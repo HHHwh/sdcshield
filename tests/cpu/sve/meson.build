@@ -237,6 +237,15 @@ if host_machine.cpu_family() == 'aarch64'
         'core179/neon_rot_ldr_at_top_rowmajor_gps_sve.cpp',
         'core179/neon_rot_ldr_at_top_rowmajor_dualcmp_sve.cpp',
         'core179/neon_rot_ldr_at_top_rowmajor_str3_checkall_sve.cpp',
+        # missing_testcases_20261009 ports (batch 7/8): K-cells — the
+        # interleaved dual-source layout cell (GPS-tagged + its natural-
+        # random control), the 4x-footprint residency cell (byte_off tag
+        # wrap documented), and the 4-cell pattern-activation battery
+        # (zero/one/GPS-rand/hiham).
+        'core179/neon_rot_ldr_at_top_rowmajor_k5far_sve.cpp',
+        'core179/neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve.cpp',
+        'core179/neon_rot_ldr_at_top_rowmajor_k3res_sve.cpp',
+        'core179/neon_rot_ldr_at_top_rowmajor_k7pattern_sve.cpp',
         # Batch 7 (4): library-backed tests re-implemented on SVE —
         # GMP big-add on the carry chain, GMP multiply on svmul partial
         # products (bigint_mulx skeleton), compiler-rt soft-float kept as
