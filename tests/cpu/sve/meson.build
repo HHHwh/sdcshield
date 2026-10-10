@@ -246,6 +246,15 @@ if host_machine.cpu_family() == 'aarch64'
         'core179/neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve.cpp',
         'core179/neon_rot_ldr_at_top_rowmajor_k3res_sve.cpp',
         'core179/neon_rot_ldr_at_top_rowmajor_k7pattern_sve.cpp',
+        # missing_testcases_20261009 ports (batch 8/8): arm-0102
+        # trigger-recipe variants on pg4 sub-blocks — BSL select
+        # (composed, no svbsl in GCC 12), NOT-logic, mask-logic, and the
+        # 3-source f32 FMA rotation (neg-nested fnma/fnms kept verbatim);
+        # +8-element buffer slack covers the asm full-VL ldr z tail.
+        'kreg/arm0102_kreg_select_sve.cpp',
+        'kreg/arm0102_kreg_not_sve.cpp',
+        'kreg/arm0102_kreg_logic_sve.cpp',
+        'kreg/arm0102_fma_f32_sve.cpp',
         # Batch 7 (4): library-backed tests re-implemented on SVE —
         # GMP big-add on the carry chain, GMP multiply on svmul partial
         # products (bigint_mulx skeleton), compiler-rt soft-float kept as
