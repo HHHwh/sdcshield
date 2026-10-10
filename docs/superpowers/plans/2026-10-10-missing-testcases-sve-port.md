@@ -29,7 +29,9 @@
     - `./builddir/sdcshield -e <test> -t 60000 --cpuset='!122' 2>&1 | tail -2` → `exit: pass`（P0 先验证 cpuset 排除语法；122 现已重新在线，两阶段协议阶段 1 = 排除 122）；
     - 回归：`./builddir/sdcshield -e zstd19 -t 3000 -n 1` → `exit: pass`；
     - commit + push（分支 feat/sve-port-avx53，非 main）。
-11. **禁止**：不主动跑含 122 的全核压测（10-09 panic #3 先例，机器现 122 在线、重启后未封顶）——如需阶段 2 观察须用户裁决。**不 kill/重启任何进程**。
+11. **可靠性 vs 有效性的语义（2026-10-11 用户两次裁定）**：
+    - **可靠性测试** = 在**0-63 号半核**上运行（`--cpuset=0-63`），全部必须 pass——任何 fail = 我的程序逻辑 bug，须修改重验。**不得用 `--cpuset='!122'`**（127 核满载会把后台守护进程挤到唯一空闲的 122 号故障核上集中负载，有崩溃风险——T1-T8 批次验证当时用了 `!122` 方式属历史执行，10-11 起废止）；
+    - **有效性冒烟测试** = **全核 0-127 含 122** 运行，观察真实 SDC。本机就是 SDC 机器，122 在某些工况自己产生 SDC——**永不故障注入**（用户明令）。判读：fail 且仅锁定 122 = 有效性证据；122 不出错也正常（SDC 偶然性）；**其他核 fail = 程序逻辑问题须修改**。逐测试顺序 60s，勿并行多项；fail/崩溃即停提取证据；日志落盘勿写 /tmp。
 12. meson 改动后必须 `PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir && ninja -C builddir`（CLAUDE.md 规则）。
 13. 诚实纪律：所有验证结论引用真实命令输出；未跑过的不写"通过"。
 
@@ -440,65 +442,55 @@ find tests/cpu/sve -name '*.cpp' | wc -l           # 预期 164（120 + 44... �
 
 ---
 
-### Task 10: 可靠性测试（全量第二遍）
+### Task 10: 可靠性测试（半核 0-63 全量）
 
-**目的**：证明 44 个新测试在健康核上零假阳性（两遍独立采样，RNG 引擎每运行随机选——跨引擎零误报证据）。
+**语义（2026-10-11 用户裁定）**：在 0-63 号半核（物理不含 122，其余核心空闲供后台守护进程分散）运行全部 44 个新测试，**全部必须 pass**——任何 fail = 我的程序逻辑 bug，须修改重验。**禁止 `--cpuset='!122'`**（127 核满载会把守护进程挤到 122 上集中负载）。
 
-- [ ] **Step 10.1: 全量第二遍 60s × !122**
+- [ ] **Step 10.1: 全量 60s × 0-63 半核**
 ```bash
-mkdir -p sdc_hunt_logs/2026-10-10-missing-sve-reliability
-TESTS="<44 个测试名，逗号分隔或 -e 正则>"
-# sdcshield -e 支持逗号分隔多测试; 逐个跑并记录:
+mkdir -p sdc_hunt_logs/2026-10-11-missing-sve-reliability
 for t in <44 names>; do
-  ./builddir/sdcshield -e $t -t 60000 --cpuset='!122' \
-    > sdc_hunt_logs/2026-10-10-missing-sve-reliability/$t.log 2>&1
-  echo "$t rc=$? $(tail -1 sdc_hunt_logs/2026-10-10-missing-sve-reliability/$t.log)"
-done | tee sdc_hunt_logs/2026-10-10-missing-sve-reliability/summary.txt
-# 预期: 44 行全 rc=0 + exit: pass（第一遍 = 各任务 Step 验证时已跑）
+  ./builddir/sdcshield -e $t -t 60000 --cpuset=0-63 \
+    > sdc_hunt_logs/2026-10-11-missing-sve-reliability/$t.log 2>&1
+  echo "$t rc=$? $(tail -1 sdc_hunt_logs/2026-10-11-missing-sve-reliability/$t.log)"
+done | tee sdc_hunt_logs/2026-10-11-missing-sve-reliability/summary.txt
+# 预期: 44 行全 rc=0 + exit: pass；任何非 pass → 停下排查修复（systematic-debugging）
 ```
-- [ ] **Step 10.2: 汇总核验** — `grep -c 'exit: pass' summary.txt` = 44；任何非 pass → 停下排查（systematic-debugging），不得带病收尾。
-- [ ] **Step 10.3: 可靠性结论写入 docs_xu 文档**（T9 的文档补上第二遍数据；或作为文档的验证节）。
+- [ ] **Step 10.2: 汇总核验** — `grep -c 'exit: pass' summary.txt` = 44。
+- [ ] **Step 10.3: 可靠性结论写入 docs_xu 文档**。
 
 ---
 
-### Task 11: 有效性冒烟测试（SVE 指令证据 + 故障注入检出）
+### Task 11: 有效性冒烟测试（objdump SVE 证据 + 全核含 122 真机观察）
+
+**语义（2026-10-11 用户裁定）**：有效性 = **全核 0-127 含 122** 运行，观察真实 SDC。本机就是 SDC 机器，**永不故障注入**——122 在某些工况自己产生 SDC。判读：fail 且仅锁定 122 = 有效性证据（探针能检出真故障）；122 不出错也正常（SDC 偶然性原则）；**其他核 fail = 程序逻辑问题，须修改**。
 
 - [ ] **Step 11.1: objdump SVE 指令证据（44 测试全覆盖）**
 ```bash
-nm builddir/sdcshield | grep -E ' [tT] ' | grep -E '(movbe_l1d|movbe_l2|movbe_dump_golden|mrn_rmw_|mrn_nuke_|mrn_pairs_2src|mrn_reloaded_2src|agu_stress_store_only|neon_rot_store_only|neon_rot_u8x16|ldr_at_top_.*_sve|arm0102_(kreg_select|kreg_not|kreg_logic|fma_f32))_sve?_?run' > /tmp/symbols.txt
-# 对每个 run 符号:
+# 对每个新测试的 run 符号:
 #   objdump -d --disassemble=<sym> builddir/sdcshield | grep -cE '\b(ldr[[:space:]]+z|ld1d|st1d|ld1b|st1b|whilelt|ptrue)\b'
-# 预期: 每个测试 ≥ 1（asm ldr z 或谓词 ld1d/st1d 必须在场——证明热路径真 SVE 且 reload 未被消除）
-# 写成 for 循环脚本, 输出 <test>: <count> 清表存入 docs_xu 文档附录
+# 预期: 每个测试 ≥ 1（asm ldr z 或谓词 ld1d/st1d 在场——热路径真 SVE 且 reload 未被消除）
+# 脚本化输出 <test>: <count> 清表
 ```
-- [ ] **Step 11.2: 故障注入检出证明（每批 1 代表 × 8）**
-
-代表（每任务一个）：`movbe_l1d_sve`(T1)、`mrn_rmw_fwd_sve`(T2)、`mrn_nuke_2src_alu_sve`(T3)、`mem_disambig_alu_sve`(T4)、`neon_rot_ldr_at_top_sub_sve`(T5)、`neon_rot_ldr_at_top_rowmajor_dualcmp_sve`(T6)、`neon_rot_ldr_at_top_rowmajor_k7p_rand_sve`(T7)、`arm0102_kreg_select_sve`(T8)。
-
-方法（git worktree 隔离，不动主树）：
+- [ ] **Step 11.2: 全核含 122 冒烟（44 × 60s 顺序跑，用户已裁定执行）**
 ```bash
-git worktree add /tmp/fi-check-wt HEAD
-# boost 头未跟踪, 需带过去:
-mkdir -p /tmp/fi-check-wt/third-party && cp -r third-party/boost-headers /tmp/fi-check-wt/third-party/
-# 8 个注入点（sed 精确改动，每处一行）:
-#  - expected[] 类(6 个): init 的 golden 循环之后插 data->expected[0] ^= 1;
-#    sed -i 's|test->data = data;|data->expected[0] ^= 1;\n    test->data = data;|' <文件>
-#  - movbe_l1d_sve: idx4 表 {3, 2, 1, 0} → {3, 2, 1, 1}（破坏 bswap 可逆性）
-#  - mem_disambig_alu_sve: expected 计算后 data->expected[0] ^= 1;
-cd /tmp/fi-check-wt && PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir-fi --buildtype=release 2>&1 | tail -2
-ninja -C builddir-fi sdcshield 2>&1 | tail -2        # 预期: 构建成功（第三方缺失项优雅降级）
-for t in <8 代表名>; do
-  ./builddir-fi/sdcshield -e $t -t 10000 -n 4 2>&1 | tail -1
-done
-# 预期: 8 行全为 fail/非 pass（report_fail 触发 = 检出路径有效）
+mkdir -p sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128
+# 跑前记录 122 状态（在线/MPIDR/频率）; 逐测试顺序跑（不并行）:
+for t in <44 names>; do
+  ./builddir/sdcshield -e $t -t 60000 \
+    -o sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/$t.yaml \
+    > sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/$t.console 2>&1
+  echo "$t rc=$? $(tail -1 sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/$t.console)"
+done | tee sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/summary.txt
+# 判读（每项跑完即查）:
+#   pass → 记录继续（122 未触发 = 偶然性，正常）
+#   fail → 提取 yaml 的 cpu-mask/miscompare 详情:
+#     仅 122 → 真 SDC 检出（有效性证据！记录详情，继续跑完其余）
+#     其他核 → 程序逻辑 bug，停下修复
+#   崩溃/挂死 → 停下报告（机器 panic 历史，不自行处置）
 ```
-- [ ] **Step 11.3: 清理**
-```bash
-git worktree remove --force /tmp/fi-check-wt && rm -rf /tmp/rpm-dl /tmp/rpm-extract /tmp/sve_probe*.c
-# 主树 git status 应干净（除既有未跟踪研究文件）
-```
-- [ ] **Step 11.4: 有效性结论 + 全部验证证据写入 docs_xu 文档**（objdump 清表 + 8 代表 fail 输出 + 可靠性两遍汇总）→ 补 commit：`docs(docs_xu): effectiveness evidence for missing_testcases SVE ports` + push。
-- [ ] **Step 11.5: 收尾报告** — 向用户汇报：44 测试清单、编译/可靠性/有效性三项证据摘要、已知偏差清单、eigen 裁决、含 122 的阶段 2 观察待裁决（不自行启动）。
+- [ ] **Step 11.3: 有效性结论 + 全部验证证据写入 docs_xu 文档**（objdump 清表 + 冒烟逐项结果 + 任何 122 SDC 详情）→ 补 commit + push。
+- [ ] **Step 11.4: 收尾报告** — 向用户汇报：44 测试清单、编译/可靠性（0-63 半核）/有效性（全核含 122）三项证据摘要、已知偏差清单、eigen 裁决。
 
 ## Self-Review 记录
 
