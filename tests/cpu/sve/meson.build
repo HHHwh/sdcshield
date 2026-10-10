@@ -218,6 +218,25 @@ if host_machine.cpu_family() == 'aarch64'
         'core179/neon_rot_store_only_sve.cpp',
         'core179/neon_rot_u8x16_sve.cpp',
         'mem/mem_disambig_alu_sve.cpp',
+        # missing_testcases_20261009 ports (batch 5/8): ldr_at_top base
+        # variants — ALU-dimension (sub/eor/bic/orn, ORN composed), the
+        # 32-bit MAC-lane variant (narrowed persisted sources), the
+        # interleaved-layout address-separation cell, the 3-store and
+        # 4-load count-gradient cells.
+        'core179/neon_rot_ldr_at_top_sub_sve.cpp',
+        'core179/neon_rot_ldr_at_top_mla_sve.cpp',
+        'core179/neon_rot_ldr_at_top_offdiag_sve.cpp',
+        'core179/neon_rot_ldr_at_top_str3_sve.cpp',
+        'core179/neon_rot_ldr_at_top_ldr4_sve.cpp',
+        # missing_testcases_20261009 ports (batch 6/8): rowmajor
+        # instrumented variants — per-element binary records (dump), the
+        # GPS self-describing-tag chassis with five-buffer dumps, the
+        # dual-store-leg comparison, and the str3 3-way slot-mask
+        # checkall with transient markers.
+        'core179/neon_rot_ldr_at_top_rowmajor_dump_sve.cpp',
+        'core179/neon_rot_ldr_at_top_rowmajor_gps_sve.cpp',
+        'core179/neon_rot_ldr_at_top_rowmajor_dualcmp_sve.cpp',
+        'core179/neon_rot_ldr_at_top_rowmajor_str3_checkall_sve.cpp',
         # Batch 7 (4): library-backed tests re-implemented on SVE —
         # GMP big-add on the carry chain, GMP multiply on svmul partial
         # products (bigint_mulx skeleton), compiler-rt soft-float kept as
