@@ -185,6 +185,12 @@ if host_machine.cpu_family() == 'aarch64'
         'mem/mmu_split_tlb_sve.cpp',
         'mem/ooo_dep_chain_sve.cpp',
         'mem/arm64_sdc_sve.cpp',
+        # missing_testcases_20261009 ports (batch 1/8): movbe reload-path
+        # probes — L1D-hit vs L2-reload differential pair + init-golden-dump
+        # cross-validation (asm-guaranteed input reload, svtbl bswap on
+        # lanes, per-line dc civac eviction in the l2 variant).
+        'core179/movbe_l1d_vs_l2_sve.cpp',
+        'core179/movbe_dump_golden_sve.cpp',
         # Batch 7 (4): library-backed tests re-implemented on SVE —
         # GMP big-add on the carry chain, GMP multiply on svmul partial
         # products (bigint_mulx skeleton), compiler-rt soft-float kept as
