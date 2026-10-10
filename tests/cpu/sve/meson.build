@@ -209,6 +209,15 @@ if host_machine.cpu_family() == 'aarch64'
         'core179/mrn_nuke_dense_sve.cpp',
         'core179/mrn_pairs_2src_alu_sve.cpp',
         'core179/mrn_reloaded_2src_alu_sve.cpp',
+        # missing_testcases_20261009 ports (batch 4/8): reload-necessity
+        # and lane/axis probes — agu store-only (2 stores no load, OR
+        # rotation), neon_rot store-only on z registers, the full-VL
+        # byte-lane variant (width-vs-lane), and the random-address
+        # disambiguation probe (svdup pattern at data-dependent offsets).
+        'mem/agu_stress_store_only_sve.cpp',
+        'core179/neon_rot_store_only_sve.cpp',
+        'core179/neon_rot_u8x16_sve.cpp',
+        'mem/mem_disambig_alu_sve.cpp',
         # Batch 7 (4): library-backed tests re-implemented on SVE —
         # GMP big-add on the carry chain, GMP multiply on svmul partial
         # products (bigint_mulx skeleton), compiler-rt soft-float kept as
