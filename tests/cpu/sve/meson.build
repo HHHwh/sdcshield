@@ -191,6 +191,24 @@ if host_machine.cpu_family() == 'aarch64'
         # lanes, per-line dc civac eviction in the l2 variant).
         'core179/movbe_l1d_vs_l2_sve.cpp',
         'core179/movbe_dump_golden_sve.cpp',
+        # missing_testcases_20261009 ports (batch 2/8): mrn_rmw load-path
+        # family — forwarding vs L1D-array (evict) pair, different-address
+        # isolation probe + 64KB/1MB footprint scan, and the 6-point
+        # nop-delay timing series (.rept mov x9,x9 fused with the ldr z).
+        'core179/mrn_rmw_fwd_vs_l1d_sve.cpp',
+        'core179/mrn_rmw_fwd_vs_diff_sve.cpp',
+        'core179/mrn_rmw_diff_footprint_sve.cpp',
+        'core179/mrn_rmw_timing_probe_sve.cpp',
+        # missing_testcases_20261009 ports (batch 3/8): mrn constructed
+        # family — nuke dependency-chain depth axis (2/3/4-source ALU
+        # chains), 16x load-density cell, the pairs back-to-back collapse,
+        # and the reloaded qword-segment immediate-verify variant.
+        'core179/mrn_nuke_2src_alu_sve.cpp',
+        'core179/mrn_nuke_3src_alu_sve.cpp',
+        'core179/mrn_nuke_4src_alu_sve.cpp',
+        'core179/mrn_nuke_dense_sve.cpp',
+        'core179/mrn_pairs_2src_alu_sve.cpp',
+        'core179/mrn_reloaded_2src_alu_sve.cpp',
         # Batch 7 (4): library-backed tests re-implemented on SVE —
         # GMP big-add on the carry chain, GMP multiply on svmul partial
         # products (bigint_mulx skeleton), compiler-rt soft-float kept as
