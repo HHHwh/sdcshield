@@ -461,6 +461,19 @@ find tests/cpu/sve -name '*.cpp' | wc -l           # 预期 164（120 + 44... �
 - [x] **Step 11.3: 有效性结论 + 全部验证证据写入 docs_xu 文档**（§五 T10/T11 节 + §六勘误 + §七状态更新）→ commit + push。
 - [x] **Step 11.4: 收尾报告** — 已向用户汇报（2026-10-11）。
 
+---
+
+### Task 12: 全核含 122 压测（44 × 30min 顺序，~22h）
+
+**用户指令（2026-10-11）**：「下一步是压测，对这44个测试用例，全核心包含122号核心，每个测试用例30分钟。」T10（0-63 半核 44/44）+ T11.2（全核 60s 冒烟 44/44）之后的持续应力批——目标 = 30 分钟长窗提高 122 SDC 命中率（1.45GHz 封顶下该核历史错误出现时间 9s~33min，60s 窗口不够）。
+
+批条件（2026-10-11 08:3x 实测）：122 在线、performance、封顶 1.45 GHz；其余核 performance、cpu0 max 1.7 GHz（全机限频为 root 所设现状，如实记录、批内保持不变才构成有效数据点）。
+
+- [x] **Step 12.1: 脚本 + 启动**（2026-10-11 08:45:38 `setsid nohup` 启动，预检全过——mpidr-ok、122 封顶 1450000kHz、othcpu performance/1700000kHz、binary 7344fb16、git eecca4d5、boot_id 797e63a8；脚本 686247 存活、首测试 movbe_l1d_sve 在 timeout 2400 兜底链下运行；bash -n 通过、44 名单与 T10 逐字一致）：`scripts/run/run-sve44-allcore-30min-20261011.sh`（沿 10-09 全核批模式：预检 122 在线/MPIDR 0x0900060200/封顶 1450000/governor/128 核/磁盘 ≥20G；逐项复检 122 在线+封顶、丢失即中止不跑无效数据点；每项 `-t 1800000`、`timeout -k 60 2400` wall 兜底；判定规则 v2 双查（rc≥128 / result:fail|crash / exit:fail|crash|interrupted / level:error / console E>）；无 `-s` 随机引擎+种子逐项记入 STATUS 可重放；STATUS.txt 每行 fsync 死亡容忍；无 fail 删日志、fail 证据链保留），日志 `sdc_hunt_logs/2026-10-11-sve44-allcore-30min-stress/`。顺序同 T10/T11.2（movbe3→mrn_rmw11→mrn6→mem/agu/neon4→ldr_at_top5→rowmajor4→str3_checkall→k3→k7p4→arm0102 4）。预计 ~22.2h，ETA 2026-10-12 晨。
+- [ ] **Step 12.2: 判读**（批后/中途检查 STATUS.txt）：仅 122 fail = 有效性证据（保留 yaml 提取 cpu-mask/miscompare 详情）；其他核 fail = 逻辑 bug，报告等裁决；崩溃/挂死 = 停下报告（机器 panic 历史，不自行处置）。122 不触发 = 正常（偶然性）。
+- [ ] **Step 12.3: 结果写入 docs_xu 文档 + commit + push**。
+- [ ] **Step 12.4: 收尾报告**。
+
 ## Self-Review 记录
 
 - 覆盖核对：MANIFEST 38 有效 + 8 对照（其中 diff_nop64 不存在→实际 45）− eigen 1（已有 SVE 口）= 44 ✓ 全部落入 T1-T8 映射表。
