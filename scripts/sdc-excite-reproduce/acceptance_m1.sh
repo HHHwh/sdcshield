@@ -144,13 +144,23 @@ fi
 #    被 systemd 拉活"的死区：门 1 只看当下 active、门 3 只看末行新鲜度，都看不见
 #    历史空洞；重启后列头相同则无缝续写，唯有时间轴间隙留痕
 if have "$MON/collector_self.csv"; then
-python3 - "$MON/collector_self.csv" <<'EOF'
-import csv, datetime, sys
+# GAP_SINCE（可选，'YYYY-MM-DD HH:MM:SS'）：间隙扫描的下界。计划维护窗
+# （如 M1 A/B 锚点抓取需停/起采集器）会在时间轴留下真实间隙，全史扫描会把
+# 它当死区误报；设 GAP_SINCE=维护重启时刻即把验收窗起算点移到维护后。
+# 证据数据不动，只限定扫描范围；默认空 = 全史扫描（原行为）。
+GAP_SINCE="${GAP_SINCE:-}" python3 - "$MON/collector_self.csv" <<'EOF'
+import csv, datetime, os, sys
 from collections import defaultdict
 FMT = "%Y-%m-%d %H:%M:%S"
+since = os.environ.get("GAP_SINCE", "").strip()
+t_since = datetime.datetime.strptime(since, FMT) if since else None
 rows = list(csv.DictReader(open(sys.argv[1])))
 if not rows:
     print("collector_self.csv 无数据（只有列头）"); sys.exit(2)
+if t_since is not None:
+    n_all = len(rows)
+    rows = [r for r in rows if datetime.datetime.strptime(r["ts"], FMT) >= t_since]
+    print(f"（间隙扫描窗：自 {since} 起，{len(rows)}/{n_all} 行在窗内——GAP_SINCE 限定）")
 per = defaultdict(list)
 for r in rows:
     per[r["collector"]].append(r)
