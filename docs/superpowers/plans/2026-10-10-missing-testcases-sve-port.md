@@ -446,18 +446,9 @@ find tests/cpu/sve -name '*.cpp' | wc -l           # 预期 164（120 + 44... �
 
 **语义（2026-10-11 用户裁定）**：在 0-63 号半核（物理不含 122，其余核心空闲供后台守护进程分散）运行全部 44 个新测试，**全部必须 pass**——任何 fail = 我的程序逻辑 bug，须修改重验。**禁止 `--cpuset='!122'`**（127 核满载会把守护进程挤到 122 上集中负载）。
 
-- [ ] **Step 10.1: 全量 60s × 0-63 半核**
-```bash
-mkdir -p sdc_hunt_logs/2026-10-11-missing-sve-reliability
-for t in <44 names>; do
-  ./builddir/sdcshield -e $t -t 60000 --cpuset=0-63 \
-    > sdc_hunt_logs/2026-10-11-missing-sve-reliability/$t.log 2>&1
-  echo "$t rc=$? $(tail -1 sdc_hunt_logs/2026-10-11-missing-sve-reliability/$t.log)"
-done | tee sdc_hunt_logs/2026-10-11-missing-sve-reliability/summary.txt
-# 预期: 44 行全 rc=0 + exit: pass；任何非 pass → 停下排查修复（systematic-debugging）
-```
-- [ ] **Step 10.2: 汇总核验** — `grep -c 'exit: pass' summary.txt` = 44。
-- [ ] **Step 10.3: 可靠性结论写入 docs_xu 文档**。
+- [x] **Step 10.1: 全量 60s × 0-63 半核**（实际执行：`--cpuset` 不收 `0-63` 范围写法，改用 `--cpuset=$(seq -s, 0 63)` 展开语法，zstd19 200s 预验证通过后执行；44 行全 `rc=0 exit: pass`）
+- [x] **Step 10.2: 汇总核验** — `grep -c 'exit: pass' summary.txt` = 44 ✓（非零 rc 行 0）。
+- [x] **Step 10.3: 可靠性结论写入 docs_xu 文档**（2026-10-10-missing-testcases-sve-port.md §五 T10 节）。
 
 ---
 
@@ -465,32 +456,10 @@ done | tee sdc_hunt_logs/2026-10-11-missing-sve-reliability/summary.txt
 
 **语义（2026-10-11 用户裁定）**：有效性 = **全核 0-127 含 122** 运行，观察真实 SDC。本机就是 SDC 机器，**永不故障注入**——122 在某些工况自己产生 SDC。判读：fail 且仅锁定 122 = 有效性证据（探针能检出真故障）；122 不出错也正常（SDC 偶然性原则）；**其他核 fail = 程序逻辑问题，须修改**。
 
-- [ ] **Step 11.1: objdump SVE 指令证据（44 测试全覆盖）**
-```bash
-# 对每个新测试的 run 符号:
-#   objdump -d --disassemble=<sym> builddir/sdcshield | grep -cE '\b(ldr[[:space:]]+z|ld1d|st1d|ld1b|st1b|whilelt|ptrue)\b'
-# 预期: 每个测试 ≥ 1（asm ldr z 或谓词 ld1d/st1d 在场——热路径真 SVE 且 reload 未被消除）
-# 脚本化输出 <test>: <count> 清表
-```
-- [ ] **Step 11.2: 全核含 122 冒烟（44 × 60s 顺序跑，用户已裁定执行）**
-```bash
-mkdir -p sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128
-# 跑前记录 122 状态（在线/MPIDR/频率）; 逐测试顺序跑（不并行）:
-for t in <44 names>; do
-  ./builddir/sdcshield -e $t -t 60000 \
-    -o sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/$t.yaml \
-    > sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/$t.console 2>&1
-  echo "$t rc=$? $(tail -1 sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/$t.console)"
-done | tee sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/summary.txt
-# 判读（每项跑完即查）:
-#   pass → 记录继续（122 未触发 = 偶然性，正常）
-#   fail → 提取 yaml 的 cpu-mask/miscompare 详情:
-#     仅 122 → 真 SDC 检出（有效性证据！记录详情，继续跑完其余）
-#     其他核 → 程序逻辑 bug，停下修复
-#   崩溃/挂死 → 停下报告（机器 panic 历史，不自行处置）
-```
-- [ ] **Step 11.3: 有效性结论 + 全部验证证据写入 docs_xu 文档**（objdump 清表 + 冒烟逐项结果 + 任何 122 SDC 详情）→ 补 commit + push。
-- [ ] **Step 11.4: 收尾报告** — 向用户汇报：44 测试清单、编译/可靠性（0-63 半核）/有效性（全核含 122）三项证据摘要、已知偏差清单、eigen 裁决。
+- [x] **Step 11.1: objdump SVE 指令证据（44 测试全覆盖）**——**正则勘误后执行**：原正则 `\b(ldr[[:space:]]+z|…)\b` 对 `ldr z0,` 因 `\b` 在 z/数字间不成立而漏计全部 `ldr zN`，修正为 `\b(ldr[[:space:]]+z[0-9]+|str[[:space:]]+z[0-9]+|ld1[bdwh]|st1[bdwh]|whilel[te]|ptrue|pfalse)\b`。结果：38 自有符号 4-15 条 + diff_64k/1m 共用 `mrn_rmw_diff_fp_sve_run` 12 条 + k7p×4 经包装尾跳（4 包装逐一反汇编实证）热循环 `k7p_sve_run_common` 13 条——**44/44 ≥ 4 条**。清表：`sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/objdump-sve-counts.txt`。
+- [x] **Step 11.2: 全核含 122 冒烟（44 × 60s 顺序跑，用户已裁定执行）**——2026-10-11 07:24:08→08:08:37：**44/44 全 `rc=0 exit: pass`**，零 fail/零崩溃/零挂死；122（在线、封顶 1.45 GHz——与 10-10 未封顶状态不同，已被重新封顶）未触发 SDC（偶然性正常）；其他核零 fail；内核日志窗口零异常；boot_id 未变。pre-check + 44 yaml + 44 console + summary 落盘于 `sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/`。
+- [x] **Step 11.3: 有效性结论 + 全部验证证据写入 docs_xu 文档**（§五 T10/T11 节 + §六勘误 + §七状态更新）→ commit + push。
+- [x] **Step 11.4: 收尾报告** — 已向用户汇报（2026-10-11）。
 
 ## Self-Review 记录
 

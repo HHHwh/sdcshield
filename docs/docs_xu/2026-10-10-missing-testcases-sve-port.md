@@ -97,16 +97,45 @@
 - **可靠性** = 0-63 号半核运行，全部必须 pass——任何 fail = 移植程序逻辑 bug，须修改重验；
 - **有效性** = 全核 0-127 含 122 运行，观察**真实 SDC**（本机就是 SDC 机器，**永不故障注入**——122 在某些工况自己产生 SDC）。fail 且仅锁定 122 = 有效性证据；122 不触发也正常（SDC 偶然性）；**其他核 fail = 逻辑 bug 须修**。
 
-（结果由 T10/T11 完成后补记。）
+#### T10 可靠性（2026-10-11，0-63 半核）——44/44 全 pass
+
+`--cpuset` 不收 `0-63` 范围写法，用 `--cpuset=$(seq -s, 0 63)` 展开语法（zstd19 200s 预验证 `exit: pass` 后执行）。44 项 × 60s 顺序：**44 行全 `rc=0 exit: pass`**（`grep -c 'exit: pass' summary.txt` = 44，非零 rc 行 0）——移植逻辑无 bug。日志：`sdc_hunt_logs/2026-10-11-missing-sve-reliability/`（summary.txt + 44 console log）。
+
+#### T11.1 objdump SVE 指令证据（2026-10-11 复产）——44/44 热路径真 SVE
+
+对 44 个测试的 run 符号逐一 `objdump -d --disassemble=<sym>`，计数正则 `\b(ldr[[:space:]]+z[0-9]+|str[[:space:]]+z[0-9]+|ld1[bdwh]|st1[bdwh]|whilel[te]|ptrue|pfalse)\b`：
+
+- 38 个自有符号 **4-15 条**；
+- `mrn_rmw_diff_64k/1m_sve` 直接绑定共用 `mrn_rmw_diff_fp_sve_run`（源码实证 `.test_run = mrn_rmw_diff_fp_sve_run`，12 条）；
+- k7p×4 的包装 `k7p_*_sve_run` 仅 4 条指令（取 data → 材料化标签字符串 → **尾跳 `b k7p_sve_run_commonP4testiPKc.isra.0`**，4 个包装逐一反汇编实证），热循环在 `k7p_sve_run_common`（**13 条**）。
+- 计数下限 4、上限 15，**44/44 全部有真 SVE 指令在场**（asm `ldr zN` / 谓词 ld1/st1 / whilelt / ptrue——reload 未被编译器消除）。完整清表：`sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/objdump-sve-counts.txt`。
+- 例证（arm0102_kreg_select_sve 热循环）：`ptrue p0.s, vl4` + `ldr z0, [x3]` ×3 + `st1w {z0.s}, p0` + `eor/and/bic/orr z*.d`——谓词寄存器 + z 寄存器数据通路全 SVE。
+
+> **⚠️ 计数正则勘误**：本计划 Step 11.1 原正则 `\b(ldr[[:space:]]+z|…)\b` 有缺陷——`ldr\tz0,` 中 `z` 后跟数字，`\b` 在 z/0 之间不成立，**`ldr zN` 形式全部漏计**（kreg 族实测漏 3 条 `ldr z`，只剩 ptrue 计 1）。修正为 `ldr[[:space:]]+z[0-9]+` 并补 ld1/st1 的 w/h 形态后，计数与初查范围（4-15）一致。
+
+#### T11.2 全核含 122 冒烟（2026-10-11 07:24:08 → 08:08:37）——44/44 全 pass，零 SDC 触发
+
+44 项 × 60s 顺序、无 `--cpuset`（= 0-127 全核含 122），逐项 `-o <test>.yaml` 落盘：
+
+- **跑前状态**（pre-check.txt）：cpu122 `online=1`、MPIDR 0x0900060200（目标核）、**封顶 1.45 GHz**（cur=max=1450000——与 10-10 记录的"重启后未封顶"不同，10-11 检查时已被重新封顶，即狩猎 v3 的已知稳定形态）；128 核在线；boot_id `797e63a8…`；磁盘 /home 余 820G。
+- **结果**：**44/44 全 `rc=0 exit: pass`**，零 fail、零崩溃、零挂死；summary 44 行全 pass、0 非零 rc；44 枚 yaml（共 1.8M）。
+- **判读**：122 未触发 SDC = 正常（SDC 偶然性；该核 1.45 GHz 封顶下历史错误出现时间 9s~33min，单次 60s 窗口命中率低）；**其他核零 fail = 无程序逻辑 bug**（与 T10 半核结论互证）；窗口内内核日志零异常行（edac/hardware error/mce/serror/panic/segfault 计数 0），boot_id 未变（无重启）。日志：`sdc_hunt_logs/2026-10-11-missing-sve-smoke-all128/`（pre-check.txt + summary.txt + 44 yaml + 44 console）。
+
+#### 结论
+
+- **可靠性 ✓**：半核 0-63（T10）与全核 0-127（T11.2）两遍独立采样 44/44 双全 pass，RNG 引擎每运行随机选——跨引擎零误报。
+- **有效性 ✓（结构层）**：objdump 44/44 热路径真 SVE 指令在场（asm ldr z/谓词访存未被消除）。
+- **有效性（真机层）**：本窗口 122 未触发 SDC——不构成反证（偶然性原则）；检出路径的真机有效性已由本机 122 历史锁定测试（`movbe_dump_probe_c_sve` / `movbe_dump_probe_x` / `neon_rot_ldr_at_top_rowmajor_sve`，2026-09~10 四次锁定均仅 122）独立证明。后续如需提高命中率可延长单测试时长（另行裁决）。
 
 ## 六、过程中抓到的问题（诚实记录）
 
 1. **DECLARE_TEST 不可被外层宏包装**（T2 首次构建失败）：`DECLARE_TEST` 内部 `0x ## TEST_ID_<name>` 拼接经二次宏展开后变成非法数字字面量 `0xTEST_ID_...`。改为六个显式 DECLARE_TEST 块。
 2. **`sandstone_short_ids.h` 是 configure 期生成头**（meson 扫描 `DECLARE_TEST(`）：修改测试文件后必须 `meson setup --reconfigure`（CLAUDE.md 规则的又一实证——plain ninja 不再生，T2 的 nop 六连曾因此报 `TEST_ID_` 未定义）。
 3. **T1 首版谓词写错被自查抓住**：把还原 svtbl 应用在 reload 上与首次加载比（bswap(reload) ≠ in1，恒假失败）→ 改为寄存器侧双 bswap（`vround = svtbl(vswapped)` 与 in2 比，谓词等价原版 `bswap(bswap(in1)) != reload`），并把被测 reload 改 asm 防 CSE。
+4. **objdump 计数正则的 `\b` 位置缺陷**（T11.1 复产时抓到）：`ldr[[:space:]]+z\b` 对 `ldr z0,` 永不匹配（z 后跟数字无词边界）——验证工具自身的正则会静默漏计，须以抽查反汇编逐指令核对（见五、T11.1 勘误注）。
 
 ## 七、遗留与边界
 
 - **NEON 原版未注册**：本任务按指令只做 SVE 版放 sve/；转移包的 NEON 原版仍在 `missing_testcases_20261009/`（未跟踪目录，作为溯源语料保留）。若需原版入树另行裁决（MANIFEST 的注册清单可参考）。
-- **含 122 的全核检测**：2026-10-11 用户裁定有效性冒烟即全核含 122 顺序执行（T11），不再"待裁决"；122 当前在线、未封顶（重启后丢失，root 才能重设——如实记录状态后执行）。
+- **含 122 的全核检测**：2026-10-11 用户裁定有效性冒烟即全核含 122 顺序执行（T11），**已执行完毕**（44/44 pass，122 未触发，见五、T11.2）。执行时 122 在线且已被重新封顶 1.45 GHz（10-10 记录的"未封顶"状态已变化，封顶不跨重启、由 root 重设）。
 - `mrn_rmw_diff_nop64`（2×2 矩阵缺角）不存在于转移包，如需补做另行设计。
