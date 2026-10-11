@@ -447,7 +447,7 @@ daily_summary() {
     done
     {
         echo "=== 日汇总 $(date '+%F %T') cycle=$CYCLE ==="
-        echo "事件数: $(wc -l < "$EVENTS_DIR/ledger.csv" 2>/dev/null || echo 0)"
+        echo "事件数: $( [ -f "$EVENTS_DIR/ledger.csv" ] && wc -l < "$EVENTS_DIR/ledger.csv" || echo 0)"
         echo "今日 YAML: $(find "$LOG_ROOT/$(date +%F | tr -d -)" -name '*.yaml' 2>/dev/null | wc -l)"
         echo "fail/crash 文件数: $(grep -lE 'result: *(fail|crash)' "$LOG_ROOT"/*/*.yaml "$LOG_ROOT"/spectrum_c*_files/*.yaml 2>/dev/null | wc -l)"
         echo "timeout/oserror 行数: $(grep -hE 'result: *(timeout|oserror)' "$LOG_ROOT"/*/*.yaml 2>/dev/null | wc -l)"
