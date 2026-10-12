@@ -12,7 +12,7 @@
  * forward-only sweep): the rotation runs in 32-bit lanes —
  * mul / mla-style (a + a*b) / mls-style (b - a*b) / eor (control) —
  * probing the MAC pipe + accumulate chains instead of 2-input logic/add
- * ops. Sources are narrowed to 15-bit magnitude (& 0xFFFF) and
+ * ops. Sources are narrowed to 15-bit magnitude (& 0x7FFF) and
  * PERSISTED back to the source buffers in init so run-side recomputation
  * sees identical inputs and s32 products never overflow (original
  * semantics). Same slot geometry otherwise: dead 3rd ldr z (scratch) at
@@ -89,7 +89,7 @@ static int neon_rot_ldr_at_top_mla_sve_init(struct test *test) {
 
     /* 收窄持久化 + golden: mul / mla式(a+a*b) / mls式(b-a*b) / eor, 同 SVE 单元 */
     svbool_t pg = svptrue_b32();
-    svuint32_t vmask = svdup_u32(0x0000ffffu);
+    svuint32_t vmask = svdup_u32(0x00007fffu);
     for (int i = 0; i < NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS; i++) {
         const size_t off = (size_t)i * lanes;
         svuint32_t a = svand_u32_x(pg, svld1_u32(pg, data->srcA + off), vmask);
@@ -102,7 +102,7 @@ static int neon_rot_ldr_at_top_mla_sve_init(struct test *test) {
         switch (i % 4) {
             case 0: res = svreinterpret_u32_s32(svmul_s32_x(pg, sa, sb)); break;
             case 1: res = svreinterpret_u32_s32(svadd_s32_x(pg, svmul_s32_x(pg, sa, sb), sa)); break;
-            case 2: res = svreinterpret_u32_s32(svsub_s32_x(pg, svmul_s32_x(pg, sa, sb), sb)); break;
+            case 2: res = svreinterpret_u32_s32(svsub_s32_x(pg, sb, svmul_s32_x(pg, sa, sb))); break;
             case 3: res = sveor_u32_x(pg, a, b); break;
         }
         svst1_u32(pg, data->expected + off, res);
@@ -149,7 +149,7 @@ static int neon_rot_ldr_at_top_mla_sve_run(struct test *test, int cpu) {
             switch (i % 4) {
                 case 0: res = svreinterpret_u32_s32(svmul_s32_x(svptrue_b32(), sa, sb)); break;
                 case 1: res = svreinterpret_u32_s32(svadd_s32_x(svptrue_b32(), svmul_s32_x(svptrue_b32(), sa, sb), sa)); break;
-                case 2: res = svreinterpret_u32_s32(svsub_s32_x(svptrue_b32(), svmul_s32_x(svptrue_b32(), sa, sb), sb)); break;
+                case 2: res = svreinterpret_u32_s32(svsub_s32_x(svptrue_b32(), sb, svmul_s32_x(svptrue_b32(), sa, sb))); break;
                 case 3: res = sveor_u32_x(svptrue_b32(), a, b); break;
             }
 
