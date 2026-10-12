@@ -87,9 +87,10 @@ static int neon_rot_u8x16_sve_init(struct test *test)
 
 #if defined(__aarch64__)
 
-static inline void store_vec_u8_sve(void *addr, svuint8_t val)
+/* 谓词化存储: 尾部 batch 用 pgn 截断, 任意 VL (含非 2 幂) 都不会写越界 */
+static inline void store_vec_u8_sve(svbool_t pg, void *addr, svuint8_t val)
 {
-    svst1_u8(svptrue_b8(), static_cast<uint8_t *>(addr), val);
+    svst1_u8(pg, static_cast<uint8_t *>(addr), val);
 }
 
 static inline svuint8_t load_vec_u8_sve(const void *addr)
@@ -130,8 +131,8 @@ static int neon_rot_u8x16_sve_run(struct test *test, int cpu)
                             svsel_u8(svcmpeq_n_u8(pgn, vphase, 2), r_and, r_orr)));
 
             /* 骨架: str temp -> ldr z temp (asm 保证) -> str dst */
-            store_vec_u8_sve(temp + base, res);
-            store_vec_u8_sve(dst + base, load_vec_u8_sve(temp + base));
+            store_vec_u8_sve(pgn, temp + base, res);
+            store_vec_u8_sve(pgn, dst + base, load_vec_u8_sve(temp + base));
         }
 
         if (memcmp(dst, data->expected, NEON_ROT_U8X16_SVE_BYTES) != 0) {
