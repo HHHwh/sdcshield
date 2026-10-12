@@ -42,7 +42,9 @@
 #endif
 
 #define ARM0102_FMA_F32_SVE_COUNT 1024
-#define ARM0102_FMA_F32_SVE_SLACK 8
+/* 尾部 asm 全宽读松弛 = 运行时 svcntw(): 最末子块 ldr z 读到
+ * (COUNT-1)+svcntw() 个元素, slack=svcntw() 严格充分 (任意 VL,
+ * movbe_slf_sweep VL-portable 范式) */
 
 struct Arm0102FmaF32SveData {
     float *srcA;
@@ -89,7 +91,8 @@ static int arm0102_fma_f32_sve_init(struct test *test) {
         return EXIT_SKIP;
     }
 
-    const size_t total = (size_t)(ARM0102_FMA_F32_SVE_COUNT + ARM0102_FMA_F32_SVE_SLACK) * sizeof(float);
+    const int slack = svcntw();   /* asm ldr z 尾批松弛, 见文件头注释 */
+    const size_t total = (size_t)(ARM0102_FMA_F32_SVE_COUNT + slack) * sizeof(float);
     auto *data = static_cast<Arm0102FmaF32SveData *>(malloc(sizeof(Arm0102FmaF32SveData)));
     data->srcA = static_cast<float *>(aligned_alloc(64, total));
     data->srcB = static_cast<float *>(aligned_alloc(64, total));
@@ -140,8 +143,8 @@ static int arm0102_fma_f32_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<Arm0102FmaF32SveData *>(test->data);
 
-    float *temp = static_cast<float *>(aligned_alloc(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + ARM0102_FMA_F32_SVE_SLACK) * sizeof(float)));
-    float *dst  = static_cast<float *>(aligned_alloc(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + ARM0102_FMA_F32_SVE_SLACK) * sizeof(float)));
+    float *temp = static_cast<float *>(aligned_alloc(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + svcntw()) * sizeof(float)));
+    float *dst  = static_cast<float *>(aligned_alloc(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + svcntw()) * sizeof(float)));
 
     TEST_LOOP(test, 1 << 13) {
         for (int base = 0; base < ARM0102_FMA_F32_SVE_COUNT; base += svcntw()) {
