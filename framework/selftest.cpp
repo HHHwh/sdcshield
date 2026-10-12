@@ -893,7 +893,7 @@ static int selftest_crash_run(struct test *test, int thread)
 // SME probe function lifts its target locally (random.cpp precedent:
 // per-function #pragma GCC target).
 #pragma GCC push_options
-#pragma GCC target("arch=armv9-a+sme")
+#pragma GCC target("arch=armv9-a+sve")
 static int selftest_sme_sigill_probe_run(struct test *test, int)
 {
     pid_t pid = fork();
