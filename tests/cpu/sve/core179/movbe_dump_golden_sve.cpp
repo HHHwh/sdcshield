@@ -155,22 +155,27 @@ static int movbe_dump_golden_sve_run(struct test *test, int cpu)
 
             svuint8_t vround = svtbl_u8(vswapped, vidx);
             if (svptest_any(pg, svcmpne_u8(pg, vround, in2))) {
-                /* 冷路径复核必须用被测 reload(in2), 而非 input 的又一次
-                 * 重读: 向量级 svcmpne 检出的正是 "寄存器结果 != 被测
-                 * reload", 重读 input 会引入第三个值 → 可能漏报被检出的
-                 * lane 或错报索引。golden = 被测 reload, actual = 寄存器值。 */
+                /* 冷路径逐元素复核 + 日志。复核基准用被测 reload(in2) ——
+                 * 向量级 svcmpne 检出的正是 "寄存器结果 != 被测 reload"。
+                 * input 单独记录字节交换前的原始加载(in1), 与 golden(in2)
+                 * 分开, 从而可判断 "字节交换前的加载" 是否已与被测 reload
+                 * 分叉 (原实现 input==golden==reload, 丢失该判别力)。 */
                 svst1_u8(pg, round_bytes, vround);
+                uint8_t in1_bytes[SVE_MAX_VECTOR_BYTES];
+                svst1_u8(pg, in1_bytes, in1);
                 uint8_t in2_bytes[SVE_MAX_VECTOR_BYTES];
                 svst1_u8(pg, in2_bytes, in2);
+                uint32_t in1w[SVE_MAX_VECTOR_BYTES / 4];
                 uint32_t round[SVE_MAX_VECTOR_BYTES / 4];
                 uint32_t reload[SVE_MAX_VECTOR_BYTES / 4];
+                memcpy(in1w, in1_bytes, (size_t)n * 4);
                 memcpy(round, round_bytes, (size_t)n * 4);
                 memcpy(reload, in2_bytes, (size_t)n * 4);
                 for (int k = 0; k < n; ++k) {
                     if (round[k] != reload[k]) {
                         log_error("MovBE-dump-golden-SVE: Round-trip failed at index %u: "
                                   "input=0x%08X golden=0x%08X actual=0x%08X xor=0x%08X",
-                                  (unsigned)(base + k), reload[k], reload[k], round[k],
+                                  (unsigned)(base + k), in1w[k], reload[k], round[k],
                                   reload[k] ^ round[k]);
                         report_fail_msg("MovBE-SVE: Round-trip failed at index %u",
                                         (unsigned)(base + k));
