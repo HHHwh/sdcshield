@@ -43,6 +43,12 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
+
+#ifndef SVE_MAX_VECTOR_BYTES
+/* GCC 12 的 arm_sve.h 不提供该 ACLE 宏 (movbe_slf_sweep 同款自定义):
+ * SVE 架构最大 VL 2048bit = 256 字节 */
+#define SVE_MAX_VECTOR_BYTES 256
+#endif
 #include <sys/auxv.h>
 
 #ifndef HWCAP_SVE
@@ -116,14 +122,17 @@ static int movbe_dump_golden_sve_run(struct test *test, int cpu)
     /* bswap32 的 svtbl 索引: 每元素 [3,2,1,0] (movbe_sve 构造) */
     static const uint8_t idx4[4] = {3, 2, 1, 0};
     const int lanes = svcntw();
-    uint8_t vidx_bytes[64];
-    for (int i = 0; i < lanes && i < 16; ++i)
+    /* 索引按运行时 VL 定容: svcntw()*4 = svcntb() ≤ 256 = 架构最大 VL
+     * (movbe_slf_sweep VL-portable 范式); 原 64 字节 cap 在 lanes>16 时
+     * 使尾部 lane 索引为垃圾 → 确定性误报 + 失败路径栈越界 */
+    uint8_t vidx_bytes[SVE_MAX_VECTOR_BYTES];
+    for (int i = 0; i < lanes; ++i)
         for (int b = 0; b < 4; ++b)
             vidx_bytes[i * 4 + b] = (uint8_t)(i * 4 + idx4[b]);
-    svbool_t pg_batch = svwhilelt_b8((uint64_t)0, (uint64_t)(lanes < 16 ? lanes * 4 : 64));
+    svbool_t pg_batch = svwhilelt_b8((uint64_t)0, (uint64_t)lanes * 4);
     svuint8_t vidx = svld1_u8(pg_batch, vidx_bytes);
 
-    uint8_t round_bytes[64];
+    uint8_t round_bytes[SVE_MAX_VECTOR_BYTES];
 
     TEST_LOOP(test, 1 << 13) {
         for (size_t base = 0; base < MOVBE_DUMP_GOLDEN_SVE_BUFFER_SIZE; base += lanes) {
@@ -141,7 +150,7 @@ static int movbe_dump_golden_sve_run(struct test *test, int cpu)
             svuint8_t vround = svtbl_u8(vswapped, vidx);
             if (svptest_any(pg, svcmpne_u8(pg, vround, in2))) {
                 svst1_u8(pg, round_bytes, vround);
-                uint32_t round[16];
+                uint32_t round[SVE_MAX_VECTOR_BYTES / 4];
                 memcpy(round, round_bytes, (size_t)n * 4);
                 for (int k = 0; k < n; ++k) {
                     uint32_t golden = data->input[base + k];
