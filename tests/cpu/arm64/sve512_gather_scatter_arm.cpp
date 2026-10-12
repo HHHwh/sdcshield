@@ -6,7 +6,11 @@
  * @test @b sve512_gather_scatter_arm
  * @parblock
  * SVE full-vector-length gather/scatter SDC stress — standalone extraction
- * of workload 4 from sve512_fma_arm.
+ * of workload 4 from sve512_fma_arm, extended with explicit read-offset
+ * verification and gather-variant coverage (SEVI ASPLOS'26: 76% of
+ * memory-class SDC is a wrong-offset read — valid data from the wrong
+ * address, never a crash, input-level repro ~0 — so the offset itself
+ * must be asserted, not just the value).
  *
  * Drives the SVE memory pipeline at the CPU's runtime vector length:
  *   svld1_gather_u64index_f64   — gather f64 elements at element-index
@@ -15,6 +19,19 @@
  *                                 (v = 1.5 + v*v)
  *   svst1_scatter_u64index_f64  — scatter results to a scratch region at
  *                                 the same element indices
+ *
+ * Explicit read-offset assertion: the source is encoded so the value
+ * reveals the index it came from (src[i] bit pattern = i, reconstructible
+ * via the mantissa). After every gather, each lane's raw loaded value is
+ * checked against decode(idx[lane]) BEFORE the FMA — a wrong-offset read
+ * produces a decodable-but-wrong index and fails immediately.
+ *
+ * Gather variants (round-robin): u64index (scalar base + u64 element
+ * indices — the original), u64base (per-lane base addresses in a vector,
+ * svld1_gather_u64base_f64), and a wide-stride variant (indices stepped
+ * by 64 elements, forcing L1 misses on the gather path — ITHICA MemDiv:
+ * forcing different memory-hierarchy paths exposes faults homogeneous
+ * traffic never sees).
  *
  * The scatter destination is byte-compared against a scalar golden that
  * indexes through the SAME indirection (a permutation does NOT commute
@@ -130,8 +147,11 @@ static int sve512_gather_scatter_arm_init(struct test *test)
         const size_t gn = 64 * data->vl_d;
         data->gather_src.resize(gn);
         data->gather_idx.resize(gn);
+        // Index-revealing encoding: src[i] = quiet [1,2) double whose low
+        // 48 mantissa bits literally carry i. gather loads can be decoded
+        // back to the index they actually read (SEVI wrong-offset check).
         for (size_t i = 0; i < gn; ++i) {
-            data->gather_src[i] = data->seeds_f64[i % data->vl_d];
+            data->gather_src[i] = 0x3FF0000000000000ULL | (uint64_t)i;
             data->gather_idx[i] = i;
         }
         /* Fisher-Yates shuffle driven by the framework RNG (per-run
@@ -152,11 +172,54 @@ static int sve512_gather_scatter_arm_init(struct test *test)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Explicit read-offset assertion (SEVI: 76% of memory-class SDC is a
+// wrong-offset read): the value encoding carries its own index, so a lane
+// that read the wrong address decodes to the wrong index.
+// ---------------------------------------------------------------------------
+static bool check_read_offsets(const SveGatherScatterData *d,
+                               const uint64_t *raw,
+                               const uint64_t *idx, size_t n)
+{
+    (void)d;
+    bool ok = true;
+    for (size_t i = 0; i < n; ++i) {
+        uint64_t decoded = raw[i] & 0x0000FFFFFFFFFFFFULL;
+        if (decoded != (idx[i] & 0x0000FFFFFFFFFFFFULL)) {
+            log_warning("sve512_gather_scatter: wrong-offset read at slot %zu: "
+                        "expected index %llu, value decodes to %llu",
+                        i, (unsigned long long)idx[i],
+                        (unsigned long long)decoded);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+// Wide-stride index table (forces L1 misses on the gather path).
+static void build_stride_idx(std::vector<uint64_t> &idx, size_t n, size_t span)
+{
+    idx.resize(n);
+    for (size_t i = 0; i < n; ++i)
+        idx[i] = (i * 64) % span;   // stride 64 elements
+}
+
 static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 {
     (void)cpu;
     const auto *d = static_cast<SveGatherScatterData *>(test->data);
     const size_t gn = d->gather_idx.size();
+    const size_t lanes = d->vl_d;
+
+    // u64base variant operand: per-lane base addresses into src (computed
+    // once from the read-only shared tables — no -n>1 hazard).
+    std::vector<uint64_t> base_addrs(gn);
+    for (size_t i = 0; i < gn; ++i)
+        base_addrs[i] = reinterpret_cast<uintptr_t>(&d->gather_src[d->gather_idx[i]]);
+
+    // wide-stride variant table
+    std::vector<uint64_t> stride_idx;
+    build_stride_idx(stride_idx, gn, d->gather_src.size());
 
     // 每线程每迭代的栈上 scratch(dst/golden 可写),不共享 —— 规避 -n>1 并发踩踏
     // (与 sve512_f64_chain_arm 的 hw/gold 同模式)。
@@ -166,6 +229,49 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
     do {
         bool all_passed = true;
 
+        // ---- variant 1: u64index (original) + explicit offset check ----
+        {
+            std::vector<uint64_t> raw(gn);
+            const svbool_t pg = svptrue_b64();
+            for (size_t off = 0; off < gn; off += lanes) {
+                svuint64_t vidx = svld1_u64(pg, &d->gather_idx[off]);
+                svfloat64_t v = svld1_gather_u64index_f64(
+                    pg, reinterpret_cast<const double *>(d->gather_src.data()), vidx);
+                svst1_f64(pg, reinterpret_cast<double *>(&raw[off]), v);
+            }
+            if (!check_read_offsets(d, raw.data(), d->gather_idx.data(), gn))
+                all_passed = false;
+        }
+
+        // ---- variant 2: u64base (vector base addresses) ----
+        {
+            std::vector<uint64_t> raw(gn);
+            const svbool_t pg = svptrue_b64();
+            for (size_t off = 0; off < gn; off += lanes) {
+                svuint64_t vbase = svld1_u64(pg, &base_addrs[off]);
+                svfloat64_t v = svld1_gather_u64base_f64(pg, vbase);
+                svst1_f64(pg, reinterpret_cast<double *>(&raw[off]), v);
+            }
+            if (!check_read_offsets(d, raw.data(), d->gather_idx.data(), gn))
+                all_passed = false;
+        }
+
+        // ---- variant 3: wide stride (L1-miss gather path) ----
+        {
+            const size_t n = stride_idx.size();
+            std::vector<uint64_t> raw(n);
+            const svbool_t pg = svptrue_b64();
+            for (size_t off = 0; off < n; off += lanes) {
+                svuint64_t vidx = svld1_u64(pg, &stride_idx[off]);
+                svfloat64_t v = svld1_gather_u64index_f64(
+                    pg, reinterpret_cast<const double *>(d->gather_src.data()), vidx);
+                svst1_f64(pg, reinterpret_cast<double *>(&raw[off]), v);
+            }
+            if (!check_read_offsets(d, raw.data(), stride_idx.data(), n))
+                all_passed = false;
+        }
+
+        // ---- original FMA+scatter round-trip (value-level check) ----
         gather_scatter_hw(d, scatter_dst.data());
         gather_scatter_golden(d, scatter_golden.data());
         for (size_t i = 0; i < gn; ++i) {
@@ -179,7 +285,8 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_gather_scatter_arm: SVE-512 gather/scatter SDC detected");
+                "sve512_gather_scatter_arm: SVE-512 gather/scatter SDC detected "
+                "(wrong-offset read or scatter corruption)");
             return EXIT_FAILURE;
         }
 
