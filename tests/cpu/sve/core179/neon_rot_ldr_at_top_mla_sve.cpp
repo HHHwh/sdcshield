@@ -158,6 +158,26 @@ static int neon_rot_ldr_at_top_mla_sve_run(struct test *test, int cpu) {
         }
 
         if (memcmp(dst, data->expected, elems * sizeof(uint32_t)) != 0) {
+            /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
+            {
+                size_t _dump_bad = 0;
+                int _dump_shown = 0;
+                for (size_t _dump_j = 0; _dump_j < elems; ++_dump_j) {
+                    if (dst[_dump_j] != data->expected[_dump_j]) {
+                        ++_dump_bad;
+                        if (_dump_shown < 8) {
+                            log_error("neon_rot_ldr_at_top_mla_sve: mismatch at flat=%zu slot=%zu lane=%zu: golden=0x%08x actual=0x%08x xor=0x%08x",
+                                      _dump_j, _dump_j / (size_t)data->lanes, _dump_j % (size_t)data->lanes,
+                                      (unsigned)data->expected[_dump_j],
+                                      (unsigned)dst[_dump_j],
+                                      (unsigned)(data->expected[_dump_j] ^ dst[_dump_j]));
+                            ++_dump_shown;
+                        }
+                    }
+                }
+                log_error("neon_rot_ldr_at_top_mla_sve: total mismatched elements: %zu / %zu (slots x lanes)",
+                          _dump_bad, elems);
+            }
             report_fail_msg("neon_rot_ldr_at_top_mla_sve data miscompare");
         }
     }
