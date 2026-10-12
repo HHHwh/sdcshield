@@ -92,6 +92,25 @@ static int gmp_bigadd_sve_run(struct test *test, int cpu)
             }
         }
         if (memcmp(result.data(), d->golden.data(), GMP_SVE_LIMBS * sizeof(uint64_t)) != 0) {
+            /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
+            {
+                size_t _dump_bad = 0;
+                int _dump_shown = 0;
+                for (size_t _dump_j = 0; _dump_j < (size_t)(GMP_SVE_LIMBS); ++_dump_j) {
+                    if (result[_dump_j] != d->golden[_dump_j]) {
+                        ++_dump_bad;
+                        if (_dump_shown < 8) {
+                            log_error("gmp_bigadd_sve: mismatch at limb %zu: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                                      _dump_j, (unsigned long long)d->golden[_dump_j],
+                                      (unsigned long long)result[_dump_j],
+                                      (unsigned long long)(d->golden[_dump_j] ^ result[_dump_j]));
+                            ++_dump_shown;
+                        }
+                    }
+                }
+                log_error("gmp_bigadd_sve: total mismatched elements: %zu / %d",
+                          _dump_bad, (int)GMP_SVE_LIMBS);
+            }
             report_fail_msg("gmp_bigadd_sve: big-integer add miscompare (SVE carry chain)");
         }
     }

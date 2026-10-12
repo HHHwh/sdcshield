@@ -117,6 +117,27 @@ static int acl_gemm_sve_run(struct test *test, int cpu)
             }
         }
         if (memcmp(C.data(), d->golden.data(), C.size() * sizeof(float)) != 0) {
+            /* cold path: locate mismatches, record bit-level evidence (bit pattern + float) */
+            {
+                size_t _dump_bad = 0;
+                int _dump_shown = 0;
+                for (size_t _dump_j = 0; _dump_j < C.size(); ++_dump_j) {
+                    uint32_t _dump_g, _dump_a;
+                    memcpy(&_dump_g, &d->golden[_dump_j], 4);
+                    memcpy(&_dump_a, &C[_dump_j], 4);
+                    if (_dump_g != _dump_a) {
+                        ++_dump_bad;
+                        if (_dump_shown < 8) {
+                            log_error("acl_gemm_sve: mismatch at index %zu: golden=0x%08x (%g) actual=0x%08x (%g) xor=0x%08x",
+                                      _dump_j, _dump_g, d->golden[_dump_j], _dump_a, C[_dump_j],
+                                      _dump_g ^ _dump_a);
+                            ++_dump_shown;
+                        }
+                    }
+                }
+                log_error("acl_gemm_sve: total mismatched elements: %zu / %d",
+                          _dump_bad, (int)C.size());
+            }
             report_fail_msg("acl_gemm_sve: GEMM output miscompare (SVE svmla path)");
         }
     }
