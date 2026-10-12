@@ -26,7 +26,7 @@
 9. **热路径保真**：asm volatile + "memory" clobber 防消除/防重排；"reload 刚存储地址"一律 asm `ldr %0,[%1]`（`=w` 约束）或已被先例验证的 svld1（objdump 冒烟兜底核查）；N-nop 延迟必须与 ldr 融合在同一 asm 块（`.rept N mov x9,x9 .endr ldr`）。
 10. **验证协议（每任务每测试）**：
     - `ninja -C builddir` 零新增 error/warning（既有良性警告白名单见 CLAUDE.md）；
-    - `./builddir/sdcshield -e <test> -t 60000 --cpuset='!122' 2>&1 | tail -2` → `exit: pass`（P0 先验证 cpuset 排除语法；122 现已重新在线，两阶段协议阶段 1 = 排除 122）；
+    - `./builddir/sdcshield -e <test> -t 60000 --cpuset=$(seq -s, 0 63) 2>&1 | tail -2` → `exit: pass`（可靠性测试限定 0-63 半核——见 Global Constraint #11；**不得再用 `--cpuset='!122'`**）；
     - 回归：`./builddir/sdcshield -e zstd19 -t 3000 -n 1` → `exit: pass`；
     - commit + push（分支 feat/sve-port-avx53，非 main）。
 11. **可靠性 vs 有效性的语义（2026-10-11 用户两次裁定）**：
@@ -132,7 +132,7 @@ static inline void evict_range(const void *p, size_t bytes) {
 ```cpp
 svuint64_t r_add = svadd_u64_x(pg, va, vb), r_sub = svsub_u64_x(pg, va, vb),
            r_eor = sveor_u64_x(pg, va, vb), r_and = svand_u64_x(pg, va, vb);
-uint64_t phase[8];
+uint64_t phase[SVE_MAX_VECTOR_BYTES / 8];   /* 按架构最大 VL 定容: 256B/8 = 32 ≥ svcntd() */
 for (int k = 0; k < n; ++k) phase[k] = (base + k) % 4;
 svuint64_t vphase = svld1_u64(pgn, phase);
 svuint64_t res = svsel_u64(svcmpeq_n_u64(pgn, vphase, 0), r_add,
@@ -204,10 +204,10 @@ cd /home/sdc/root-xupeng/sdcshield && ninja -C builddir 2>&1 | tail -3
 ./builddir/sdcshield -e zstd19 -t 3000 -n 1 2>&1 | tail -2   # 预期 exit: pass
 ./builddir/sdcshield --list-tests | wc -l                     # 预期 406（记录为基线）
 ```
-- [ ] **Step 0.4: 验证 cpuset 排除语法（两阶段协议阶段 1 的载体）**
+- [ ] **Step 0.4: 验证 cpuset 子集语法（可靠性测试 0-63 半核的载体；不得用 `!122` 形式）**
 ```bash
-./builddir/sdcshield -e zstd19 -t 3000 --cpuset='!122' -v 2>&1 | grep -iE 'cpu|thread' | head -3
-# 预期: 显示 127 线程/CPU 集（若 '!' 语法不支持, 改用 --cpuset=0-121,123-127 并更新本计划所有命令）
+./builddir/sdcshield -e zstd19 -t 3000 --cpuset=$(seq -s, 0 63) -v 2>&1 | grep -iE 'cpu|thread' | head -3
+# 预期: 显示 64 线程/CPU 集（0-63，122 不在其中）；见 Global Constraint #11
 ```
 
 ---
@@ -251,10 +251,10 @@ ninja -C builddir 2>&1 | grep -E 'error|warning' | grep -vE 'sysv_abi|assume|Wre
 # 预期: 无新增 error/warning 输出, rc=0
 ```
 
-- [ ] **Step 1.4: 逐测试验证（60s × !122）**
+- [ ] **Step 1.4: 逐测试验证（60s × cpuset 0-63）**
 ```bash
 for t in movbe_l1d_sve movbe_l2_sve movbe_dump_golden_sve; do
-  ./builddir/sdcshield -e $t -t 60000 --cpuset='!122' 2>&1 | tail -1
+  ./builddir/sdcshield -e $t -t 60000 --cpuset=$(seq -s, 0 63) 2>&1 | tail -1
 done
 # 预期: 三行 exit: pass
 ./builddir/sdcshield -e zstd19 -t 3000 -n 1 2>&1 | tail -1   # 预期 exit: pass
@@ -302,7 +302,7 @@ git push origin feat/sve-port-avx53
 ```bash
 for t in mrn_rmw_fwd_sve mrn_rmw_l1d_sve mrn_rmw_diff_sve mrn_rmw_diff_64k_sve mrn_rmw_diff_1m_sve \
          mrn_rmw_nop_sve mrn_rmw_nop1_sve mrn_rmw_nop4_sve mrn_rmw_nop8_sve mrn_rmw_nop16_sve mrn_rmw_nop64_sve; do
-  ./builddir/sdcshield -e $t -t 60000 --cpuset='!122' 2>&1 | tail -1
+  ./builddir/sdcshield -e $t -t 60000 --cpuset=$(seq -s, 0 63) 2>&1 | tail -1
 done
 # 预期: 11 行 exit: pass（nop 系首跑允许较慢启动; 任何 fail/崩溃 → 停下按 systematic-debugging 排查）
 ./builddir/sdcshield -e zstd19 -t 3000 -n 1 2>&1 | tail -1
@@ -373,7 +373,7 @@ done
 - [ ] **Step 6.2: gps** — init `mkdir("movbe_log/gps_rowmajor", 0755)`（**保留相对路径**，头注释记录 CWD 依赖与原版一致）；GPS 标签填充（片段 F：srcA=0xA5A5/srcB=0x5A5A/scratch=0x0F0F，byte_off=字内偏移，gen=0，**无 RNG**）；golden 从标签数据按槽旋转 {add,eor,and,orr}；热路径 rowmajor 逐字；冷路径：五缓冲整转储（dst/expected/srcA/srcB/scratch 顺序 write 到 `movbe_log/gps_rowmajor/neon_rot_ldr_at_top_rowmajor_gps_sve_fail_cpu<cpu>_sweep<sweep>.bin`）+ 尾行 `cpu=%d sweep=%lu\n` + report_fail_msg。
 - [ ] **Step 6.3: dualcmp** — init 同 mkdir；热路径 rowmajor 双存逐字；**每 sweep 两个无条件 memcmp**（dst vs golden、temp vs golden）；任一失配 → noinline 标量分类循环统计 `{a_only(dst错/temp对), b_only, ab_div(两者互异), ab_same(同错≠golden), first_bad}` → 五缓冲转储 + stats 行 → `report_fail_msg` 带四计数摘要。头注释记录读出语义（哪条 store 腿 / 分叉上游）。
 - [ ] **Step 6.4: str3_checkall**（测试名**无 rowmajor**）— str3 热路径（三存 temp/junk/dst）+ 每 sweep **三个无条件 memcmp** → slot_mask(bit0=temp,bit1=junk,bit2=dst)；失配 → noinline 冷扫描：逐槽三路比较得 index_slot_mask + srcA/srcB 冷重读（asm ldr z，load-错误 vs ALU-错误分类）+ 逐失配 log + 记录写 + **瞬态处理**（重读干净 → 写 sweep 级记录 index=0xFFFFFFFF）；`/var/tmp/neon_rot_ldr_at_top_str3_checkall_sve_<pid>.bin` 追加。
-- [ ] **Step 6.5: 注册 + 构建 + 验证 4 测试**（60s × !122）+ zstd19 回归（meson 注释 `batch 6/8: rowmajor instrumented variants`）。验证时同时确认不产生误转储：`ls movbe_log/gps_rowmajor/ /var/tmp/*_sve_*.bin 2>/dev/null` 应只有 dump_golden 的 golden 文件、无 fail 转储。
+- [ ] **Step 6.5: 注册 + 构建 + 验证 4 测试**（60s × cpuset 0-63）+ zstd19 回归（meson 注释 `batch 6/8: rowmajor instrumented variants`）。验证时同时确认不产生误转储：`ls movbe_log/gps_rowmajor/ /var/tmp/*_sve_*.bin 2>/dev/null` 应只有 dump_golden 的 golden 文件、无 fail 转储。
 - [ ] **Step 6.6: Commit + push**：`tests(sve): port rowmajor instrumented variants from missing_testcases_20261009 — dump/gps/dualcmp/str3_checkall (4 tests)`
 
 ---
@@ -426,14 +426,14 @@ default: return svorr_u32_x(pg, svand_u32_x(pg, a, svand_u32_x(pg, a, b)),  /* B
 ### Task 9: 文档同步（README 计数 + docs_xu 批次文档）
 
 **Files:**
-- Modify: `README.md`（测试计数脚注：`--list-tests` 实测 406 → 450，及 SVE 套件 120 → 164 文件描述行——以实测为准）
+- Modify: `README.md`（测试计数脚注：`--list-tests` 实测 406 → 450，及 SVE 套件 120 → 153 文件描述行——以实测为准）
 - Create: `docs/docs_xu/2026-10-10-missing-testcases-sve-port.md`（批次文档）
 
 - [ ] **Step 9.1: 实测计数**
 ```bash
 ./builddir/sdcshield --list-tests | wc -l          # 预期 450（406 + 44）
 ./builddir/sdcshield --list-tests | grep -c '_sve' # 预期 163（119 + 44）
-find tests/cpu/sve -name '*.cpp' | wc -l           # 预期 164（120 + 44... 核对: 新文件数 = 2+4+6+4+5+4+4+4 = 33 个文件含 44 测试）
+find tests/cpu/sve -name '*.cpp' | wc -l           # 预期 153（120 基线文件 + 33 新文件；新文件数 = 2+4+6+4+5+4+4+4 = 33，含 44 测试）
 ```
 （注意：44 测试分布在 33 个新文件中——k7pattern 4 测试 1 文件、timing_probe 6 测试 1 文件、l1d_vs_l2 与 footprint 各 2 测试 1 文件。）
 - [ ] **Step 9.2: README 计数与 SVE 套件行更新**（只改计数/清单行，不动其他）。
