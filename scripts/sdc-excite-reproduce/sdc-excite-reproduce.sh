@@ -212,9 +212,16 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
 # ---------------- stress-ng 补充层（后台，小时轮转 --verify）----------------
 stressng_layer() {
     local list i=0 s
-    # 白名单取自本机 stress-ng --verifiable 实测可用集（CPU 型、内存足迹小）
-    list=$(stress-ng --verifiable 2>/dev/null | awk 'NR>1 {print $1}' \
-            | grep -xE 'matrix|matrix-3d|qsort|radixsort|mergesort|insertionsort|bsearch|fma|vecfp|vecwide|skiplist|hash|judy|tsearch|hsearch|fibsearch|lsearch' | tr '\n' ' ')
+    # 白名单取自本机 stress-ng --verifiable 实测可用集（CPU 型、内存足迹小）。
+    # stress-ng 0.22 起 --verifiable 为分段空格分隔格式（0.18 为逐行），原
+    # awk 'NR>1 {print $1}' 逐行解析在新格式下只取每段首词、白名单交集恒空——
+    # 改用 tr 拆词后 -xE 精确匹配，两种格式都兼容。
+    # SDC 定向补充（sdc-stressng fork 0.22.x）：operand-var（塑形操作数 golden
+    # 重放）、armcrypto（NEON crypto 引擎）、llccross（跨域一致性，默认
+    # 8m/worker 足迹）；ooopress/memrate 无 verify oracle、lsupress/addrspace
+    # 足迹大，按层设计约束（CPU 型、小足迹）排除。
+    list=$(stress-ng --verifiable 2>/dev/null | tr ' ' '\n' \
+            | grep -xE 'matrix|matrix-3d|qsort|radixsort|mergesort|insertionsort|bsearch|fma|vecfp|vecwide|skiplist|hash|judy|tsearch|hsearch|fibsearch|lsearch|operand-var|armcrypto|llccross' | tr '\n' ' ')
     [ -z "$list" ] && list="matrix"
     log "stress-ng 补充层启动（保留核 $STRESSNG_CPUS，轮转: $list）"
     while :; do
