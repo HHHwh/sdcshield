@@ -435,6 +435,47 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 > 另:PR #202 的 5 个缺签提交已于 09-29 补签强推(14a82a92→f9e79b65,
 > 树零变化),git-sanity 转绿。
 
+## 2026-10-10（会话：CPU122 上线即封顶——满频致死竞态根因与模块方案）
+
+### 现象与根因（v6.6 源码级, 逐条核实）
+- 现象: 脚本上线 CPU122 后 ~10ms 整机卡死——uevent 未出、udev cap 脚本未跑,
+  "先上线后降频"架构性必输。
+- 根因三条:
+  1) KOBJ_ONLINE uevent 在 write() 返回前才广播 → 用户态一切触发源都在
+     风险窗口之后;
+  2) cppc_cpufreq_cpu_init() 在 CPUHP_AP_ONLINE_DYN（上线路径内, CPU122
+     自身执行, 早于 governor）直接 cppc_set_perf(desired=highest_perf
+     =2.9G boost)——满频是内核亲手写上去的;
+  3) 用户态无跨 offline/online 限值持久化通道（per-cpu policy 实证 +
+     sysfs 离线不存在 + 无 freq_qos 接口）。
+- 关键核实: cpufreq_notifier_max 为 schedule_work 异步 → CREATE_POLICY
+  回调内挂 freq_qos 无死锁; 全部依赖符号在 6.6.0-159.4.x Module.symvers
+  确认导出。
+
+### 产出（分支 feat/cpu122-online-atomic-freqcap）
+- 方案 A（用户裁定）: 模块 cpu122-capfreq——kprobe cppc_set_perf 钳位
+  （时刻②归零）+ freq_qos MAX 挂 policy 跨热插拔存活（时刻③归零）。
+  spec: docs/superpowers/specs/2026-10-10-cpu122-online-atomic-freqcap-design.md
+- 仓内正本: docs/cases/sdc1-01-04-core122/cpu122-capfreq/（含 deploy/tests）
+  + 脚本 v2（门0/门1/后验/封顶）+ 配置总账增补。
+- 实证: 本机零警告构建通过（vermagic 6.6.0-159.4.3.154, 仅 kbuild
+  编译器名比对噪音 gcc_old/gcc 同版本 12.3.1）+ insmod/rmmod 冒烟全链路
+  （armed/disarmed/参数回调/caps 失败优雅降级, dmesg 4 行留痕）;
+  行为测试 16 用例 43 断言全绿（fake sysfs/假 journalctl, TDD 红→绿）;
+  5 个提交逐一推送（dcae1ce spec/38652be 计划/1fb7b28 模块/96a52a77
+  封顶/2d9cf419 三门/041f9a5a 总账）。
+
+### 残余与缓解
+- 时刻①（PSCI 热启动早期段, 固件域）不可归零: 历史全部死亡发生于负载期或
+  满频稳态, 无一例在热启动早期段; 缓解 = 会话一次上线 + 错峰; 治本走
+  BIOS/BMC per-core 限频（长期项）。
+
+### 下一步
+- [ ] 板上部署（kernel-devel 重编 + deploy conf 安装）→ V1 好核 123 演练
+      → V3 真实上线, 结论回写本台账
+- [ ] V6: 检索清除板上残留 udev cap 规则（保留防自动上线注释）
+- [ ] 内核升级 SOP 增补"先重编模块再谈上线"（脚本门0 强制）
+
 ## 2026-10-12 激发增强套件合并 main + 本机最大检测
 
 - **合并落地**:`feat/sdc-excitation-enhancement-20260917`(22 commits,19 任务,

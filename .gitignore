@@ -29,6 +29,3 @@ tags
 /scripts/sdc-excite-reproduce/drills/out/
 # oversized raw field logs kept on disk, never for git (245 MB):
 /docs/cases/hpc/Linsheng 10.39.0.1_2026-09-11_6_42_28.log
-# standalone parent of the split sve512 workload tests, intentionally
-# untracked until it gets its own meson entry (see sve512_*_arm.cpp):
-/tests/cpu/arm64/sve512_fma_arm.cpp
