@@ -126,10 +126,11 @@ static int mrn_reloaded_2src_alu_sve_run(struct test *test, int cpu)
                 for (int k = 0; k < n; ++k) {
                     if (got_bytes[k] != data->expected[base + k]) {
                         report_fail_msg("mrn_reloaded_2src_alu_sve qword miscompare at %zu: "
-                                        "expected 0x%llx got 0x%llx",
+                                        "expected 0x%llx got 0x%llx xor=0x%llx",
                                         (size_t)(base + k),
                                         (unsigned long long)data->expected[base + k],
-                                        (unsigned long long)got_bytes[k]);
+                                        (unsigned long long)got_bytes[k],
+                                        (unsigned long long)(data->expected[base + k] ^ got_bytes[k]));
                     }
                 }
             }

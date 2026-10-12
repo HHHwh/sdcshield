@@ -121,6 +121,26 @@ static int mrn_nuke_2src_alu_sve_run(struct test *test, int cpu)
         }
 
         if (memcmp(dst, data->expected, MRN_NUKE_2SRC_ALU_SVE_COUNT * sizeof(uint64_t)) != 0) {
+            /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
+            {
+                size_t _dump_bad = 0;
+                int _dump_shown = 0;
+                for (size_t _dump_j = 0; _dump_j < (size_t)(MRN_NUKE_2SRC_ALU_SVE_COUNT); ++_dump_j) {
+                    if (dst[_dump_j] != data->expected[_dump_j]) {
+                        ++_dump_bad;
+                        if (_dump_shown < 8) {
+                            log_error("mrn_nuke_2src_alu_sve: mismatch at index %zu: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                                      _dump_j,
+                                      (unsigned long long)data->expected[_dump_j],
+                                      (unsigned long long)dst[_dump_j],
+                                      (unsigned long long)(data->expected[_dump_j] ^ dst[_dump_j]));
+                            ++_dump_shown;
+                        }
+                    }
+                }
+                log_error("mrn_nuke_2src_alu_sve: total mismatched elements: %zu / %d",
+                          _dump_bad, MRN_NUKE_2SRC_ALU_SVE_COUNT);
+            }
             report_fail_msg("mrn_nuke_2src_alu_sve data miscompare");
         }
     }

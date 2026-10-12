@@ -74,7 +74,10 @@ static int mrn_reloaded_sve_run(struct test *test, int cpu)
             svst1_u8(pg, got, svld1_u8(pg, temp8 + base));
             for (int i = 0; i < n; ++i)
                 if (got[i] != data->src8[base + i])
-                    report_fail_msg("mrn_reloaded_sve 1-byte miscompare at %d", (int)(base + i));
+                    report_fail_msg("mrn_reloaded_sve 1-byte miscompare at %d: "
+                                    "golden=0x%02x actual=0x%02x xor=0x%02x",
+                                    (int)(base + i), (unsigned)data->src8[base + i],
+                                    (unsigned)got[i], (unsigned)(data->src8[base + i] ^ got[i]));
         }
         /* 32-bit 批 */
         for (size_t base = 0; base < MRN_RELOADED_SVE_COUNT; base += svcntw()) {
@@ -85,7 +88,10 @@ static int mrn_reloaded_sve_run(struct test *test, int cpu)
             svst1_u32(pg, got, svld1_u32(pg, temp32 + base));
             for (int i = 0; i < n; ++i)
                 if (got[i] != data->src32[base + i])
-                    report_fail_msg("mrn_reloaded_sve 4-byte miscompare at %d", (int)(base + i));
+                    report_fail_msg("mrn_reloaded_sve 4-byte miscompare at %d: "
+                                    "golden=0x%08x actual=0x%08x xor=0x%08x",
+                                    (int)(base + i), (unsigned)data->src32[base + i],
+                                    (unsigned)got[i], (unsigned)(data->src32[base + i] ^ got[i]));
         }
         /* 64-bit 批 */
         for (size_t base = 0; base < MRN_RELOADED_SVE_COUNT; base += svcntd()) {
@@ -96,7 +102,11 @@ static int mrn_reloaded_sve_run(struct test *test, int cpu)
             svst1_u64(pg, got, svld1_u64(pg, temp64 + base));
             for (int i = 0; i < n; ++i)
                 if (got[i] != data->src64[base + i])
-                    report_fail_msg("mrn_reloaded_sve 8-byte miscompare at %d", (int)(base + i));
+                    report_fail_msg("mrn_reloaded_sve 8-byte miscompare at %d: "
+                                    "golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                                    (int)(base + i), (unsigned long long)data->src64[base + i],
+                                    (unsigned long long)got[i],
+                                    (unsigned long long)(data->src64[base + i] ^ got[i]));
         }
     }
 
