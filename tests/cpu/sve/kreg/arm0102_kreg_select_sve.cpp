@@ -21,9 +21,9 @@
  * 4-lane NEON semantics are preserved via pg4 sub-block predicates
  * (arm0102_kreg_mask_sve discipline: svptrue at VL=256 is 8 lanes and
  * would overrun the 4-element sub-block — the batch-1 heap-corruption
- * bug). Buffers carry +8 elements of slack so the asm full-VL ldr z at
- * the final sub-block cannot overread (deviation from the mask_sve
- * template, documented).
+ * bug). Buffers carry svcntw() elements (runtime VL) of slack so the asm
+ * full-VL ldr z at the final sub-block cannot overread (deviation from
+ * the mask_sve template, documented).
  * @endparblock
  */
 
@@ -108,14 +108,16 @@ static int arm0102_kreg_select_sve_init(struct test *test) {
     memset_random(data->srcA, total);
     memset_random(data->srcB, total);
 
-    /* golden: 与 run 完全相同的 4 元素子块结构 + 相位 (base+sub)%4 */
+    /* golden: 与 run 完全相同的 4 元素子块结构 + 相位 = 子块序号
+     * (base+sub)/KSEL_SVE_SUBLANES, 按子块旋转 op; 原式 (base+sub)%4
+     * 恒为 0 (base 是 svcntw() 倍数、sub 是 4 的倍数), 旋转失效 */
     const int lanes = svcntw();
     svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)KSEL_SVE_SUBLANES);
     for (int base = 0; base < ARM0102_KREG_SELECT_SVE_COUNT; base += lanes) {
         const int n = (ARM0102_KREG_SELECT_SVE_COUNT - base < lanes)
                           ? ARM0102_KREG_SELECT_SVE_COUNT - base : lanes;
         for (int sub = 0; sub < n; sub += KSEL_SVE_SUBLANES) {
-            const int phase = (base + sub) % 4;
+            const int phase = (base + sub) / KSEL_SVE_SUBLANES;
             uint32_t av[8], bv[8], ov[8];
             for (int k = 0; k < KSEL_SVE_SUBLANES && sub + k < n; ++k) {
                 av[k] = data->srcA[base + sub + k];
@@ -148,7 +150,7 @@ static int arm0102_kreg_select_sve_run(struct test *test, int cpu) {
     uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc(64, (size_t)(ARM0102_KREG_SELECT_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
 
     TEST_LOOP(test, 1 << 13) {
-        /* 与 golden 逐字一致的子块结构: 相位 = (base+sub)%4 */
+        /* 与 golden 逐字一致的子块结构: 相位 = 子块序号 (base+sub)/KSEL_SVE_SUBLANES */
         for (int base = 0; base < ARM0102_KREG_SELECT_SVE_COUNT; base += svcntw()) {
             const int n = (ARM0102_KREG_SELECT_SVE_COUNT - base < svcntw())
                               ? ARM0102_KREG_SELECT_SVE_COUNT - base : svcntw();
@@ -158,7 +160,7 @@ static int arm0102_kreg_select_sve_run(struct test *test, int cpu) {
                 svuint32_t b = load_vec_sve(data->srcB + base + sub);
                 svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)KSEL_SVE_SUBLANES);
 
-                svuint32_t res = select_rotating_sve(pg4, a, b, base + sub);
+                svuint32_t res = select_rotating_sve(pg4, a, b, (base + sub) / KSEL_SVE_SUBLANES);
 
                 /* 放大器: str z -> ldr z -> str z */
                 store_vec_sve(temp + base + sub, res);

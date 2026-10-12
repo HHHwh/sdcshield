@@ -13,9 +13,10 @@
  * xnor / nandnot — vmvnq applied over and/or/eor/bic. On SVE the NOT
  * maps to svnot (a real SVE1 instruction); pg4 sub-block predicates
  * preserve the 4-lane NEON semantics (arm0102_kreg_mask_sve
- * discipline); +8-element buffer slack covers the asm full-VL ldr z at
- * the final sub-block (documented deviation from the mask_sve
- * template). Back-to-back str z -> ldr z -> str z amplifier.
+ * discipline); svcntw() elements (runtime VL) of buffer slack cover the
+ * asm full-VL ldr z at the final sub-block (documented deviation from
+ * the mask_sve template). Back-to-back str z -> ldr z -> str z
+ * amplifier.
  * @endparblock
  */
 
@@ -97,7 +98,9 @@ static int arm0102_kreg_not_sve_init(struct test *test) {
         const int n = (ARM0102_KREG_NOT_SVE_COUNT - base < lanes)
                           ? ARM0102_KREG_NOT_SVE_COUNT - base : lanes;
         for (int sub = 0; sub < n; sub += KNOT_SVE_SUBLANES) {
-            const int phase = (base + sub) % 4;
+            /* 相位 = 子块序号 (base+sub)/KNOT_SVE_SUBLANES, 按子块旋转;
+             * 原式 (base+sub)%4 恒为 0 (base 是 svcntw() 倍数、sub 是 4 的倍数) */
+            const int phase = (base + sub) / KNOT_SVE_SUBLANES;
             uint32_t av[8], bv[8], ov[8];
             for (int k = 0; k < KNOT_SVE_SUBLANES && sub + k < n; ++k) {
                 av[k] = data->srcA[base + sub + k];
@@ -138,7 +141,7 @@ static int arm0102_kreg_not_sve_run(struct test *test, int cpu) {
                 svuint32_t b = load_vec_sve(data->srcB + base + sub);
                 svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)KNOT_SVE_SUBLANES);
 
-                svuint32_t res = not_rotating_sve(pg4, a, b, base + sub);
+                svuint32_t res = not_rotating_sve(pg4, a, b, (base + sub) / KNOT_SVE_SUBLANES);
 
                 store_vec_sve(temp + base + sub, res);
                 store_vec_sve(dst + base + sub, load_vec_sve(temp + base + sub));
