@@ -17,11 +17,12 @@
  * Four sections, each with an exact golden:
  *
  * 1. Predicate-density sweep: for active-lane counts k = 1..VL, whilelt
- *    masks the first k lanes; an svmla_f64_x under that predicate must
+ *    masks the first k lanes; an svmla_f64_m under that predicate must
  *    update exactly lanes [0, k) and leave lanes [k, VL) untouched. The
- *    untouched lanes are pre-filled with a sentinel (0xdead...) and the
- *    test verifies BOTH the computed lanes (byte-exact golden) and the
- *    untouched lanes (sentinel preserved) — a predicate that fails to
+ *    active lanes carry a finite addend (so the computed result has a
+ *    deterministic golden), the untouched lanes a sentinel (0xdead...);
+ *    the test verifies BOTH the computed lanes (byte-exact golden) and
+ *    the untouched lanes (sentinel preserved) — a predicate that fails to
  *    mask, or masks the wrong lanes, fails either half.
  *
  * 2. Predicate inversion: svnot_b_z of a whilelt predicate drives a
@@ -118,108 +119,75 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
     const svbool_t all = svptrue_b64();
     bool all_passed = true;
 
+    // Finite FMA addend for the active lanes: a distinctive, exactly
+    // representable value so the computed lanes have a deterministic
+    // golden. The masked-out lanes keep the NaN SENTINEL, which the
+    // merging (_m) form must preserve bit-for-bit.
+    const double BASE = 1.5;
+    uint64_t base_bits;
+    memcpy(&base_bits, &BASE, 8);
+
     // ---------------- Section 1+2: density sweep + inversion ----------------
     for (size_t k = 1; k <= vl; ++k) {
         // ---- section 1: whilelt(k) partial FMA ----
         svbool_t pg = svwhilelt_b64_u64((uint64_t)0, (uint64_t)k);
-        // dst prefilled with the sentinel
+        // dst: active lanes carry BASE (the addend), the rest the SENTINEL.
         std::vector<uint64_t> dst(vl, SENTINEL);
+        for (size_t i = 0; i < k; ++i)
+            dst[i] = base_bits;
         svfloat64_t vdst = svld1_f64(all, reinterpret_cast<const double *>(dst.data()));
         svfloat64_t vsrc = svld1_f64(all, d->src.data());
-        // acc = fma(src, src, dst) — active lanes only
-        vdst = svmla_f64_x(pg, vsrc, vsrc, vdst);
+        // ACLE _m: op1 + op2*op3, merging — acc = fma(src, src, BASE) on
+        // the active lanes; inactive lanes retain the SENTINEL.
+        vdst = svmla_f64_m(pg, vdst, vsrc, vsrc);
         svst1_f64(all, reinterpret_cast<double *>(dst.data()), vdst);
-        // golden: lane i < k ? fma(src,src,sentinel_as_double) : sentinel
-        double sentinel_d;
-        memcpy(&sentinel_d, &SENTINEL, 8);
-        for (size_t i = 0; i < vl; ++i) {
-            double expect;
-            if (i < k) {
-                // NaN sentinel: fma(src,src,NaN) = NaN — payload not
-                // deterministic. Use 0.0 as the dst base for active lanes
-                // instead: reload trick below keeps it exact.
-                expect = sentinel_d; // replaced below by the exact variant
-            } else {
-                expect = sentinel_d;
-            }
-            (void)expect;
-        }
-        // Exact variant: run the same predicate FMA with dst=0 base and
-        // merge with the sentinel dst afterwards. The hardware op is
-        // identical; only the base differs, so this is still a genuine
-        // partial-predicate check (active lanes must equal the golden
-        // fma; inactive lanes must equal the sentinel).
-        std::vector<uint64_t> zero(vl, 0);
-        svfloat64_t vz = svld1_f64(all, reinterpret_cast<const double *>(zero.data()));
-        vz = svmla_f64_x(pg, vsrc, vsrc, vz);
-        std::vector<uint64_t> merged(vl, SENTINEL);
-        for (size_t i = 0; i < vl; ++i) {
-            if (i < k)
-                memcpy(&merged[i], &zero[i], 8); // placeholder, refilled below
-        }
-        // Recompute merged from the vz store:
-        std::vector<uint64_t> vzout(vl, 0);
-        svst1_f64(all, reinterpret_cast<double *>(vzout.data()), vz);
-        for (size_t i = 0; i < vl; ++i) {
-            if (i < k)
-                merged[i] = vzout[i];
-        }
-        // The first dst run (sentinel base) must agree with merged on the
-        // ACTIVE lanes only (NaN payload propagation makes inactive-lane
-        // equality the sentinel check):
         for (size_t i = 0; i < vl; ++i) {
             if (i < k) {
-                // golden: fma(src_i, src_i, 0)
-                double g = std::fma(d->src[i], d->src[i], 0.0);
+                // golden: fma(src_i, src_i, BASE)
+                double g = std::fma(d->src[i], d->src[i], BASE);
                 uint64_t gw, aw;
                 memcpy(&gw, &g, 8);
-                memcpy(&aw, &vzout[i], 8);
+                memcpy(&aw, &dst[i], 8);
                 if (gw != aw) {
                     log_warning("sve512_pred_ops: density %zu active lane "
                                 "%zu golden=0x%016" PRIx64 " actual=0x%016"
                                 PRIx64, k, i, gw, aw);
                     all_passed = false;
                 }
-                // sentinel-base run: active lanes are NaN (payload
-                // unconstrained) — only check they differ from SENTINEL is
-                // NOT sound; skip.
-            } else {
-                if (dst[i] != SENTINEL) {
-                    log_warning("sve512_pred_ops: density %zu INACTIVE lane "
-                                "%zu sentinel clobbered: 0x%016" PRIx64,
-                                k, i, dst[i]);
-                    all_passed = false;
-                }
+            } else if (dst[i] != SENTINEL) {
+                log_warning("sve512_pred_ops: density %zu INACTIVE lane "
+                            "%zu sentinel clobbered: 0x%016" PRIx64,
+                            k, i, dst[i]);
+                all_passed = false;
             }
         }
 
         // ---- section 2: inverted predicate ----
         svbool_t pg_inv = svnot_b_z(all, pg);
-        std::vector<uint64_t> z2(vl, 0);
-        svfloat64_t w = svld1_f64(all, reinterpret_cast<const double *>(z2.data()));
-        w = svmla_f64_x(pg_inv, vsrc, vsrc, w);
-        std::vector<uint64_t> wout(vl, 0);
-        svst1_f64(all, reinterpret_cast<double *>(wout.data()), w);
+        // active set is the complement [k, vl); inactive (i < k) = SENTINEL.
+        std::vector<uint64_t> dst2(vl, SENTINEL);
+        for (size_t i = k; i < vl; ++i)
+            dst2[i] = base_bits;
+        svfloat64_t w = svld1_f64(all, reinterpret_cast<const double *>(dst2.data()));
+        w = svmla_f64_m(pg_inv, w, vsrc, vsrc);
+        svst1_f64(all, reinterpret_cast<double *>(dst2.data()), w);
         for (size_t i = 0; i < vl; ++i) {
             if (i >= k) {   // complement: active iff NOT (i < k)
-                double g = std::fma(d->src[i], d->src[i], 0.0);
+                double g = std::fma(d->src[i], d->src[i], BASE);
                 uint64_t gw, aw;
                 memcpy(&gw, &g, 8);
-                memcpy(&aw, &wout[i], 8);
+                memcpy(&aw, &dst2[i], 8);
                 if (gw != aw) {
                     log_warning("sve512_pred_ops: inverted density %zu lane "
                                 "%zu golden=0x%016" PRIx64 " actual=0x%016"
                                 PRIx64, k, i, gw, aw);
                     all_passed = false;
                 }
-            } else {
-                uint64_t zero_w = 0;
-                if (wout[i] != zero_w) {
-                    log_warning("sve512_pred_ops: inverted density %zu "
-                                "inactive lane %zu written: 0x%016" PRIx64,
-                                k, i, wout[i]);
-                    all_passed = false;
-                }
+            } else if (dst2[i] != SENTINEL) {
+                log_warning("sve512_pred_ops: inverted density %zu inactive "
+                            "lane %zu written: 0x%016" PRIx64,
+                            k, i, dst2[i]);
+                all_passed = false;
             }
         }
     }
@@ -304,7 +272,7 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         svfloat64_t vsrc = svld1_f64(all, d->src.data());
         std::vector<uint64_t> z(vl, 0);
         svfloat64_t w = svld1_f64(all, reinterpret_cast<const double *>(z.data()));
-        w = svmla_f64_x(pg, vsrc, vsrc, w);
+        w = svmla_f64_m(pg, w, vsrc, vsrc);   // 0 + src*src on active lanes
         std::vector<uint64_t> out(vl, 0);
         svst1_f64(all, reinterpret_cast<double *>(out.data()), w);
         for (size_t i = 0; i + 1 < vl; ++i) {
