@@ -32,6 +32,12 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
+
+#ifndef SVE_MAX_VECTOR_BYTES
+/* GCC 12 的 arm_sve.h 不提供该 ACLE 宏 (movbe_slf_sweep 同款自定义):
+ * SVE 架构最大 VL 2048bit = 256 字节 */
+#define SVE_MAX_VECTOR_BYTES 256
+#endif
 #include <sys/auxv.h>
 
 #ifndef HWCAP_SVE
@@ -101,7 +107,9 @@ static int neon_rot_u8x16_sve_run(struct test *test, int cpu)
     uint8_t *temp = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
     uint8_t *dst  = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
     const int lanes = svcntb();   /* bytes per vector */
-    uint8_t phase[64];
+    /* SVE 架构最大 VL 2048bit → svcntb() ≤ 256 (movbe_slf_sweep
+     * VL-portable 范式): n = min(bytes-base, svcntb()) 全 VL 覆盖 */
+    uint8_t phase[SVE_MAX_VECTOR_BYTES];
 
     TEST_LOOP(test, 1 << 13) {
         for (size_t base = 0; base < NEON_ROT_U8X16_SVE_BYTES; base += lanes) {
