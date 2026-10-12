@@ -278,6 +278,5 @@ DECLARE_TEST(fpu_special_values_sve,
     .test_init = fpu_special_values_sve_init,
     .test_run = fpu_special_values_sve_run,
     .test_cleanup = fpu_special_values_sve_finish,
-    .fracture_loop_count = -1,
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

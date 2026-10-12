@@ -137,11 +137,7 @@ static uint32_t golden_fma_f32(uint32_t ua, uint32_t ub, uint32_t uc,
     return ur;
 }
 
-static int fpcr_rounding_cartesian_arm_init(struct test *test)
-{
-    (void)test;
-    return EXIT_SUCCESS;
-}
+
 
 static int fpcr_rounding_cartesian_arm_run(struct test *test, int cpu)
 {
@@ -337,6 +333,12 @@ static int fpcr_rounding_cartesian_arm_run(struct test *test, int cpu)
 }
 
 #else
+
+static int fpcr_rounding_cartesian_arm_init(struct test *test)
+{
+    (void)test;
+    return EXIT_SUCCESS;
+}
 
 static int fpcr_rounding_cartesian_arm_run(struct test *test, int cpu)
 {

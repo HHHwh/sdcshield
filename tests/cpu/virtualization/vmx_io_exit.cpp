@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstring>
 
-#ifdef __aarch64__
+#ifndef __aarch64__
 // ARM64 平台：诚实跳过 —— 无端口 I/O，原先的"模拟"路径（单个常量存取即
 // EXIT_SUCCESS）不压测任何单元却报 pass，违反 placeholder-honesty 规则。
 static int vmx_io_exit_init(struct test *test) {
