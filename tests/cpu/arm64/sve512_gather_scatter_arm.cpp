@@ -21,10 +21,15 @@
  *                                 the same element indices
  *
  * Explicit read-offset assertion: the source is encoded so the value
- * reveals the index it came from (src[i] bit pattern = i, reconstructible
- * via the mantissa). After every gather, each lane's raw loaded value is
- * checked against decode(idx[lane]) BEFORE the FMA — a wrong-offset read
- * produces a decodable-but-wrong index and fails immediately.
+ * reveals the index it came from — the low IDX_TAG_BITS of the mantissa
+ * literally carry the element index while sign, exponent and the upper
+ * mantissa carry per-run fresh entropy (the plain 0x3FF0..|i encoding
+ * put every value within ~1e-16 of 1.0 and gutted the datapath
+ * switching this stress test exists to exercise — caught by the Codex
+ * review of PR #233). After every gather, each lane's raw loaded value
+ * is tag-decoded and checked against idx[lane] BEFORE the FMA — a
+ * wrong-offset read produces a decodable-but-wrong index and fails
+ * immediately.
  *
  * Gather variants (round-robin): u64index (scalar base + u64 element
  * indices — the original), u64base (per-lane base addresses in a vector,
@@ -65,9 +70,14 @@ static inline uint64_t splitmix64(uint64_t x)
     return z ^ (z >> 31);
 }
 
+// Index-revealing encoding v2: the low 20 mantissa bits are the element
+// index tag (the wrong-offset assertion decodes exactly these bits), wide
+// enough for both the 512-entry gather table and the 256K-entry stride
+// table below.
+static constexpr uint64_t IDX_TAG_MASK = 0xFFFFFULL;
+
 struct SveGatherScatterData {
     size_t vl_d;
-    std::vector<uint64_t> seeds_f64;   // 只读共享
     std::vector<uint64_t> gather_src;  // 只读共享
     std::vector<uint64_t> gather_idx;  // 只读共享(置换索引表)
     // 注意: scatter_dst / scatter_golden 是每线程每迭代的可变 scratch,不能放共享 data ——
@@ -136,22 +146,25 @@ static int sve512_gather_scatter_arm_init(struct test *test)
         auto data = std::make_unique<SveGatherScatterData>();
         data->vl_d = svcntd();
 
-        /* randomization hardening H12': seeds from the framework RNG
-         * (per-run fresh, -s reproducible) instead of fixed splitmix. */
-        data->seeds_f64.resize(data->vl_d);
-        for (size_t lane = 0; lane < data->vl_d; ++lane) {
-            data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (random64() & 0x000FFFFFFFFFFFFFULL);
-        }
-
         const size_t gn = 64 * data->vl_d;
         data->gather_src.resize(gn);
         data->gather_idx.resize(gn);
-        // Index-revealing encoding: src[i] = quiet [1,2) double whose low
-        // 48 mantissa bits literally carry i. gather loads can be decoded
-        // back to the index they actually read (SEVI wrong-offset check).
+        // Index-revealing encoding v2 (Codex review, PR #233): the low
+        // IDX_TAG_BITS of the mantissa carry the element index (the
+        // wrong-offset assertion decodes exactly these), while sign,
+        // exponent and the upper mantissa carry per-run fresh entropy
+        // from the framework RNG (H12': -s reproducible). The exponent
+        // stays in the [0.5, 2) band so the FMA transform v = 1.5 + v*v
+        // can never overflow and the byte-exact golden stays valid — and
+        // the operands keep the bit-switching activity the v1 encoding
+        // (quiet [1,2) doubles 1e-16 apart) had destroyed. The old
+        // seeds_f64 table became dead code under v1 and is gone.
         for (size_t i = 0; i < gn; ++i) {
-            data->gather_src[i] = 0x3FF0000000000000ULL | (uint64_t)i;
+            uint64_t sign = (random64() & 1ULL) << 63;
+            uint64_t exp = 0x3FEULL + (random64() & 1ULL);          // [0.5, 2)
+            uint64_t entropy = (random64() & 0xFFFFFFFFULL) << 20;  // mant [51:20]
+            data->gather_src[i] = sign | (exp << 52) | entropy |
+                                  (uint64_t)(i & IDX_TAG_MASK);
             data->gather_idx[i] = i;
         }
         /* Fisher-Yates shuffle driven by the framework RNG (per-run
@@ -184,8 +197,8 @@ static bool check_read_offsets(const SveGatherScatterData *d,
     (void)d;
     bool ok = true;
     for (size_t i = 0; i < n; ++i) {
-        uint64_t decoded = raw[i] & 0x0000FFFFFFFFFFFFULL;
-        if (decoded != (idx[i] & 0x0000FFFFFFFFFFFFULL)) {
+        uint64_t decoded = raw[i] & IDX_TAG_MASK;
+        if (decoded != (idx[i] & IDX_TAG_MASK)) {
             log_warning("sve512_gather_scatter: wrong-offset read at slot %zu: "
                         "expected index %llu, value decodes to %llu",
                         i, (unsigned long long)idx[i],
