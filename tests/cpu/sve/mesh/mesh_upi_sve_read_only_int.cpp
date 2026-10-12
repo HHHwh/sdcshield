@@ -91,6 +91,11 @@ static int mesh_upi_sve_read_only_int_run(struct test *test, int cpu) {
         fflush(stderr);
 
         if (!passed) {
+            /* cold path: record bit-level evidence for the failing leg(s) */
+            if (local_sum != td->golden_sum)
+                log_error("mesh_upi_sve_read_only_int: sum mismatch: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                          (unsigned long long)td->golden_sum, (unsigned long long)local_sum,
+                          (unsigned long long)(td->golden_sum ^ local_sum));
             report_fail_msg("mesh_upi_sve_read_only_int: Sum mismatch");
             return EXIT_FAILURE;
         }
