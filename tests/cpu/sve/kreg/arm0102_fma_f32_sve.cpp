@@ -167,6 +167,27 @@ static int arm0102_fma_f32_sve_run(struct test *test, int cpu) {
         }
 
         if (memcmp(dst, data->expected, (size_t)ARM0102_FMA_F32_SVE_COUNT * sizeof(float)) != 0) {
+            /* cold path: locate mismatches, record bit-level evidence (bit pattern + float) */
+            {
+                size_t _dump_bad = 0;
+                int _dump_shown = 0;
+                for (size_t _dump_j = 0; _dump_j < (size_t)(ARM0102_FMA_F32_SVE_COUNT); ++_dump_j) {
+                    uint32_t _dump_g, _dump_a;
+                    memcpy(&_dump_g, &data->expected[_dump_j], 4);
+                    memcpy(&_dump_a, &dst[_dump_j], 4);
+                    if (_dump_g != _dump_a) {
+                        ++_dump_bad;
+                        if (_dump_shown < 8) {
+                            log_error("arm0102_fma_f32_sve: mismatch at index %zu: golden=0x%08x (%g) actual=0x%08x (%g) xor=0x%08x",
+                                      _dump_j, _dump_g, data->expected[_dump_j], _dump_a, dst[_dump_j],
+                                      _dump_g ^ _dump_a);
+                            ++_dump_shown;
+                        }
+                    }
+                }
+                log_error("arm0102_fma_f32_sve: total mismatched elements: %zu / %d", _dump_bad,
+                          ARM0102_FMA_F32_SVE_COUNT);
+            }
             report_fail_msg("arm0102_fma_f32_sve data miscompare");
         }
     }

@@ -149,6 +149,24 @@ static int arm0102_kreg_not_sve_run(struct test *test, int cpu) {
         }
 
         if (memcmp(dst, data->expected, (size_t)ARM0102_KREG_NOT_SVE_COUNT * sizeof(uint32_t)) != 0) {
+            /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
+            {
+                size_t _dump_bad = 0;
+                int _dump_shown = 0;
+                for (size_t _dump_j = 0; _dump_j < (size_t)(ARM0102_KREG_NOT_SVE_COUNT); ++_dump_j) {
+                    if (dst[_dump_j] != data->expected[_dump_j]) {
+                        ++_dump_bad;
+                        if (_dump_shown < 8) {
+                            log_error("arm0102_kreg_not_sve: mismatch at index %zu: golden=0x%08x actual=0x%08x xor=0x%08x",
+                                      _dump_j, (unsigned)data->expected[_dump_j], (unsigned)dst[_dump_j],
+                                      (unsigned)(data->expected[_dump_j] ^ dst[_dump_j]));
+                            ++_dump_shown;
+                        }
+                    }
+                }
+                log_error("arm0102_kreg_not_sve: total mismatched elements: %zu / %d", _dump_bad,
+                          ARM0102_KREG_NOT_SVE_COUNT);
+            }
             report_fail_msg("arm0102_kreg_not_sve data miscompare");
         }
     }

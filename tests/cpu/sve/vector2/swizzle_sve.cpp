@@ -49,6 +49,31 @@ static int swizzle_sve_init(struct test *test) {
 }
 
 #ifdef __aarch64__
+/* 冷路径转储 (noinline): 让热循环里 memcmp 比较后的两数组值即死
+ * (本函数按地址自行重载), do-while 主体指令序列与加转储前保持一致 */
+[[gnu::noinline]] static void swizzle_sve_dump_mismatch(const float *golden,
+                                                        const float *actual)
+{
+    /* cold path: locate mismatches, record bit-level evidence (bit pattern + float) */
+    size_t _dump_bad = 0;
+    int _dump_shown = 0;
+    for (size_t _dump_j = 0; _dump_j < 8; ++_dump_j) {
+        uint32_t _dump_g, _dump_a;
+        memcpy(&_dump_g, &golden[_dump_j], 4);
+        memcpy(&_dump_a, &actual[_dump_j], 4);
+        if (_dump_g != _dump_a) {
+            ++_dump_bad;
+            if (_dump_shown < 8) {
+                log_error("swizzle_sve: mismatch at index %zu: golden=0x%08x (%g) actual=0x%08x (%g) xor=0x%08x",
+                          _dump_j, _dump_g, golden[_dump_j], _dump_a, actual[_dump_j],
+                          _dump_g ^ _dump_a);
+                ++_dump_shown;
+            }
+        }
+    }
+    log_error("swizzle_sve: total mismatched elements: %zu / %d", _dump_bad, 8);
+}
+
 static int swizzle_sve_run(struct test *test, int cpu) {
     (void)cpu;
 
@@ -99,6 +124,7 @@ static int swizzle_sve_run(struct test *test, int cpu) {
                 iteration, src[0], src[1], src[2], src[3], color, result_str);
 
         if (!passed) {
+            swizzle_sve_dump_mismatch(dst_ref, dst_hw);
             report_fail_msg("swizzle_sve: data mismatch");
             return EXIT_FAILURE;
         }
