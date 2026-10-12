@@ -84,8 +84,42 @@ Rewrite §1/§2 and the re-loop to the correct form:
 - golden = `fma(src, src, BASE)` for active lanes, `SENTINEL` bit-exact
   for inactive ones.
 
-§3 (FADDA), §4 (LDFF1/FFR/FMAXV) verified correct by inspection and left
-unchanged.
+§3 (FADDA) verified correct by inspection and left unchanged. §4 was
+initially believed correct too — that proved wrong on the next CI run, see
+Root cause 3.
+
+## Root cause 3 — `sve512_pred_ops_arm.cpp` §4 (FFR readback without SETFFR)
+
+After unit A (commit `cf63210a`) and unit B (commit `f335b564`) landed,
+CI run `38277871409` still failed `run tests quickly`, but the failure
+moved from line 296 to line **264** (the aggregate report), i.e. the only
+remaining sub-check failing was §4. The warning is suppressed in the CI
+console by the default verbosity, but the run-log artifact
+(`test-linux-GCC-arm64-logs`, `quick.yaml`) preserves it:
+
+> `W> sve512_pred_ops: FFR not all-true after mapped LDFF1 (count=0, expected 2)`
+
+The test read FFR with `svrdffr()` **without priming it first**. Per the
+ARM SVE first-fault model (confirmed against the ARM first-fault-load
+flow: *"SETFFR — reset the FFR to all-ones; LDFF1 … if any subsequent
+element faults, the hardware silently suppresses that fault and clears
+FFR from that lane onward"*, and the FFR reference: *"可以使用 SETFFR
+指令初始化该值"*), an `LDFF1` only **clears** the FFR bit of a faulting
+element — it never **sets** a bit. So without `SETFFR` the readback is the
+previous, undefined FFR state; on the CI runner that state was 0, giving
+`count=0` instead of `2` (VL=128 → 2 doublewords).
+
+Empirically verified on the local GCC 12 aarch64 toolchain: for
+`svldff1_f64(all, p)` GCC emits a real `ldff1d` (no relaxation to `ld1`),
+and emits `setffr` **only** when `svsetffr()` is present in the source.
+
+### Unit C — `tests/cpu/arm64/sve512_pred_ops_arm.cpp`
+
+Call `svsetffr()` immediately before the §4 `svldff1_f64`, so the FFR bit
+for each non-faulting lane is the architecturally defined 1, and the
+`svrdffr()`/`svcntp_b64` comparison against the all-true operating
+predicate is meaningful. Update the §4 doc comment accordingly.
+
 
 ## Verification (100% real)
 
@@ -97,4 +131,8 @@ unchanged.
   {-1.5,-0.5,0.5,1.5}`, `BASE=1.5`, active-lane golden `src²+1.5 ∈
   {1.75,3.75}` is exact; FADDA sum over VL (multiple of 4) is exactly 0.
 - x86-64 untouched (files are `#ifdef __aarch64__` only).
+- Unit C: `objdump -d` of the rebuilt
+  `builddir/tests/cpu/arm64/libtests_arm64_sve.a.p/sve512_pred_ops_arm.cpp.o`
+  shows `setffr` immediately followed by `ldff1d {z0.d}, p0/z, …` in the §4
+  path (grep `setffr` → 2 hits, `ldff1` → 2 hits).
 - Final oracle: CI `Build binary for CPU` → `run tests quickly` green.

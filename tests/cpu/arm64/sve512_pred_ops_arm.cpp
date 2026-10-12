@@ -37,10 +37,12 @@
  *
  * 4. LDFF1 + FFR: first-fault load from valid mapped memory must leave
  *    FFR all-true; svrdffr() is compared against the operating predicate
- *    bit-for-bit. (A faulting LDFF1 is not exercised — that is kernel
- *    territory; the mapped case checks the FFR datapath itself.) FMAXV
- *    tree reduction (order-independent, exactly checkable) over the
- *    whilelt-masked prefix.
+ *    bit-for-bit. FFR is primed with svsetffr() first — an LDFF1 only
+ *    clears the bit of a faulting element, so the FFR is only meaningful
+ *    against an all-ones starting state. (A faulting LDFF1 is not
+ *    exercised — that is kernel territory; the mapped case checks the FFR
+ *    datapath itself.) FMAXV tree reduction (order-independent, exactly
+ *    checkable) over the whilelt-masked prefix.
  *
  * test_init probes HWCAP_SVE and returns a clean EXIT_SKIP on SVE-less
  * CPUs. Any runtime vector length. Built in tests_arm64_sve.
@@ -224,6 +226,11 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         std::vector<double> mem(d->vl_d);
         for (size_t i = 0; i < d->vl_d; ++i)
             mem[i] = d->src[i];
+        // Prime FFR to all-ones before the first-fault load. LDFF1 only
+        // *clears* the FFR bit of each faulting element — it never sets a
+        // bit — so without SETFFR the readback below is the previous
+        // (undefined) FFR state, not the set of successfully-loaded lanes.
+        svsetffr();
         svfloat64_t v = svldff1_f64(all, mem.data());
         std::vector<double> back(d->vl_d);
         svst1_f64(all, back.data(), v);
