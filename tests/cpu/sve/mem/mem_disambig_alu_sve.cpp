@@ -133,6 +133,17 @@ static int mem_disambig_alu_sve_run(struct test *test, int cpu)
             svuint64_t got = load_vec_sve(addr);
 
             if (svptest_any(pg, svcmpne_n_u64(pg, got, res))) {
+                /* cold path: spill both vectors and record lane-level evidence */
+                uint64_t _dump_got[32];
+                uint64_t _dump_res[32];
+                svst1_u64(pg, _dump_got, got);
+                svst1_u64(pg, _dump_res, svdup_u64(res));
+                for (int _dump_l = 0; _dump_l < (int)svcntd(); ++_dump_l)
+                    if (_dump_got[_dump_l] != _dump_res[_dump_l])
+                        log_error("mem_disambig_alu_sve: lane %d mismatch: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                                  _dump_l, (unsigned long long)_dump_res[_dump_l],
+                                  (unsigned long long)_dump_got[_dump_l],
+                                  (unsigned long long)(_dump_res[_dump_l] ^ _dump_got[_dump_l]));
                 report_fail_msg("mem_disambig_alu_sve: store-to-load forward (ALU) mismatch at "
                                 "pattern %d (offset %llu): expected 0x%llx",
                                 i, (unsigned long long)off,
