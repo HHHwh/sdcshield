@@ -434,3 +434,17 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 > 待用户决策:恢复订阅 / 转公开仓 / 接受降级(SARIF 改存 artifact)。
 > 另:PR #202 的 5 个缺签提交已于 09-29 补签强推(14a82a92→f9e79b65,
 > 树零变化),git-sanity 转绿。
+
+> **2026-10-10 战役记账(SVE 全节点压测 · hollow 修复)**:NSCC 战役(r21/r22,r23 投
+> 递中)发现 13 个轻量 SVE/SME 测试(fma_sve、fpu_special_values_sve、9×sve512_*、
+> 2×sme_*)在 608 核节点上实为 hollow——框架默认 fracture(40 循环切片重 fork)×
+> μs 级测试体 → 全部墙钟耗于 fork/38 线程 spawn churn,有效负载 ~0.5%(cn23423:
+> fma_sve 925s 内 19156 次迭代、子进程 utime=0)。修复:`.fracture_loop_count = -1`
+> (commit 7c4dc566,计划 5f679782);cn23196 实测 13/13 pass、blocks=2、满时长、
+> idle delta=0(~100% 满载);zstd19 回归 pass;x86 不受影响(arm64 文件不编译,
+> fma2 两测试首调即 SKIP,循环计数不在执行路径)。构建教训:(a) 无 ninja 增量构建
+> 须强制 cwd=compile_commands.json 的 directory 字段;(b) ninja 链接命令的隐式依赖
+> (| 后档案)不是位置参数,误用 → 档案两遍 → 277 multiple definition;(c) 旧二进制
+> 控制副本被覆盖丢失,字节证据须即时多处备份。r23(23 测试全套+大矩阵+EDAC)以修复
+> 版 542e197e 滚动覆盖;q_hpcapp 池内无 2.0GHz 段节点(全 cn23xxx@1.55),频率偏好
+> 不可满足。战场细节:NFS 上 sve-campaign-20261009/progress.md(非 repo,不入库)。

@@ -252,5 +252,6 @@ DECLARE_TEST(sve512_f64_chain_svd,
     .test_init = sve512_f64_chain_svd_init,
     .test_run = sve512_f64_chain_svd_run,
     .test_cleanup = sve512_f64_chain_svd_cleanup,
+    .fracture_loop_count = -1,
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST
