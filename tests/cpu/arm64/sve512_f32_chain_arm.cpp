@@ -174,6 +174,21 @@ static int sve512_f32_chain_arm_init(struct test *test)
             return sign | (exp << 23) | mantissa;
         };
 
+        /* Value-domain knob (SEVI ASPLOS'26 Obs.19: bounded vs unbounded
+         * inputs differ up to 245x in SDC frequency on the same core).
+         * bounded=1 (default): the |x| <= 2 finite band above — the
+         * randomization-hardened path, untouched.
+         * bounded=0: full-entropy mantissas with the exponent clamped to
+         * [2^-8, 1) so the chain still cannot overflow to Inf/NaN and
+         * the byte-exact golden stays valid. */
+        int64_t bounded = get_testspecific_knob_value_int(test, "bounded", 1);
+        auto random_unbounded_f32 = []() -> uint32_t {
+            uint32_t sign = (random32() & 1U) << 31;
+            uint32_t mantissa = random32() & 0x007FFFFFU;
+            uint32_t exp = 0x77U + ((random32() >> 29) & 7U);  /* [2^-8, 1) */
+            return sign | (exp << 23) | mantissa;
+        };
+
         // Per-lane seed accumulators: finite in [1.0, 2.0).
         data->seeds_f32.resize(data->vl_w);
         for (size_t lane = 0; lane < data->vl_w; ++lane) {
@@ -186,8 +201,10 @@ static int sve512_f32_chain_arm_init(struct test *test)
         data->m_f32.resize(n32);
         data->a_f32.resize(n32);
         for (size_t i = 0; i < n32; ++i) {
-            data->m_f32[i] = random_finite_f32();
-            data->a_f32[i] = random_finite_f32();
+            data->m_f32[i] = bounded ? random_finite_f32()
+                                     : random_unbounded_f32();
+            data->a_f32[i] = bounded ? random_finite_f32()
+                                     : random_unbounded_f32();
         }
 
         test->data = data.release();
