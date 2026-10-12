@@ -1,0 +1,120 @@
+--- sample 1 @ 2026-10-10 21:07:25 ---
+INPUT_TEMP       | 01h | ok  |  7.96 | 26 degrees C
+OUTPUT_TEMP      | 02h | ok  |  7.96 | 36 degrees C
+CPU1_TEMP        | 03h | ok  |  3.96 | 80 degrees C
+CPU2_TEMP        | 04h | ok  |  3.97 | 69 degrees C
+CPU3_TEMP        | 05h | ok  |  3.98 | 60 degrees C
+CPU4_TEMP        | 06h | ok  |  3.99 | 49 degrees C
+CPU1 MEM Temp    | 07h | ok  | 37.96 | 55 degrees C
+CPU2 MEM Temp    | 08h | ok  | 37.97 | 46 degrees C
+CPU3 MEM Temp    | 09h | ok  | 37.98 | 41 degrees C
+CPU4 MEM Temp    | 0Ah | ok  | 37.99 | 36 degrees C
+Disks Temp       | 0Ch | ok  |  7.96 | 30 degrees C
+NIC OM Temp      | 0Dh | ns  |  7.96 | No Reading
+1711 Core Temp   | 0Eh | ok  |  7.96 | 54 degrees C
+PS2 Inlet Temp   | 11h | ok  | 10.97 | 32 degrees C
+CPU1 VDDQ Temp   | 27h | ok  |  3.96 | 69 degrees C
+CPU2 VDDQ Temp   | 28h | ok  |  3.97 | 66 degrees C
+CPU3 VDDQ Temp   | 29h | ok  |  3.98 | 47 degrees C
+CPU4 VDDQ Temp   | 2Ah | ok  |  3.99 | 59 degrees C
+CPU1 VRD Temp    | 2Bh | ok  |  3.96 | 60 degrees C
+CPU2 VRD Temp    | 2Ch | ok  |  3.97 | 57 degrees C
+CPU3 VRD Temp    | 2Dh | ok  |  3.98 | 46 degrees C
+CPU4 VRD Temp    | 2Eh | ok  |  3.99 | 46 degrees C
+PCIe RAID2 Temp  | D3h | ok  | 11.97 | 55 degrees C
+Raid BBU Temp    | D4h | ns  | 11.97 | No Reading
+FAN1 F Speed     | 3Fh | ok  | 30.96 | 9000 RPM
+FAN1 R Speed     | 40h | ok  | 30.96 | 9000 RPM
+FAN2 F Speed     | 41h | ok  | 30.97 | 9180 RPM
+FAN2 R Speed     | 42h | ok  | 30.97 | 9180 RPM
+FAN3 F Speed     | 43h | ok  | 30.98 | 8820 RPM
+FAN3 R Speed     | 44h | ok  | 30.98 | 8820 RPM
+FAN4 F Speed     | 45h | ok  | 30.99 | 13338 RPM
+FAN4 R Speed     | 46h | ok  | 30.99 | 13338 RPM
+FAN5 F Speed     | 47h | ok  | 30.100 | 13050 RPM
+FAN5 R Speed     | 48h | ok  | 30.100 | 13050 RPM
+FAN6 F Speed     | 49h | ok  | 30.101 | 13320 RPM
+FAN6 R Speed     | 4Ah | ok  | 30.101 | 13320 RPM
+
+    DCMI request failed because: Invalid command (c1)
+
+--- sample 2 @ 2026-10-10 21:07:51 ---
+INPUT_TEMP       | 01h | ok  |  7.96 | 26 degrees C
+OUTPUT_TEMP      | 02h | ok  |  7.96 | 36 degrees C
+CPU1_TEMP        | 03h | ok  |  3.96 | 80 degrees C
+CPU2_TEMP        | 04h | ok  |  3.97 | 69 degrees C
+CPU3_TEMP        | 05h | ok  |  3.98 | 60 degrees C
+CPU4_TEMP        | 06h | ok  |  3.99 | 49 degrees C
+CPU1 MEM Temp    | 07h | ok  | 37.96 | 55 degrees C
+CPU2 MEM Temp    | 08h | ok  | 37.97 | 46 degrees C
+CPU3 MEM Temp    | 09h | ok  | 37.98 | 41 degrees C
+CPU4 MEM Temp    | 0Ah | ok  | 37.99 | 36 degrees C
+Disks Temp       | 0Ch | ok  |  7.96 | 30 degrees C
+NIC OM Temp      | 0Dh | ns  |  7.96 | No Reading
+1711 Core Temp   | 0Eh | ok  |  7.96 | 54 degrees C
+PS2 Inlet Temp   | 11h | ok  | 10.97 | 32 degrees C
+CPU1 VDDQ Temp   | 27h | ok  |  3.96 | 69 degrees C
+CPU2 VDDQ Temp   | 28h | ok  |  3.97 | 66 degrees C
+CPU3 VDDQ Temp   | 29h | ok  |  3.98 | 47 degrees C
+CPU4 VDDQ Temp   | 2Ah | ok  |  3.99 | 59 degrees C
+CPU1 VRD Temp    | 2Bh | ok  |  3.96 | 60 degrees C
+CPU2 VRD Temp    | 2Ch | ok  |  3.97 | 57 degrees C
+CPU3 VRD Temp    | 2Dh | ok  |  3.98 | 46 degrees C
+CPU4 VRD Temp    | 2Eh | ok  |  3.99 | 46 degrees C
+PCIe RAID2 Temp  | D3h | ok  | 11.97 | 55 degrees C
+Raid BBU Temp    | D4h | ns  | 11.97 | No Reading
+FAN1 F Speed     | 3Fh | ok  | 30.96 | 8820 RPM
+FAN1 R Speed     | 40h | ok  | 30.96 | 8820 RPM
+FAN2 F Speed     | 41h | ok  | 30.97 | 9180 RPM
+FAN2 R Speed     | 42h | ok  | 30.97 | 9180 RPM
+FAN3 F Speed     | 43h | ok  | 30.98 | 8820 RPM
+FAN3 R Speed     | 44h | ok  | 30.98 | 8820 RPM
+FAN4 F Speed     | 45h | ok  | 30.99 | 13338 RPM
+FAN4 R Speed     | 46h | ok  | 30.99 | 13338 RPM
+FAN5 F Speed     | 47h | ok  | 30.100 | 13050 RPM
+FAN5 R Speed     | 48h | ok  | 30.100 | 13050 RPM
+FAN6 F Speed     | 49h | ok  | 30.101 | 13320 RPM
+FAN6 R Speed     | 4Ah | ok  | 30.101 | 13320 RPM
+
+    DCMI request failed because: Invalid command (c1)
+
+--- sample 3 @ 2026-10-10 21:08:17 ---
+INPUT_TEMP       | 01h | ok  |  7.96 | 26 degrees C
+OUTPUT_TEMP      | 02h | ok  |  7.96 | 36 degrees C
+CPU1_TEMP        | 03h | ok  |  3.96 | 80 degrees C
+CPU2_TEMP        | 04h | ok  |  3.97 | 69 degrees C
+CPU3_TEMP        | 05h | ok  |  3.98 | 60 degrees C
+CPU4_TEMP        | 06h | ok  |  3.99 | 49 degrees C
+CPU1 MEM Temp    | 07h | ok  | 37.96 | 55 degrees C
+CPU2 MEM Temp    | 08h | ok  | 37.97 | 46 degrees C
+CPU3 MEM Temp    | 09h | ok  | 37.98 | 41 degrees C
+CPU4 MEM Temp    | 0Ah | ok  | 37.99 | 36 degrees C
+Disks Temp       | 0Ch | ok  |  7.96 | 30 degrees C
+NIC OM Temp      | 0Dh | ns  |  7.96 | No Reading
+1711 Core Temp   | 0Eh | ok  |  7.96 | 54 degrees C
+PS2 Inlet Temp   | 11h | ok  | 10.97 | 32 degrees C
+CPU1 VDDQ Temp   | 27h | ok  |  3.96 | 69 degrees C
+CPU2 VDDQ Temp   | 28h | ok  |  3.97 | 66 degrees C
+CPU3 VDDQ Temp   | 29h | ok  |  3.98 | 47 degrees C
+CPU4 VDDQ Temp   | 2Ah | ok  |  3.99 | 59 degrees C
+CPU1 VRD Temp    | 2Bh | ok  |  3.96 | 60 degrees C
+CPU2 VRD Temp    | 2Ch | ok  |  3.97 | 57 degrees C
+CPU3 VRD Temp    | 2Dh | ok  |  3.98 | 46 degrees C
+CPU4 VRD Temp    | 2Eh | ok  |  3.99 | 46 degrees C
+PCIe RAID2 Temp  | D3h | ok  | 11.97 | 55 degrees C
+Raid BBU Temp    | D4h | ns  | 11.97 | No Reading
+FAN1 F Speed     | 3Fh | ok  | 30.96 | 9000 RPM
+FAN1 R Speed     | 40h | ok  | 30.96 | 9000 RPM
+FAN2 F Speed     | 41h | ok  | 30.97 | 9180 RPM
+FAN2 R Speed     | 42h | ok  | 30.97 | 9180 RPM
+FAN3 F Speed     | 43h | ok  | 30.98 | 8820 RPM
+FAN3 R Speed     | 44h | ok  | 30.98 | 8820 RPM
+FAN4 F Speed     | 45h | ok  | 30.99 | 13452 RPM
+FAN4 R Speed     | 46h | ok  | 30.99 | 13452 RPM
+FAN5 F Speed     | 47h | ok  | 30.100 | 13050 RPM
+FAN5 R Speed     | 48h | ok  | 30.100 | 13050 RPM
+FAN6 F Speed     | 49h | ok  | 30.101 | 13320 RPM
+FAN6 R Speed     | 4Ah | ok  | 30.101 | 13320 RPM
+
+    DCMI request failed because: Invalid command (c1)
+

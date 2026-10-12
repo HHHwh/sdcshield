@@ -1,0 +1,32 @@
+FRU Device Description : Builtin FRU Device (ID 0)
+ Chassis Type          : Unspecified
+ Board Mfg Date        : Wed Mar 20 21:51:00 2024
+ Board Mfg             : Yangtze Computing
+ Board Product         : 5104-00594
+ Board Serial          : 2106411330FSQ2000471
+ Board Part Number     : 06411330
+ Board Extra           : Description=Function Module,Kunpeng Server Boar
+ Board Extra           : d S920X02,K24R-02-SC2225B1-X3,25*2.5"HDD EXP L6
+ Board Extra           :  typical configuration(4*Kunpeng 920,5250,48 Co
+ Board Extra           : re@2.6GHz
+ Board Extra           : IssueNumber=00
+ Board Extra           : CLEICode=Null
+ Board Extra           : BOM=Null
+ Board Extra           : ChipAlias=Kunpeng920_5250
+ Product Manufacturer  : Yangtze Computing
+ Product Name          : R240K V2
+ Product Part Number   : 02314UWE
+ Product Serial        : 71006932A034
+
+FRU Device Description : Disk BP1 (ID 1)
+ Board Mfg Date        : Mon Jan  1 08:00:00 1996
+ Board Mfg             : Huawei
+ Product Manufacturer  : Huawei
+
+FRU Device Description : PSU2 (ID 4)
+ Product Manufacturer  : HUAWEI
+ Product Name          : PAC2000S12-BG
+ Product Part Number   : 02312HGY
+ Product Version       : A
+ Product Serial        : 2102312HGYW0L4017314
+

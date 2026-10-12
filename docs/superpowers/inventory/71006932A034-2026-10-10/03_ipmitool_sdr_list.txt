@@ -1,0 +1,213 @@
+INPUT_TEMP       | 26 degrees C      | ok
+OUTPUT_TEMP      | 36 degrees C      | ok
+CPU1_TEMP        | 80 degrees C      | ok
+CPU2_TEMP        | 69 degrees C      | ok
+CPU3_TEMP        | 60 degrees C      | ok
+CPU4_TEMP        | 49 degrees C      | ok
+CPU1 MEM Temp    | 55 degrees C      | ok
+CPU2 MEM Temp    | 46 degrees C      | ok
+CPU3 MEM Temp    | 41 degrees C      | ok
+CPU4 MEM Temp    | 36 degrees C      | ok
+Power            | 540 Watts         | ok
+Disks Temp       | 30 degrees C      | ok
+NIC OM Temp      | no reading        | ns
+1711 Core Temp   | 54 degrees C      | ok
+Power2           | 540 Watts         | ok
+PS2 VIN          | 224 Volts         | ok
+PS2 Inlet Temp   | 32 degrees C      | ok
+VCC_12V0_1       | 12.12 Volts       | ok
+VCC_12V0_2       | 12 Volts          | ok
+VCC_12V0_3       | 12.12 Volts       | ok
+VCC_12V0_4       | 12 Volts          | ok
+VCC_12V0_5       | 12.12 Volts       | ok
+V_VCC_5V0        | 4.85 Volts        | ok
+V_VCC_3V3        | 3.24 Volts        | ok
+V_1V8_CPU_1      | 1.76 Volts        | ok
+V_1V8_CPU_2      | 1.76 Volts        | ok
+N_VDDAVS_CPU1    | 0.97 Volts        | ok
+N_VDDAVS_CPU2    | 0.95 Volts        | ok
+N_VDDAVS_CPU3    | 0.95 Volts        | ok
+N_VDDAVS_CPU4    | 0.96 Volts        | ok
+CPU1 VDDQ_AB     | 1.21 Volts        | ok
+CPU1 VDDQ_CD     | 1.21 Volts        | ok
+CPU2 VDDQ_AB     | 1.21 Volts        | ok
+CPU2 VDDQ_CD     | 1.21 Volts        | ok
+CPU3 VDDQ_AB     | 1.21 Volts        | ok
+CPU3 VDDQ_CD     | 1.21 Volts        | ok
+CPU4 VDDQ_AB     | 1.21 Volts        | ok
+CPU4 VDDQ_CD     | 1.21 Volts        | ok
+CPU1 VDDQ Temp   | 69 degrees C      | ok
+CPU2 VDDQ Temp   | 66 degrees C      | ok
+CPU3 VDDQ Temp   | 47 degrees C      | ok
+CPU4 VDDQ Temp   | 59 degrees C      | ok
+CPU1 VRD Temp    | 60 degrees C      | ok
+CPU2 VRD Temp    | 57 degrees C      | ok
+CPU3 VRD Temp    | 46 degrees C      | ok
+CPU4 VRD Temp    | 46 degrees C      | ok
+CPU1 VDDAVS      | 0.87 Volts        | ok
+CPU2 VDDAVS      | 0.87 Volts        | ok
+CPU3 VDDAVS      | 0.87 Volts        | ok
+CPU4 VDDAVS      | 0.88 Volts        | ok
+CPU1 HVCC        | 1.20 Volts        | ok
+CPU2 HVCC        | 1.20 Volts        | ok
+CPU3 HVCC        | 1.20 Volts        | ok
+CPU4 HVCC        | 1.20 Volts        | ok
+CPU1 DDR_VDD     | 0.81 Volts        | ok
+CPU2 DDR_VDD     | 0.81 Volts        | ok
+CPU3 DDR_VDD     | 0.81 Volts        | ok
+CPU4 DDR_VDD     | 0.81 Volts        | ok
+CPU1 VDDFIX      | 0.80 Volts        | ok
+CPU2 VDDFIX      | 0.80 Volts        | ok
+CPU3 VDDFIX      | 0.80 Volts        | ok
+CPU4 VDDFIX      | 0.80 Volts        | ok
+FAN1 F Speed     | 9000 RPM          | ok
+FAN1 R Speed     | 9000 RPM          | ok
+FAN2 F Speed     | 9360 RPM          | ok
+FAN2 R Speed     | 9360 RPM          | ok
+FAN3 F Speed     | 8820 RPM          | ok
+FAN3 R Speed     | 8820 RPM          | ok
+FAN4 F Speed     | 13452 RPM         | ok
+FAN4 R Speed     | 13452 RPM         | ok
+FAN5 F Speed     | 13050 RPM         | ok
+FAN5 R Speed     | 13050 RPM         | ok
+FAN6 F Speed     | 13320 RPM         | ok
+FAN6 R Speed     | 13320 RPM         | ok
+PCIe RAID2 Temp  | 56 degrees C      | ok
+Raid BBU Temp    | no reading        | ns
+LOM P1 Link Down | 0x00              | ok
+LOM P2 Link Down | 0x00              | ok
+LOM P3 Link Down | 0x00              | ok
+LOM P4 Link Down | 0x00              | ok
+CPU1 Prochot     | 0x00              | ok
+CPU2 Prochot     | 0x00              | ok
+CPU3 Prochot     | 0x00              | ok
+CPU4 Prochot     | 0x00              | ok
+System Notice    | 0x00              | ok
+System Error     | 0x00              | ok
+CPU1 Status      | 0x00              | ok
+CPU2 Status      | 0x00              | ok
+CPU3 Status      | 0x00              | ok
+CPU4 Status      | 0x00              | ok
+CPU1 Memory      | 0x00              | ok
+CPU2 Memory      | 0x00              | ok
+CPU3 Memory      | 0x00              | ok
+CPU4 Memory      | 0x00              | ok
+DIMM000          | 0x00              | ok
+DIMM010          | 0x00              | ok
+DIMM020          | 0x00              | ok
+DIMM030          | 0x00              | ok
+DIMM040          | 0x00              | ok
+DIMM050          | 0x00              | ok
+DIMM060          | 0x00              | ok
+DIMM070          | 0x00              | ok
+DIMM100          | 0x00              | ok
+DIMM110          | 0x00              | ok
+DIMM120          | 0x00              | ok
+DIMM130          | 0x00              | ok
+DIMM140          | 0x00              | ok
+DIMM150          | 0x00              | ok
+DIMM160          | 0x00              | ok
+DIMM170          | 0x00              | ok
+DIMM200          | 0x00              | ok
+DIMM210          | 0x00              | ok
+DIMM220          | 0x00              | ok
+DIMM230          | 0x00              | ok
+DIMM240          | 0x00              | ok
+DIMM250          | 0x00              | ok
+DIMM260          | 0x00              | ok
+DIMM270          | 0x00              | ok
+DIMM300          | 0x00              | ok
+DIMM310          | 0x00              | ok
+DIMM320          | 0x00              | ok
+DIMM330          | 0x00              | ok
+DIMM340          | 0x00              | ok
+DIMM350          | 0x00              | ok
+DIMM360          | 0x00              | ok
+DIMM370          | 0x00              | ok
+PCIE Status      | 0x00              | ok
+ACPI State       | 0x00              | ok
+SysFWProgress    | 0x00              | ok
+Power Button     | 0x00              | ok
+SysRestart       | 0x00              | ok
+Boot Error       | 0x00              | ok
+Watchdog2        | 0x00              | ok
+Mngmnt Health    | 0x00              | ok
+UID Button       | 0x00              | ok
+PwrOk Sig. Drop  | 0x00              | ok
+PwrOn TimeOut    | 0x00              | ok
+PwrCap Status    | 0x00              | ok
+HDD Backplane    | 0x00              | ok
+HDD BP Status    | 0x00              | ok
+Riser1 Card      | 0x00              | ok
+Riser2 Card      | 0x00              | ok
+SAS Cable        | 0x00              | ok
+CPU Usage        | 0x00              | ok
+Memory Usage     | 0x00              | ok
+PS Redundancy    | 0x00              | ok
+BMC Boot Up      | 0x00              | ok
+BMC Time Hopping | 0x00              | ok
+NTP Sync Failed  | 0x00              | ok
+SEL Status       | 0x00              | ok
+Op. Log Full     | 0x00              | ok
+Sec. Log Full    | 0x00              | ok
+Host Loss        | 0x00              | ok
+Cert OverDue     | 0x00              | ok
+RTC Time         | 0x00              | ok
+DISK0            | 0x00              | ok
+DISK1            | 0x00              | ok
+DISK2            | 0x00              | ok
+DISK3            | 0x00              | ok
+DISK4            | 0x00              | ok
+DISK5            | 0x00              | ok
+DISK6            | 0x00              | ok
+DISK7            | 0x00              | ok
+DISK8            | 0x00              | ok
+DISK9            | 0x00              | ok
+DISK10           | 0x00              | ok
+DISK11           | 0x00              | ok
+DISK12           | 0x00              | ok
+DISK13           | 0x00              | ok
+DISK14           | 0x00              | ok
+DISK15           | 0x00              | ok
+DISK16           | 0x00              | ok
+DISK17           | 0x00              | ok
+DISK18           | 0x00              | ok
+DISK19           | 0x00              | ok
+DISK20           | 0x00              | ok
+DISK21           | 0x00              | ok
+DISK22           | 0x00              | ok
+DISK23           | 0x00              | ok
+DISK24           | 0x00              | ok
+DISK40           | 0x00              | ok
+DISK41           | 0x00              | ok
+DISK42           | 0x00              | ok
+PS2 Status       | 0x00              | ok
+PS2 Fan Status   | 0x00              | ok
+PS2 Temp Status  | 0x00              | ok
+AreaIntrusion    | 0x00              | ok
+RTC Battery      | 0x00              | ok
+FAN1 F Status    | 0x00              | ok
+FAN1 R Status    | 0x00              | ok
+FAN2 F Status    | 0x00              | ok
+FAN2 R Status    | 0x00              | ok
+FAN3 F Status    | 0x00              | ok
+FAN3 R Status    | 0x00              | ok
+FAN4 F Status    | 0x00              | ok
+FAN4 R Status    | 0x00              | ok
+FAN5 F Status    | 0x00              | ok
+FAN5 R Status    | 0x00              | ok
+FAN6 F Status    | 0x00              | ok
+FAN6 R Status    | 0x00              | ok
+FAN1 F Presence  | 0x00              | ok
+FAN1 R Presence  | 0x00              | ok
+FAN2 F Presence  | 0x00              | ok
+FAN2 R Presence  | 0x00              | ok
+FAN3 F Presence  | 0x00              | ok
+FAN3 R Presence  | 0x00              | ok
+FAN4 F Presence  | 0x00              | ok
+FAN4 R Presence  | 0x00              | ok
+FAN5 F Presence  | 0x00              | ok
+FAN5 R Presence  | 0x00              | ok
+FAN6 F Presence  | 0x00              | ok
+FAN6 R Presence  | 0x00              | ok
+PCIe2 Card BBU   | 0x00              | ok

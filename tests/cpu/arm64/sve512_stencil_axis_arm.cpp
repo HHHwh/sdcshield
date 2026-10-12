@@ -230,5 +230,6 @@ DECLARE_TEST(sve512_stencil_axis_arm,
     .test_init = sve512_stencil_axis_arm_init,
     .test_run = sve512_stencil_axis_arm_run,
     .test_cleanup = sve512_stencil_axis_arm_cleanup,
+    .fracture_loop_count = -1,
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST
