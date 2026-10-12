@@ -331,7 +331,12 @@ void SandstoneMemcmpOrFail::report(const void *_actual, const void *_expected, s
         // unit, while scattered offsets suggest a datapath/buffer fault).
         // Failure-branch only: the pass path never runs this loop.
         {
-            std::string hist = "lane offsets:";
+            // log_yaml(char, const char *) expects a pre-formatted YAML
+            // message: first line = "text:" description, following lines =
+            // indented details. The heading below is the description, the
+            // histogram is the detail body; a single-line message would trip
+            // the parser's second-line assert (debug builds only).
+            std::string hist = "lane offsets\n";
             ptrdiff_t first_bad = -1, last_bad = -1;
             size_t count = 0;
             for (size_t i = 0; i < size; ++i) {
@@ -345,7 +350,7 @@ void SandstoneMemcmpOrFail::report(const void *_actual, const void *_expected, s
             if (count > 0) {
                 // per-8-byte lane summary (f64/f32 vector lanes both
                 // align to 4/8-byte boundaries; report byte offsets)
-                hist += stdprintf(" %zu mismatching bytes in [%td..%td]",
+                hist += stdprintf("%zu mismatching bytes in [%td..%td]",
                                   count, first_bad, last_bad);
                 if (count == 1)
                     hist += " (single-lane pattern — one bad physical unit fingerprint)";
