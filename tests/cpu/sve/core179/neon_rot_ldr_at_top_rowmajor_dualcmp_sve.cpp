@@ -131,6 +131,7 @@ static int neon_rot_ldr_at_top_rowmajor_dualcmp_sve_init(struct test *test) {
         svst1_u64(pg, data->expected + (size_t)i * lanes, res);
     }
 
+    mkdir("movbe_log", 0755);            /* mkdir creates only the last component */
     mkdir(DUALCMP_SVE_DUMP_DIR, 0755);   /* EEXIST is fine */
 
     test->data = data;

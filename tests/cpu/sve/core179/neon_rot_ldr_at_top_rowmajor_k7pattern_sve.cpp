@@ -149,6 +149,7 @@ static int k7p_sve_init_common(struct test *test, K7pSvePattern pattern)
         svst1_u64(pg, data->expected + (size_t)i * lanes, res);
     }
 
+    mkdir("movbe_log", 0755);        /* mkdir creates only the last component */
     mkdir(K7P_SVE_DUMP_DIR, 0755);
 
     test->data = data;

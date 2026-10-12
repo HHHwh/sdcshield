@@ -121,6 +121,7 @@ static int neon_rot_ldr_at_top_rowmajor_k3res_sve_init(struct test *test) {
         svst1_u64(pg, data->expected + (size_t)i * lanes, res);
     }
 
+    mkdir("movbe_log", 0755);         /* mkdir creates only the last component */
     mkdir(K3RES_SVE_DUMP_DIR, 0755);
 
     test->data = data;
