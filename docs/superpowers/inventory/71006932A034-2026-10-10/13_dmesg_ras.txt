@@ -1,0 +1,80 @@
+[434326.269380] lr : __do_kernel_fault+0x130/0x1b8
+[434326.269425]  __do_kernel_fault+0x130/0x1b8
+[434326.269432]  do_translation_fault+0x40/0x80
+[434859.070005] Ignoring spurious kernel translation fault at virtual address ffff60404d4392f0
+[434859.070010] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[434859.070020] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[434859.070150] pc : __do_kernel_fault+0x130/0x1b8
+[434859.070153] lr : __do_kernel_fault+0x130/0x1b8
+[434859.070199]  __do_kernel_fault+0x130/0x1b8
+[434859.070205]  do_translation_fault+0x40/0x80
+[434859.082679] Ignoring spurious kernel translation fault at virtual address ffff604045e81a32
+[434859.082682] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[434859.082687] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[434859.082787] pc : __do_kernel_fault+0x130/0x1b8
+[434859.082790] lr : __do_kernel_fault+0x130/0x1b8
+[434859.082832]  __do_kernel_fault+0x130/0x1b8
+[434859.082838]  do_translation_fault+0x40/0x80
+[434879.037415] Ignoring spurious kernel translation fault at virtual address ffff60404d4391f3
+[434879.037421] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[434879.037430] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[434879.037569] pc : __do_kernel_fault+0x130/0x1b8
+[434879.037573] lr : __do_kernel_fault+0x130/0x1b8
+[434879.037623]  __do_kernel_fault+0x130/0x1b8
+[434879.037629]  do_translation_fault+0x40/0x80
+[434889.046132] Ignoring spurious kernel translation fault at virtual address ffff60404d439311
+[434889.046137] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[434889.046146] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[434889.046279] pc : __do_kernel_fault+0x130/0x1b8
+[434889.046282] lr : __do_kernel_fault+0x130/0x1b8
+[434889.046327]  __do_kernel_fault+0x130/0x1b8
+[434889.046333]  do_translation_fault+0x40/0x80
+[434919.066919] Ignoring spurious kernel translation fault at virtual address ffff60404d439138
+[434919.066924] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[434919.066934] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[434919.067067] pc : __do_kernel_fault+0x130/0x1b8
+[434919.067070] lr : __do_kernel_fault+0x130/0x1b8
+[434919.067116]  __do_kernel_fault+0x130/0x1b8
+[434919.067122]  do_translation_fault+0x40/0x80
+[496193.502150] Ignoring spurious kernel translation fault at virtual address ffff60403e43c7cb
+[496193.502156] WARNING: CPU: 179 PID: 10378 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[496193.502165] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[496193.502303] pc : __do_kernel_fault+0x130/0x1b8
+[496193.502306] lr : __do_kernel_fault+0x130/0x1b8
+[496193.502353]  __do_kernel_fault+0x130/0x1b8
+[496193.502359]  do_translation_fault+0x40/0x80
+[496410.046520] Ignoring spurious kernel translation fault at virtual address ffff6040431c682e
+[496410.046525] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[496410.046535] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[496410.046670] pc : __do_kernel_fault+0x130/0x1b8
+[496410.046673] lr : __do_kernel_fault+0x130/0x1b8
+[496410.046719]  __do_kernel_fault+0x130/0x1b8
+[496410.046726]  do_translation_fault+0x40/0x80
+[498390.041082] Ignoring spurious kernel translation fault at virtual address ffff60407b3622e5
+[498390.041087] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[498390.041098] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[498390.041232] pc : __do_kernel_fault+0x130/0x1b8
+[498390.041235] lr : __do_kernel_fault+0x130/0x1b8
+[498390.041281]  __do_kernel_fault+0x130/0x1b8
+[498390.041287]  do_translation_fault+0x40/0x80
+[498450.038150] Ignoring spurious kernel translation fault at virtual address ffff60407b36142f
+[498450.038156] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[498450.038164] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[498450.038296] pc : __do_kernel_fault+0x130/0x1b8
+[498450.038299] lr : __do_kernel_fault+0x130/0x1b8
+[498450.038346]  __do_kernel_fault+0x130/0x1b8
+[498450.038352]  do_translation_fault+0x40/0x80
+[499050.050385] Ignoring spurious kernel translation fault at virtual address ffff60407b36119b
+[499050.050389] WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[499050.050398] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[499050.050526] pc : __do_kernel_fault+0x130/0x1b8
+[499050.050529] lr : __do_kernel_fault+0x130/0x1b8
+[499050.050574]  __do_kernel_fault+0x130/0x1b8
+[499050.050580]  do_translation_fault+0x40/0x80
+[499473.520992] Ignoring spurious kernel translation fault at virtual address ffff60408739b00f
+[499473.520997] WARNING: CPU: 179 PID: 10378 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+[499473.521007] Modules linked in: binfmt_misc nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat rpcrdma sunrpc rdma_ucm ib_srpt ib_isert iscsi_target_mod target_core_mod ib_iser rdma_cm iw_cm ib_cm libiscsi scsi_transport_iscsi hns_roce_hw_v2 ipmi_ssif ib_uverbs ib_core acpi_ipmi ipmi_si ipmi_devintf hisi_uncore_l3c_pmu hisi_uncore_hha_pmu ses enclosure hisi_uncore_ddrc_pmu hisi_uncore_pmu ipmi_msghandler sg ip6_tables ip_tables fuse nfnetlink ext4 mbcache jbd2 sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 hibmc_drm motorcomm drm_vram_helper crct10dif_ce drm_ttm_helper ttm ghash_ce hclge sha2_ce drm_display_helper hisi_sas_v3_hw sha256_arm64 sha1_ce hisi_sas_main drm_kms_helper libsas ahci sbsa_gwdt libahci scsi_transport_sas drm hns3 libata nfit hnae3 megaraid_sas host_edma_drv i2c_designware_platform libnvdimm i2c_designware_core hisi_trng_v2
+[499473.521141] pc : __do_kernel_fault+0x130/0x1b8
+[499473.521144] lr : __do_kernel_fault+0x130/0x1b8
+[499473.521190]  __do_kernel_fault+0x130/0x1b8
+[499473.521197]  do_translation_fault+0x40/0x80

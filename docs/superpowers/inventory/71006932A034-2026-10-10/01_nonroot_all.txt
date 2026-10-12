@@ -1,0 +1,291 @@
+### root-mode: sudo
+### cmd: lscpu
+Architecture:                         aarch64
+CPU op-mode(s):                       64-bit
+Byte Order:                           Little Endian
+CPU(s):                               192
+On-line CPU(s) list:                  0-178,180-191
+Off-line CPU(s) list:                 179
+Vendor ID:                            HiSilicon
+Model name:                           Kunpeng-920
+Model:                                0
+Thread(s) per core:                   1
+Core(s) per socket:                   47
+Socket(s):                            4
+Stepping:                             0x1
+BogoMIPS:                             200.00
+Flags:                                fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma dcpop asimddp asimdfhm ssbs
+L1d cache:                            11.9 MiB (191 instances)
+L1i cache:                            11.9 MiB (191 instances)
+L2 cache:                             95.5 MiB (191 instances)
+L3 cache:                             192 MiB (8 instances)
+NUMA node(s):                         8
+NUMA node0 CPU(s):                    0-23
+NUMA node1 CPU(s):                    24-47
+NUMA node2 CPU(s):                    48-71
+NUMA node3 CPU(s):                    72-95
+NUMA node4 CPU(s):                    96-119
+NUMA node5 CPU(s):                    120-143
+NUMA node6 CPU(s):                    144-167
+NUMA node7 CPU(s):                    168-178,180-191
+Vulnerability Gather data sampling:   Not affected
+Vulnerability Itlb multihit:          Not affected
+Vulnerability L1tf:                   Not affected
+Vulnerability Mds:                    Not affected
+Vulnerability Meltdown:               Not affected
+Vulnerability Mmio stale data:        Not affected
+Vulnerability Reg file data sampling: Not affected
+Vulnerability Retbleed:               Not affected
+Vulnerability Spec rstack overflow:   Not affected
+Vulnerability Spec store bypass:      Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:             Mitigation; __user pointer sanitization
+Vulnerability Spectre v2:             Mitigation; CSV2, but not BHB
+Vulnerability Srbds:                  Not affected
+Vulnerability Tsa:                    Not affected
+Vulnerability Tsx async abort:        Not affected
+Vulnerability Vmscape:                Not affected
+
+### cmd: nproc
+191
+
+### cmd: uname -a
+Linux localhost0102 6.6.0-145.3.23.154.oe2403sp3.aarch64 #1 SMP Mon Jul 27 19:00:34 CST 2026 aarch64 aarch64 aarch64 GNU/Linux
+
+### cmd: /etc/os-release
+NAME="openEuler"
+VERSION="24.03 (LTS-SP3)"
+ID="openEuler"
+VERSION_ID="24.03"
+PRETTY_NAME="openEuler 24.03 (LTS-SP3)"
+ANSI_COLOR="0;31"
+
+
+### cmd: /proc/cmdline
+BOOT_IMAGE=/vmlinuz-6.6.0-145.3.23.154.oe2403sp3.aarch64 root=/dev/mapper/openeuler-root ro rd.lvm.lv=openeuler/root rd.lvm.lv=openeuler/swap cgroup_disable=files apparmor=0 crashkernel=1024M,high smmu.bypassdev=0x1000:0x17 smmu.bypassdev=0x1000:0x15 arm64.nopauth nospectre_bhb rhgb quiet console=tty0
+
+### cmd: free -h
+               total        used        free      shared  buff/cache   available
+Mem:           754Gi        11Gi       737Gi        13Mi       9.3Gi       743Gi
+Swap:          4.0Gi        15Mi       4.0Gi
+
+### cmd: /proc/cpuinfo (cpu0 block + count)
+processor	: 0
+BogoMIPS	: 200.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma dcpop asimddp asimdfhm ssbs
+CPU implementer	: 0x48
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd01
+CPU revision	: 0
+
+processor	: 1
+BogoMIPS	: 200.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma dcpop asimddp asimdfhm ssbs
+CPU implementer	: 0x48
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd01
+CPU revision	: 0
+
+processor	: 2
+BogoMIPS	: 200.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma dcpop asimddp asimdfhm ssbs
+CPU implementer	: 0x48
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd01
+CPU revision	: 0
+
+processor	: 3
+BogoMIPS	: 200.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma dcpop asimddp asimdfhm ssbs
+CPU implementer	: 0x48
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd01
+CPU revision	: 0
+
+processor	: 4
+BogoMIPS	: 200.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma dcpop asimddp asimdfhm ssbs
+CPU implementer	: 0x48
+191
+
+### cmd: NUMA nodes
+-- /sys/devices/system/node/node0
+0-23
+Node 0 MemTotal:       98592452 kB
+Node 0 MemFree:        96165620 kB
+-- /sys/devices/system/node/node1
+24-47
+Node 1 MemTotal:       99087044 kB
+Node 1 MemFree:        97632292 kB
+-- /sys/devices/system/node/node2
+48-71
+Node 2 MemTotal:       99087040 kB
+Node 2 MemFree:        97153340 kB
+-- /sys/devices/system/node/node3
+72-95
+Node 3 MemTotal:       99087044 kB
+Node 3 MemFree:        97936344 kB
+-- /sys/devices/system/node/node4
+96-119
+Node 4 MemTotal:       99087040 kB
+Node 4 MemFree:        94842740 kB
+-- /sys/devices/system/node/node5
+120-143
+Node 5 MemTotal:       99087044 kB
+Node 5 MemFree:        98376380 kB
+-- /sys/devices/system/node/node6
+144-167
+Node 6 MemTotal:       99027860 kB
+Node 6 MemFree:        95730220 kB
+-- /sys/devices/system/node/node7
+168-178,180-191
+Node 7 MemTotal:       98028148 kB
+Node 7 MemFree:        95082852 kB
+
+### cmd: cpu0 cache hierarchy
+-- /sys/devices/system/cpu/cpu0/cache/index0
+1
+Data
+64K
+64
+0
+-- /sys/devices/system/cpu/cpu0/cache/index1
+1
+Instruction
+64K
+64
+0
+-- /sys/devices/system/cpu/cpu0/cache/index2
+2
+Unified
+512K
+64
+0
+-- /sys/devices/system/cpu/cpu0/cache/index3
+3
+Unified
+24576K
+128
+0-23
+
+### cmd: cpufreq presence
+NO cpufreq sysfs
+
+### cmd: governor
+
+### cmd: thermal zones + trips
+-- /sys/class/thermal/thermal_zone* type= temp= trips: types:
+
+### cmd: hwmon names
+-- /sys/class/hwmon/hwmon*: 
+
+### cmd: sensors
+lm-sensors 未安装
+
+### cmd: EDAC
+mc0
+power
+subsystem
+uevent
+-- /sys/devices/system/edac/mc/mc0
+0
+0
+786432
+
+### cmd: rasdaemon service
+inactive
+not-found
+
+### cmd: kdump service
+active
+enabled
+
+### cmd: 工具盘点
+stress-ng:          stress-ng, version 0.18.12 (gcc 12.3.1, aarch64 Linux 6.6.0-145.3.23.154.oe2403sp3.aarch64)
+rasdaemon:          NOT FOUND
+ipmitool:           
+sensors:            sensors version 3.6.0 with libsensors version 3.6.0
+lstopo-no-graphics: lstopo-no-graphics 2.9.1
+numactl:            
+turbostat:          NOT FOUND
+cpupower:           cpupower 6.6.0-145.3.23.154.oe2403sp3.aarch64
+dmidecode:          3.5
+perf:               perf version 6.6.0-145.3.23.154.oe2403sp3.aarch64
+gcc:                gcc (GCC) 12.3.1 (openEuler 12.3.1-105.oe2403sp3)
+g++:                g++ (GCC) 12.3.1 (openEuler 12.3.1-105.oe2403sp3)
+cmake:              cmake version 3.27.9
+meson:              1.11.2
+ninja:              1.13.0.git.kitware.jobserver-pipe-1
+
+### cmd: lsblk
+NAME               MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+sda                  8:0    0  1.1T  0 disk 
+├─sda1               8:1    0  600M  0 part /boot/efi
+├─sda2               8:2    0    1G  0 part /boot
+└─sda3               8:3    0  1.1T  0 part 
+  ├─openeuler-root 253:0    0   70G  0 lvm  /
+  ├─openeuler-swap 253:1    0    4G  0 lvm  [SWAP]
+  └─openeuler-home 253:2    0    1T  0 lvm  /home
+
+### cmd: lspci summary
+00:00.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCIe Root Port with Gen4 (rev 21)
+00:08.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCIe Root Port with Gen4 (rev 21)
+00:10.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCIe Root Port with Gen4 (rev 21)
+00:11.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCIe Root Port with Gen4 (rev 21)
+00:12.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCIe Root Port with Gen4 (rev 21)
+02:00.0 RAID bus controller: Broadcom / LSI MegaRAID 12GSAS/PCIe Secure SAS39xx
+03:00.0 VGA compatible controller: Huawei Technologies Co., Ltd. Hi171x Series [iBMC Intelligent Management system chip w/VGA support] (rev 01)
+04:00.0 Signal processing controller: Huawei Technologies Co., Ltd. iBMA Virtual Network Adapter (rev 01)
+34:01.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCI-PCI Bridge (rev 20)
+34:02.0 Serial Attached SCSI controller: Huawei Technologies Co., Ltd. HiSilicon SAS 3.0 HBA (rev 21)
+34:03.0 SATA controller: Huawei Technologies Co., Ltd. HiSilicon AHCI HBA (rev 21)
+34:04.0 Serial Attached SCSI controller: Huawei Technologies Co., Ltd. HiSilicon SAS 3.0 HBA (rev 21)
+3a:00.0 USB controller: Huawei Technologies Co., Ltd. HiSilicon USB 1.1 Host Controller (rev 21)
+3a:01.0 USB controller: Huawei Technologies Co., Ltd. HiSilicon USB 2.0 2-port Host Controller (rev 21)
+3a:02.0 USB controller: Huawei Technologies Co., Ltd. HiSilicon USB 3.0 Host Controller (rev 21)
+3c:00.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCI-PCI Bridge (rev 20)
+40:00.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCIe Root Port with Gen4 (rev 21)
+40:08.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCIe Root Port with Gen4 (rev 21)
+40:10.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCIe Root Port with Gen4 (rev 21)
+74:01.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCI-PCI Bridge (rev 20)
+74:02.0 Serial Attached SCSI controller: Huawei Technologies Co., Ltd. HiSilicon SAS 3.0 HBA (rev 21)
+74:03.0 SATA controller: Huawei Technologies Co., Ltd. HiSilicon AHCI HBA (rev 21)
+74:04.0 Serial Attached SCSI controller: Huawei Technologies Co., Ltd. HiSilicon SAS 3.0 HBA (rev 21)
+7a:00.0 USB controller: Huawei Technologies Co., Ltd. HiSilicon USB 1.1 Host Controller (rev 21)
+7a:01.0 USB controller: Huawei Technologies Co., Ltd. HiSilicon USB 2.0 2-port Host Controller (rev 21)
+7a:02.0 USB controller: Huawei Technologies Co., Ltd. HiSilicon USB 3.0 Host Controller (rev 21)
+7c:00.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCI-PCI Bridge (rev 20)
+b4:01.0 PCI bridge: Huawei Technologies Co., Ltd. HiSilicon PCI-PCI Bridge (rev 20)
+b4:02.0 Serial Attached SCSI controller: Huawei Technologies Co., Ltd. HiSilicon SAS 3.0 HBA (rev 21)
+b4:03.0 SATA controller: Huawei Technologies Co., Ltd. HiSilicon AHCI HBA (rev 21)
+
+### cmd: ip -brief a
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+enp189s0f0       UP             172.168.160.42/16 2001:db8:0:f101:b24f:a6ff:fe69:4de1/64 fe80::b24f:a6ff:fe69:4de1/64 
+enp189s0f1       DOWN           
+enp189s0f2       DOWN           
+enp189s0f3       DOWN           
+
+### cmd: df -h
+Filesystem                  Size  Used Avail Use% Mounted on
+/dev/mapper/openeuler-root   69G   27G   39G  41% /
+efivarfs                     83K   30K   54K  36% /sys/firmware/efi/efivars
+/dev/sda2                   974M  294M  614M  33% /boot
+/dev/mapper/openeuler-home  1.1T  396G  578G  41% /home
+/dev/sda1                   599M  6.5M  593M   2% /boot/efi
+
+### cmd: 背景负载 top10
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+sdc       655850  6.0  0.0 6908696 535788 pts/9  Sl+  16:51  15:18 claude --teammate-mode tmux --allow-dangerously-skip-permissions
+root       10378  1.6  0.0  38852 29892 ?        S    Oct03 172:18 /var/lib/pcp/pmdas/linux/pmdalinux
+sdc       990623  0.9  0.0  22604  3320 ?        S    21:06   0:00 /bin/bash scripts/sdc-excite-reproduce/collect_inventory.sh docs/superpowers/inventory/
+sdc      3338499  0.8  0.0 6978040 504224 pts/0  Sl+  Oct09  19:14 claude
+root     1171409  0.4  0.0  21208 13060 ?        S    Oct08  14:59 /var/lib/pcp/pmdas/proc/pmdaproc -d 3
+root        9694  0.2  0.0  81816  4372 ?        Ssl  Oct03  25:06 /usr/sbin/irqbalance --hintpolicy=subset --pid=/var/run/irqbalance.pid
+pcp       879180  0.1  0.0 120604 112444 ?       S    Oct08   4:58 /usr/libexec/pcp/bin/pmlogger -N -P -d "/var/log/pcp/pmlogger/LOCALHOSTNAME" -r -T24h10m -c config.default -v 100mb -mreexec %Y%m%d.%H.%M
+root      647757  0.0  0.0      0     0 ?        I    15:55   0:16 [kworker/151:0-events_power_efficient]
+root          16  0.0  0.0      0     0 ?        I    Oct03   6:58 [rcu_sched]
+root        9764  0.0  0.0 350764 22416 ?        Ssl  Oct03   6:29 /usr/sbin/NetworkManager --no-daemon

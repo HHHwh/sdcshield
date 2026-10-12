@@ -1,0 +1,50 @@
+Oct 08 17:20:56 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 08 17:20:56 localhost0102 kernel:  do_translation_fault+0x40/0x80
+Oct 08 17:21:06 localhost0102 kernel: Ignoring spurious kernel translation fault at virtual address ffff60404d439311
+Oct 08 17:21:06 localhost0102 kernel: WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+Oct 08 17:21:06 localhost0102 kernel: pc : __do_kernel_fault+0x130/0x1b8
+Oct 08 17:21:06 localhost0102 kernel: lr : __do_kernel_fault+0x130/0x1b8
+Oct 08 17:21:06 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 08 17:21:06 localhost0102 kernel:  do_translation_fault+0x40/0x80
+Oct 08 17:21:36 localhost0102 kernel: Ignoring spurious kernel translation fault at virtual address ffff60404d439138
+Oct 08 17:21:36 localhost0102 kernel: WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+Oct 08 17:21:36 localhost0102 kernel: pc : __do_kernel_fault+0x130/0x1b8
+Oct 08 17:21:36 localhost0102 kernel: lr : __do_kernel_fault+0x130/0x1b8
+Oct 08 17:21:36 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 08 17:21:36 localhost0102 kernel:  do_translation_fault+0x40/0x80
+Oct 09 10:22:50 localhost0102 kernel: Ignoring spurious kernel translation fault at virtual address ffff60403e43c7cb
+Oct 09 10:22:50 localhost0102 kernel: WARNING: CPU: 179 PID: 10378 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+Oct 09 10:22:50 localhost0102 kernel: pc : __do_kernel_fault+0x130/0x1b8
+Oct 09 10:22:50 localhost0102 kernel: lr : __do_kernel_fault+0x130/0x1b8
+Oct 09 10:22:50 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 09 10:22:50 localhost0102 kernel:  do_translation_fault+0x40/0x80
+Oct 09 10:26:27 localhost0102 kernel: Ignoring spurious kernel translation fault at virtual address ffff6040431c682e
+Oct 09 10:26:27 localhost0102 kernel: WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+Oct 09 10:26:27 localhost0102 kernel: pc : __do_kernel_fault+0x130/0x1b8
+Oct 09 10:26:27 localhost0102 kernel: lr : __do_kernel_fault+0x130/0x1b8
+Oct 09 10:26:27 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 09 10:26:27 localhost0102 kernel:  do_translation_fault+0x40/0x80
+Oct 09 10:59:27 localhost0102 kernel: Ignoring spurious kernel translation fault at virtual address ffff60407b3622e5
+Oct 09 10:59:27 localhost0102 kernel: WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+Oct 09 10:59:27 localhost0102 kernel: pc : __do_kernel_fault+0x130/0x1b8
+Oct 09 10:59:27 localhost0102 kernel: lr : __do_kernel_fault+0x130/0x1b8
+Oct 09 10:59:27 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 09 10:59:27 localhost0102 kernel:  do_translation_fault+0x40/0x80
+Oct 09 11:00:27 localhost0102 kernel: Ignoring spurious kernel translation fault at virtual address ffff60407b36142f
+Oct 09 11:00:27 localhost0102 kernel: WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+Oct 09 11:00:27 localhost0102 kernel: pc : __do_kernel_fault+0x130/0x1b8
+Oct 09 11:00:27 localhost0102 kernel: lr : __do_kernel_fault+0x130/0x1b8
+Oct 09 11:00:27 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 09 11:00:27 localhost0102 kernel:  do_translation_fault+0x40/0x80
+Oct 09 11:10:27 localhost0102 kernel: Ignoring spurious kernel translation fault at virtual address ffff60407b36119b
+Oct 09 11:10:27 localhost0102 kernel: WARNING: CPU: 179 PID: 9694 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+Oct 09 11:10:27 localhost0102 kernel: pc : __do_kernel_fault+0x130/0x1b8
+Oct 09 11:10:27 localhost0102 kernel: lr : __do_kernel_fault+0x130/0x1b8
+Oct 09 11:10:27 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 09 11:10:27 localhost0102 kernel:  do_translation_fault+0x40/0x80
+Oct 09 11:17:30 localhost0102 kernel: Ignoring spurious kernel translation fault at virtual address ffff60408739b00f
+Oct 09 11:17:30 localhost0102 kernel: WARNING: CPU: 179 PID: 10378 at arch/arm64/mm/fault.c:494 __do_kernel_fault+0x130/0x1b8
+Oct 09 11:17:30 localhost0102 kernel: pc : __do_kernel_fault+0x130/0x1b8
+Oct 09 11:17:30 localhost0102 kernel: lr : __do_kernel_fault+0x130/0x1b8
+Oct 09 11:17:30 localhost0102 kernel:  __do_kernel_fault+0x130/0x1b8
+Oct 09 11:17:30 localhost0102 kernel:  do_translation_fault+0x40/0x80

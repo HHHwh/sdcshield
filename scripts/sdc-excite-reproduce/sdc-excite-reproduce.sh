@@ -257,7 +257,7 @@ phase_cold() {
     local reps
     reps=$(resolve 'memcpy_rewr,cachebounce,lock*,atomic_simd_*,fma*,crc32,mul64,openblas_dgemm,sleef_neon,pocketfft_fft,isal_igzip,zstd19,openssl_sha,openssl_sm3sm4,acl_gemm')
     if [ -z "$reps" ]; then log "冷机首轮：无匹配用例，跳过"; return; fi
-    log "[cycle $CYCLE] 冷机首轮（L1 代表集）。基线温度: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | cut -d, -f2,3)"
+    log "[cycle $CYCLE] 冷机首轮（L1 代表集）。基线温度: $(cpu_temp_now)"
     run_bounded "cold_c${CYCLE}" "$(DUR_S "$T_COLD")" 60 -e "$reps" "${FLAGS[@]}"
 }
 
@@ -326,6 +326,23 @@ l5_dit() {
     done
 }
 
+# CPU 温度读取（L1/L5 消费 monitor.csv）：按列名匹配 cpu*temp，命中列取最大值；
+# 无命中回退 f2,f3（参考板列序恰好 CPU 温度在前两列——R240K V2 的 f2,f3 是
+# INPUT/OUTPUT_TEMP 进出风口，永远够不到热激发目标带）。
+cpu_temp_now() {
+    local csv="$MON_DIR/monitor.csv" cols
+    [ -r "$csv" ] || return 0
+    cols=$(head -1 "$csv" | awk -F, '{for(i=1;i<=NF;i++) if($i ~ /^cpu.*temp|^temp.*cpu/) c=c (c?",":"") i} END{print c}')
+    if [ -n "$cols" ]; then
+        tail -1 "$csv" | awk -F, -v c="$cols" '
+            BEGIN { n = split(c, C, ",") }
+            { for (i = 1; i <= n; i++) if ($C[i]+0 > m) m = $C[i]+0 }
+            END { print (m > 0) ? m : "" }'
+    else
+        tail -1 "$csv" | awk -F, '{print ($2 > $3) ? $2 : $3}'
+    fi
+}
+
 l5_heatsoak() {
     log "L5 热激发：预热至 $(( THERMAL_PAUSE_C - 10 ))C 带"
     local target=$(( THERMAL_PAUSE_C - 10 )) cur=0 i
@@ -334,7 +351,7 @@ l5_heatsoak() {
     local iters=$(( $(DUR_S "$T_HEAT") / 300 )); [ $iters -lt 1 ] && iters=1
     for i in $(seq 1 $iters); do
         run_bounded "l5_heat_c${CYCLE}_i${i}" 300 300 -e "$heat_suite" "${FLAGS[@]}"
-        cur=$(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | awk -F, '{print ($2 > $3) ? $2 : $3}')
+        cur=$(cpu_temp_now)
         if [ -n "$cur" ] && [ "$cur" -ge "$target" ] 2>/dev/null; then
             log "L5 热激发：已达目标温度带 ${cur}C"
             break
@@ -342,7 +359,7 @@ l5_heatsoak() {
     done
     local tgt; tgt=$(resolve 'openblas_dgemm,sleef_neon,fma*')
     [ -n "$tgt" ] && run_bounded "l5_hot_target_c${CYCLE}" "$(DUR_S "$T_TARGET")" 600 -e "$tgt" "${FLAGS[@]}"
-    log "L5 热激发完成，末态温度: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | cut -d, -f2,3)"
+    log "L5 热激发完成，末态温度: $(cpu_temp_now)"
 }
 
 l5_numa() {
@@ -430,7 +447,7 @@ daily_summary() {
     done
     {
         echo "=== 日汇总 $(date '+%F %T') cycle=$CYCLE ==="
-        echo "事件数: $(wc -l < "$EVENTS_DIR/ledger.csv" 2>/dev/null || echo 0)"
+        echo "事件数: $( [ -f "$EVENTS_DIR/ledger.csv" ] && wc -l < "$EVENTS_DIR/ledger.csv" || echo 0)"
         echo "今日 YAML: $(find "$LOG_ROOT/$(date +%F | tr -d -)" -name '*.yaml' 2>/dev/null | wc -l)"
         echo "fail/crash 文件数: $(grep -lE 'result: *(fail|crash)' "$LOG_ROOT"/*/*.yaml "$LOG_ROOT"/spectrum_c*_files/*.yaml 2>/dev/null | wc -l)"
         echo "timeout/oserror 行数: $(grep -hE 'result: *(timeout|oserror)' "$LOG_ROOT"/*/*.yaml 2>/dev/null | wc -l)"
