@@ -1,0 +1,22 @@
+Device ID                 : 1
+Device Revision           : 1
+Firmware Revision         : 3.11
+IPMI Version              : 2.0
+Manufacturer ID           : 2011
+Manufacturer Name         : Unknown (0x7DB)
+Product ID                : 7 (0x0007)
+Product Name              : Unknown (0x7)
+Device Available          : yes
+Provides Device SDRs      : yes
+Additional Device Support :
+    Sensor Device
+    SDR Repository Device
+    SEL Device
+    FRU Inventory Device
+    IPMB Event Generator
+    Chassis Device
+Aux Firmware Rev Info     : 
+    0x01
+    0x00
+    0x00
+    0x35

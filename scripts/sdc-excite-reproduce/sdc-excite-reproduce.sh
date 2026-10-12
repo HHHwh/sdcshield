@@ -212,9 +212,16 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
 # ---------------- stress-ng 补充层（后台，小时轮转 --verify）----------------
 stressng_layer() {
     local list i=0 s
-    # 白名单取自本机 stress-ng --verifiable 实测可用集（CPU 型、内存足迹小）
-    list=$(stress-ng --verifiable 2>/dev/null | awk 'NR>1 {print $1}' \
-            | grep -xE 'matrix|matrix-3d|qsort|radixsort|mergesort|insertionsort|bsearch|fma|vecfp|vecwide|skiplist|hash|judy|tsearch|hsearch|fibsearch|lsearch' | tr '\n' ' ')
+    # 白名单取自本机 stress-ng --verifiable 实测可用集（CPU 型、内存足迹小）。
+    # stress-ng 0.22 起 --verifiable 为分段空格分隔格式（0.18 为逐行），原
+    # awk 'NR>1 {print $1}' 逐行解析在新格式下只取每段首词、白名单交集恒空——
+    # 改用 tr 拆词后 -xE 精确匹配，两种格式都兼容。
+    # SDC 定向补充（sdc-stressng fork 0.22.x）：operand-var（塑形操作数 golden
+    # 重放）、armcrypto（NEON crypto 引擎）、llccross（跨域一致性，默认
+    # 8m/worker 足迹）；ooopress/memrate 无 verify oracle、lsupress/addrspace
+    # 足迹大，按层设计约束（CPU 型、小足迹）排除。
+    list=$(stress-ng --verifiable 2>/dev/null | tr ' ' '\n' \
+            | grep -xE 'matrix|matrix-3d|qsort|radixsort|mergesort|insertionsort|bsearch|fma|vecfp|vecwide|skiplist|hash|judy|tsearch|hsearch|fibsearch|lsearch|operand-var|armcrypto|llccross' | tr '\n' ' ')
     [ -z "$list" ] && list="matrix"
     log "stress-ng 补充层启动（保留核 $STRESSNG_CPUS，轮转: $list）"
     while :; do
@@ -250,7 +257,7 @@ phase_cold() {
     local reps
     reps=$(resolve 'memcpy_rewr,cachebounce,lock*,atomic_simd_*,fma*,crc32,mul64,openblas_dgemm,sleef_neon,pocketfft_fft,isal_igzip,zstd19,openssl_sha,openssl_sm3sm4,acl_gemm')
     if [ -z "$reps" ]; then log "冷机首轮：无匹配用例，跳过"; return; fi
-    log "[cycle $CYCLE] 冷机首轮（L1 代表集）。基线温度: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | cut -d, -f2,3)"
+    log "[cycle $CYCLE] 冷机首轮（L1 代表集）。基线温度: $(cpu_temp_now)"
     run_bounded "cold_c${CYCLE}" "$(DUR_S "$T_COLD")" 60 -e "$reps" "${FLAGS[@]}"
 }
 
@@ -319,6 +326,23 @@ l5_dit() {
     done
 }
 
+# CPU 温度读取（L1/L5 消费 monitor.csv）：按列名匹配 cpu*temp，命中列取最大值；
+# 无命中回退 f2,f3（参考板列序恰好 CPU 温度在前两列——R240K V2 的 f2,f3 是
+# INPUT/OUTPUT_TEMP 进出风口，永远够不到热激发目标带）。
+cpu_temp_now() {
+    local csv="$MON_DIR/monitor.csv" cols
+    [ -r "$csv" ] || return 0
+    cols=$(head -1 "$csv" | awk -F, '{for(i=1;i<=NF;i++) if($i ~ /^cpu.*temp|^temp.*cpu/) c=c (c?",":"") i} END{print c}')
+    if [ -n "$cols" ]; then
+        tail -1 "$csv" | awk -F, -v c="$cols" '
+            BEGIN { n = split(c, C, ",") }
+            { for (i = 1; i <= n; i++) if ($C[i]+0 > m) m = $C[i]+0 }
+            END { print (m > 0) ? m : "" }'
+    else
+        tail -1 "$csv" | awk -F, '{print ($2 > $3) ? $2 : $3}'
+    fi
+}
+
 l5_heatsoak() {
     log "L5 热激发：预热至 $(( THERMAL_PAUSE_C - 10 ))C 带"
     local target=$(( THERMAL_PAUSE_C - 10 )) cur=0 i
@@ -327,7 +351,7 @@ l5_heatsoak() {
     local iters=$(( $(DUR_S "$T_HEAT") / 300 )); [ $iters -lt 1 ] && iters=1
     for i in $(seq 1 $iters); do
         run_bounded "l5_heat_c${CYCLE}_i${i}" 300 300 -e "$heat_suite" "${FLAGS[@]}"
-        cur=$(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | awk -F, '{print ($2 > $3) ? $2 : $3}')
+        cur=$(cpu_temp_now)
         if [ -n "$cur" ] && [ "$cur" -ge "$target" ] 2>/dev/null; then
             log "L5 热激发：已达目标温度带 ${cur}C"
             break
@@ -335,7 +359,7 @@ l5_heatsoak() {
     done
     local tgt; tgt=$(resolve 'openblas_dgemm,sleef_neon,fma*')
     [ -n "$tgt" ] && run_bounded "l5_hot_target_c${CYCLE}" "$(DUR_S "$T_TARGET")" 600 -e "$tgt" "${FLAGS[@]}"
-    log "L5 热激发完成，末态温度: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | cut -d, -f2,3)"
+    log "L5 热激发完成，末态温度: $(cpu_temp_now)"
 }
 
 l5_numa() {
@@ -423,7 +447,7 @@ daily_summary() {
     done
     {
         echo "=== 日汇总 $(date '+%F %T') cycle=$CYCLE ==="
-        echo "事件数: $(wc -l < "$EVENTS_DIR/ledger.csv" 2>/dev/null || echo 0)"
+        echo "事件数: $( [ -f "$EVENTS_DIR/ledger.csv" ] && wc -l < "$EVENTS_DIR/ledger.csv" || echo 0)"
         echo "今日 YAML: $(find "$LOG_ROOT/$(date +%F | tr -d -)" -name '*.yaml' 2>/dev/null | wc -l)"
         echo "fail/crash 文件数: $(grep -lE 'result: *(fail|crash)' "$LOG_ROOT"/*/*.yaml "$LOG_ROOT"/spectrum_c*_files/*.yaml 2>/dev/null | wc -l)"
         echo "timeout/oserror 行数: $(grep -hE 'result: *(timeout|oserror)' "$LOG_ROOT"/*/*.yaml 2>/dev/null | wc -l)"

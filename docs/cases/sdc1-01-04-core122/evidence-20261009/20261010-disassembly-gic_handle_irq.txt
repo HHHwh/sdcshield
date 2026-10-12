@@ -1,0 +1,44 @@
+# gic_handle_irq 全函数反汇编（kernel 6.6.0-159.4.13.167.oe2403sp4.aarch64）
+# 函数基址 ffff800080010008（System.map t gic_handle_irq），尺寸 0x98，与 Oops '+0x74/0x98' 吻合
+# 故障指令 +0x74: a94153f3 = ldp x19, x20, [sp, #16]，读回 +0x14 序言写入的栈帧槽 → L3 翻译故障 pte=0
+# 运行时寄存器对照见报告 §3.1；x29/x19/x20/x21 在故障时已被替换（x29≠mov x29,sp 必保值）
+
+ffff800080010008:	d503201f 	nop
+ffff80008001000c:	d503201f 	nop
+ffff800080010010:	d503233f 	paciasp
+ffff800080010014:	a9bd7bfd 	stp	x29, x30, [sp, #-48]!
+ffff800080010018:	910003fd 	mov	x29, sp
+ffff80008001001c:	a90153f3 	stp	x19, x20, [sp, #16]
+ffff800080010020:	9000fb33 	adrp	x19, 0xffff800081f74000
+ffff800080010024:	91078273 	add	x19, x19, #0x1e0
+ffff800080010028:	a9025bf5 	stp	x21, x22, [sp, #32]
+ffff80008001002c:	f000db35 	adrp	x21, 0xffff800081b77000
+ffff800080010030:	910342b5 	add	x21, x21, #0xd0
+ffff800080010034:	f9400674 	ldr	x20, [x19, #8]
+ffff800080010038:	91003296 	add	x22, x20, #0xc
+ffff80008001003c:	91004294 	add	x20, x20, #0x10
+ffff800080010040:	1400000b 	b	0xffff80008001006c
+ffff800080010044:	d503201f 	nop
+ffff800080010048:	b9000280 	str	w0, [x20]
+ffff80008001004c:	d5033fdf 	isb
+ffff800080010050:	721c141f 	tst	w0, #0x3f0
+ffff800080010054:	54000081 	b.ne	0xffff800080010064  // b.any
+ffff800080010058:	d50339bf 	dmb	ishld
+ffff80008001005c:	d538d082 	mrs	x2, tpidr_el1
+ffff800080010060:	b8226aa0 	str	w0, [x21, x2]
+ffff800080010064:	f9431e60 	ldr	x0, [x19, #1592]
+ffff800080010068:	94060328 	bl	0xffff800080190d08
+ffff80008001006c:	b94002c0 	ldr	w0, [x22]
+ffff800080010070:	12002401 	and	w1, w0, #0x3ff
+ffff800080010074:	710fec3f 	cmp	w1, #0x3fb
+ffff800080010078:	54fffe69 	b.ls	0xffff800080010044  // b.plast
+ffff80008001007c:	a94153f3 	ldp	x19, x20, [sp, #16]
+ffff800080010080:	a9425bf5 	ldp	x21, x22, [sp, #32]
+ffff800080010084:	a8c37bfd 	ldp	x29, x30, [sp], #48
+ffff800080010088:	d50323bf 	autiasp
+ffff80008001008c:	d65f03c0 	ret
+ffff800080010090:	d53cd042 	mrs	x2, tpidr_el2
+ffff800080010094:	88dffec0 	ldar	w0, [x22]
+ffff800080010098:	d503201f 	nop
+ffff80008001009c:	d503201f 	nop
+ffff8000800100a0:	d503201f 	nop

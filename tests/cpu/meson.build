@@ -430,6 +430,7 @@ tests_set_skx.add(
 tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
+        'eigen_gemm/gemm_double_max_arm.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
     )
 )

@@ -1,0 +1,377 @@
+# 五次 kernel panic 控制台原文摘录（BMC systemcom 黑匣子）
+# day1 = 20261009-systemcom-day1.dat（10-09 21:41 抓取）；day2 = 20261010-systemcom-day2.dat（10-10 10:50 抓取）
+
+===== panic1-vsnprintf-3154 (day1 line 9461, 前后窗口) =====
+[   34.559523][  T684] i40e 0000:17:00.2: PCI-Express: Speed 8.0GT/s Width x8
+[   34.561328][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.11.auto: Registered PMU @ 0x0000200100120000 using 8 counters with Individual filter settings
+[   34.561399][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.12.auto: option mask 0x2
+[   34.561432][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.12.auto: Registered PMU @ 0x0000208300120000 using 8 counters with Individual filter settings
+[   34.561475][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.13.auto: option mask 0x2
+[   34.616457][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.13.auto: Registered PMU @ 0x0000208401220000 using 8 counters with Individual filter settings
+[   34.630527][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.14.auto: option mask 0x2
+[   34.640036][  T684] i40e 0000:17:00.2: Features: PF-id[2] VFs: 32 VSIs: 34 QP: 119 RSS FD_ATR FD_SB NTUPLE VxLAN Geneve PTP VEPA
+[   34.641999][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.14.auto: Registered PMU @ 0x0000208200120000 using 8 counters with Individual filter settings
+[   34.666419][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.15.auto: option mask 0x2
+[   34.669409][  T684] i40e 0000:17:00.3: enabling device (0140 -> 0142)
+[   34.683125][ T2072] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.15.auto: Registered PMU @ 0x0000208100120000 using 8 counters with Individual filter settings
+[   34.700164][  T684] i40e 0000:17:00.3: fw 6.0.48442 api 1.7 nvm 6.01 0x800039ca 1.1927.0 [8086:1572] [19e5:d11d]
+[   34.969611][  T684] i40e 0000:17:00.3: MAC address: 8c:2a:8e:01:dc:2b
+[   34.992172][  T684] i40e 0000:17:00.3: PCI-Express: Speed 8.0GT/s Width x8
+[   35.008292][  T684] i40e 0000:17:00.3: Features: PF-id[3] VFs: 32 VSIs: 34 QP: 119 RSS FD_ATR FD_SB NTUPLE VxLAN Geneve PTP VEPA
+[   35.039926][ T3010] EXT4-fs (sda4): mounted filesystem b7f8ecca-c390-4b66-ac87-0af8ed05c161 r/w with ordered data mode. Quota mode: none.
+[   35.040799][ T2997] device-mapper: ioctl: lvm[2997]: dm-2 (openeuler-home) is created successfully
+[   35.104783][ T2198] i40e 0000:17:00.3 enp23s0f3: renamed from eth3
+[   35.169556][ T2001] i40e 0000:17:00.1 enp23s0f1: renamed from eth1
+[   35.261242][ T2004] i40e 0000:17:00.0 enp23s0f0: renamed from eth0
+[   35.361872][ T2142] i40e 0000:17:00.2 enp23s0f2: renamed from eth2
+[   35.386772][    T0] CPU features: detected CPU126: Activity Monitors Unit (AMU)
+[   35.394086][    T0] Detected VIPT I-cache on CPU126
+[   35.399063][    T0] GICv3: CPU126: found redistributor 900070200 region 126:0x0000204641000000
+[   35.407692][    T0] GICv3: CPU126: using allocated LPI pending table @0x0000082089c40000
+[   35.416024][    T0] CPU126: Booted secondary processor 0x0900070200 [0x480fd020]
+[   35.498913][    T0] CPU features: detected CPU123: Activity Monitors Unit (AMU)
+[   35.506227][    T0] Detected VIPT I-cache on CPU123
+[   35.511188][    T0] GICv3: CPU123: found redistributor 900060300 region 123:0x0000204640e80000
+[   35.519815][    T0] GICv3: CPU123: using allocated LPI pending table @0x0000082089c10000
+[   35.528124][    T0] CPU123: Booted secondary processor 0x0900060300 [0x480fd020]
+[   35.608902][ T3055] EXT4-fs (dm-2): mounted filesystem 8928ee43-355f-4c38-82e7-e0cd45309333 r/w with ordered data mode. Quota mode: none.
+[   35.630855][    T0] CPU features: detected CPU122: Activity Monitors Unit (AMU)
+[   35.638166][    T0] Detected VIPT I-cache on CPU122
+[   35.643116][    T0] GICv3: CPU122: found redistributor 900060200 region 122:0x0000204640e00000
+[   35.651739][    T0] GICv3: CPU122: using allocated LPI pending table @0x0000082089c00000
+[   35.660045][    T0] CPU122: Booted secondary processor 0x0900060200 [0x480fd020]
+[   35.669988][ T3080] Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: vsnprintf+0x6ec/0x6f0
+[   35.680761][ T3080] CPU: 122 PID: 3080 Comm: kworker/122:0 Not tainted 6.6.0-159.4.3.154.oe2403sp4.aarch64 #1
+[   35.690919][ T3080] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[   35.699516][ T3080] Call trace:
+[   35.702896][ T3080]  dump_backtrace+0xa0/0x128
+[   35.707587][ T3080] NMI backtrace for cpu 122
+[   35.712178][ T3080] CPU: 122 PID: 3080 Comm: kworker/122:0 Not tainted 6.6.0-159.4.3.154.oe2403sp4.aarch64 #1
+[   35.722327][ T3080] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[   35.730913][ T3080] Call trace:
+[   35.734284][ T3080]  dump_backtrace+0xa0/0x128
+[   35.738957][ T3080] Sending NMI from CPU 122 to CPUs 0-121,123,125-126:
+[   35.745803][    C1] NMI backtrace for cpu 1 skipped: idling at default_idle_call+0x74/0x150
+[   35.745812][    C2] NMI backtrace for cpu 2 skipped: idling at default_idle_call+0x74/0x150
+[   35.745817][    C0] NMI backtrace for cpu 0 skipped: idling at default_idle_call+0x74/0x150
+[   35.745821][    C3] NMI backtrace for cpu 3 skipped: idling at default_idle_call+0x74/0x150
+[   35.745827][   C25] NMI backtrace for cpu 25 skipped: idling at default_idle_call+0x74/0x150
+[   35.745838][   C33] NMI backtrace for cpu 33 skipped: idling at default_idle_call+0x74/0x150
+[   35.745848][   C34] NMI backtrace for cpu 34 skipped: idling at default_idle_call+0x74/0x150
+[   35.745855][   C18] NMI backtrace for cpu 18 skipped: idling at default_idle_call+0x74/0x150
+[   35.745862][   C17] NMI backtrace for cpu 17 skipped: idling at default_idle_call+0x74/0x150
+[   35.745867][   C16] NMI backtrace for cpu 16 skipped: idling at default_idle_call+0x74/0x150
+[   35.745872][   C19] NMI backtrace for cpu 19 skipped: idling at default_idle_call+0x74/0x150
+[   35.745878][   C26] NMI backtrace for cpu 26 skipped: idling at default_idle_call+0x74/0x150
+[   35.745895][  C109] NMI backtrace for cpu 109 skipped: idling at default_idle_call+0x74/0x150
+[   35.745908][  C103] NMI backtrace for cpu 103 skipped: idling at default_idle_call+0x74/0x150
+[   35.745917][  C102] NMI backtrace for cpu 102 skipped: idling at default_idle_call+0x74/0x150
+[   35.745924][  C101] NMI backtrace for cpu 101 skipped: idling at default_idle_call+0x74/0x150
+[   35.745936][   C68] NMI backtrace for cpu 68 skipped: idling at default_idle_call+0x74/0x150
+[   35.745954][   C71] NMI backtrace for cpu 71 skipped: idling at default_idle_call+0x74/0x150
+[   35.745960][   C69] NMI backtrace for cpu 69 skipped: idling at default_idle_call+0x74/0x150
+[   35.745965][   C89] NMI backtrace for cpu 89 skipped: idling at default_idle_call+0x74/0x150
+[   35.745974][   C57] NMI backtrace for cpu 57 skipped: idling at default_idle_call+0x74/0x150
+[   35.745986][   C91] NMI backtrace for cpu 91 skipped: idling at default_idle_call+0x74/0x150
+[   35.745995][   C67] NMI backtrace for cpu 67 skipped: idling at default_idle_call+0x74/0x150
+[   35.746002][   C66] NMI backtrace for cpu 66 skipped: idling at default_idle_call+0x74/0x150
+[   35.746008][   C64] NMI backtrace for cpu 64 skipped: idling at default_idle_call+0x74/0x150
+[   35.746014][   C65] NMI backtrace for cpu 65 skipped: idling at default_idle_call+0x74/0x150
+[   35.746019][   C88] NMI backtrace for cpu 88 skipped: idling at default_idle_call+0x74/0x150
+[   35.746027][   C27] NMI backtrace for cpu 27 skipped: idling at default_idle_call+0x74/0x150
+[   35.746036][   C90] NMI backtrace for cpu 90 skipped: idling at default_idle_call+0x74/0x150
+[   35.746042][   C92] NMI backtrace for cpu 92 skipped: idling at default_idle_call+0x74/0x150
+[   35.746049][   C93] NMI backtrace for cpu 93 skipped: idling at default_idle_call+0x74/0x150
+[   35.746054][   C94] NMI backtrace for cpu 94 skipped: idling at default_idle_call+0x74/0x150
+
+===== panic2-pc0-413167 (day1 line 16629, 前后窗口) =====
+[   34.918333][ T2073] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.0.auto: Registered PMU @ 0x0000000300120000 using 8 counters with Individual filter settings
+[   34.937049][ T2073] arm-smmu-v3-pmcg arm-smmu-v3-pmcg.1.auto: option mask 0x2
+[   34.949155][    T0] CPU features: detected CPU122: Activity Monitors Unit (AMU)
+[   34.956477][    T0] Detected VIPT I-cache on CPU122
+[   34.961460][    T0] GICv3: CPU122: found redistributor 900060200 region 122:0x0000204640e00000
+[   34.970092][    T0] GICv3: CPU122: using allocated LPI pending table @0x0000082089c00000
+[   34.978415][    T0] CPU122: Booted secondary processor 0x0900060200 [0x480fd020]
+[   35.012133][ T3049] Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
+[   35.027153][ T3049] Mem abort info:
+[   35.033334][ T3049]   ESR = 0x0000000086000004
+[   35.040474][ T3049]   EC = 0x21: IABT (current EL), IL = 32 bits
+[   35.049173][ T3049]   SET = 0, FnV = 0
+[   35.055532][ T3049]   EA = 0, S1PTW = 0
+[   35.061902][ T3049]   FSC = 0x04: level 0 translation fault
+[   35.070010][ T3049] [0000000000000000] user address but active_mm is swapper
+[   35.079595][ T3049] Internal error: Oops: 0000000086000004 [#1] SMP
+[   35.088388][ T3049] Modules linked in: ttm(+) ses(+) ipmi_si(+) drm_display_helper ipmi_devintf enclosure arm_spe_pmu arm_smmuv3_pmu(+) drm_kms_helper ipmi_msghandler ptp_hisi sg cppc_cpufreq hisi_uncore_pa_pmu hisi_uncore_cpa_pmu hisi_uncore_sllc_pmu hisi_uncore_ddrc_pmu hisi_uncore_l3c_pmu(+) hisi_uncore_hha_pmu hisi_ptt hisi_pcie_pmu hisi_uncore_pmu fuse drm nfnetlink ext4 mbcache jbd2 ccm aes_ce_ccm sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 des_generic libdes crct10dif_ce ghash_ce sm4_ce sm4_ce_cipher sm4 sm3_ce hisi_hpre sha3_ce hisi_sas_v3_hw sha512_ce hisi_sas_main sha512_arm64 dh_generic sha2_ce libsas ahci ecdh_generic sha256_arm64 libahci scsi_transport_sas hisi_sec2 hisi_zip ecc sha1_ce sbsa_gwdt i40e libata hisi_qm megaraid_sas libcurve25519_generic authenc host_edma_drv uacce hisi_uncore_freq hisi_trng_v2 hns_mdio dm_mirror dm_region_hash dm_log dm_multipath dm_mod aes_neon_bs aes_neon_blk aes_ce_blk aes_ce_cipher
+[   35.204418][ T3049] CPU: 122 PID: 3049 Comm: kworker/122:3 Not tainted 6.6.0-159.4.13.167.oe2403sp4.aarch64 #1
+[   35.219979][ T3049] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[   35.233887][ T3049] Workqueue: events smp_call_on_cpu_callback
+[   35.242497][ T3049] pstate: 81400009 (Nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)
+[   35.255659][ T3049] pc : 0x0
+[   35.261184][ T3049] lr : 0x0
+[   35.266619][ T3049] sp : ffff80008db73d70
+[   35.273182][ T3049] x29: 0000000060001000 x28: 0000000000000000 x27: 0000000000000000
+[   35.286279][ T3049] x26: 0000000000000000 x25: ffff08210361f640 x24: ffff0820882d1805
+[   35.299586][ T3049] x23: ffff80008cf2bbd8 x22: ffff0820882d1800 x21: 0000000823454d42
+[   35.313087][ T3049] x20: 000000000000007a x19: ffff80008cf2bc70 x18: ffffffffffffffff
+[   35.326671][ T3049] x17: 0000000000000000 x16: ffffcf92e63cf978 x15: ffffffffffffffff
+[   35.340260][ T3049] x14: 0000000000000000 x13: 0000000000000030 x12: 0101010101010101
+[   35.353835][ T3049] x11: 7f7f7f7f7f7f7f7f x10: fefefefefefefeff x9 : ffffcf92e63cf9e0
+[   35.367401][ T3049] x8 : 8080808080808080 x7 : 0000000000000000 x6 : 000000023f63d85f
+[   35.380943][ T3049] x5 : 01ffffffffffffff x4 : 0004c4b400000000 x3 : 0000000000000018
+[   35.394465][ T3049] x2 : 0000000000000000 x1 : ffffcf92e705b780 x0 : 0000000000000000
+[   35.407961][ T3049] Call trace:
+[   35.413832][ T3049]  0x0
+[   35.419008][ T3049] Code: ???????? ???????? ???????? ???????? (????????) 
+[   35.428479][ T3049] ---[ end trace 0000000000000000 ]---
+[   35.436441][ T3049] Kernel panic - not syncing: Oops: Fatal exception
+[   35.445542][ T3049] NMI backtrace for cpu 122
+[   35.452495][ T3049] CPU: 122 PID: 3049 Comm: kworker/122:3 Tainted: G      D             6.6.0-159.4.13.167.oe2403sp4.aarch64 #1
+
+===== panic3-switchto-413167-maxcpus1 (day1 line 27441, 前后窗口) =====
+[   36.484341][    T0] GICv3: CPU122: using allocated LPI pending table @0x0000082089c00000
+[   36.492625][    T0] CPU122: Booted secondary processor 0x0900060200 [0x480fd020]
+[   36.510595][ T1080] Unable to handle kernel paging request at virtual address ffff80008c91d038
+[   36.519432][ T1080] Mem abort info:
+[   36.523141][ T1080]   ESR = 0x0000000096000007
+[   36.527804][ T1080]   EC = 0x25: DABT (current EL), IL = 32 bits
+[   36.534029][ T1080]   SET = 0, FnV = 0
+[   36.537993][ T1080]   EA = 0, S1PTW = 0
+[   36.542041][ T1080]   FSC = 0x07: level 3 translation fault
+[   36.547824][ T1080] Data abort info:
+[   36.551607][ T1080]   ISV = 0, ISS = 0x00000007, ISS2 = 0x00000000
+[   36.557996][ T1080]   CM = 0, WnR = 0, TnD = 0, TagAccess = 0
+[   36.563949][ T1080]   GCS = 0, Overlay = 0, DirtyBit = 0, Xs = 0
+[   36.570161][ T1080] swapper pgtable: 4k pages, 48-bit VAs, pgdp=00000826b8814000
+[   36.577764][ T1080] [ffff80008c91d038] pgd=10000820883ca403, p4d=10000820883ca403, pud=10000820883cb403, pmd=100008208b702403, pte=0000000000000000
+[   36.591413][ T1080] Internal error: Oops: 0000000096000007 [#1] SMP
+[   36.597890][ T1080] Modules linked in: vfat fat ipmi_ssif arm_smmuv3_pmu arm_spe_pmu hibmc_drm drm_vram_helper drm_ttm_helper ttm acpi_ipmi drm_display_helper ipmi_si drm_kms_helper ses hisi_ptt enclosure hisi_pcie_pmu ipmi_devintf ipmi_msghandler ptp_hisi hisi_uncore_cpa_pmu hisi_uncore_pa_pmu hisi_uncore_sllc_pmu hisi_uncore_hha_pmu hisi_uncore_ddrc_pmu hisi_uncore_l3c_pmu hisi_uncore_pmu sg cppc_cpufreq fuse drm nfnetlink ext4 mbcache jbd2 ccm sd_mod t10_pi aes_ce_ccm crc64_rocksoft_generic crc64_rocksoft crc64 des_generic libdes crct10dif_ce ghash_ce sm4_ce_cipher sm3_ce sha3_ce sha512_ce sha512_arm64 sha2_ce sha256_arm64 sha1_ce sbsa_gwdt sm4_ce sm4 hisi_hpre hisi_sas_v3_hw hisi_sas_main ahci libsas dh_generic libahci scsi_transport_sas libata i40e hisi_sec2 hisi_zip ecdh_generic ecc hisi_qm megaraid_sas libcurve25519_generic authenc host_edma_drv uacce hisi_uncore_freq hisi_trng_v2 hns_mdio dm_mirror dm_region_hash dm_log dm_multipath dm_mod aes_neon_bs aes_neon_blk aes_ce_blk aes_ce_cipher
+[   36.688087][ T1080] CPU: 122 PID: 1080 Comm: kworker/122:3 Not tainted 6.6.0-159.4.13.167.oe2403sp4.aarch64 #1
+[   36.698332][ T1080] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[   36.706925][ T1080] Workqueue: events smp_call_on_cpu_callback
+[   36.713007][ T1080] pstate: 81400009 (Nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)
+[   36.720905][ T1080] pc : __switch_to+0xc8/0x248
+[   36.725681][ T1080] lr : __switch_to+0xa8/0x248
+[   36.730449][ T1080] sp : ffff80008c943d70
+[   36.734691][ T1080] x29: ffff80008c943d60 x28: 0000000000000000 x27: 0000000000000000
+[   36.742758][ T1080] x26: 0000000000000000 x25: ffff0820cd8c4680 x24: ffff0820882d5805
+[   36.750824][ T1080] x23: ffff80008c91bbd8 x22: ffff0820882d5800 x21: 0000000769a9b652
+[   36.758889][ T1080] x20: 000000000000007a x19: ffff80008c91bc70 x18: ffffffffffffffff
+[   36.766954][ T1080] x17: 0000000000000020 x16: ffffcf7c5775f978 x15: ffffffffffffffff
+[   36.775015][ T1080] x14: 0000000000000000 x13: 0000000000000030 x12: 0101010101010101
+[   36.783075][ T1080] x11: 7f7f7f7f7f7f7f7f x10: fefefefefefefeff x9 : ffffcf7c5775f9e0
+[   36.791135][ T1080] x8 : 8080808080808080 x7 : 0000000000000000 x6 : 0000000363ece0ad
+[   36.799195][ T1080] x5 : 01ffffffffffffff x4 : 0038074300000000 x3 : 0000000000000018
+[   36.807253][ T1080] x2 : 0000000000000000 x1 : ffffcf7c583eb780 x0 : 0000000000000000
+[   36.815310][ T1080] Call trace:
+[   36.818674][ T1080]  __switch_to+0xc8/0x248
+[   36.823081][ T1080] Code: d503201f d503201f d503201f d5033b9f (f949e661) 
+[   36.830093][ T1080] ---[ end trace 0000000000000000 ]---
+[   36.835625][ T1080] Kernel panic - not syncing: Oops: Fatal exception
+[   36.842288][ T1080] NMI backtrace for cpu 122
+[   36.846862][ T1080] CPU: 122 PID: 1080 Comm: kworker/122:3 Tainted: G      D             6.6.0-159.4.13.167.oe2403sp4.aarch64 #1
+[   36.858879][ T1080] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[   36.867453][ T1080] Workqueue: events smp_call_on_cpu_callback
+[   36.873514][ T1080] Call trace:
+[   36.876879][ T1080]  dump_backtrace+0xa0/0x128
+[   36.881549][ T1080] Sending NMI from CPU 122 to CPUs 0,10,100,102-104,107-111,114,119-120:
+[   36.890046][  C100] NMI backtrace for cpu 100 skipped: idling at default_idle_call+0x74/0x150
+[   36.890053][   C10] NMI backtrace for cpu 10 skipped: idling at default_idle_call+0x74/0x150
+[   36.890064][    C0] NMI backtrace for cpu 0 skipped: idling at default_idle_call+0x74/0x150
+[   36.890070][  C103] NMI backtrace for cpu 103 skipped: idling at default_idle_call+0x74/0x150
+[   36.890075][  C102] NMI backtrace for cpu 102 skipped: idling at default_idle_call+0x74/0x150
+[   36.890079][  C120] NMI backtrace for cpu 120 skipped: idling at default_idle_call+0x74/0x150
+[   36.890084][  C119] NMI backtrace for cpu 119 skipped: idling at default_idle_call+0x74/0x150
+[   36.890089][  C107] NMI backtrace for cpu 107 skipped: idling at default_idle_call+0x74/0x150
+[   36.890094][  C104] NMI backtrace for cpu 104 skipped: idling at default_idle_call+0x74/0x150
+[   36.890099][  C111] NMI backtrace for cpu 111 skipped: idling at default_idle_call+0x74/0x150
+[   36.890104][  C109] NMI backtrace for cpu 109 skipped: idling at default_idle_call+0x74/0x150
+[   36.890108][  C108] NMI backtrace for cpu 108 skipped: idling at default_idle_call+0x74/0x150
+[   36.890112][  C110] NMI backtrace for cpu 110 skipped: idling at default_idle_call+0x74/0x150
+[   36.890117][  C114] NMI backtrace for cpu 114 skipped: idling at default_idle_call+0x74/0x150
+[   36.891049][ T1080] SMP: stopping secondary CPUs
+[   37.017868][ T1080] Kernel Offset: 0x4f7bd6870000 from 0xffff800080000000
+[   37.024821][ T1080] PHYS_OFFSET: 0x0
+[   37.028556][ T1080] CPU features: 0x00,00008040,00000007,8009cf43,105fde03
+[   37.035588][ T1080] Memory Limit: none
+[   37.039492][ T1080] task:systemd         state:S stack:0     pid:1     ppid:0      flags:0x00800004
+[   37.048695][ T1080] Call trace:
+[   37.051988][ T1080]  __switch_to+0x160/0x248
+[   37.056410][ T1080]  __schedule+0x394/0x8a0
+[   37.060746][ T1080]  schedule+0x58/0x130
+[   37.064821][ T1080]  schedule_hrtimeout_range_clock+0xdc/0x150
+[   37.070807][ T1080]  schedule_hrtimeout_range+0x1c/0x30
+[   37.076182][ T1080]  ep_poll+0x300/0x498
+[   37.080257][ T1080]  do_epoll_wait+0x100/0x128
+[   37.084848][ T1080]  do_epoll_pwait.part.0+0x1c/0xb8
+[   37.089960][ T1080]  __arm64_sys_epoll_pwait2+0xc0/0xe8
+[   37.095332][ T1080]  invoke_syscall+0x50/0x128
+[   37.099921][ T1080]  el0_svc_common.constprop.0+0x48/0xf0
+[   37.105463][ T1080]  do_el0_svc+0x48/0x78
+[   37.109615][ T1080]  el0_slow_syscall+0x44/0x1b8
+[   37.114375][ T1080]  el0t_64_sync_handler+0x100/0x130
+
+===== panic4-switchto-3154-maxcpus10 (day2 line 12108, 前后窗口) =====
+[   34.781481][    T0] GICv3: CPU122: using allocated LPI pending table @0x0000082089c00000
+[   34.789792][    T0] CPU122: Booted secondary processor 0x0900060200 [0x480fd020]
+[   34.808636][ T1269] Unable to handle kernel paging request at virtual address ffff80008db25038
+[   34.817477][ T1269] Mem abort info:
+[   34.821191][ T1269]   ESR = 0x0000000096000007
+[   34.825857][ T1269]   EC = 0x25: DABT (current EL), IL = 32 bits
+[   34.832087][ T1269]   SET = 0, FnV = 0
+[   34.836055][ T1269]   EA = 0, S1PTW = 0
+[   34.840107][ T1269]   FSC = 0x07: level 3 translation fault
+[   34.845895][ T1269] Data abort info:
+[   34.849681][ T1269]   ISV = 0, ISS = 0x00000007, ISS2 = 0x00000000
+[   34.856073][ T1269]   CM = 0, WnR = 0, TnD = 0, TagAccess = 0
+[   34.862028][ T1269]   GCS = 0, Overlay = 0, DirtyBit = 0, Xs = 0
+[   34.868243][ T1269] swapper pgtable: 4k pages, 48-bit VAs, pgdp=0000082bb9d24000
+[   34.875848][ T1269] [ffff80008db25038] pgd=10000820883ca403, p4d=10000820883ca403, pud=10000820883cb403, pmd=1000082093ad1403, pte=0000000000000000
+[   34.889502][ T1269] Internal error: Oops: 0000000096000007 [#1] SMP
+[   34.895982][ T1269] Modules linked in: vfat fat ipmi_ssif i40e arm_spe_pmu arm_smmuv3_pmu acpi_ipmi hibmc_drm drm_vram_helper drm_ttm_helper ipmi_si ttm ipmi_devintf drm_display_helper ses ipmi_msghandler drm_kms_helper enclosure ptp_hisi hisi_uncore_cpa_pmu hisi_uncore_sllc_pmu hisi_uncore_pa_pmu hisi_uncore_hha_pmu hisi_uncore_ddrc_pmu sg hisi_uncore_l3c_pmu hisi_pcie_pmu hisi_uncore_pmu hisi_ptt cppc_cpufreq fuse drm nfnetlink ext4 mbcache jbd2 ccm sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 crct10dif_ce ghash_ce sm4_ce_cipher aes_ce_ccm sm3_ce sha3_ce sha512_ce sha512_arm64 hisi_hpre sha2_ce des_generic libdes sha256_arm64 sha1_ce sm4_ce hisi_sas_v3_hw sbsa_gwdt sm4 dh_generic hisi_sas_main ahci libsas hisi_sec2 ecdh_generic ecc hisi_zip libahci scsi_transport_sas libata authenc hisi_qm libcurve25519_generic megaraid_sas uacce host_edma_drv hisi_uncore_freq hisi_trng_v2 hns_mdio dm_mirror dm_region_hash dm_log dm_multipath dm_mod aes_neon_bs aes_neon_blk aes_ce_blk aes_ce_cipher
+[   34.986205][ T1269] CPU: 122 PID: 1269 Comm: kworker/122:3 Not tainted 6.6.0-159.4.3.154.oe2403sp4.aarch64 #1
+[   34.996360][ T1269] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[   35.004952][ T1269] Workqueue: events smp_call_on_cpu_callback
+[   35.011035][ T1269] pstate: 81400009 (Nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)
+[   35.018934][ T1269] pc : __switch_to+0xc8/0x248
+[   35.023710][ T1269] lr : __switch_to+0xa8/0x248
+[   35.028478][ T1269] sp : ffff80008db53d70
+[   35.032723][ T1269] x29: ffff80008db53d60 x28: 0000000000000000 x27: 0000000000000000
+[   35.032726][ T1269] x26: 0000000000000000 x25: ffff082094246d40 x24: ffff0820882d5c05
+[   35.032730][ T1269] x23: ffff80008db23bd8 x22: ffff0820882d5c00 x21: 000000081a610f4a
+[   35.049091][ T1269] x20: 000000000000007a x19: ffff80008db23c70 x18: ffffffffffffffff
+[   35.049093][ T1269] x17: 0000000000000020 x16: ffffb1afca66f978 x15: ffffffffffffffff
+[   35.065436][ T1269] x14: 0000000000000000 x13: 0000000000000030 x12: 0101010101010101
+[   35.065438][ T1269] x11: 7f7f7f7f7f7f7f7f x10: fefefefefefefeff x9 : ffffb1afca66f9e0
+[   35.065441][ T1269] x8 : 8080808080808080 x7 : 0000000000000000 x6 : 000000085d4a0e08
+[   35.065442][ T1269] x5 : 01ffffffffffffff x4 : 0017206900000000 x3 : 0000000000000018
+[   35.065444][ T1269] x2 : 0000000000000000 x1 : ffffb1afcb2fb780 x0 : 0000000000000000
+[   35.065447][ T1269] Call trace:
+[   35.065448][ T1269]  __switch_to+0xc8/0x248
+[   35.065451][ T1269] Code: d503201f d503201f d503201f d5033b9f (f949e661) 
+[   35.065454][ T1269] ---[ end trace 0000000000000000 ]---
+[   35.065455][ T1269] Kernel panic - not syncing: Oops: Fatal exception
+[   35.065458][ T1269] NMI backtrace for cpu 122
+[   35.065459][ T1269] CPU: 122 PID: 1269 Comm: kworker/122:3 Tainted: G      D             6.6.0-159.4.3.154.oe2403sp4.aarch64 #1
+[   35.065461][ T1269] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[   35.065462][ T1269] Workqueue: events smp_call_on_cpu_callback
+[   35.065464][ T1269] Call trace:
+[   35.065465][ T1269]  dump_backtrace+0xa0/0x128
+[   35.179695][ T1269] Sending NMI from CPU 122 to CPUs 0-9,11-14,21,26,30,35,100,102,107-108,110,112-115,118-119,124,127:
+[   35.190709][    C0] NMI backtrace for cpu 0 skipped: idling at default_idle_call+0x74/0x150
+[   35.190718][    C2] NMI backtrace for cpu 2 skipped: idling at default_idle_call+0x74/0x150
+[   35.190722][    C1] NMI backtrace for cpu 1 skipped: idling at default_idle_call+0x74/0x150
+[   35.190727][    C3] NMI backtrace for cpu 3 skipped: idling at default_idle_call+0x74/0x150
+[   35.190732][   C35] NMI backtrace for cpu 35 skipped: idling at default_idle_call+0x74/0x150
+[   35.190740][  C107] NMI backtrace for cpu 107 skipped: idling at default_idle_call+0x74/0x150
+[   35.190747][  C115] NMI backtrace for cpu 115 skipped: idling at default_idle_call+0x74/0x150
+[   35.190753][  C112] NMI backtrace for cpu 112 skipped: idling at default_idle_call+0x74/0x150
+[   35.190758][  C113] NMI backtrace for cpu 113 skipped: idling at default_idle_call+0x74/0x150
+[   35.190763][  C114] NMI backtrace for cpu 114 skipped: idling at default_idle_call+0x74/0x150
+[   35.190767][  C119] NMI backtrace for cpu 119 skipped: idling at default_idle_call+0x74/0x150
+[   35.190772][  C118] NMI backtrace for cpu 118 skipped: idling at default_idle_call+0x74/0x150
+[   35.190778][  C110] NMI backtrace for cpu 110 skipped: idling at default_idle_call+0x74/0x150
+[   35.190784][   C14] NMI backtrace for cpu 14 skipped: idling at default_idle_call+0x74/0x150
+[   35.190792][  C108] NMI backtrace for cpu 108 skipped: idling at default_idle_call+0x74/0x150
+[   35.190799][  C102] NMI backtrace for cpu 102 skipped: idling at default_idle_call+0x74/0x150
+[   35.190803][  C100] NMI backtrace for cpu 100 skipped: idling at default_idle_call+0x74/0x150
+[   35.190807][  C127] NMI backtrace for cpu 127 skipped: idling at default_idle_call+0x74/0x150
+[   35.190812][  C124] NMI backtrace for cpu 124 skipped: idling at default_idle_call+0x74/0x150
+[   35.190816][   C13] NMI backtrace for cpu 13 skipped: idling at default_idle_call+0x74/0x150
+[   35.190821][   C30] NMI backtrace for cpu 30 skipped: idling at default_idle_call+0x74/0x150
+[   35.190826][   C12] NMI backtrace for cpu 12 skipped: idling at default_idle_call+0x74/0x150
+[   35.190831][   C11] NMI backtrace for cpu 11 skipped: idling at default_idle_call+0x74/0x150
+[   35.190836][    C9] NMI backtrace for cpu 9 skipped: idling at default_idle_call+0x74/0x150
+[   35.190840][    C8] NMI backtrace for cpu 8 skipped: idling at default_idle_call+0x74/0x150
+[   35.190844][   C26] NMI backtrace for cpu 26 skipped: idling at default_idle_call+0x74/0x150
+[   35.190849][    C7] NMI backtrace for cpu 7 skipped: idling at default_idle_call+0x74/0x150
+[   35.190854][    C5] NMI backtrace for cpu 5 skipped: idling at default_idle_call+0x74/0x150
+[   35.190858][    C6] NMI backtrace for cpu 6 skipped: idling at default_idle_call+0x74/0x150
+[   35.190863][    C4] NMI backtrace for cpu 4 skipped: idling at default_idle_call+0x74/0x150
+[   35.190867][   C21] NMI backtrace for cpu 21 skipped: idling at default_idle_call+0x74/0x150
+[   35.191725][ T1269] SMP: stopping secondary CPUs
+[   35.463555][ T1269] Kernel Offset: 0x31af49780000 from 0xffff800080000000
+[   35.470468][ T1269] PHYS_OFFSET: 0x0
+[   35.474165][ T1269] CPU features: 0x00,00008040,00000007,8009cf43,105fde03
+
+===== panic5-gic-413167-hotplug27s (day2 line 26597, 前后窗口) =====
+[ 4784.319016][    T0] GICv3: CPU122: found redistributor 900060200 region 122:0x0000204640e00000
+[ 4784.327644][    T0] GICv3: CPU122: using allocated LPI pending table @0x0000082089c00000
+[ 4784.335961][    T0] CPU122: Booted secondary processor 0x0900060200 [0x480fd020]
+[ 4784.352570][T25296] ------------[ cut here ]------------
+[ 4784.357892][T25296] WARNING: CPU: 122 PID: 25296 at kernel/sched/topology.c:1021 init_overlap_sched_group+0x120/0x140
+[ 4784.368509][T25296] Modules linked in: udp_diag inet_diag netconsole nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat ipmi_ssif hibmc_drm drm_vram_helper drm_ttm_helper acpi_ipmi ttm drm_display_helper ipmi_si ses drm_kms_helper ipmi_devintf enclosure hisi_ptt hisi_pcie_pmu arm_spe_pmu arm_smmuv3_pmu ipmi_msghandler sg cppc_cpufreq ptp_hisi hisi_uncore_cpa_pmu hisi_uncore_sllc_pmu hisi_uncore_pa_pmu hisi_uncore_l3c_pmu hisi_uncore_hha_pmu hisi_uncore_ddrc_pmu hisi_uncore_pmu fuse drm nfnetlink ext4 mbcache jbd2 ccm aes_ce_ccm des_generic libdes sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 crct10dif_ce ghash_ce sm4_ce sm4_ce_cipher sm4 sm3_ce hisi_hpre sha3_ce hisi_sas_v3_hw sha512_ce hisi_sas_main sha512_arm64 dh_generic ahci libsas sha2_ce ecdh_generic sha256_arm64 libahci scsi_transport_sas hisi_sec2 hisi_zip ecc sha1_ce sbsa_gwdt i40e libata
+[ 4784.368597][T25296]  hisi_qm megaraid_sas libcurve25519_generic authenc host_edma_drv uacce hisi_uncore_freq hisi_trng_v2 hns_mdio dm_mirror dm_region_hash dm_log dm_multipath dm_mod aes_neon_bs aes_neon_blk aes_ce_blk aes_ce_cipher
+[ 4784.479842][T25296] CPU: 122 PID: 25296 Comm: cpuhp/122 Kdump: loaded Not tainted 6.6.0-159.4.13.167.oe2403sp4.aarch64 #1
+[ 4784.490799][T25296] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[ 4784.499149][T25296] pstate: 21400009 (nzCv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)
+[ 4784.506803][T25296] pc : init_overlap_sched_group+0x120/0x140
+[ 4784.512547][T25296] lr : init_overlap_sched_group+0x8c/0x140
+[ 4784.518203][T25296] sp : ffff8000a58e3270
+[ 4784.522208][T25296] x29: ffff8000a58e3270 x28: ffff08208dc245d8 x27: 0000000000000020
+[ 4784.530035][T25296] x26: ffffdc584b2d55d0 x25: ffff08210f359de0 x24: ffff0820e15fb600
+[ 4784.537864][T25296] x23: ffff0820eb27dd28 x22: 0000000000000080 x21: ffffdc584b2cf000
+[ 4784.545692][T25296] x20: ffffdc584b8946c8 x19: ffff08210f359de0 x18: 0000000000000014
+[ 4784.553520][T25296] x17: 00000000031ff9a7 x16: 000000003fbc90a7 x15: 0000000051d11484
+[ 4784.561348][T25296] x14: 000000005a146514 x13: 0000000000000000 x12: ffffffffffffffff
+[ 4784.569176][T25296] x11: 0000000000000000 x10: ffff0820b50217b0 x9 : ffff0820b50217a8
+[ 4784.577004][T25296] x8 : ffffdc584b8949b8 x7 : 0000000000000003 x6 : ffffffff00000000
+[ 4784.584832][T25296] x5 : bfffffff00000000 x4 : 0000000000000002 x3 : 0000000000000001
+[ 4784.592661][T25296] x2 : 0000000000000080 x1 : ffffdc584b8949c0 x0 : 0000000000000000
+[ 4784.600490][T25296] Call trace:
+[ 4784.603627][T25296]  init_overlap_sched_group+0x120/0x140
+[ 4784.609364][T25296]  build_overlap_sched_groups+0x148/0x278
+[ 4784.615224][T25296]  build_sched_domains+0x3a4/0x750
+[ 4784.620465][T25296]  partition_sched_domains_locked+0x294/0x420
+[ 4784.626655][T25296]  rebuild_sched_domains_locked+0x164/0x1b0
+[ 4784.632672][T25296]  cpuset_handle_hotplug+0x3cc/0x630
+[ 4784.638079][T25296]  cpuset_update_active_cpus+0x18/0x30
+[ 4784.643673][T25296]  sched_cpu_activate+0x1e0/0x270
+[ 4784.648822][T25296]  cpuhp_invoke_callback+0x128/0x580
+[ 4784.654230][T25296]  cpuhp_thread_fun+0x110/0x1b0
+[ 4784.659197][T25296]  smpboot_thread_fn+0x140/0x190
+[ 4784.664259][T25296]  kthread+0xec/0x100
+[ 4784.668361][T25296]  ret_from_fork+0x10/0x20
+[ 4784.672889][T25296] ---[ end trace 0000000000000000 ]---
+[ 4811.420532][    T0] Unable to handle kernel paging request at virtual address ffff8000803d4010
+[ 4811.429558][    T0] Mem abort info:
+[ 4811.433298][    T0]   ESR = 0x0000000096000007
+[ 4811.437971][    T0]   EC = 0x25: DABT (current EL), IL = 32 bits
+[ 4811.444205][    T0]   SET = 0, FnV = 0
+[ 4811.448176][    T0]   EA = 0, S1PTW = 0
+[ 4811.452227][    T0]   FSC = 0x07: level 3 translation fault
+[ 4811.458011][    T0] Data abort info:
+[ 4811.461791][    T0]   ISV = 0, ISS = 0x00000007, ISS2 = 0x00000000
+[ 4811.468172][    T0]   CM = 0, WnR = 0, TnD = 0, TagAccess = 0
+[ 4811.474114][    T0]   GCS = 0, Overlay = 0, DirtyBit = 0, Xs = 0
+[ 4811.480312][    T0] swapper pgtable: 4k pages, 48-bit VAs, pgdp=0000082517d04000
+[ 4811.487898][    T0] [ffff8000803d4010] pgd=10000820883ca403, p4d=10000820883ca403, pud=10000820883cb403, pmd=10000820888d0403, pte=0000000000000000
+[ 4811.501499][    T0] Internal error: Oops: 0000000096000007 [#1] SMP
+[ 4811.507952][    T0] Modules linked in: udp_diag inet_diag netconsole nft_fib_inet nft_fib_ipv4 nft_fib_ipv6 nft_fib nft_reject_inet nf_reject_ipv4 nf_reject_ipv6 nft_reject nft_ct nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 rfkill ip_set nf_tables libcrc32c vfat fat ipmi_ssif hibmc_drm drm_vram_helper drm_ttm_helper acpi_ipmi ttm drm_display_helper ipmi_si ses drm_kms_helper ipmi_devintf enclosure hisi_ptt hisi_pcie_pmu arm_spe_pmu arm_smmuv3_pmu ipmi_msghandler sg cppc_cpufreq ptp_hisi hisi_uncore_cpa_pmu hisi_uncore_sllc_pmu hisi_uncore_pa_pmu hisi_uncore_l3c_pmu hisi_uncore_hha_pmu hisi_uncore_ddrc_pmu hisi_uncore_pmu fuse drm nfnetlink ext4 mbcache jbd2 ccm aes_ce_ccm des_generic libdes sd_mod t10_pi crc64_rocksoft_generic crc64_rocksoft crc64 crct10dif_ce ghash_ce sm4_ce sm4_ce_cipher sm4 sm3_ce hisi_hpre sha3_ce hisi_sas_v3_hw sha512_ce hisi_sas_main sha512_arm64 dh_generic ahci libsas sha2_ce ecdh_generic sha256_arm64 libahci scsi_transport_sas hisi_sec2 hisi_zip ecc sha1_ce sbsa_gwdt i40e libata
+[ 4811.508046][    T0]  hisi_qm megaraid_sas libcurve25519_generic authenc host_edma_drv uacce hisi_uncore_freq hisi_trng_v2 hns_mdio dm_mirror dm_region_hash dm_log dm_multipath dm_mod aes_neon_bs aes_neon_blk aes_ce_blk aes_ce_cipher
+[ 4811.621479][    T0] CPU: 122 PID: 0 Comm: swapper/122 Kdump: loaded Tainted: G        W           6.6.0-159.4.13.167.oe2403sp4.aarch64 #1
+[ 4811.634282][    T0] Hardware name: JD Cloud J353 G3/BC83AMDA01-7270Z, BIOS 32.83 07/17/2026
+[ 4811.642863][    T0] pstate: 214000c9 (nzCv daIF +PAN -UAO -TCO +DIT -SSBS BTYPE=--)
+[ 4811.650751][    T0] pc : gic_handle_irq+0x74/0x98
+[ 4811.655691][    T0] lr : gic_handle_irq+0x64/0x98
+[ 4811.660623][    T0] sp : ffff8000803d4000
+[ 4811.664856][    T0] x29: ffff80008111bc00 x28: ffff08208a4c3f00 x27: 0000000000000000
+[ 4811.672915][    T0] x26: 0000000000000000 x25: 0000000000000000 x24: 0000000000000000
+[ 4811.680975][    T0] x23: 0000000041400009 x22: ffffdc584a24b0bc x21: ffff80008111bdd0
+[ 4811.689034][    T0] x20: ffffdc58493700e8 x19: ffff08208a4c3f00 x18: 0000000000000000
+[ 4811.697095][    T0] x17: ffff2bd7342e6000 x16: ffff8000803d0000 x15: 0000000000000020
+[ 4811.705155][    T0] x14: 0000000000000000 x13: 0000000000000030 x12: 0000000000000000
+[ 4811.713215][    T0] x11: 0000000000000040 x10: ffff08208803cbe8 x9 : ffffdc58494f0d2c
+[ 4811.721275][    T0] x8 : ffffdc584a2a9d60 x7 : 0000000000000000 x6 : 00000067c8f58255
+[ 4811.729337][    T0] x5 : 01ffffffffffffff x4 : 00000000000decb0 x3 : 000000000024e370
+[ 4811.737400][    T0] x2 : 0000000000000000 x1 : 00000000000003fd x0 : 00000000a8c27bfd
+[ 4811.745463][    T0] Call trace:
+[ 4811.748837][    T0]  gic_handle_irq+0x74/0x98
+[ 4811.753427][    T0]  do_softirq_own_stack+0x24/0x38
+[ 4811.758540][    T0]  irq_exit_rcu+0x108/0x130
+[ 4811.763132][    T0]  el1_interrupt+0x58/0x120
+[ 4811.767723][    T0]  el1h_64_irq_handler+0x24/0x30
+[ 4811.772741][    T0]  el1h_64_irq+0x78/0x80
+[ 4811.777062][    T0]  default_idle_call+0x74/0x150
+[ 4811.781990][    T0]  cpuidle_idle_call+0x198/0x228
+[ 4811.787007][    T0]  do_idle+0x13c/0x1b8
+[ 4811.791153][    T0]  cpu_startup_entry+0x40/0x50

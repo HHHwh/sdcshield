@@ -1,0 +1,1198 @@
+
+   1 | 09/06/2026 | 15:28:21 | Event Logging Disabled SEL Status | Log area reset/cleared | Asserted
+   2 | 09/06/2026 | 15:28:21 | Event Logging Disabled SEL Status | Log almost full | Deasserted
+   3 | 09/06/2026 | 15:28:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+   4 | 09/06/2026 | 15:28:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+   5 | 09/06/2026 | 15:28:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+   6 | 09/06/2026 | 15:33:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   7 | 09/06/2026 | 15:39:50 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   8 | 09/06/2026 | 15:39:50 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   9 | 09/06/2026 | 15:39:50 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   a | 09/06/2026 | 15:39:50 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   b | 09/06/2026 | 15:45:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   c | 09/06/2026 | 15:45:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   d | 09/06/2026 | 15:45:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   e | 09/06/2026 | 15:45:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+   f | 09/06/2026 | 15:45:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  10 | 09/06/2026 | 15:45:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  11 | 09/06/2026 | 15:53:21 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  12 | 09/06/2026 | 15:53:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  13 | 09/06/2026 | 15:53:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  14 | 09/06/2026 | 15:53:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  15 | 09/06/2026 | 16:00:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  16 | 09/06/2026 | 16:00:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  17 | 09/06/2026 | 16:00:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  18 | 09/06/2026 | 16:00:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  19 | 09/06/2026 | 16:10:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  1a | 09/06/2026 | 16:10:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  1b | 09/06/2026 | 16:10:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  1c | 09/06/2026 | 16:10:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  1d | 09/06/2026 | 16:10:50 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  1e | 09/06/2026 | 16:16:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  1f | 09/06/2026 | 16:16:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  20 | 09/06/2026 | 16:16:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  21 | 09/06/2026 | 16:16:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  22 | 09/06/2026 | 16:17:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  23 | 09/06/2026 | 16:17:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  24 | 09/06/2026 | 16:19:34 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  25 | 09/06/2026 | 16:20:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  26 | 09/06/2026 | 16:20:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  27 | 09/06/2026 | 16:20:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  28 | 09/06/2026 | 16:20:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  29 | 09/06/2026 | 16:20:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  2a | 09/06/2026 | 16:20:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  2b | 09/06/2026 | 16:20:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  2c | 09/06/2026 | 16:20:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  2d | 09/06/2026 | 16:20:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  2e | 09/06/2026 | 16:20:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  2f | 09/06/2026 | 16:53:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  30 | 09/06/2026 | 16:53:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  31 | 09/06/2026 | 16:53:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  32 | 09/06/2026 | 16:53:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  33 | 09/06/2026 | 16:58:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  34 | 09/06/2026 | 17:01:17 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  35 | 09/06/2026 | 17:01:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  36 | 09/06/2026 | 17:01:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  37 | 09/06/2026 | 17:01:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  38 | 09/06/2026 | 17:01:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  39 | 09/06/2026 | 17:01:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  3a | 09/06/2026 | 17:21:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  3b | 09/06/2026 | 17:21:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  3c | 09/06/2026 | 17:21:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  3d | 09/06/2026 | 17:21:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  3e | 09/06/2026 | 17:22:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  3f | 09/06/2026 | 17:27:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  40 | 09/06/2026 | 17:27:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  41 | 09/06/2026 | 17:27:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  42 | 09/06/2026 | 17:27:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  43 | 09/06/2026 | 17:27:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  44 | 09/06/2026 | 17:27:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  45 | 09/06/2026 | 17:54:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  46 | 09/06/2026 | 17:55:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  47 | 09/06/2026 | 18:03:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  48 | 09/06/2026 | 18:03:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  49 | 09/06/2026 | 18:03:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  4a | 09/06/2026 | 18:03:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  4b | 09/06/2026 | 18:07:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  4c | 09/06/2026 | 18:10:54 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  4d | 09/06/2026 | 18:11:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  4e | 09/06/2026 | 18:11:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  4f | 09/06/2026 | 18:11:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  50 | 09/06/2026 | 18:11:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  51 | 09/06/2026 | 18:19:04 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  52 | 09/06/2026 | 18:21:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  53 | 09/06/2026 | 18:21:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  54 | 09/06/2026 | 18:21:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  55 | 09/06/2026 | 18:21:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  56 | 09/06/2026 | 18:21:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  57 | 09/06/2026 | 18:21:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  58 | 09/06/2026 | 18:22:33 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  59 | 09/06/2026 | 18:29:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  5a | 09/06/2026 | 18:30:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  5b | 09/06/2026 | 18:30:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  5c | 09/06/2026 | 18:30:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  5d | 09/06/2026 | 18:30:21 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  5e | 09/06/2026 | 18:34:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  5f | 09/06/2026 | 18:34:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  60 | 09/06/2026 | 18:34:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  61 | 09/06/2026 | 18:34:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  62 | 09/06/2026 | 18:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  63 | 09/06/2026 | 18:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  64 | 09/06/2026 | 18:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  65 | 09/06/2026 | 18:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  66 | 09/06/2026 | 18:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  67 | 09/06/2026 | 18:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  68 | 09/06/2026 | 18:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  69 | 09/06/2026 | 18:51:10 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  6a | 09/06/2026 | 18:51:10 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  6b | 09/06/2026 | 18:51:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  6c | 09/06/2026 | 18:51:12 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  6d | 09/06/2026 | 18:58:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  6e | 09/06/2026 | 18:58:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  6f | 09/06/2026 | 18:58:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  70 | 09/06/2026 | 18:58:14 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  71 | 09/06/2026 | 18:58:14 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  72 | 09/06/2026 | 18:58:14 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  73 | 09/06/2026 | 19:00:50 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  74 | 09/06/2026 | 19:00:51 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  75 | 09/06/2026 | 19:00:51 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  76 | 09/06/2026 | 19:00:51 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  77 | 09/06/2026 | 19:00:51 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  78 | 09/06/2026 | 19:00:51 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  79 | 09/06/2026 | 19:01:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  7a | 09/06/2026 | 19:01:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  7b | 09/06/2026 | 19:01:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  7c | 09/06/2026 | 19:01:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  7d | 09/06/2026 | 19:13:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  7e | 09/06/2026 | 19:13:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  7f | 09/06/2026 | 19:13:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  80 | 09/06/2026 | 19:13:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  81 | 09/06/2026 | 19:13:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  82 | 09/06/2026 | 19:13:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  83 | 09/06/2026 | 19:21:40 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  84 | 09/06/2026 | 19:22:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  85 | 09/06/2026 | 19:22:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  86 | 09/06/2026 | 19:22:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  87 | 09/06/2026 | 19:22:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  88 | 09/06/2026 | 19:24:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  89 | 09/06/2026 | 19:24:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  8a | 09/06/2026 | 19:24:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  8b | 09/06/2026 | 19:24:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  8c | 09/06/2026 | 19:29:14 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  8d | 09/06/2026 | 19:36:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  8e | 09/06/2026 | 19:37:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  8f | 09/06/2026 | 19:37:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  90 | 09/06/2026 | 19:37:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  91 | 09/06/2026 | 19:37:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  92 | 09/06/2026 | 19:38:09 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  93 | 09/06/2026 | 19:39:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  94 | 09/06/2026 | 19:39:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  95 | 09/06/2026 | 19:39:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  96 | 09/06/2026 | 19:39:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  97 | 09/06/2026 | 19:39:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  98 | 09/06/2026 | 19:39:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  99 | 09/06/2026 | 19:47:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  9a | 09/06/2026 | 19:47:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  9b | 09/06/2026 | 19:47:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  9c | 09/06/2026 | 19:47:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  9d | 09/06/2026 | 19:51:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  9e | 09/06/2026 | 19:51:48 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  9f | 09/06/2026 | 19:51:48 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  a0 | 09/06/2026 | 19:51:48 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  a1 | 09/06/2026 | 19:51:48 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  a2 | 09/06/2026 | 19:51:49 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  a3 | 09/06/2026 | 19:58:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  a4 | 09/06/2026 | 19:58:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  a5 | 09/06/2026 | 19:58:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  a6 | 09/06/2026 | 19:58:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  a7 | 09/06/2026 | 19:58:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  a8 | 09/06/2026 | 19:58:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  a9 | 09/06/2026 | 20:10:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  aa | 09/06/2026 | 20:11:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  ab | 09/06/2026 | 20:11:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  ac | 09/06/2026 | 20:11:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  ad | 09/06/2026 | 20:11:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  ae | 09/06/2026 | 20:13:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  af | 09/06/2026 | 20:13:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  b0 | 09/06/2026 | 20:13:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  b1 | 09/06/2026 | 20:13:04 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  b2 | 09/06/2026 | 20:13:04 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  b3 | 09/06/2026 | 20:13:04 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  b4 | 09/06/2026 | 20:18:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  b5 | 09/06/2026 | 20:22:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  b6 | 09/06/2026 | 20:22:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  b7 | 09/06/2026 | 20:22:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  b8 | 09/06/2026 | 20:22:39 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  b9 | 09/06/2026 | 20:30:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  ba | 09/06/2026 | 20:30:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  bb | 09/06/2026 | 20:30:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  bc | 09/06/2026 | 20:30:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  bd | 09/06/2026 | 20:30:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  be | 09/06/2026 | 20:30:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  bf | 09/06/2026 | 20:36:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c0 | 09/06/2026 | 20:44:01 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c1 | 09/06/2026 | 20:44:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c2 | 09/06/2026 | 20:44:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c3 | 09/06/2026 | 20:44:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c4 | 09/06/2026 | 20:46:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c5 | 09/06/2026 | 20:46:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c6 | 09/06/2026 | 20:46:04 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c7 | 09/06/2026 | 20:46:04 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c8 | 09/06/2026 | 20:46:04 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  c9 | 09/06/2026 | 20:46:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  ca | 09/06/2026 | 20:46:49 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  cb | 09/06/2026 | 20:47:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  cc | 09/06/2026 | 20:47:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  cd | 09/06/2026 | 20:47:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  ce | 09/06/2026 | 20:47:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  cf | 09/06/2026 | 20:48:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  d0 | 09/06/2026 | 20:48:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  d1 | 09/06/2026 | 20:48:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  d2 | 09/06/2026 | 20:48:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  d3 | 09/06/2026 | 20:48:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  d4 | 09/06/2026 | 20:48:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  d5 | 09/06/2026 | 20:58:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  d6 | 09/06/2026 | 20:58:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  d7 | 09/06/2026 | 20:58:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  d8 | 09/06/2026 | 20:58:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  d9 | 09/06/2026 | 20:58:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  da | 09/06/2026 | 20:58:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  db | 09/06/2026 | 21:01:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  dc | 09/06/2026 | 21:01:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  dd | 09/06/2026 | 21:01:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  de | 09/06/2026 | 21:01:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  df | 09/06/2026 | 21:01:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  e0 | 09/06/2026 | 21:01:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  e1 | 09/06/2026 | 21:18:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  e2 | 09/06/2026 | 21:19:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  e3 | 09/06/2026 | 21:19:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  e4 | 09/06/2026 | 21:19:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  e5 | 09/06/2026 | 21:19:39 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  e6 | 09/06/2026 | 21:26:30 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  e7 | 09/06/2026 | 21:26:30 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  e8 | 09/06/2026 | 21:26:30 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  e9 | 09/06/2026 | 21:26:30 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  ea | 09/06/2026 | 21:26:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  eb | 09/06/2026 | 21:26:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  ec | 09/06/2026 | 21:28:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  ed | 09/06/2026 | 21:34:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  ee | 09/06/2026 | 21:34:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  ef | 09/06/2026 | 21:34:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f0 | 09/06/2026 | 21:34:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f1 | 09/06/2026 | 21:43:49 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  f2 | 09/06/2026 | 21:45:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f3 | 09/06/2026 | 21:45:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f4 | 09/06/2026 | 21:45:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f5 | 09/06/2026 | 21:45:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f6 | 09/06/2026 | 21:45:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f7 | 09/06/2026 | 21:45:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f8 | 09/06/2026 | 21:45:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+  f9 | 09/06/2026 | 21:52:48 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  fa | 09/06/2026 | 21:54:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  fb | 09/06/2026 | 21:54:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  fc | 09/06/2026 | 21:54:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  fd | 09/06/2026 | 21:54:21 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  fe | 09/06/2026 | 21:55:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+  ff | 09/06/2026 | 21:55:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 100 | 09/06/2026 | 21:55:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 101 | 09/06/2026 | 21:55:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 102 | 09/06/2026 | 21:55:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 103 | 09/06/2026 | 21:55:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 104 | 09/06/2026 | 21:57:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 105 | 09/06/2026 | 21:57:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 106 | 09/06/2026 | 21:57:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 107 | 09/06/2026 | 21:57:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 108 | 09/06/2026 | 21:57:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 109 | 09/06/2026 | 22:06:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 10a | 09/06/2026 | 22:06:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 10b | 09/06/2026 | 22:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 10c | 09/06/2026 | 22:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 10d | 09/06/2026 | 22:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 10e | 09/06/2026 | 22:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 10f | 09/06/2026 | 22:19:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 110 | 09/06/2026 | 22:19:22 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 111 | 09/06/2026 | 22:19:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 112 | 09/06/2026 | 22:19:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 113 | 09/06/2026 | 22:21:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 114 | 09/06/2026 | 22:21:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 115 | 09/06/2026 | 22:21:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 116 | 09/06/2026 | 22:21:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 117 | 09/06/2026 | 22:21:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 118 | 09/06/2026 | 22:21:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 119 | 09/06/2026 | 22:28:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 11a | 09/06/2026 | 22:31:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 11b | 09/06/2026 | 22:31:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 11c | 09/06/2026 | 22:31:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 11d | 09/06/2026 | 22:31:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 11e | 09/06/2026 | 22:31:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 11f | 09/06/2026 | 22:31:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 120 | 09/06/2026 | 22:37:36 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 121 | 09/06/2026 | 22:37:36 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 122 | 09/06/2026 | 22:37:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 123 | 09/06/2026 | 22:37:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 124 | 09/06/2026 | 22:40:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 125 | 09/06/2026 | 22:40:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 126 | 09/06/2026 | 22:40:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 127 | 09/06/2026 | 22:40:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 128 | 09/06/2026 | 22:40:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 129 | 09/06/2026 | 22:40:48 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 12a | 09/06/2026 | 22:44:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 12b | 09/06/2026 | 22:44:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 12c | 09/06/2026 | 22:44:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 12d | 09/06/2026 | 22:44:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 12e | 09/06/2026 | 22:45:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 12f | 09/06/2026 | 22:46:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 130 | 09/06/2026 | 22:46:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 131 | 09/06/2026 | 22:46:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 132 | 09/06/2026 | 22:46:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 133 | 09/06/2026 | 22:47:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 134 | 09/06/2026 | 22:47:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 135 | 09/06/2026 | 22:47:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 136 | 09/06/2026 | 22:47:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 137 | 09/06/2026 | 22:47:09 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 138 | 09/06/2026 | 22:47:09 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 139 | 09/06/2026 | 22:55:23 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 13a | 09/06/2026 | 22:57:28 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 13b | 09/06/2026 | 23:04:49 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 13c | 09/06/2026 | 23:05:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 13d | 09/06/2026 | 23:05:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 13e | 09/06/2026 | 23:05:28 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 13f | 09/06/2026 | 23:05:28 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 140 | 09/06/2026 | 23:07:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 141 | 09/06/2026 | 23:07:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 142 | 09/06/2026 | 23:07:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 143 | 09/06/2026 | 23:07:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 144 | 09/06/2026 | 23:07:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 145 | 09/06/2026 | 23:07:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 146 | 09/06/2026 | 23:11:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 147 | 09/06/2026 | 23:11:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 148 | 09/06/2026 | 23:11:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 149 | 09/06/2026 | 23:11:11 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 14a | 09/06/2026 | 23:11:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 14b | 09/06/2026 | 23:13:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 14c | 09/06/2026 | 23:13:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 14d | 09/06/2026 | 23:13:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 14e | 09/06/2026 | 23:13:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 14f | 09/06/2026 | 23:13:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 150 | 09/06/2026 | 23:13:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 151 | 09/06/2026 | 23:20:21 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 152 | 09/06/2026 | 23:22:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 153 | 09/06/2026 | 23:35:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 154 | 09/06/2026 | 23:36:30 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 155 | 09/06/2026 | 23:36:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 156 | 09/06/2026 | 23:36:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 157 | 09/06/2026 | 23:36:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 158 | 09/06/2026 | 23:45:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 159 | 09/06/2026 | 23:45:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 15a | 09/06/2026 | 23:45:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 15b | 09/06/2026 | 23:45:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 15c | 09/06/2026 | 23:45:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 15d | 09/06/2026 | 23:45:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 15e | 09/06/2026 | 23:46:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 15f | 09/06/2026 | 23:46:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 160 | 09/06/2026 | 23:46:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 161 | 09/06/2026 | 23:46:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 162 | 09/06/2026 | 23:46:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 163 | 09/06/2026 | 23:48:12 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 164 | 09/06/2026 | 23:48:12 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 165 | 09/06/2026 | 23:48:12 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 166 | 09/06/2026 | 23:48:12 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 167 | 09/06/2026 | 23:48:12 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 168 | 09/06/2026 | 23:48:12 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 169 | 09/06/2026 | 23:56:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 16a | 09/06/2026 | 23:57:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 16b | 09/06/2026 | 23:57:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 16c | 09/06/2026 | 23:57:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 16d | 09/06/2026 | 23:57:17 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 16e | 09/06/2026 | 23:59:17 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 16f | 09/06/2026 | 23:59:17 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 170 | 09/06/2026 | 23:59:17 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 171 | 09/06/2026 | 23:59:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 172 | 09/06/2026 | 23:59:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 173 | 09/06/2026 | 23:59:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 174 | 09/07/2026 | 00:27:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 175 | 09/07/2026 | 00:29:15 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 176 | 09/07/2026 | 00:29:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 177 | 09/07/2026 | 00:29:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 178 | 09/07/2026 | 00:29:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 179 | 09/07/2026 | 00:30:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 17a | 09/07/2026 | 00:30:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 17b | 09/07/2026 | 00:30:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 17c | 09/07/2026 | 00:30:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 17d | 09/07/2026 | 00:30:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 17e | 09/07/2026 | 00:30:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 17f | 09/07/2026 | 00:40:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 180 | 09/07/2026 | 00:41:50 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 181 | 09/07/2026 | 01:14:51 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 182 | 09/07/2026 | 01:15:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 183 | 09/07/2026 | 01:15:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 184 | 09/07/2026 | 01:15:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 185 | 09/07/2026 | 01:15:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 186 | 09/07/2026 | 01:17:30 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 187 | 09/07/2026 | 01:17:30 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 188 | 09/07/2026 | 01:17:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 189 | 09/07/2026 | 01:17:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 18a | 09/07/2026 | 01:17:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 18b | 09/07/2026 | 01:17:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 18c | 09/07/2026 | 01:24:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 18d | 09/07/2026 | 01:24:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 18e | 09/07/2026 | 01:24:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 18f | 09/07/2026 | 01:24:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 190 | 09/07/2026 | 01:26:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 191 | 09/07/2026 | 01:26:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 192 | 09/07/2026 | 01:26:26 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 193 | 09/07/2026 | 01:26:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 194 | 09/07/2026 | 01:26:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 195 | 09/07/2026 | 01:26:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 196 | 09/07/2026 | 01:26:27 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 197 | 09/07/2026 | 01:47:36 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 198 | 09/07/2026 | 01:48:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 199 | 09/07/2026 | 01:56:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 19a | 09/07/2026 | 01:56:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 19b | 09/07/2026 | 01:56:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 19c | 09/07/2026 | 01:56:20 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 19d | 09/07/2026 | 01:57:53 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 19e | 09/07/2026 | 02:01:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 19f | 09/07/2026 | 02:01:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1a0 | 09/07/2026 | 02:01:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1a1 | 09/07/2026 | 02:01:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1a2 | 09/07/2026 | 02:01:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1a3 | 09/07/2026 | 02:01:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1a4 | 09/07/2026 | 02:04:30 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1a5 | 09/07/2026 | 02:05:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1a6 | 09/07/2026 | 02:05:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1a7 | 09/07/2026 | 02:05:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1a8 | 09/07/2026 | 02:05:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1a9 | 09/07/2026 | 02:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1aa | 09/07/2026 | 02:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1ab | 09/07/2026 | 02:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1ac | 09/07/2026 | 02:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1ad | 09/07/2026 | 02:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1ae | 09/07/2026 | 02:06:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1af | 09/07/2026 | 02:12:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b0 | 09/07/2026 | 02:15:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b1 | 09/07/2026 | 02:15:08 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b2 | 09/07/2026 | 02:15:09 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b3 | 09/07/2026 | 02:15:09 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b4 | 09/07/2026 | 02:15:09 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b5 | 09/07/2026 | 02:15:09 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b6 | 09/07/2026 | 02:18:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b7 | 09/07/2026 | 02:18:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b8 | 09/07/2026 | 02:18:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1b9 | 09/07/2026 | 02:18:47 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1ba | 09/07/2026 | 02:24:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1bb | 09/07/2026 | 02:31:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1bc | 09/07/2026 | 02:36:53 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1bd | 09/07/2026 | 02:37:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1be | 09/07/2026 | 02:37:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1bf | 09/07/2026 | 02:37:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c0 | 09/07/2026 | 02:37:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c1 | 09/07/2026 | 02:40:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c2 | 09/07/2026 | 02:40:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c3 | 09/07/2026 | 02:40:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c4 | 09/07/2026 | 02:40:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c5 | 09/07/2026 | 02:40:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c6 | 09/07/2026 | 02:40:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c7 | 09/07/2026 | 08:39:14 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1c8 | 09/07/2026 | 08:40:36 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1c9 | 09/07/2026 | 09:02:01 | System Boot Initiated SysRestart | System Restart | Asserted
+ 1ca | 09/07/2026 | 09:05:05 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 1cb | 09/07/2026 | 09:05:06 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 1cc | 09/07/2026 | 09:05:22 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 1cd | 09/07/2026 | 09:08:55 | System Boot Initiated SysRestart | System Restart | Asserted
+ 1ce | 09/07/2026 | 09:10:06 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 1cf | 09/07/2026 | 09:11:59 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 1d0 | 09/07/2026 | 09:12:00 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.30 < Threshold 2.94 Volts
+ 1d1 | 09/07/2026 | 09:12:14 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 1d2 | 09/07/2026 | 09:13:41 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 1d3 | 09/07/2026 | 09:28:10 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1d4 | 09/07/2026 | 09:28:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1d5 | 09/07/2026 | 09:28:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1d6 | 09/07/2026 | 09:28:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1d7 | 09/07/2026 | 09:28:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1d8 | 09/07/2026 | 09:30:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1d9 | 09/07/2026 | 09:30:43 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1da | 09/07/2026 | 09:30:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1db | 09/07/2026 | 09:30:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1dc | 09/07/2026 | 09:30:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1dd | 09/07/2026 | 09:30:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1de | 09/07/2026 | 09:31:40 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1df | 09/07/2026 | 09:31:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e0 | 09/07/2026 | 09:31:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e1 | 09/07/2026 | 09:31:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e2 | 09/07/2026 | 09:32:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e3 | 09/07/2026 | 09:32:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e4 | 09/07/2026 | 09:32:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e5 | 09/07/2026 | 09:32:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e6 | 09/07/2026 | 09:32:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e7 | 09/07/2026 | 09:32:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e8 | 09/07/2026 | 09:32:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1e9 | 09/07/2026 | 09:39:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1ea | 09/07/2026 | 09:40:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1eb | 09/07/2026 | 09:40:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1ec | 09/07/2026 | 09:40:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1ed | 09/07/2026 | 09:40:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1ee | 09/07/2026 | 09:40:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1ef | 09/07/2026 | 09:42:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1f0 | 09/07/2026 | 09:42:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1f1 | 09/07/2026 | 09:42:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1f2 | 09/07/2026 | 09:42:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1f3 | 09/07/2026 | 09:49:08 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 1f4 | 09/07/2026 | 09:49:09 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 1f5 | 09/07/2026 | 09:49:24 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 1f6 | 09/07/2026 | 09:49:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1f7 | 09/07/2026 | 09:53:28 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1f8 | 09/07/2026 | 09:56:54 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1f9 | 09/07/2026 | 09:56:54 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1fa | 09/07/2026 | 09:56:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 1fb | 09/07/2026 | 09:58:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1fc | 09/07/2026 | 09:58:14 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 1fd | 09/07/2026 | 09:58:37 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1fe | 09/07/2026 | 09:58:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 1ff | 09/07/2026 | 09:58:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 200 | 09/07/2026 | 09:58:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 201 | 09/07/2026 | 10:10:50 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 202 | 09/07/2026 | 10:10:50 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.30 < Threshold 2.94 Volts
+ 203 | 09/07/2026 | 10:11:05 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 204 | 09/07/2026 | 10:12:32 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 205 | 09/07/2026 | 10:20:50 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 206 | 09/07/2026 | 10:20:51 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.30 < Threshold 2.94 Volts
+ 207 | 09/07/2026 | 10:21:06 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 208 | 09/07/2026 | 10:27:24 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 209 | 09/07/2026 | 10:28:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 20a | 09/07/2026 | 10:28:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 20b | 09/07/2026 | 10:28:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 20c | 09/07/2026 | 10:28:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 20d | 09/07/2026 | 10:30:05 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 20e | 09/07/2026 | 10:30:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 20f | 09/07/2026 | 10:30:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 210 | 09/07/2026 | 10:30:06 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 211 | 09/07/2026 | 10:30:07 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 212 | 09/07/2026 | 10:30:07 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 213 | 09/07/2026 | 10:35:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 214 | 09/07/2026 | 10:35:17 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 215 | 09/07/2026 | 10:35:17 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 216 | 09/07/2026 | 10:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 217 | 09/07/2026 | 10:35:18 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 218 | 09/07/2026 | 10:36:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 219 | 09/07/2026 | 10:36:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 21a | 09/07/2026 | 10:36:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 21b | 09/07/2026 | 10:36:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 21c | 09/07/2026 | 10:36:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 21d | 09/07/2026 | 10:36:57 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 21e | 09/07/2026 | 10:44:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 21f | 09/07/2026 | 10:44:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 220 | 09/07/2026 | 10:44:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 221 | 09/07/2026 | 10:44:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 222 | 09/07/2026 | 10:47:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 223 | 09/07/2026 | 10:47:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 224 | 09/07/2026 | 10:47:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 225 | 09/07/2026 | 10:47:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 226 | 09/07/2026 | 11:10:29 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 227 | 09/07/2026 | 11:10:30 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 228 | 09/07/2026 | 11:10:44 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 229 | 09/07/2026 | 11:18:38 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 22a | 09/07/2026 | 11:20:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 22b | 09/07/2026 | 11:20:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 22c | 09/07/2026 | 11:20:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 22d | 09/07/2026 | 11:20:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 22e | 09/07/2026 | 11:21:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 22f | 09/07/2026 | 11:21:13 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 230 | 09/07/2026 | 11:21:14 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 231 | 09/07/2026 | 11:21:14 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 232 | 09/07/2026 | 11:21:14 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 233 | 09/07/2026 | 11:22:07 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 234 | 09/07/2026 | 11:22:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 235 | 09/07/2026 | 11:22:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 236 | 09/07/2026 | 11:22:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 237 | 09/07/2026 | 11:22:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 238 | 09/07/2026 | 11:23:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 239 | 09/07/2026 | 11:23:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 23a | 09/07/2026 | 11:23:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 23b | 09/07/2026 | 11:23:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 23c | 09/07/2026 | 11:23:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 23d | 09/07/2026 | 11:23:29 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 23e | 09/07/2026 | 11:33:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 23f | 09/07/2026 | 11:34:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 240 | 09/07/2026 | 11:34:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 241 | 09/07/2026 | 11:34:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 242 | 09/07/2026 | 11:34:33 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 243 | 09/07/2026 | 11:36:15 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 244 | 09/07/2026 | 11:36:15 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 245 | 09/07/2026 | 11:36:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 246 | 09/07/2026 | 11:36:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 247 | 09/07/2026 | 11:36:16 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 248 | 09/07/2026 | 11:36:30 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 249 | 09/07/2026 | 11:43:44 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 24a | 09/07/2026 | 11:44:36 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 24b | 09/07/2026 | 11:45:26 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 24c | 09/07/2026 | 11:53:19 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 24d | 09/07/2026 | 11:53:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 24e | 09/07/2026 | 11:54:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 24f | 09/07/2026 | 11:57:07 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 250 | 09/07/2026 | 12:50:35 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 251 | 09/07/2026 | 12:51:59 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 252 | 09/07/2026 | 13:22:52 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 253 | 09/07/2026 | 13:23:32 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 254 | 09/07/2026 | 13:23:33 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 255 | 09/07/2026 | 13:23:33 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 256 | 09/07/2026 | 13:23:33 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 257 | 09/07/2026 | 13:26:29 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 258 | 09/07/2026 | 13:26:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 259 | 09/07/2026 | 13:26:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 25a | 09/07/2026 | 13:26:45 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 25b | 09/07/2026 | 13:26:46 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 25c | 09/07/2026 | 13:44:21 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 25d | 09/07/2026 | 13:45:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 25e | 09/07/2026 | 13:45:02 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 25f | 09/07/2026 | 13:45:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 260 | 09/07/2026 | 13:45:03 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 261 | 09/07/2026 | 13:47:50 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 262 | 09/07/2026 | 13:51:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 263 | 09/07/2026 | 13:51:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 264 | 09/07/2026 | 13:51:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 265 | 09/07/2026 | 13:51:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 266 | 09/07/2026 | 14:00:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 267 | 09/07/2026 | 14:00:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 268 | 09/07/2026 | 14:00:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 269 | 09/07/2026 | 14:00:57 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 26a | 09/07/2026 | 14:02:34 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 26b | 09/07/2026 | 14:02:34 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 26c | 09/07/2026 | 14:02:34 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 26d | 09/07/2026 | 14:02:34 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 26e | 09/07/2026 | 14:23:08 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 26f | 09/07/2026 | 14:23:08 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.30 < Threshold 2.94 Volts
+ 270 | 09/07/2026 | 14:23:25 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 271 | 09/07/2026 | 14:24:55 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 272 | 09/07/2026 | 14:28:01 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 273 | 09/07/2026 | 14:28:02 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 274 | 09/07/2026 | 14:28:18 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 275 | 09/07/2026 | 14:30:25 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 276 | 09/07/2026 | 14:39:00 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 277 | 09/07/2026 | 14:39:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 278 | 09/07/2026 | 14:39:55 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 279 | 09/07/2026 | 14:39:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 27a | 09/07/2026 | 14:39:58 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 27b | 09/07/2026 | 14:44:33 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 27c | 09/07/2026 | 14:45:54 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 27d | 09/07/2026 | 14:45:54 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 27e | 09/07/2026 | 14:45:54 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 27f | 09/07/2026 | 14:45:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 280 | 09/07/2026 | 15:02:19 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 281 | 09/07/2026 | 15:02:19 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.30 < Threshold 2.94 Volts
+ 282 | 09/07/2026 | 15:02:35 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 283 | 09/07/2026 | 15:03:34 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 284 | 09/07/2026 | 15:03:50 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 285 | 09/07/2026 | 15:04:42 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 286 | 09/07/2026 | 15:04:57 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 287 | 09/07/2026 | 15:07:34 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 288 | 09/07/2026 | 15:27:59 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 289 | 09/07/2026 | 15:27:59 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 28a | 09/07/2026 | 15:28:15 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 28b | 09/07/2026 | 15:29:38 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 28c | 09/07/2026 | 15:52:53 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 28d | 09/07/2026 | 15:54:15 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 28e | 09/07/2026 | 16:12:36 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 28f | 09/07/2026 | 16:12:37 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 290 | 09/07/2026 | 16:12:53 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 291 | 09/07/2026 | 16:14:09 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 292 | 09/07/2026 | 16:28:50 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 293 | 09/07/2026 | 16:29:11 | Power Supply #0x20 | Presence detected | Asserted
+ 294 | 09/07/2026 | 16:29:32 | System Boot Initiated SysRestart | System Restart | Asserted
+ 295 | 09/07/2026 | 16:29:32 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 296 | 09/07/2026 | 16:29:51 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 297 | 09/07/2026 | 16:32:30 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 298 | 09/07/2026 | 16:32:35 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 299 | 09/07/2026 | 16:32:35 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 29a | 09/07/2026 | 16:32:51 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 29b | 09/07/2026 | 16:32:51 | System Boot Initiated SysRestart | System Restart | Asserted
+ 29c | 09/07/2026 | 16:34:11 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 29d | 09/07/2026 | 16:24:54 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 29e | 09/07/2026 | 16:24:55 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 29f | 09/07/2026 | 16:25:08 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2a0 | 09/07/2026 | 16:25:09 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2a1 | 09/07/2026 | 16:26:32 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2a2 | 09/07/2026 | 16:28:13 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2a3 | 09/07/2026 | 16:28:13 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2a4 | 09/07/2026 | 16:28:28 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2a5 | 09/07/2026 | 16:28:29 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2a6 | 09/07/2026 | 16:29:38 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2a7 | 09/07/2026 | 17:09:30 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.36 < Threshold 2.94 Volts
+ 2a8 | 09/07/2026 | 17:01:16 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2a9 | 09/07/2026 | 17:04:43 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2aa | 09/07/2026 | 17:07:48 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2ab | 09/07/2026 | 17:07:48 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2ac | 09/07/2026 | 17:08:01 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2ad | 09/07/2026 | 17:08:03 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2ae | 09/07/2026 | 17:09:24 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2af | 09/07/2026 | 17:11:06 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2b0 | 09/07/2026 | 17:11:06 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2b1 | 09/07/2026 | 17:11:20 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2b2 | 09/07/2026 | 17:11:21 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2b3 | 09/07/2026 | 17:12:40 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2b4 | 09/07/2026 | 17:14:25 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2b5 | 09/07/2026 | 17:14:25 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2b6 | 09/07/2026 | 17:14:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2b7 | 09/07/2026 | 17:14:40 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2b8 | 09/07/2026 | 17:16:02 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2b9 | 09/07/2026 | 17:16:47 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2ba | 09/07/2026 | 17:16:48 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2bb | 09/07/2026 | 17:17:01 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2bc | 09/07/2026 | 17:17:03 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2bd | 09/07/2026 | 17:18:17 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2be | 09/07/2026 | 17:20:06 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2bf | 09/07/2026 | 17:20:07 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2c0 | 09/07/2026 | 17:20:19 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2c1 | 09/07/2026 | 17:20:21 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2c2 | 09/07/2026 | 17:21:40 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2c3 | 09/07/2026 | 17:23:24 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2c4 | 09/07/2026 | 17:23:25 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2c5 | 09/07/2026 | 17:23:37 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2c6 | 09/07/2026 | 17:23:39 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2c7 | 09/07/2026 | 17:24:55 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2c8 | 09/07/2026 | 17:26:42 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2c9 | 09/07/2026 | 17:26:42 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2ca | 09/07/2026 | 17:26:56 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2cb | 09/07/2026 | 17:26:58 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2cc | 09/07/2026 | 17:28:17 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2cd | 09/07/2026 | 20:44:56 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 2ce | 09/07/2026 | 20:47:41 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 2cf | 09/07/2026 | 20:47:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 2d0 | 09/07/2026 | 20:47:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 2d1 | 09/07/2026 | 20:47:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 2d2 | 09/07/2026 | 20:47:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 2d3 | 09/07/2026 | 20:47:42 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Asserted
+ 2d4 | 09/07/2026 | 20:48:31 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 2d5 | 09/07/2026 | 20:56:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 2d6 | 09/07/2026 | 20:56:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 2d7 | 09/07/2026 | 20:56:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 2d8 | 09/07/2026 | 20:56:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 2d9 | 09/07/2026 | 20:56:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 2da | 09/07/2026 | 20:56:25 | Management Subsys Health Mngmnt Health | Sensor access degraded or unavailable | Deasserted
+ 2db | 09/08/2026 | 10:11:28 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2dc | 09/08/2026 | 10:11:28 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2dd | 09/08/2026 | 10:11:44 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2de | 09/08/2026 | 10:11:44 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2df | 09/08/2026 | 10:13:02 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2e0 | 09/08/2026 | 10:14:49 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2e1 | 09/08/2026 | 10:14:50 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2e2 | 09/08/2026 | 10:15:05 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2e3 | 09/08/2026 | 10:15:07 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2e4 | 09/08/2026 | 10:16:20 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2e5 | 09/08/2026 | 10:18:13 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2e6 | 09/08/2026 | 10:18:14 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2e7 | 09/08/2026 | 10:18:30 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2e8 | 09/08/2026 | 10:18:33 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2e9 | 09/08/2026 | 10:19:46 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2ea | 09/08/2026 | 10:21:39 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2eb | 09/08/2026 | 10:21:39 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2ec | 09/08/2026 | 10:21:53 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2ed | 09/08/2026 | 10:21:55 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2ee | 09/08/2026 | 10:23:08 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2ef | 09/08/2026 | 11:02:43 | Version Change Version Change | Firmware or software change success, Mngmt Ctrl Firm Rev | Asserted
+ 2f0 | 09/08/2026 | 11:02:58 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.36 < Threshold 2.94 Volts
+ 2f1 | 09/08/2026 | 10:54:38 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2f2 | 09/08/2026 | 11:00:14 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2f3 | 09/08/2026 | 11:00:15 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2f4 | 09/08/2026 | 11:01:57 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2f5 | 09/08/2026 | 11:01:58 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2f6 | 09/08/2026 | 11:03:11 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2f7 | 09/08/2026 | 11:26:53 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2f8 | 09/08/2026 | 14:24:58 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2f9 | 09/08/2026 | 14:24:59 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2fa | 09/08/2026 | 14:25:11 | System Boot Initiated SysRestart | System Restart | Asserted
+ 2fb | 09/08/2026 | 14:25:13 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 2fc | 09/08/2026 | 14:26:22 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 2fd | 09/08/2026 | 14:32:08 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 2fe | 09/08/2026 | 14:32:08 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 2ff | 09/08/2026 | 14:32:21 | System Boot Initiated SysRestart | System Restart | Asserted
+ 300 | 09/08/2026 | 14:32:23 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 301 | 09/08/2026 | 14:33:31 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 302 | 09/08/2026 | 17:01:58 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 303 | 09/08/2026 | 17:02:06 | Power Supply #0x2a | Presence detected | Asserted
+ 304 | 09/08/2026 | 17:02:13 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 305 | 09/08/2026 | 17:02:28 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 306 | 09/08/2026 | 17:02:28 | System Boot Initiated SysRestart | System Restart | Asserted
+ 307 | 09/08/2026 | 16:54:36 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 308 | 09/08/2026 | 19:23:24 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 309 | 09/08/2026 | 19:23:24 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.81 < Threshold 2.94 Volts
+ 30a | 09/08/2026 | 19:37:22 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 30b | 09/08/2026 | 19:37:31 | Power Supply #0x27 | Presence detected | Asserted
+ 30c | 09/08/2026 | 19:37:38 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 30d | 09/08/2026 | 19:27:02 | System Boot Initiated SysRestart | System Restart | Asserted
+ 30e | 09/08/2026 | 19:27:02 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 30f | 09/08/2026 | 19:30:01 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 310 | 09/08/2026 | 19:58:07 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.36 < Threshold 2.94 Volts
+ 311 | 09/08/2026 | 19:49:07 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 312 | 09/08/2026 | 19:53:56 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 313 | 09/08/2026 | 19:53:57 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.30 < Threshold 2.94 Volts
+ 314 | 09/08/2026 | 19:54:10 | System Boot Initiated SysRestart | System Restart | Asserted
+ 315 | 09/08/2026 | 19:54:11 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 316 | 09/08/2026 | 19:55:20 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 317 | 09/09/2026 | 11:00:05 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 318 | 09/09/2026 | 11:00:13 | Power Supply #0x26 | Presence detected | Asserted
+ 319 | 09/09/2026 | 11:00:13 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 31a | 09/09/2026 | 11:00:33 | System Boot Initiated SysRestart | System Restart | Asserted
+ 31b | 09/09/2026 | 10:49:38 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 31c | 09/09/2026 | 10:52:30 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.81 < Threshold 2.94 Volts
+ 31d | 09/11/2026 | 16:23:35 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 31e | 09/11/2026 | 16:23:43 | Power Supply PS1 Status | Presence detected | Asserted
+ 31f | 09/11/2026 | 16:23:43 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 320 | 09/11/2026 | 16:13:57 | Power Supply PwrOn TimeOut | Failure detected | Asserted
+ 321 | 09/11/2026 | 17:15:41 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 322 | 09/11/2026 | 17:15:49 | Power Supply PS1 Status | Presence detected | Asserted
+ 323 | 09/11/2026 | 17:15:50 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 324 | 09/11/2026 | 17:05:58 | Power Supply PwrOn TimeOut | Failure detected | Asserted
+ 325 | 09/11/2026 | 17:20:57 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 326 | 09/11/2026 | 17:21:05 | Power Supply PS1 Status | Presence detected | Asserted
+ 327 | 09/11/2026 | 17:21:06 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 328 | 09/11/2026 | 17:11:22 | Power Supply PwrOn TimeOut | Failure detected | Asserted
+ 329 | 09/14/2026 | 11:20:01 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 32a | 09/14/2026 | 11:20:09 | Power Supply PS1 Status | Presence detected | Asserted
+ 32b | 09/14/2026 | 11:20:10 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 32c | 09/14/2026 | 11:20:29 | System Boot Initiated SysRestart | System Restart | Asserted
+ 32d | 09/14/2026 | 11:20:29 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 32e | 09/14/2026 | 11:10:35 | Memory DIMM000 | Presence Detected | Asserted
+ 32f | 09/14/2026 | 11:12:29 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.72 < Threshold 2.94 Volts
+ 330 | 09/14/2026 | 11:22:53 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 331 | 09/14/2026 | 11:22:53 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 0.72 < Threshold 2.94 Volts
+ 332 | 09/14/2026 | 11:37:47 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 333 | 09/14/2026 | 11:37:55 | Power Supply PS1 Status | Presence detected | Asserted
+ 334 | 09/14/2026 | 11:38:01 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 335 | 09/14/2026 | 11:27:19 | System Boot Initiated SysRestart | System Restart | Asserted
+ 336 | 09/14/2026 | 11:27:20 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 337 | 09/14/2026 | 11:28:29 | Memory DIMM000 | Presence Detected | Asserted
+ 338 | 09/14/2026 | 11:29:04 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 339 | 09/14/2026 | 11:29:17 | System Boot Initiated SysRestart | System Restart | Asserted
+ 33a | 09/14/2026 | 11:29:19 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 33b | 09/14/2026 | 11:31:11 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.72 < Threshold 2.94 Volts
+ 33c | 09/14/2026 | 11:32:26 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 33d | 09/14/2026 | 11:32:27 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.30 < Threshold 2.94 Volts
+ 33e | 09/14/2026 | 11:32:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 33f | 09/14/2026 | 11:32:40 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 340 | 09/14/2026 | 11:33:53 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.72 < Threshold 2.94 Volts
+ 341 | 09/14/2026 | 14:12:03 | System Boot Initiated SysRestart | System Restart | Asserted
+ 342 | 09/14/2026 | 14:17:13 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 343 | 09/14/2026 | 14:17:14 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Deasserted | Reading 3.30 < Threshold 2.94 Volts
+ 344 | 09/14/2026 | 14:17:28 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 345 | 09/14/2026 | 14:17:30 | System Boot Initiated SysRestart | System Restart | Asserted
+ 346 | 09/14/2026 | 14:18:41 | Voltage BCU1 3V3_RISER2 | Lower Critical going low  | Asserted | Reading 0.72 < Threshold 2.94 Volts
+ 347 | 09/14/2026 | 17:06:19 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 348 | 09/14/2026 | 17:06:27 | Power Supply PS1 Status | Presence detected | Asserted
+ 349 | 09/14/2026 | 17:06:27 | Drive Slot / Bay DISK11 | Drive Present | Asserted
+ 34a | 09/14/2026 | 16:55:44 | System Boot Initiated SysRestart | System Restart | Asserted
+ 34b | 09/14/2026 | 16:55:44 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 34c | 09/14/2026 | 16:56:49 | Memory DIMM000 | Presence Detected | Asserted
+ 34d | 09/15/2026 | 10:46:12 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 34e | 09/15/2026 | 10:46:21 | Power Supply PS1 Status | Presence detected | Asserted
+ 34f | 09/15/2026 | 10:46:21 | Drive Slot / Bay DISK11 | Drive Present | Asserted
+ 350 | 09/15/2026 | 10:46:28 | Button Power Button | Power Button pressed | Asserted
+ 351 | 09/15/2026 | 10:35:38 | System Boot Initiated SysRestart | System Restart | Asserted
+ 352 | 09/15/2026 | 10:35:38 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 353 | 09/15/2026 | 10:37:44 | Drive Slot / Bay DISK11 | Drive Present | Deasserted
+ 354 | 09/15/2026 | 10:37:47 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 355 | 09/15/2026 | 10:39:16 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 356 | 09/15/2026 | 10:39:29 | System Boot Initiated SysRestart | System Restart | Asserted
+ 357 | 09/15/2026 | 10:39:30 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 358 | 09/15/2026 | 10:41:00 | Memory DIMM000 | Presence Detected | Asserted
+ 359 | 09/15/2026 | 10:43:27 | System Boot Initiated SysRestart | System Restart | Asserted
+ 35a | 09/15/2026 | 10:49:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 35b | 09/15/2026 | 11:00:05 | System Boot Initiated SysRestart | System Restart | Asserted
+ 35c | 09/15/2026 | 11:46:56 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 35d | 09/15/2026 | 11:47:04 | Power Supply PS1 Status | Presence detected | Asserted
+ 35e | 09/15/2026 | 11:47:11 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 35f | 09/15/2026 | 11:36:25 | System Boot Initiated SysRestart | System Restart | Asserted
+ 360 | 09/15/2026 | 11:36:25 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 361 | 09/15/2026 | 11:37:53 | Memory DIMM000 | Presence Detected | Asserted
+ 362 | 09/15/2026 | 11:39:58 | System Boot Initiated SysRestart | System Restart | Asserted
+ 363 | 09/15/2026 | 14:00:35 | System Boot Initiated SysRestart | System Restart | Asserted
+ 364 | 09/15/2026 | 14:30:12 | System Boot Initiated SysRestart | System Restart | Asserted
+ 365 | 09/15/2026 | 14:38:21 | OS Boot | Installation started | Asserted
+ 366 | 09/15/2026 | 14:40:06 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 367 | 09/15/2026 | 14:40:14 | System Boot Initiated SysRestart | System Restart | Asserted
+ 368 | 09/15/2026 | 14:40:15 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 369 | 09/15/2026 | 14:54:58 | System Boot Initiated SysRestart | System Restart | Asserted
+ 36a | 09/15/2026 | 15:06:32 | System Boot Initiated SysRestart | System Restart | Asserted
+ 36b | 09/16/2026 | 09:09:53 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 36c | 09/16/2026 | 09:10:07 | System Boot Initiated SysRestart | System Restart | Asserted
+ 36d | 09/16/2026 | 09:10:09 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 36e | 09/16/2026 | 09:15:15 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 36f | 09/16/2026 | 09:15:30 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 370 | 09/16/2026 | 09:15:31 | System Boot Initiated SysRestart | System Restart | Asserted
+ 371 | 09/16/2026 | 09:19:12 | OS Boot | Installation started | Asserted
+ 372 | 09/16/2026 | 10:44:39 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 373 | 09/16/2026 | 10:44:52 | System Boot Initiated SysRestart | System Restart | Asserted
+ 374 | 09/16/2026 | 10:44:54 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 375 | 09/16/2026 | 10:49:47 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 376 | 09/16/2026 | 10:50:01 | System Boot Initiated SysRestart | System Restart | Asserted
+ 377 | 09/16/2026 | 10:50:02 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 378 | 09/16/2026 | 10:57:53 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 379 | 09/16/2026 | 10:58:05 | System Boot Initiated SysRestart | System Restart | Asserted
+ 37a | 09/16/2026 | 10:58:07 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 37b | 09/17/2026 | 10:24:14 | System Boot Initiated SysRestart | System Restart | Asserted
+ 37c | 09/17/2026 | 10:26:14 | System Boot Initiated SysRestart | System Restart | Asserted
+ 37d | 09/17/2026 | 10:30:13 | System Boot Initiated SysRestart | System Restart | Asserted
+ 37e | 09/17/2026 | 10:47:16 | System Boot Initiated SysRestart | System Restart | Asserted
+ 37f | 09/17/2026 | 10:49:05 | System Boot Initiated SysRestart | System Restart | Asserted
+ 380 | 09/17/2026 | 10:53:53 | System Boot Initiated SysRestart | System Restart | Asserted
+ 381 | 09/17/2026 | 10:58:46 | System Boot Initiated SysRestart | System Restart | Asserted
+ 382 | 09/17/2026 | 11:10:27 | System Boot Initiated SysRestart | System Restart | Asserted
+ 383 | 09/17/2026 | 11:14:05 | OS Boot | Installation started | Asserted
+ 384 | 09/17/2026 | 11:25:37 | OS Boot | Installation completed | Asserted
+ 385 | 09/17/2026 | 11:25:55 | System Boot Initiated SysRestart | System Restart | Asserted
+ 386 | 09/17/2026 | 11:29:16 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 387 | 09/17/2026 | 11:29:28 | System Boot Initiated SysRestart | System Restart | Asserted
+ 388 | 09/17/2026 | 11:29:30 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 389 | 09/17/2026 | 11:32:41 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 38a | 09/17/2026 | 11:32:54 | System Boot Initiated SysRestart | System Restart | Asserted
+ 38b | 09/17/2026 | 11:32:56 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 38c | 09/17/2026 | 14:11:36 | System Boot Initiated SysRestart | System Restart | Asserted
+ 38d | 09/17/2026 | 15:50:26 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 38e | 09/17/2026 | 15:50:34 | Power Supply PS1 Status | Presence detected | Asserted
+ 38f | 09/17/2026 | 15:50:35 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 390 | 09/17/2026 | 15:50:54 | System Boot Initiated SysRestart | System Restart | Asserted
+ 391 | 09/17/2026 | 15:50:54 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 392 | 09/17/2026 | 15:41:20 | Memory DIMM000 | Presence Detected | Asserted
+ 393 | 09/17/2026 | 15:52:00 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 394 | 09/17/2026 | 15:52:13 | System Boot Initiated SysRestart | System Restart | Asserted
+ 395 | 09/17/2026 | 15:52:15 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 396 | 09/17/2026 | 16:00:16 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 397 | 09/17/2026 | 16:00:29 | System Boot Initiated SysRestart | System Restart | Asserted
+ 398 | 09/17/2026 | 16:00:31 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 399 | 09/17/2026 | 16:11:47 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 39a | 09/17/2026 | 16:13:42 | System Boot Initiated SysRestart | System Restart | Asserted
+ 39b | 09/17/2026 | 16:13:43 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 39c | 09/17/2026 | 16:21:40 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 39d | 09/17/2026 | 16:21:53 | System Boot Initiated SysRestart | System Restart | Asserted
+ 39e | 09/17/2026 | 16:21:55 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 39f | 09/17/2026 | 16:31:32 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3a0 | 09/17/2026 | 16:34:29 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3a1 | 09/17/2026 | 16:34:44 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3a2 | 09/17/2026 | 16:34:44 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3a3 | 09/17/2026 | 16:57:01 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3a4 | 09/17/2026 | 16:57:16 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3a5 | 09/17/2026 | 16:57:16 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3a6 | 09/17/2026 | 17:03:57 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3a7 | 09/17/2026 | 17:04:14 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3a8 | 09/17/2026 | 17:04:16 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3a9 | 09/17/2026 | 17:08:24 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3aa | 09/17/2026 | 17:08:36 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3ab | 09/17/2026 | 17:08:39 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3ac | 09/17/2026 | 19:35:44 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3ad | 09/17/2026 | 19:35:58 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3ae | 09/17/2026 | 19:35:59 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3af | 09/17/2026 | 19:43:54 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3b0 | 09/17/2026 | 19:44:07 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3b1 | 09/17/2026 | 19:44:09 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3b2 | 09/17/2026 | 19:48:40 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3b3 | 09/17/2026 | 19:48:53 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3b4 | 09/17/2026 | 19:48:54 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3b5 | 09/17/2026 | 19:51:50 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3b6 | 09/17/2026 | 19:52:03 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3b7 | 09/17/2026 | 19:52:05 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3b8 | 09/17/2026 | 19:54:59 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3b9 | 09/17/2026 | 19:55:12 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3ba | 09/17/2026 | 19:55:14 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3bb | 09/17/2026 | 19:56:42 | Event Logging Disabled Op. Log Full | Informational | Asserted
+ 3bc | 09/21/2026 | 14:50:15 | Event Logging Disabled Op. Log Full | Informational | Deasserted
+ 3bd | 09/22/2026 | 20:42:54 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3be | 09/22/2026 | 20:50:16 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3bf | 09/22/2026 | 21:02:22 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3c0 | 09/22/2026 | 21:02:23 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3c1 | 09/22/2026 | 21:02:46 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3c2 | 09/22/2026 | 21:03:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3c3 | 09/22/2026 | 21:03:01 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3c4 | 09/22/2026 | 21:13:40 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3c5 | 09/22/2026 | 21:14:04 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3c6 | 09/22/2026 | 21:14:05 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3c7 | 09/22/2026 | 21:15:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3c8 | 09/22/2026 | 21:21:53 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3c9 | 09/22/2026 | 21:23:01 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3ca | 09/22/2026 | 21:23:01 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3cb | 09/22/2026 | 22:19:41 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3cc | 09/22/2026 | 22:26:01 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3cd | 09/22/2026 | 22:26:53 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3ce | 09/22/2026 | 22:26:53 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3cf | 09/22/2026 | 22:41:11 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3d0 | 09/22/2026 | 22:41:25 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3d1 | 09/22/2026 | 22:41:26 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3d2 | 09/22/2026 | 22:53:41 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3d3 | 09/22/2026 | 22:53:54 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3d4 | 09/22/2026 | 22:53:55 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3d5 | 09/22/2026 | 23:15:22 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3d6 | 09/22/2026 | 23:15:36 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3d7 | 09/22/2026 | 23:15:36 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3d8 | 09/22/2026 | 23:22:13 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3d9 | 09/22/2026 | 23:26:08 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3da | 09/22/2026 | 23:26:22 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3db | 09/22/2026 | 23:26:23 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3dc | 09/23/2026 | 21:18:13 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3dd | 09/23/2026 | 21:18:45 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3de | 09/23/2026 | 21:35:58 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3df | 09/23/2026 | 21:37:36 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3e0 | 09/23/2026 | 21:38:41 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3e1 | 09/23/2026 | 21:38:43 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3e2 | 09/23/2026 | 21:45:39 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3e3 | 09/23/2026 | 21:47:36 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3e4 | 09/23/2026 | 21:47:37 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3e5 | 09/23/2026 | 22:28:07 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3e6 | 09/23/2026 | 22:29:45 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3e7 | 09/23/2026 | 22:29:47 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3e8 | 09/23/2026 | 22:34:21 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3e9 | 09/23/2026 | 22:40:48 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3ea | 09/23/2026 | 22:40:49 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3eb | 09/23/2026 | 22:53:13 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3ec | 09/23/2026 | 22:53:27 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3ed | 09/23/2026 | 22:53:28 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3ee | 09/23/2026 | 22:54:11 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3ef | 09/23/2026 | 22:55:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3f0 | 09/23/2026 | 22:55:01 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3f1 | 09/23/2026 | 23:22:37 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3f2 | 09/23/2026 | 23:23:46 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3f3 | 09/23/2026 | 23:23:48 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 3f4 | 09/24/2026 | 00:22:25 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3f5 | 09/24/2026 | 00:28:35 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3f6 | 09/24/2026 | 00:45:46 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3f7 | 09/24/2026 | 01:03:02 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3f8 | 09/24/2026 | 09:57:31 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3f9 | 09/24/2026 | 10:14:44 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3fa | 09/24/2026 | 10:19:33 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3fb | 09/24/2026 | 10:36:44 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3fc | 09/24/2026 | 10:53:57 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3fd | 09/24/2026 | 11:11:17 | System Boot Initiated SysRestart | System Restart | Asserted
+ 3fe | 09/24/2026 | 11:18:56 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 3ff | 09/24/2026 | 11:19:08 | System Boot Initiated SysRestart | System Restart | Asserted
+ 400 | 09/24/2026 | 11:19:10 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 401 | 09/24/2026 | 11:36:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 402 | 09/24/2026 | 11:53:52 | System Boot Initiated SysRestart | System Restart | Asserted
+ 403 | 09/29/2026 | 11:38:01 | System Boot Initiated SysRestart | System Restart | Asserted
+ 404 | 09/29/2026 | 11:55:18 | System Boot Initiated SysRestart | System Restart | Asserted
+ 405 | 09/29/2026 | 12:12:30 | System Boot Initiated SysRestart | System Restart | Asserted
+ 406 | 09/29/2026 | 12:29:38 | System Boot Initiated SysRestart | System Restart | Asserted
+ 407 | 09/29/2026 | 12:46:54 | System Boot Initiated SysRestart | System Restart | Asserted
+ 408 | 09/29/2026 | 16:06:04 | System Boot Initiated SysRestart | System Restart | Asserted
+ 409 | 09/29/2026 | 21:13:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 40a | 09/30/2026 | 02:54:52 | Event Logging Disabled Sec. Log Full | Informational | Asserted
+ 40b | 09/30/2026 | 08:22:48 | System Boot Initiated SysRestart | System Restart | Asserted
+ 40c | 09/30/2026 | 08:32:44 | System Boot Initiated SysRestart | System Restart | Asserted
+ 40d | 09/30/2026 | 09:50:05 | System Boot Initiated SysRestart | System Restart | Asserted
+ 40e | 09/30/2026 | 10:07:17 | System Boot Initiated SysRestart | System Restart | Asserted
+ 40f | 09/30/2026 | 10:24:28 | System Boot Initiated SysRestart | System Restart | Asserted
+ 410 | 09/30/2026 | 10:41:40 | System Boot Initiated SysRestart | System Restart | Asserted
+ 411 | 09/30/2026 | 10:43:46 | System Boot Initiated SysRestart | System Restart | Asserted
+ 412 | 09/30/2026 | 10:51:49 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 413 | 09/30/2026 | 11:03:43 | System Boot Initiated SysRestart | System Restart | Asserted
+ 414 | 09/30/2026 | 11:03:45 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 415 | 09/30/2026 | 11:17:28 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 416 | 09/30/2026 | 11:19:47 | System Boot Initiated SysRestart | System Restart | Asserted
+ 417 | 09/30/2026 | 11:19:49 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 418 | 09/30/2026 | 11:27:03 | System Boot Initiated SysRestart | System Restart | Asserted
+ 419 | 09/30/2026 | 11:44:15 | System Boot Initiated SysRestart | System Restart | Asserted
+ 41a | 09/30/2026 | 12:01:28 | System Boot Initiated SysRestart | System Restart | Asserted
+ 41b | 09/30/2026 | 12:18:40 | System Boot Initiated SysRestart | System Restart | Asserted
+ 41c | 09/30/2026 | 12:35:51 | System Boot Initiated SysRestart | System Restart | Asserted
+ 41d | 09/30/2026 | 12:53:04 | System Boot Initiated SysRestart | System Restart | Asserted
+ 41e | 09/30/2026 | 13:08:35 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 41f | 09/30/2026 | 13:08:52 | System Boot Initiated SysRestart | System Restart | Asserted
+ 420 | 09/30/2026 | 13:08:54 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 421 | 09/30/2026 | 13:13:42 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 422 | 09/30/2026 | 13:13:50 | System Boot Initiated SysRestart | System Restart | Asserted
+ 423 | 09/30/2026 | 13:13:52 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 424 | 09/30/2026 | 13:21:49 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 425 | 09/30/2026 | 13:21:57 | System Boot Initiated SysRestart | System Restart | Asserted
+ 426 | 09/30/2026 | 13:21:59 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 427 | 09/30/2026 | 13:30:45 | System Boot Initiated SysRestart | System Restart | Asserted
+ 428 | 09/30/2026 | 13:48:02 | System Boot Initiated SysRestart | System Restart | Asserted
+ 429 | 10/02/2026 | 22:42:58 | Event Logging Disabled Sec. Log Full | Informational | Asserted
+ 42a | 10/02/2026 | 22:42:58 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 42b | 10/02/2026 | 22:43:05 | Power Supply PS1 Status | Presence detected | Asserted
+ 42c | 10/02/2026 | 22:43:13 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 42d | 10/02/2026 | 22:43:26 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 42e | 10/02/2026 | 22:43:26 | System Boot Initiated SysRestart | System Restart | Asserted
+ 42f | 10/02/2026 | 22:44:53 | Memory DIMM000 | Presence Detected | Asserted
+ 430 | 10/03/2026 | 01:12:19 | Temperature Inlet Temp | Upper Non-critical going high | Asserted | Reading 41 > Threshold 41 degrees C
+ 431 | 10/03/2026 | 01:31:25 | Temperature Inlet Temp | Upper Critical going high | Asserted | Reading 43 > Threshold 43 degrees C
+ 432 | 10/03/2026 | 01:36:58 | System Boot Initiated SysRestart | System Restart | Asserted
+ 433 | 10/03/2026 | 01:54:20 | System Boot Initiated SysRestart | System Restart | Asserted
+ 434 | 10/03/2026 | 16:31:50 | Event Logging Disabled Sec. Log Full | Informational | Asserted
+ 435 | 10/03/2026 | 16:31:50 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 436 | 10/03/2026 | 16:31:58 | Power Supply PS1 Status | Presence detected | Asserted
+ 437 | 10/03/2026 | 16:31:58 | Drive Slot / Bay DISK2 | Drive Present | Asserted
+ 438 | 10/03/2026 | 16:32:18 | System Boot Initiated SysRestart | System Restart | Asserted
+ 439 | 10/03/2026 | 16:32:18 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 43a | 10/03/2026 | 16:33:47 | Memory DIMM000 | Presence Detected | Asserted
+ 43b | 10/03/2026 | 17:23:06 | System Boot Initiated SysRestart | System Restart | Asserted
+ 43c | 10/03/2026 | 17:40:16 | System Boot Initiated SysRestart | System Restart | Asserted
+ 43d | 10/03/2026 | 17:57:27 | System Boot Initiated SysRestart | System Restart | Asserted
+ 43e | 10/03/2026 | 18:14:40 | System Boot Initiated SysRestart | System Restart | Asserted
+ 43f | 10/03/2026 | 18:32:02 | System Boot Initiated SysRestart | System Restart | Asserted
+ 440 | 10/03/2026 | 18:53:35 | System Boot Initiated SysRestart | System Restart | Asserted
+ 441 | 10/03/2026 | 19:10:47 | System Boot Initiated SysRestart | System Restart | Asserted
+ 442 | 10/03/2026 | 19:28:07 | System Boot Initiated SysRestart | System Restart | Asserted
+ 443 | 10/03/2026 | 19:45:19 | System Boot Initiated SysRestart | System Restart | Asserted
+ 444 | 10/03/2026 | 20:02:31 | System Boot Initiated SysRestart | System Restart | Asserted
+ 445 | 10/03/2026 | 20:19:42 | System Boot Initiated SysRestart | System Restart | Asserted
+ 446 | 10/03/2026 | 20:36:55 | System Boot Initiated SysRestart | System Restart | Asserted
+ 447 | 10/03/2026 | 20:54:02 | System Boot Initiated SysRestart | System Restart | Asserted
+ 448 | 10/03/2026 | 21:11:14 | System Boot Initiated SysRestart | System Restart | Asserted
+ 449 | 10/03/2026 | 21:28:32 | System Boot Initiated SysRestart | System Restart | Asserted
+ 44a | 10/03/2026 | 21:45:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 44b | 10/03/2026 | 22:02:51 | System Boot Initiated SysRestart | System Restart | Asserted
+ 44c | 10/03/2026 | 22:20:08 | System Boot Initiated SysRestart | System Restart | Asserted
+ 44d | 10/03/2026 | 22:37:26 | System Boot Initiated SysRestart | System Restart | Asserted
+ 44e | 10/03/2026 | 22:54:37 | System Boot Initiated SysRestart | System Restart | Asserted
+ 44f | 10/03/2026 | 23:11:49 | System Boot Initiated SysRestart | System Restart | Asserted
+ 450 | 10/03/2026 | 23:29:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 451 | 10/03/2026 | 23:46:23 | System Boot Initiated SysRestart | System Restart | Asserted
+ 452 | 10/04/2026 | 00:03:33 | System Boot Initiated SysRestart | System Restart | Asserted
+ 453 | 10/04/2026 | 00:09:12 | System Boot Initiated SysRestart | System Restart | Asserted
+ 454 | 10/04/2026 | 00:26:24 | System Boot Initiated SysRestart | System Restart | Asserted
+ 455 | 10/04/2026 | 00:31:20 | System Boot Initiated SysRestart | System Restart | Asserted
+ 456 | 10/04/2026 | 00:48:32 | System Boot Initiated SysRestart | System Restart | Asserted
+ 457 | 10/04/2026 | 01:05:43 | System Boot Initiated SysRestart | System Restart | Asserted
+ 458 | 10/04/2026 | 01:22:55 | System Boot Initiated SysRestart | System Restart | Asserted
+ 459 | 10/04/2026 | 01:40:07 | System Boot Initiated SysRestart | System Restart | Asserted
+ 45a | 10/04/2026 | 01:57:24 | System Boot Initiated SysRestart | System Restart | Asserted
+ 45b | 10/04/2026 | 03:15:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 45c | 10/04/2026 | 05:01:35 | System Boot Initiated SysRestart | System Restart | Asserted
+ 45d | 10/04/2026 | 07:11:16 | System Boot Initiated SysRestart | System Restart | Asserted
+ 45e | 10/04/2026 | 07:32:14 | System Boot Initiated SysRestart | System Restart | Asserted
+ 45f | 10/09/2026 | 11:19:33 | System Boot Initiated SysRestart | System Restart | Asserted
+ 460 | 10/09/2026 | 11:36:46 | System Boot Initiated SysRestart | System Restart | Asserted
+ 461 | 10/09/2026 | 11:37:34 | System Boot Initiated SysRestart | System Restart | Asserted
+ 462 | 10/09/2026 | 11:45:25 | System Boot Initiated SysRestart | System Restart | Asserted
+ 463 | 10/09/2026 | 11:47:08 | System Boot Initiated SysRestart | System Restart | Asserted
+ 464 | 10/09/2026 | 11:49:36 | System Boot Initiated SysRestart | System Restart | Asserted
+ 465 | 10/09/2026 | 12:30:35 | System Boot Initiated SysRestart | System Restart | Asserted
+ 466 | 10/09/2026 | 12:47:48 | System Boot Initiated SysRestart | System Restart | Asserted
+ 467 | 10/09/2026 | 13:05:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 468 | 10/09/2026 | 13:22:12 | System Boot Initiated SysRestart | System Restart | Asserted
+ 469 | 10/09/2026 | 13:39:24 | System Boot Initiated SysRestart | System Restart | Asserted
+ 46a | 10/09/2026 | 13:56:37 | System Boot Initiated SysRestart | System Restart | Asserted
+ 46b | 10/09/2026 | 14:13:48 | System Boot Initiated SysRestart | System Restart | Asserted
+ 46c | 10/09/2026 | 14:31:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 46d | 10/09/2026 | 17:07:50 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 46e | 10/09/2026 | 17:11:25 | System Boot Initiated SysRestart | System Restart | Asserted
+ 46f | 10/09/2026 | 17:11:27 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 470 | 10/09/2026 | 17:22:45 | System Boot Initiated SysRestart | System Restart | Asserted
+ 471 | 10/09/2026 | 17:31:17 | System Boot Initiated SysRestart | System Restart | Asserted
+ 472 | 10/09/2026 | 17:48:33 | System Boot Initiated SysRestart | System Restart | Asserted
+ 473 | 10/09/2026 | 17:51:02 | System Boot Initiated SysRestart | System Restart | Asserted
+ 474 | 10/09/2026 | 18:03:43 | System Boot Initiated SysRestart | System Restart | Asserted
+ 475 | 10/09/2026 | 18:08:07 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 476 | 10/09/2026 | 18:08:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 477 | 10/09/2026 | 18:08:40 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 478 | 10/09/2026 | 18:12:17 | System Boot Initiated SysRestart | System Restart | Asserted
+ 479 | 10/09/2026 | 18:12:59 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 47a | 10/09/2026 | 18:13:12 | System Boot Initiated SysRestart | System Restart | Asserted
+ 47b | 10/09/2026 | 18:13:13 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 47c | 10/09/2026 | 18:17:49 | System Boot Initiated SysRestart | System Restart | Asserted
+ 47d | 10/09/2026 | 18:35:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 47e | 10/09/2026 | 18:52:12 | System Boot Initiated SysRestart | System Restart | Asserted
+ 47f | 10/09/2026 | 19:09:24 | System Boot Initiated SysRestart | System Restart | Asserted
+ 480 | 10/09/2026 | 19:26:38 | System Boot Initiated SysRestart | System Restart | Asserted
+ 481 | 10/09/2026 | 19:36:07 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 482 | 10/09/2026 | 19:43:49 | System Boot Initiated SysRestart | System Restart | Asserted
+ 483 | 10/09/2026 | 19:43:50 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 484 | 10/09/2026 | 19:57:10 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 485 | 10/09/2026 | 19:57:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 486 | 10/09/2026 | 19:57:41 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 487 | 10/09/2026 | 20:42:57 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 488 | 10/09/2026 | 20:45:53 | System Boot Initiated SysRestart | System Restart | Asserted
+ 489 | 10/09/2026 | 20:45:54 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 48a | 10/09/2026 | 20:52:17 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 48b | 10/09/2026 | 20:53:10 | System Boot Initiated SysRestart | System Restart | Asserted
+ 48c | 10/09/2026 | 20:53:11 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 48d | 10/09/2026 | 21:05:20 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 48e | 10/09/2026 | 21:06:07 | System Boot Initiated SysRestart | System Restart | Asserted
+ 48f | 10/09/2026 | 21:06:07 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 490 | 10/09/2026 | 21:10:36 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 491 | 10/09/2026 | 21:10:49 | System Boot Initiated SysRestart | System Restart | Asserted
+ 492 | 10/09/2026 | 21:10:51 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 493 | 10/09/2026 | 21:13:47 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 494 | 10/09/2026 | 21:14:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 495 | 10/09/2026 | 21:14:01 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 496 | 10/09/2026 | 21:18:20 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 497 | 10/09/2026 | 21:18:33 | System Boot Initiated SysRestart | System Restart | Asserted
+ 498 | 10/09/2026 | 21:18:35 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 499 | 10/09/2026 | 21:20:01 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 49a | 10/09/2026 | 21:20:17 | System Boot Initiated SysRestart | System Restart | Asserted
+ 49b | 10/09/2026 | 21:20:18 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 49c | 10/09/2026 | 21:25:31 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 49d | 10/09/2026 | 21:25:44 | System Boot Initiated SysRestart | System Restart | Asserted
+ 49e | 10/09/2026 | 21:25:46 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 49f | 10/09/2026 | 21:25:54 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 4a0 | 10/09/2026 | 21:26:09 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 4a1 | 10/09/2026 | 21:30:15 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 4a2 | 10/09/2026 | 21:30:29 | System Boot Initiated SysRestart | System Restart | Asserted
+ 4a3 | 10/09/2026 | 21:30:30 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 4a4 | 10/09/2026 | 21:35:25 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 4a5 | 10/09/2026 | 21:35:39 | System Boot Initiated SysRestart | System Restart | Asserted
+ 4a6 | 10/09/2026 | 21:35:40 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 4a7 | 10/09/2026 | 21:44:29 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 4a8 | 10/09/2026 | 21:44:42 | System Boot Initiated SysRestart | System Restart | Asserted
+ 4a9 | 10/09/2026 | 21:44:43 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 4aa | 10/09/2026 | 22:12:51 | System ACPI Power State ACPI State | S4/S5: soft-off | Asserted
+ 4ab | 10/09/2026 | 22:13:00 | System Boot Initiated SysRestart | System Restart | Asserted
+ 4ac | 10/09/2026 | 22:13:01 | System ACPI Power State ACPI State | S0/G0: working | Asserted
+ 4ad | 10/09/2026 | 23:47:19 | System Boot Initiated SysRestart | System Restart | Asserted

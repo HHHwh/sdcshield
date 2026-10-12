@@ -1,0 +1,1222 @@
+   1 | 10/08/2026 | 11:06:16 | Processor #0x4f | State Asserted | Asserted
+   2 | 10/08/2026 | 11:06:16 | Event Logging Disabled #0x94 | Log almost full | Deasserted
+   3 | 10/08/2026 | 11:06:48 | Processor #0x4f | State Asserted | Deasserted
+   4 | 10/08/2026 | 11:06:49 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+   5 | 10/08/2026 | 11:07:01 | Temperature #0x03 | Upper Non-critical going high | Asserted
+   6 | 10/08/2026 | 11:07:01 | Processor #0x4f | State Asserted | Asserted
+   7 | 10/08/2026 | 11:07:33 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+   8 | 10/08/2026 | 11:07:33 | Processor #0x4f | State Asserted | Deasserted
+   9 | 10/08/2026 | 11:07:44 | Processor #0x4f | State Asserted | Asserted
+   a | 10/08/2026 | 11:07:46 | Temperature #0x03 | Upper Non-critical going high | Asserted
+   b | 10/08/2026 | 11:07:48 | Processor #0x4f | State Asserted | Deasserted
+   c | 10/08/2026 | 11:07:50 | Processor #0x4f | State Asserted | Asserted
+   d | 10/08/2026 | 11:08:18 | Processor #0x4f | State Asserted | Deasserted
+   e | 10/08/2026 | 11:08:20 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+   f | 10/08/2026 | 11:08:30 | Processor #0x4f | State Asserted | Asserted
+  10 | 10/08/2026 | 11:08:31 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  11 | 10/08/2026 | 11:08:35 | Processor #0x4f | State Asserted | Deasserted
+  12 | 10/08/2026 | 11:08:37 | Processor #0x4f | State Asserted | Asserted
+  13 | 10/08/2026 | 11:09:05 | Processor #0x4f | State Asserted | Deasserted
+  14 | 10/08/2026 | 11:09:05 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  15 | 10/08/2026 | 11:09:20 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  16 | 10/08/2026 | 11:09:20 | Processor #0x4f | State Asserted | Asserted
+  17 | 10/08/2026 | 11:09:54 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  18 | 10/08/2026 | 11:09:54 | Processor #0x4f | State Asserted | Deasserted
+  19 | 10/08/2026 | 11:10:03 | Processor #0x4f | State Asserted | Asserted
+  1a | 10/08/2026 | 11:10:04 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  1b | 10/08/2026 | 11:10:33 | Processor #0x4f | State Asserted | Deasserted
+  1c | 10/08/2026 | 11:10:34 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  1d | 10/08/2026 | 11:10:50 | Processor #0x4f | State Asserted | Asserted
+  1e | 10/08/2026 | 11:10:51 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  1f | 10/08/2026 | 11:11:20 | Processor #0x4f | State Asserted | Deasserted
+  20 | 10/08/2026 | 11:11:21 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  21 | 10/08/2026 | 11:11:35 | Processor #0x4f | State Asserted | Asserted
+  22 | 10/08/2026 | 11:11:37 | Processor #0x4f | State Asserted | Deasserted
+  23 | 10/08/2026 | 11:11:37 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  24 | 10/08/2026 | 11:11:39 | Processor #0x4f | State Asserted | Asserted
+  25 | 10/08/2026 | 11:12:07 | Processor #0x4f | State Asserted | Deasserted
+  26 | 10/08/2026 | 11:12:07 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  27 | 10/08/2026 | 11:12:21 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  28 | 10/08/2026 | 11:12:22 | Processor #0x4f | State Asserted | Asserted
+  29 | 10/08/2026 | 11:12:57 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  2a | 10/08/2026 | 11:12:58 | Processor #0x4f | State Asserted | Deasserted
+  2b | 10/08/2026 | 11:13:11 | Processor #0x4f | State Asserted | Asserted
+  2c | 10/08/2026 | 11:13:11 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  2d | 10/08/2026 | 11:13:41 | Processor #0x4f | State Asserted | Deasserted
+  2e | 10/08/2026 | 11:13:42 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  2f | 10/08/2026 | 11:13:53 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  30 | 10/08/2026 | 11:13:54 | Processor #0x4f | State Asserted | Asserted
+  31 | 10/08/2026 | 11:14:42 | Processor #0x4f | State Asserted | Deasserted
+  32 | 10/08/2026 | 11:14:44 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  33 | 10/08/2026 | 11:14:59 | Processor #0x4f | State Asserted | Asserted
+  34 | 10/08/2026 | 11:14:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  35 | 10/08/2026 | 11:15:29 | Processor #0x4f | State Asserted | Deasserted
+  36 | 10/08/2026 | 11:15:30 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  37 | 10/08/2026 | 11:15:43 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  38 | 10/08/2026 | 11:15:44 | Processor #0x4f | State Asserted | Asserted
+  39 | 10/08/2026 | 11:16:16 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  3a | 10/08/2026 | 11:16:16 | Processor #0x4f | State Asserted | Deasserted
+  3b | 10/08/2026 | 11:16:31 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  3c | 10/08/2026 | 11:16:31 | Processor #0x4f | State Asserted | Asserted
+  3d | 10/08/2026 | 11:17:08 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  3e | 10/08/2026 | 11:17:09 | Processor #0x4f | State Asserted | Deasserted
+  3f | 10/08/2026 | 11:17:18 | Processor #0x4f | State Asserted | Asserted
+  40 | 10/08/2026 | 11:17:20 | Processor #0x4f | State Asserted | Deasserted
+  41 | 10/08/2026 | 11:17:25 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  42 | 10/08/2026 | 11:17:26 | Processor #0x4f | State Asserted | Asserted
+  43 | 10/08/2026 | 11:17:57 | Processor #0x4f | State Asserted | Deasserted
+  44 | 10/08/2026 | 11:17:58 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  45 | 10/08/2026 | 11:18:11 | Processor #0x4f | State Asserted | Asserted
+  46 | 10/08/2026 | 11:18:12 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  47 | 10/08/2026 | 11:18:22 | Processor #0x4f | State Asserted | Deasserted
+  48 | 10/08/2026 | 11:18:24 | Processor #0x4f | State Asserted | Asserted
+  49 | 10/08/2026 | 11:18:59 | Processor #0x4f | State Asserted | Deasserted
+  4a | 10/08/2026 | 11:19:00 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  4b | 10/08/2026 | 11:19:14 | Processor #0x4f | State Asserted | Asserted
+  4c | 10/08/2026 | 11:19:16 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  4d | 10/08/2026 | 11:19:37 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  4e | 10/08/2026 | 11:19:39 | Processor #0x4f | State Asserted | Deasserted
+  4f | 10/08/2026 | 11:19:43 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  50 | 10/08/2026 | 11:19:44 | Processor #0x4f | State Asserted | Asserted
+  51 | 10/08/2026 | 11:20:07 | Processor #0x4f | State Asserted | Deasserted
+  52 | 10/08/2026 | 11:20:12 | Processor #0x4f | State Asserted | Asserted
+  53 | 10/08/2026 | 11:20:41 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  54 | 10/08/2026 | 11:20:42 | Processor #0x4f | State Asserted | Deasserted
+  55 | 10/08/2026 | 11:20:48 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  56 | 10/08/2026 | 11:20:48 | Processor #0x4f | State Asserted | Asserted
+  57 | 10/08/2026 | 11:21:20 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  58 | 10/08/2026 | 11:21:20 | Processor #0x4f | State Asserted | Deasserted
+  59 | 10/08/2026 | 11:21:25 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  5a | 10/08/2026 | 11:21:26 | Processor #0x4f | State Asserted | Asserted
+  5b | 10/08/2026 | 11:21:58 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  5c | 10/08/2026 | 11:21:59 | Processor #0x4f | State Asserted | Deasserted
+  5d | 10/08/2026 | 11:22:01 | Processor #0x4f | State Asserted | Asserted
+  5e | 10/08/2026 | 11:22:03 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  5f | 10/08/2026 | 11:22:38 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  60 | 10/08/2026 | 11:22:39 | Processor #0x4f | State Asserted | Deasserted
+  61 | 10/08/2026 | 11:22:44 | Processor #0x4f | State Asserted | Asserted
+  62 | 10/08/2026 | 11:22:44 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  63 | 10/08/2026 | 11:23:18 | Processor #0x4f | State Asserted | Deasserted
+  64 | 10/08/2026 | 11:23:19 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  65 | 10/08/2026 | 11:23:28 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  66 | 10/08/2026 | 11:23:29 | Processor #0x4f | State Asserted | Asserted
+  67 | 10/08/2026 | 11:23:59 | Processor #0x4f | State Asserted | Deasserted
+  68 | 10/08/2026 | 11:24:00 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  69 | 10/08/2026 | 11:24:03 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  6a | 10/08/2026 | 11:24:05 | Processor #0x4f | State Asserted | Asserted
+  6b | 10/08/2026 | 11:24:40 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  6c | 10/08/2026 | 11:24:40 | Processor #0x4f | State Asserted | Deasserted
+  6d | 10/08/2026 | 11:24:46 | Processor #0x4f | State Asserted | Asserted
+  6e | 10/08/2026 | 11:24:46 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  6f | 10/08/2026 | 11:25:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  70 | 10/08/2026 | 11:25:24 | Processor #0x4f | State Asserted | Deasserted
+  71 | 10/08/2026 | 11:25:25 | Processor #0x4f | State Asserted | Asserted
+  72 | 10/08/2026 | 11:25:26 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  73 | 10/08/2026 | 11:26:10 | Processor #0x4f | State Asserted | Deasserted
+  74 | 10/08/2026 | 11:26:18 | Processor #0x4f | State Asserted | Asserted
+  75 | 10/08/2026 | 11:26:55 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  76 | 10/08/2026 | 11:26:55 | Processor #0x4f | State Asserted | Deasserted
+  77 | 10/08/2026 | 11:27:03 | Processor #0x4f | State Asserted | Asserted
+  78 | 10/08/2026 | 11:27:05 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  79 | 10/08/2026 | 11:27:42 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  7a | 10/08/2026 | 11:27:42 | Processor #0x4f | State Asserted | Deasserted
+  7b | 10/08/2026 | 11:27:52 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  7c | 10/08/2026 | 11:27:54 | Processor #0x4f | State Asserted | Asserted
+  7d | 10/08/2026 | 11:28:32 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  7e | 10/08/2026 | 11:28:33 | Processor #0x4f | State Asserted | Deasserted
+  7f | 10/08/2026 | 11:28:39 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  80 | 10/08/2026 | 11:28:40 | Processor #0x4f | State Asserted | Asserted
+  81 | 10/08/2026 | 11:29:15 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  82 | 10/08/2026 | 11:29:16 | Processor #0x4f | State Asserted | Deasserted
+  83 | 10/08/2026 | 11:29:20 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  84 | 10/08/2026 | 11:29:22 | Processor #0x4f | State Asserted | Asserted
+  85 | 10/08/2026 | 11:29:54 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  86 | 10/08/2026 | 11:29:55 | Processor #0x4f | State Asserted | Deasserted
+  87 | 10/08/2026 | 11:30:05 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  88 | 10/08/2026 | 11:30:07 | Processor #0x4f | State Asserted | Asserted
+  89 | 10/08/2026 | 11:30:35 | Processor #0x4f | State Asserted | Deasserted
+  8a | 10/08/2026 | 11:30:35 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  8b | 10/08/2026 | 11:30:38 | Processor #0x4f | State Asserted | Asserted
+  8c | 10/08/2026 | 11:30:39 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  8d | 10/08/2026 | 11:30:40 | Processor #0x4f | State Asserted | Deasserted
+  8e | 10/08/2026 | 11:30:42 | Processor #0x4f | State Asserted | Asserted
+  8f | 10/08/2026 | 11:31:20 | Processor #0x4f | State Asserted | Deasserted
+  90 | 10/08/2026 | 11:31:20 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  91 | 10/08/2026 | 11:31:34 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  92 | 10/08/2026 | 11:31:40 | Processor #0x4f | State Asserted | Asserted
+  93 | 10/08/2026 | 11:32:29 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  94 | 10/08/2026 | 11:32:29 | Processor #0x4f | State Asserted | Deasserted
+  95 | 10/08/2026 | 11:32:39 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  96 | 10/08/2026 | 11:32:40 | Processor #0x4f | State Asserted | Asserted
+  97 | 10/08/2026 | 11:33:10 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  98 | 10/08/2026 | 11:33:10 | Processor #0x4f | State Asserted | Deasserted
+  99 | 10/08/2026 | 11:33:20 | Processor #0x4f | State Asserted | Asserted
+  9a | 10/08/2026 | 11:33:20 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  9b | 10/08/2026 | 11:33:55 | Processor #0x4f | State Asserted | Deasserted
+  9c | 10/08/2026 | 11:33:55 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  9d | 10/08/2026 | 11:33:59 | Processor #0x4f | State Asserted | Asserted
+  9e | 10/08/2026 | 11:33:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  9f | 10/08/2026 | 11:34:38 | Processor #0x4f | State Asserted | Deasserted
+  a0 | 10/08/2026 | 11:34:39 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  a1 | 10/08/2026 | 11:34:44 | Processor #0x4f | State Asserted | Asserted
+  a2 | 10/08/2026 | 11:34:46 | Processor #0x4f | State Asserted | Deasserted
+  a3 | 10/08/2026 | 11:34:46 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  a4 | 10/08/2026 | 11:34:48 | Processor #0x4f | State Asserted | Asserted
+  a5 | 10/08/2026 | 11:35:21 | Processor #0x4f | State Asserted | Deasserted
+  a6 | 10/08/2026 | 11:35:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  a7 | 10/08/2026 | 11:35:27 | Processor #0x4f | State Asserted | Asserted
+  a8 | 10/08/2026 | 11:35:30 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  a9 | 10/08/2026 | 11:36:07 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  aa | 10/08/2026 | 11:36:08 | Processor #0x4f | State Asserted | Deasserted
+  ab | 10/08/2026 | 11:36:14 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  ac | 10/08/2026 | 11:36:18 | Processor #0x4f | State Asserted | Asserted
+  ad | 10/08/2026 | 11:36:54 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  ae | 10/08/2026 | 11:36:55 | Processor #0x4f | State Asserted | Deasserted
+  af | 10/08/2026 | 11:37:01 | Processor #0x4f | State Asserted | Asserted
+  b0 | 10/08/2026 | 11:37:05 | Processor #0x4f | State Asserted | Deasserted
+  b1 | 10/08/2026 | 11:37:05 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  b2 | 10/08/2026 | 11:37:06 | Processor #0x4f | State Asserted | Asserted
+  b3 | 10/08/2026 | 11:37:40 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  b4 | 10/08/2026 | 11:37:40 | Processor #0x4f | State Asserted | Deasserted
+  b5 | 10/08/2026 | 11:37:48 | Processor #0x4f | State Asserted | Asserted
+  b6 | 10/08/2026 | 11:37:48 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  b7 | 10/08/2026 | 11:37:53 | Processor #0x4f | State Asserted | Deasserted
+  b8 | 10/08/2026 | 11:37:55 | Processor #0x4f | State Asserted | Asserted
+  b9 | 10/08/2026 | 11:38:25 | Processor #0x4f | State Asserted | Deasserted
+  ba | 10/08/2026 | 11:38:26 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  bb | 10/08/2026 | 11:38:30 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  bc | 10/08/2026 | 11:38:33 | Processor #0x4f | State Asserted | Asserted
+  bd | 10/08/2026 | 11:39:08 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  be | 10/08/2026 | 11:39:08 | Processor #0x4f | State Asserted | Deasserted
+  bf | 10/08/2026 | 11:39:16 | Processor #0x4f | State Asserted | Asserted
+  c0 | 10/08/2026 | 11:39:16 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  c1 | 10/08/2026 | 11:39:55 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  c2 | 10/08/2026 | 11:39:55 | Processor #0x4f | State Asserted | Deasserted
+  c3 | 10/08/2026 | 11:40:01 | Processor #0x4f | State Asserted | Asserted
+  c4 | 10/08/2026 | 11:40:02 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  c5 | 10/08/2026 | 11:40:39 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  c6 | 10/08/2026 | 11:40:40 | Processor #0x4f | State Asserted | Deasserted
+  c7 | 10/08/2026 | 11:40:45 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  c8 | 10/08/2026 | 11:40:46 | Processor #0x4f | State Asserted | Asserted
+  c9 | 10/08/2026 | 11:41:25 | Processor #0x4f | State Asserted | Deasserted
+  ca | 10/08/2026 | 11:41:27 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  cb | 10/08/2026 | 11:41:31 | Processor #0x4f | State Asserted | Asserted
+  cc | 10/08/2026 | 11:41:31 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  cd | 10/08/2026 | 11:42:08 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  ce | 10/08/2026 | 11:42:08 | Processor #0x4f | State Asserted | Deasserted
+  cf | 10/08/2026 | 11:42:16 | Processor #0x4f | State Asserted | Asserted
+  d0 | 10/08/2026 | 11:42:16 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  d1 | 10/08/2026 | 11:42:50 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  d2 | 10/08/2026 | 11:42:51 | Processor #0x4f | State Asserted | Deasserted
+  d3 | 10/08/2026 | 11:42:57 | Processor #0x4f | State Asserted | Asserted
+  d4 | 10/08/2026 | 11:42:57 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  d5 | 10/08/2026 | 11:43:36 | Processor #0x4f | State Asserted | Deasserted
+  d6 | 10/08/2026 | 11:43:37 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  d7 | 10/08/2026 | 11:43:45 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  d8 | 10/08/2026 | 11:43:46 | Processor #0x4f | State Asserted | Asserted
+  d9 | 10/08/2026 | 11:43:55 | Processor #0x4f | State Asserted | Deasserted
+  da | 10/08/2026 | 11:43:57 | Processor #0x4f | State Asserted | Asserted
+  db | 10/08/2026 | 11:44:27 | Processor #0x4f | State Asserted | Deasserted
+  dc | 10/08/2026 | 11:44:29 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  dd | 10/08/2026 | 11:44:35 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  de | 10/08/2026 | 11:44:36 | Processor #0x4f | State Asserted | Asserted
+  df | 10/08/2026 | 11:45:16 | Processor #0x4f | State Asserted | Deasserted
+  e0 | 10/08/2026 | 11:45:17 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  e1 | 10/08/2026 | 11:45:21 | Processor #0x4f | State Asserted | Asserted
+  e2 | 10/08/2026 | 11:45:22 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  e3 | 10/08/2026 | 11:45:25 | Processor #0x4f | State Asserted | Deasserted
+  e4 | 10/08/2026 | 11:45:27 | Processor #0x4f | State Asserted | Asserted
+  e5 | 10/08/2026 | 11:46:04 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  e6 | 10/08/2026 | 11:46:05 | Processor #0x4f | State Asserted | Deasserted
+  e7 | 10/08/2026 | 11:46:12 | Processor #0x4f | State Asserted | Asserted
+  e8 | 10/08/2026 | 11:46:13 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  e9 | 10/08/2026 | 11:46:50 | Processor #0x4f | State Asserted | Deasserted
+  ea | 10/08/2026 | 11:46:50 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  eb | 10/08/2026 | 11:46:58 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  ec | 10/08/2026 | 11:46:59 | Processor #0x4f | State Asserted | Asserted
+  ed | 10/08/2026 | 11:47:36 | Processor #0x4f | State Asserted | Deasserted
+  ee | 10/08/2026 | 11:47:38 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  ef | 10/08/2026 | 11:47:42 | Processor #0x4f | State Asserted | Asserted
+  f0 | 10/08/2026 | 11:47:44 | Processor #0x4f | State Asserted | Deasserted
+  f1 | 10/08/2026 | 11:47:44 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  f2 | 10/08/2026 | 11:47:46 | Processor #0x4f | State Asserted | Asserted
+  f3 | 10/08/2026 | 11:48:21 | Processor #0x4f | State Asserted | Deasserted
+  f4 | 10/08/2026 | 11:48:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  f5 | 10/08/2026 | 11:48:26 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  f6 | 10/08/2026 | 11:48:27 | Processor #0x4f | State Asserted | Asserted
+  f7 | 10/08/2026 | 11:49:06 | Processor #0x4f | State Asserted | Deasserted
+  f8 | 10/08/2026 | 11:49:07 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  f9 | 10/08/2026 | 11:49:11 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  fa | 10/08/2026 | 11:49:12 | Processor #0x4f | State Asserted | Asserted
+  fb | 10/08/2026 | 11:49:16 | Processor #0x4f | State Asserted | Deasserted
+  fc | 10/08/2026 | 11:49:16 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+  fd | 10/08/2026 | 12:26:58 | Processor #0x4f | State Asserted | Asserted
+  fe | 10/08/2026 | 12:26:58 | Temperature #0x03 | Upper Non-critical going high | Asserted
+  ff | 10/08/2026 | 12:27:09 | Processor #0x4f | State Asserted | Deasserted
+ 100 | 10/08/2026 | 12:27:10 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 101 | 10/08/2026 | 12:27:36 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 102 | 10/08/2026 | 12:27:39 | Processor #0x4f | State Asserted | Asserted
+ 103 | 10/08/2026 | 12:27:41 | Processor #0x4f | State Asserted | Deasserted
+ 104 | 10/08/2026 | 12:27:43 | Processor #0x4f | State Asserted | Asserted
+ 105 | 10/08/2026 | 12:28:09 | Processor #0x4f | State Asserted | Deasserted
+ 106 | 10/08/2026 | 12:28:10 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 107 | 10/08/2026 | 12:28:22 | Processor #0x4f | State Asserted | Asserted
+ 108 | 10/08/2026 | 12:28:23 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 109 | 10/08/2026 | 12:28:56 | Processor #0x4f | State Asserted | Deasserted
+ 10a | 10/08/2026 | 12:28:57 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 10b | 10/08/2026 | 12:29:09 | Processor #0x4f | State Asserted | Asserted
+ 10c | 10/08/2026 | 12:29:09 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 10d | 10/08/2026 | 12:29:46 | Processor #0x4f | State Asserted | Deasserted
+ 10e | 10/08/2026 | 12:29:47 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 10f | 10/08/2026 | 12:29:57 | Processor #0x4f | State Asserted | Asserted
+ 110 | 10/08/2026 | 12:29:57 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 111 | 10/08/2026 | 12:30:39 | Processor #0x4f | State Asserted | Deasserted
+ 112 | 10/08/2026 | 12:30:39 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 113 | 10/08/2026 | 12:30:50 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 114 | 10/08/2026 | 12:30:50 | Processor #0x4f | State Asserted | Asserted
+ 115 | 10/08/2026 | 12:31:41 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 116 | 10/08/2026 | 12:31:42 | Processor #0x4f | State Asserted | Deasserted
+ 117 | 10/08/2026 | 12:31:54 | Processor #0x4f | State Asserted | Asserted
+ 118 | 10/08/2026 | 12:31:55 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 119 | 10/08/2026 | 12:31:59 | Processor #0x4f | State Asserted | Deasserted
+ 11a | 10/08/2026 | 12:32:01 | Processor #0x4f | State Asserted | Asserted
+ 11b | 10/08/2026 | 12:32:39 | Processor #0x4f | State Asserted | Deasserted
+ 11c | 10/08/2026 | 12:32:41 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 11d | 10/08/2026 | 12:32:50 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 11e | 10/08/2026 | 12:32:52 | Processor #0x4f | State Asserted | Asserted
+ 11f | 10/08/2026 | 12:33:32 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 120 | 10/08/2026 | 12:33:33 | Processor #0x4f | State Asserted | Deasserted
+ 121 | 10/08/2026 | 12:33:45 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 122 | 10/08/2026 | 12:33:46 | Processor #0x4f | State Asserted | Asserted
+ 123 | 10/08/2026 | 12:34:25 | Processor #0x4f | State Asserted | Deasserted
+ 124 | 10/08/2026 | 12:34:27 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 125 | 10/08/2026 | 12:34:35 | Processor #0x4f | State Asserted | Asserted
+ 126 | 10/08/2026 | 12:34:37 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 127 | 10/08/2026 | 12:34:40 | Processor #0x4f | State Asserted | Deasserted
+ 128 | 10/08/2026 | 12:34:42 | Processor #0x4f | State Asserted | Asserted
+ 129 | 10/08/2026 | 12:35:22 | Processor #0x4f | State Asserted | Deasserted
+ 12a | 10/08/2026 | 12:35:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 12b | 10/08/2026 | 12:35:32 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 12c | 10/08/2026 | 12:35:33 | Processor #0x4f | State Asserted | Asserted
+ 12d | 10/08/2026 | 12:36:10 | Processor #0x4f | State Asserted | Deasserted
+ 12e | 10/08/2026 | 12:36:12 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 12f | 10/08/2026 | 12:36:22 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 130 | 10/08/2026 | 12:36:24 | Processor #0x4f | State Asserted | Asserted
+ 131 | 10/08/2026 | 12:37:06 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 132 | 10/08/2026 | 12:37:07 | Processor #0x4f | State Asserted | Deasserted
+ 133 | 10/08/2026 | 12:37:14 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 134 | 10/08/2026 | 12:37:14 | Processor #0x4f | State Asserted | Asserted
+ 135 | 10/08/2026 | 12:37:57 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 136 | 10/08/2026 | 12:37:57 | Processor #0x4f | State Asserted | Deasserted
+ 137 | 10/08/2026 | 12:38:10 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 138 | 10/08/2026 | 12:38:10 | Processor #0x4f | State Asserted | Asserted
+ 139 | 10/08/2026 | 12:38:52 | Processor #0x4f | State Asserted | Deasserted
+ 13a | 10/08/2026 | 12:38:54 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 13b | 10/08/2026 | 12:39:01 | Processor #0x4f | State Asserted | Asserted
+ 13c | 10/08/2026 | 12:39:02 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 13d | 10/08/2026 | 12:39:05 | Processor #0x4f | State Asserted | Deasserted
+ 13e | 10/08/2026 | 12:39:07 | Processor #0x4f | State Asserted | Asserted
+ 13f | 10/08/2026 | 12:39:40 | Processor #0x4f | State Asserted | Deasserted
+ 140 | 10/08/2026 | 12:39:41 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 141 | 10/08/2026 | 12:39:50 | Processor #0x4f | State Asserted | Asserted
+ 142 | 10/08/2026 | 12:39:50 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 143 | 10/08/2026 | 12:40:35 | Processor #0x4f | State Asserted | Deasserted
+ 144 | 10/08/2026 | 12:40:35 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 145 | 10/08/2026 | 12:40:42 | Processor #0x4f | State Asserted | Asserted
+ 146 | 10/08/2026 | 12:40:43 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 147 | 10/08/2026 | 12:41:24 | Processor #0x4f | State Asserted | Deasserted
+ 148 | 10/08/2026 | 12:41:27 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 149 | 10/08/2026 | 12:41:42 | Processor #0x4f | State Asserted | Asserted
+ 14a | 10/08/2026 | 12:41:43 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 14b | 10/08/2026 | 12:42:17 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 14c | 10/08/2026 | 12:42:18 | Processor #0x4f | State Asserted | Deasserted
+ 14d | 10/08/2026 | 12:42:27 | Processor #0x4f | State Asserted | Asserted
+ 14e | 10/08/2026 | 12:42:28 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 14f | 10/08/2026 | 12:43:05 | Processor #0x4f | State Asserted | Deasserted
+ 150 | 10/08/2026 | 12:43:07 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 151 | 10/08/2026 | 12:43:16 | Processor #0x4f | State Asserted | Asserted
+ 152 | 10/08/2026 | 12:43:17 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 153 | 10/08/2026 | 12:43:25 | Processor #0x4f | State Asserted | Deasserted
+ 154 | 10/08/2026 | 12:43:27 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 155 | 10/08/2026 | 12:43:32 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 156 | 10/08/2026 | 12:43:33 | Processor #0x4f | State Asserted | Asserted
+ 157 | 10/08/2026 | 12:44:11 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 158 | 10/08/2026 | 12:44:12 | Processor #0x4f | State Asserted | Deasserted
+ 159 | 10/08/2026 | 12:44:22 | Processor #0x4f | State Asserted | Asserted
+ 15a | 10/08/2026 | 12:44:22 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 15b | 10/08/2026 | 12:44:25 | Processor #0x4f | State Asserted | Deasserted
+ 15c | 10/08/2026 | 12:44:27 | Processor #0x4f | State Asserted | Asserted
+ 15d | 10/08/2026 | 12:45:01 | Processor #0x4f | State Asserted | Deasserted
+ 15e | 10/08/2026 | 12:45:02 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 15f | 10/08/2026 | 12:45:14 | Processor #0x4f | State Asserted | Asserted
+ 160 | 10/08/2026 | 12:45:16 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 161 | 10/08/2026 | 12:45:55 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 162 | 10/08/2026 | 12:45:55 | Processor #0x4f | State Asserted | Deasserted
+ 163 | 10/08/2026 | 12:46:05 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 164 | 10/08/2026 | 12:46:07 | Processor #0x4f | State Asserted | Asserted
+ 165 | 10/08/2026 | 12:46:46 | Processor #0x4f | State Asserted | Deasserted
+ 166 | 10/08/2026 | 12:46:46 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 167 | 10/08/2026 | 12:46:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 168 | 10/08/2026 | 12:46:59 | Processor #0x4f | State Asserted | Asserted
+ 169 | 10/08/2026 | 12:47:36 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 16a | 10/08/2026 | 12:47:37 | Processor #0x4f | State Asserted | Deasserted
+ 16b | 10/08/2026 | 12:47:49 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 16c | 10/08/2026 | 12:47:50 | Processor #0x4f | State Asserted | Asserted
+ 16d | 10/08/2026 | 12:48:35 | Processor #0x4f | State Asserted | Deasserted
+ 16e | 10/08/2026 | 12:48:37 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 16f | 10/08/2026 | 12:48:42 | Processor #0x4f | State Asserted | Asserted
+ 170 | 10/08/2026 | 12:48:43 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 171 | 10/08/2026 | 12:49:27 | Processor #0x4f | State Asserted | Deasserted
+ 172 | 10/08/2026 | 12:49:29 | Processor #0x4f | State Asserted | Asserted
+ 173 | 10/08/2026 | 12:49:57 | Processor #0x4f | State Asserted | Deasserted
+ 174 | 10/08/2026 | 12:49:59 | Processor #0x4f | State Asserted | Asserted
+ 175 | 10/08/2026 | 12:50:40 | Processor #0x4f | State Asserted | Deasserted
+ 176 | 10/08/2026 | 12:50:42 | Processor #0x4f | State Asserted | Asserted
+ 177 | 10/08/2026 | 12:51:14 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 178 | 10/08/2026 | 12:51:14 | Processor #0x4f | State Asserted | Deasserted
+ 179 | 10/08/2026 | 12:51:23 | Processor #0x4f | State Asserted | Asserted
+ 17a | 10/08/2026 | 12:51:24 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 17b | 10/08/2026 | 12:52:06 | Processor #0x4f | State Asserted | Deasserted
+ 17c | 10/08/2026 | 12:52:08 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 17d | 10/08/2026 | 12:52:18 | Processor #0x4f | State Asserted | Asserted
+ 17e | 10/08/2026 | 12:52:19 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 17f | 10/08/2026 | 12:52:55 | Processor #0x4f | State Asserted | Deasserted
+ 180 | 10/08/2026 | 12:52:56 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 181 | 10/08/2026 | 12:53:06 | Processor #0x4f | State Asserted | Asserted
+ 182 | 10/08/2026 | 12:53:07 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 183 | 10/08/2026 | 12:53:08 | Processor #0x4f | State Asserted | Deasserted
+ 184 | 10/08/2026 | 12:53:10 | Processor #0x4f | State Asserted | Asserted
+ 185 | 10/08/2026 | 12:53:39 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 186 | 10/08/2026 | 12:53:40 | Processor #0x4f | State Asserted | Deasserted
+ 187 | 10/08/2026 | 12:53:46 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 188 | 10/08/2026 | 12:53:46 | Processor #0x4f | State Asserted | Asserted
+ 189 | 10/08/2026 | 12:53:48 | Processor #0x4f | State Asserted | Deasserted
+ 18a | 10/08/2026 | 12:53:52 | Processor #0x4f | State Asserted | Asserted
+ 18b | 10/08/2026 | 12:54:21 | Processor #0x4f | State Asserted | Deasserted
+ 18c | 10/08/2026 | 12:54:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 18d | 10/08/2026 | 12:54:27 | Processor #0x4f | State Asserted | Asserted
+ 18e | 10/08/2026 | 12:54:29 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 18f | 10/08/2026 | 12:55:06 | Processor #0x4f | State Asserted | Deasserted
+ 190 | 10/08/2026 | 12:55:07 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 191 | 10/08/2026 | 12:55:13 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 192 | 10/08/2026 | 12:55:14 | Processor #0x4f | State Asserted | Asserted
+ 193 | 10/08/2026 | 12:55:48 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 194 | 10/08/2026 | 12:55:48 | Processor #0x4f | State Asserted | Deasserted
+ 195 | 10/08/2026 | 12:55:52 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 196 | 10/08/2026 | 12:55:53 | Processor #0x4f | State Asserted | Asserted
+ 197 | 10/08/2026 | 12:55:57 | Processor #0x4f | State Asserted | Deasserted
+ 198 | 10/08/2026 | 12:55:58 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 199 | 10/08/2026 | 12:56:05 | Processor #0x4f | State Asserted | Asserted
+ 19a | 10/08/2026 | 12:56:08 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 19b | 10/08/2026 | 12:56:44 | Processor #0x4f | State Asserted | Deasserted
+ 19c | 10/08/2026 | 12:56:45 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 19d | 10/08/2026 | 12:56:51 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 19e | 10/08/2026 | 12:56:52 | Processor #0x4f | State Asserted | Asserted
+ 19f | 10/08/2026 | 12:57:28 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1a0 | 10/08/2026 | 12:57:29 | Processor #0x4f | State Asserted | Deasserted
+ 1a1 | 10/08/2026 | 12:57:34 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1a2 | 10/08/2026 | 12:57:35 | Processor #0x4f | State Asserted | Asserted
+ 1a3 | 10/08/2026 | 12:58:13 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1a4 | 10/08/2026 | 12:58:14 | Processor #0x4f | State Asserted | Deasserted
+ 1a5 | 10/08/2026 | 12:58:18 | Processor #0x4f | State Asserted | Asserted
+ 1a6 | 10/08/2026 | 12:58:18 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1a7 | 10/08/2026 | 12:58:22 | Processor #0x4f | State Asserted | Deasserted
+ 1a8 | 10/08/2026 | 12:58:23 | Processor #0x4f | State Asserted | Asserted
+ 1a9 | 10/08/2026 | 12:59:05 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1aa | 10/08/2026 | 12:59:05 | Processor #0x4f | State Asserted | Deasserted
+ 1ab | 10/08/2026 | 12:59:12 | Processor #0x4f | State Asserted | Asserted
+ 1ac | 10/08/2026 | 12:59:13 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1ad | 10/08/2026 | 12:59:53 | Processor #0x4f | State Asserted | Deasserted
+ 1ae | 10/08/2026 | 12:59:55 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1af | 10/08/2026 | 13:00:02 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1b0 | 10/08/2026 | 13:00:03 | Processor #0x4f | State Asserted | Asserted
+ 1b1 | 10/08/2026 | 13:00:33 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1b2 | 10/08/2026 | 13:00:33 | Processor #0x4f | State Asserted | Deasserted
+ 1b3 | 10/08/2026 | 13:00:38 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1b4 | 10/08/2026 | 13:00:38 | Processor #0x4f | State Asserted | Asserted
+ 1b5 | 10/08/2026 | 13:00:40 | Processor #0x4f | State Asserted | Deasserted
+ 1b6 | 10/08/2026 | 13:00:42 | Processor #0x4f | State Asserted | Asserted
+ 1b7 | 10/08/2026 | 13:01:14 | Processor #0x4f | State Asserted | Deasserted
+ 1b8 | 10/08/2026 | 13:01:18 | Processor #0x4f | State Asserted | Asserted
+ 1b9 | 10/08/2026 | 13:01:22 | Processor #0x4f | State Asserted | Deasserted
+ 1ba | 10/08/2026 | 13:01:23 | Processor #0x4f | State Asserted | Asserted
+ 1bb | 10/08/2026 | 13:02:00 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1bc | 10/08/2026 | 13:02:01 | Processor #0x4f | State Asserted | Deasserted
+ 1bd | 10/08/2026 | 13:02:04 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1be | 10/08/2026 | 13:02:05 | Processor #0x4f | State Asserted | Asserted
+ 1bf | 10/08/2026 | 13:02:07 | Processor #0x4f | State Asserted | Deasserted
+ 1c0 | 10/08/2026 | 13:02:08 | Processor #0x4f | State Asserted | Asserted
+ 1c1 | 10/08/2026 | 13:02:42 | Processor #0x4f | State Asserted | Deasserted
+ 1c2 | 10/08/2026 | 13:02:45 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1c3 | 10/08/2026 | 13:02:50 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1c4 | 10/08/2026 | 13:02:52 | Processor #0x4f | State Asserted | Asserted
+ 1c5 | 10/08/2026 | 13:03:25 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1c6 | 10/08/2026 | 13:03:25 | Processor #0x4f | State Asserted | Deasserted
+ 1c7 | 10/08/2026 | 13:03:31 | Processor #0x4f | State Asserted | Asserted
+ 1c8 | 10/08/2026 | 13:03:31 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1c9 | 10/08/2026 | 13:04:12 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1ca | 10/08/2026 | 13:04:12 | Processor #0x4f | State Asserted | Deasserted
+ 1cb | 10/08/2026 | 13:04:17 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1cc | 10/08/2026 | 13:04:18 | Processor #0x4f | State Asserted | Asserted
+ 1cd | 10/08/2026 | 13:04:57 | Processor #0x4f | State Asserted | Deasserted
+ 1ce | 10/08/2026 | 13:04:58 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1cf | 10/08/2026 | 13:05:06 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1d0 | 10/08/2026 | 13:05:07 | Processor #0x4f | State Asserted | Asserted
+ 1d1 | 10/08/2026 | 13:05:43 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1d2 | 10/08/2026 | 13:05:44 | Processor #0x4f | State Asserted | Deasserted
+ 1d3 | 10/08/2026 | 13:05:52 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1d4 | 10/08/2026 | 13:05:53 | Processor #0x4f | State Asserted | Asserted
+ 1d5 | 10/08/2026 | 13:06:25 | Processor #0x4f | State Asserted | Deasserted
+ 1d6 | 10/08/2026 | 13:06:26 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1d7 | 10/08/2026 | 13:06:33 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1d8 | 10/08/2026 | 13:06:33 | Processor #0x4f | State Asserted | Asserted
+ 1d9 | 10/08/2026 | 13:07:10 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1da | 10/08/2026 | 13:07:10 | Processor #0x4f | State Asserted | Deasserted
+ 1db | 10/08/2026 | 13:07:18 | Processor #0x4f | State Asserted | Asserted
+ 1dc | 10/08/2026 | 13:07:19 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1dd | 10/08/2026 | 13:08:01 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1de | 10/08/2026 | 13:08:01 | Processor #0x4f | State Asserted | Deasserted
+ 1df | 10/08/2026 | 13:08:05 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1e0 | 10/08/2026 | 13:08:07 | Processor #0x4f | State Asserted | Asserted
+ 1e1 | 10/08/2026 | 13:08:48 | Processor #0x4f | State Asserted | Deasserted
+ 1e2 | 10/08/2026 | 13:08:49 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1e3 | 10/08/2026 | 13:08:53 | Processor #0x4f | State Asserted | Asserted
+ 1e4 | 10/08/2026 | 13:08:54 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1e5 | 10/08/2026 | 13:08:55 | Processor #0x4f | State Asserted | Deasserted
+ 1e6 | 10/08/2026 | 13:08:57 | Processor #0x4f | State Asserted | Asserted
+ 1e7 | 10/08/2026 | 13:09:34 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1e8 | 10/08/2026 | 13:09:35 | Processor #0x4f | State Asserted | Deasserted
+ 1e9 | 10/08/2026 | 13:09:42 | Processor #0x4f | State Asserted | Asserted
+ 1ea | 10/08/2026 | 13:09:42 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1eb | 10/08/2026 | 13:10:18 | Processor #0x4f | State Asserted | Deasserted
+ 1ec | 10/08/2026 | 13:10:18 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1ed | 10/08/2026 | 13:10:25 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1ee | 10/08/2026 | 13:10:25 | Processor #0x4f | State Asserted | Asserted
+ 1ef | 10/08/2026 | 13:10:58 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1f0 | 10/08/2026 | 13:10:59 | Processor #0x4f | State Asserted | Deasserted
+ 1f1 | 10/08/2026 | 13:11:08 | Processor #0x4f | State Asserted | Asserted
+ 1f2 | 10/08/2026 | 13:11:09 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1f3 | 10/08/2026 | 13:11:44 | Processor #0x4f | State Asserted | Deasserted
+ 1f4 | 10/08/2026 | 13:11:44 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1f5 | 10/08/2026 | 13:11:49 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1f6 | 10/08/2026 | 13:11:50 | Processor #0x4f | State Asserted | Asserted
+ 1f7 | 10/08/2026 | 13:11:55 | Processor #0x4f | State Asserted | Deasserted
+ 1f8 | 10/08/2026 | 13:11:57 | Processor #0x4f | State Asserted | Asserted
+ 1f9 | 10/08/2026 | 13:12:32 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1fa | 10/08/2026 | 13:12:33 | Processor #0x4f | State Asserted | Deasserted
+ 1fb | 10/08/2026 | 13:12:41 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 1fc | 10/08/2026 | 13:12:42 | Processor #0x4f | State Asserted | Asserted
+ 1fd | 10/08/2026 | 13:12:51 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 1fe | 10/08/2026 | 13:12:52 | Processor #0x4f | State Asserted | Deasserted
+ 1ff | 10/08/2026 | 13:12:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 200 | 10/08/2026 | 13:12:59 | Processor #0x4f | State Asserted | Asserted
+ 201 | 10/08/2026 | 13:13:08 | Processor #0x4f | State Asserted | Deasserted
+ 202 | 10/08/2026 | 13:13:10 | Processor #0x4f | State Asserted | Asserted
+ 203 | 10/08/2026 | 13:13:46 | Processor #0x4f | State Asserted | Deasserted
+ 204 | 10/08/2026 | 13:13:48 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 205 | 10/08/2026 | 13:13:52 | Processor #0x4f | State Asserted | Asserted
+ 206 | 10/08/2026 | 13:13:53 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 207 | 10/08/2026 | 13:14:27 | Processor #0x4f | State Asserted | Deasserted
+ 208 | 10/08/2026 | 13:14:28 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 209 | 10/08/2026 | 13:14:40 | Processor #0x4f | State Asserted | Asserted
+ 20a | 10/08/2026 | 13:14:41 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 20b | 10/08/2026 | 13:15:31 | Processor #0x4f | State Asserted | Deasserted
+ 20c | 10/08/2026 | 13:15:32 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 20d | 10/08/2026 | 13:15:36 | Processor #0x4f | State Asserted | Asserted
+ 20e | 10/08/2026 | 13:15:38 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 20f | 10/08/2026 | 13:16:14 | Processor #0x4f | State Asserted | Deasserted
+ 210 | 10/08/2026 | 13:16:15 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 211 | 10/08/2026 | 13:16:21 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 212 | 10/08/2026 | 13:16:21 | Processor #0x4f | State Asserted | Asserted
+ 213 | 10/08/2026 | 13:16:25 | Processor #0x4f | State Asserted | Deasserted
+ 214 | 10/08/2026 | 13:16:27 | Processor #0x4f | State Asserted | Asserted
+ 215 | 10/08/2026 | 13:16:59 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 216 | 10/08/2026 | 13:16:59 | Processor #0x4f | State Asserted | Deasserted
+ 217 | 10/08/2026 | 13:17:07 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 218 | 10/08/2026 | 13:17:08 | Processor #0x4f | State Asserted | Asserted
+ 219 | 10/08/2026 | 13:17:48 | Processor #0x4f | State Asserted | Deasserted
+ 21a | 10/08/2026 | 13:17:48 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 21b | 10/08/2026 | 13:17:57 | Processor #0x4f | State Asserted | Asserted
+ 21c | 10/08/2026 | 13:17:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 21d | 10/08/2026 | 13:18:01 | Processor #0x4f | State Asserted | Deasserted
+ 21e | 10/08/2026 | 13:18:03 | Processor #0x4f | State Asserted | Asserted
+ 21f | 10/08/2026 | 13:18:35 | Processor #0x4f | State Asserted | Deasserted
+ 220 | 10/08/2026 | 13:18:35 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 221 | 10/08/2026 | 13:18:38 | Processor #0x4f | State Asserted | Asserted
+ 222 | 10/08/2026 | 13:18:39 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 223 | 10/08/2026 | 13:19:15 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 224 | 10/08/2026 | 13:19:16 | Processor #0x4f | State Asserted | Deasserted
+ 225 | 10/08/2026 | 15:30:06 | Processor #0x4f | State Asserted | Asserted
+ 226 | 10/08/2026 | 15:30:08 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 227 | 10/08/2026 | 15:30:19 | Processor #0x4f | State Asserted | Deasserted
+ 228 | 10/08/2026 | 15:30:20 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 229 | 10/08/2026 | 15:30:37 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 22a | 10/08/2026 | 15:30:38 | Processor #0x4f | State Asserted | Asserted
+ 22b | 10/08/2026 | 15:31:04 | Processor #0x4f | State Asserted | Deasserted
+ 22c | 10/08/2026 | 15:31:05 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 22d | 10/08/2026 | 15:31:17 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 22e | 10/08/2026 | 15:31:18 | Processor #0x4f | State Asserted | Asserted
+ 22f | 10/08/2026 | 15:31:19 | Processor #0x4f | State Asserted | Deasserted
+ 230 | 10/08/2026 | 15:31:21 | Processor #0x4f | State Asserted | Asserted
+ 231 | 10/08/2026 | 15:31:44 | Processor #0x4f | State Asserted | Deasserted
+ 232 | 10/08/2026 | 15:31:44 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 233 | 10/08/2026 | 15:31:59 | Processor #0x4f | State Asserted | Asserted
+ 234 | 10/08/2026 | 15:31:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 235 | 10/08/2026 | 15:32:01 | Processor #0x4f | State Asserted | Deasserted
+ 236 | 10/08/2026 | 15:32:03 | Processor #0x4f | State Asserted | Asserted
+ 237 | 10/08/2026 | 15:32:33 | Processor #0x4f | State Asserted | Deasserted
+ 238 | 10/08/2026 | 15:32:34 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 239 | 10/08/2026 | 15:32:44 | Processor #0x4f | State Asserted | Asserted
+ 23a | 10/08/2026 | 15:32:44 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 23b | 10/08/2026 | 15:33:20 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 23c | 10/08/2026 | 15:33:21 | Processor #0x4f | State Asserted | Deasserted
+ 23d | 10/08/2026 | 15:33:31 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 23e | 10/08/2026 | 15:33:33 | Processor #0x4f | State Asserted | Asserted
+ 23f | 10/08/2026 | 15:34:05 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 240 | 10/08/2026 | 15:34:06 | Processor #0x4f | State Asserted | Deasserted
+ 241 | 10/08/2026 | 15:34:17 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 242 | 10/08/2026 | 15:34:18 | Processor #0x4f | State Asserted | Asserted
+ 243 | 10/08/2026 | 15:34:19 | Processor #0x4f | State Asserted | Deasserted
+ 244 | 10/08/2026 | 15:34:21 | Processor #0x4f | State Asserted | Asserted
+ 245 | 10/08/2026 | 15:35:00 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 246 | 10/08/2026 | 15:35:01 | Processor #0x4f | State Asserted | Deasserted
+ 247 | 10/08/2026 | 15:35:11 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 248 | 10/08/2026 | 15:35:12 | Processor #0x4f | State Asserted | Asserted
+ 249 | 10/08/2026 | 15:35:48 | Processor #0x4f | State Asserted | Deasserted
+ 24a | 10/08/2026 | 15:35:48 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 24b | 10/08/2026 | 15:36:01 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 24c | 10/08/2026 | 15:36:03 | Processor #0x4f | State Asserted | Asserted
+ 24d | 10/08/2026 | 15:36:38 | Processor #0x4f | State Asserted | Deasserted
+ 24e | 10/08/2026 | 15:36:39 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 24f | 10/08/2026 | 15:36:53 | Processor #0x4f | State Asserted | Asserted
+ 250 | 10/08/2026 | 15:36:53 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 251 | 10/08/2026 | 15:37:25 | Processor #0x4f | State Asserted | Deasserted
+ 252 | 10/08/2026 | 15:37:26 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 253 | 10/08/2026 | 15:37:37 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 254 | 10/08/2026 | 15:37:38 | Processor #0x4f | State Asserted | Asserted
+ 255 | 10/08/2026 | 15:38:13 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 256 | 10/08/2026 | 15:38:14 | Processor #0x4f | State Asserted | Deasserted
+ 257 | 10/08/2026 | 15:38:21 | Processor #0x4f | State Asserted | Asserted
+ 258 | 10/08/2026 | 15:38:23 | Processor #0x4f | State Asserted | Deasserted
+ 259 | 10/08/2026 | 15:38:26 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 25a | 10/08/2026 | 15:38:29 | Processor #0x4f | State Asserted | Asserted
+ 25b | 10/08/2026 | 15:39:04 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 25c | 10/08/2026 | 15:39:04 | Processor #0x4f | State Asserted | Deasserted
+ 25d | 10/08/2026 | 15:39:19 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 25e | 10/08/2026 | 15:39:19 | Processor #0x4f | State Asserted | Asserted
+ 25f | 10/08/2026 | 15:40:00 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 260 | 10/08/2026 | 15:40:01 | Processor #0x4f | State Asserted | Deasserted
+ 261 | 10/08/2026 | 15:40:15 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 262 | 10/08/2026 | 15:40:16 | Processor #0x4f | State Asserted | Asserted
+ 263 | 10/08/2026 | 15:40:53 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 264 | 10/08/2026 | 15:40:55 | Processor #0x4f | State Asserted | Deasserted
+ 265 | 10/08/2026 | 15:41:07 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 266 | 10/08/2026 | 15:41:10 | Processor #0x4f | State Asserted | Asserted
+ 267 | 10/08/2026 | 15:41:47 | Processor #0x4f | State Asserted | Deasserted
+ 268 | 10/08/2026 | 15:41:49 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 269 | 10/08/2026 | 15:42:04 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 26a | 10/08/2026 | 15:42:06 | Processor #0x4f | State Asserted | Asserted
+ 26b | 10/08/2026 | 15:42:38 | Processor #0x4f | State Asserted | Deasserted
+ 26c | 10/08/2026 | 15:42:41 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 26d | 10/08/2026 | 15:42:57 | Processor #0x4f | State Asserted | Asserted
+ 26e | 10/08/2026 | 15:42:57 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 26f | 10/08/2026 | 15:43:02 | Processor #0x4f | State Asserted | Deasserted
+ 270 | 10/08/2026 | 15:43:04 | Processor #0x4f | State Asserted | Asserted
+ 271 | 10/08/2026 | 15:43:32 | Processor #0x4f | State Asserted | Deasserted
+ 272 | 10/08/2026 | 15:43:33 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 273 | 10/08/2026 | 15:43:49 | Processor #0x4f | State Asserted | Asserted
+ 274 | 10/08/2026 | 15:43:51 | Processor #0x4f | State Asserted | Deasserted
+ 275 | 10/08/2026 | 15:43:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 276 | 10/08/2026 | 15:43:59 | Processor #0x4f | State Asserted | Asserted
+ 277 | 10/08/2026 | 15:44:32 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 278 | 10/08/2026 | 15:44:32 | Processor #0x4f | State Asserted | Deasserted
+ 279 | 10/08/2026 | 15:44:46 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 27a | 10/08/2026 | 15:44:49 | Processor #0x4f | State Asserted | Asserted
+ 27b | 10/08/2026 | 15:45:23 | Processor #0x4f | State Asserted | Deasserted
+ 27c | 10/08/2026 | 15:45:23 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 27d | 10/08/2026 | 15:45:40 | Processor #0x4f | State Asserted | Asserted
+ 27e | 10/08/2026 | 15:45:40 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 27f | 10/08/2026 | 15:45:46 | Processor #0x4f | State Asserted | Deasserted
+ 280 | 10/08/2026 | 15:45:47 | Processor #0x4f | State Asserted | Asserted
+ 281 | 10/08/2026 | 15:46:16 | Processor #0x4f | State Asserted | Deasserted
+ 282 | 10/08/2026 | 15:46:16 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 283 | 10/08/2026 | 15:46:29 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 284 | 10/08/2026 | 15:46:31 | Processor #0x4f | State Asserted | Asserted
+ 285 | 10/08/2026 | 15:47:08 | Processor #0x4f | State Asserted | Deasserted
+ 286 | 10/08/2026 | 15:47:09 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 287 | 10/08/2026 | 15:47:23 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 288 | 10/08/2026 | 15:47:23 | Processor #0x4f | State Asserted | Asserted
+ 289 | 10/08/2026 | 15:47:29 | Processor #0x4f | State Asserted | Deasserted
+ 28a | 10/08/2026 | 15:47:31 | Processor #0x4f | State Asserted | Asserted
+ 28b | 10/08/2026 | 15:48:02 | Processor #0x4f | State Asserted | Deasserted
+ 28c | 10/08/2026 | 15:48:04 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 28d | 10/08/2026 | 15:48:16 | Processor #0x4f | State Asserted | Asserted
+ 28e | 10/08/2026 | 15:48:16 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 28f | 10/08/2026 | 15:48:57 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 290 | 10/08/2026 | 15:48:57 | Processor #0x4f | State Asserted | Deasserted
+ 291 | 10/08/2026 | 15:49:04 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 292 | 10/08/2026 | 15:49:04 | Processor #0x4f | State Asserted | Asserted
+ 293 | 10/08/2026 | 15:49:42 | Processor #0x4f | State Asserted | Deasserted
+ 294 | 10/08/2026 | 15:49:43 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 295 | 10/08/2026 | 15:49:58 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 296 | 10/08/2026 | 15:49:59 | Processor #0x4f | State Asserted | Asserted
+ 297 | 10/08/2026 | 15:50:41 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 298 | 10/08/2026 | 15:50:42 | Processor #0x4f | State Asserted | Deasserted
+ 299 | 10/08/2026 | 15:50:55 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 29a | 10/08/2026 | 15:50:55 | Processor #0x4f | State Asserted | Asserted
+ 29b | 10/08/2026 | 15:51:32 | Processor #0x4f | State Asserted | Deasserted
+ 29c | 10/08/2026 | 15:51:33 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 29d | 10/08/2026 | 15:51:49 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 29e | 10/08/2026 | 15:51:49 | Processor #0x4f | State Asserted | Asserted
+ 29f | 10/08/2026 | 15:51:53 | Processor #0x4f | State Asserted | Deasserted
+ 2a0 | 10/08/2026 | 15:51:55 | Processor #0x4f | State Asserted | Asserted
+ 2a1 | 10/08/2026 | 15:52:25 | Processor #0x4f | State Asserted | Deasserted
+ 2a2 | 10/08/2026 | 15:52:26 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2a3 | 10/08/2026 | 15:52:38 | Processor #0x4f | State Asserted | Asserted
+ 2a4 | 10/08/2026 | 15:52:40 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2a5 | 10/08/2026 | 15:53:14 | Processor #0x4f | State Asserted | Deasserted
+ 2a6 | 10/08/2026 | 15:53:14 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2a7 | 10/08/2026 | 15:53:27 | Processor #0x4f | State Asserted | Asserted
+ 2a8 | 10/08/2026 | 15:53:27 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2a9 | 10/08/2026 | 15:53:29 | Processor #0x4f | State Asserted | Deasserted
+ 2aa | 10/08/2026 | 15:53:31 | Processor #0x4f | State Asserted | Asserted
+ 2ab | 10/08/2026 | 15:54:04 | Processor #0x4f | State Asserted | Deasserted
+ 2ac | 10/08/2026 | 15:54:05 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2ad | 10/08/2026 | 15:54:17 | Processor #0x4f | State Asserted | Asserted
+ 2ae | 10/08/2026 | 15:54:18 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2af | 10/08/2026 | 15:54:53 | Processor #0x4f | State Asserted | Deasserted
+ 2b0 | 10/08/2026 | 15:54:54 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2b1 | 10/08/2026 | 15:55:08 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2b2 | 10/08/2026 | 15:55:08 | Processor #0x4f | State Asserted | Asserted
+ 2b3 | 10/08/2026 | 15:55:17 | Processor #0x4f | State Asserted | Deasserted
+ 2b4 | 10/08/2026 | 15:55:19 | Processor #0x4f | State Asserted | Asserted
+ 2b5 | 10/08/2026 | 15:55:49 | Processor #0x4f | State Asserted | Deasserted
+ 2b6 | 10/08/2026 | 15:55:53 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2b7 | 10/08/2026 | 15:56:09 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2b8 | 10/08/2026 | 15:56:10 | Processor #0x4f | State Asserted | Asserted
+ 2b9 | 10/08/2026 | 15:56:16 | Processor #0x4f | State Asserted | Deasserted
+ 2ba | 10/08/2026 | 15:56:17 | Processor #0x4f | State Asserted | Asserted
+ 2bb | 10/08/2026 | 15:56:44 | Processor #0x4f | State Asserted | Deasserted
+ 2bc | 10/08/2026 | 15:56:45 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2bd | 10/08/2026 | 15:57:01 | Processor #0x4f | State Asserted | Asserted
+ 2be | 10/08/2026 | 15:57:03 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2bf | 10/08/2026 | 15:57:04 | Processor #0x4f | State Asserted | Deasserted
+ 2c0 | 10/08/2026 | 15:57:06 | Processor #0x4f | State Asserted | Asserted
+ 2c1 | 10/08/2026 | 15:57:36 | Processor #0x4f | State Asserted | Deasserted
+ 2c2 | 10/08/2026 | 15:57:36 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2c3 | 10/08/2026 | 15:57:44 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2c4 | 10/08/2026 | 15:57:46 | Processor #0x4f | State Asserted | Asserted
+ 2c5 | 10/08/2026 | 15:58:16 | Processor #0x4f | State Asserted | Deasserted
+ 2c6 | 10/08/2026 | 15:58:17 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2c7 | 10/08/2026 | 15:58:21 | Processor #0x4f | State Asserted | Asserted
+ 2c8 | 10/08/2026 | 15:58:22 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2c9 | 10/08/2026 | 15:58:49 | Processor #0x4f | State Asserted | Deasserted
+ 2ca | 10/08/2026 | 15:58:49 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2cb | 10/08/2026 | 15:58:53 | Processor #0x4f | State Asserted | Asserted
+ 2cc | 10/08/2026 | 15:58:54 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2cd | 10/08/2026 | 15:59:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2ce | 10/08/2026 | 15:59:23 | Processor #0x4f | State Asserted | Deasserted
+ 2cf | 10/08/2026 | 15:59:31 | Processor #0x4f | State Asserted | Asserted
+ 2d0 | 10/08/2026 | 15:59:33 | Processor #0x4f | State Asserted | Deasserted
+ 2d1 | 10/08/2026 | 15:59:35 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2d2 | 10/08/2026 | 15:59:36 | Processor #0x4f | State Asserted | Asserted
+ 2d3 | 10/08/2026 | 16:00:15 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2d4 | 10/08/2026 | 16:00:16 | Processor #0x4f | State Asserted | Deasserted
+ 2d5 | 10/08/2026 | 16:00:23 | Processor #0x4f | State Asserted | Asserted
+ 2d6 | 10/08/2026 | 16:00:26 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2d7 | 10/08/2026 | 16:00:59 | Processor #0x4f | State Asserted | Deasserted
+ 2d8 | 10/08/2026 | 16:00:59 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2d9 | 10/08/2026 | 16:01:08 | Processor #0x4f | State Asserted | Asserted
+ 2da | 10/08/2026 | 16:01:12 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2db | 10/08/2026 | 16:01:43 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2dc | 10/08/2026 | 16:01:44 | Processor #0x4f | State Asserted | Deasserted
+ 2dd | 10/08/2026 | 16:01:46 | Processor #0x4f | State Asserted | Asserted
+ 2de | 10/08/2026 | 16:01:47 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2df | 10/08/2026 | 16:01:48 | Processor #0x4f | State Asserted | Deasserted
+ 2e0 | 10/08/2026 | 16:01:50 | Processor #0x4f | State Asserted | Asserted
+ 2e1 | 10/08/2026 | 16:02:31 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2e2 | 10/08/2026 | 16:02:31 | Processor #0x4f | State Asserted | Deasserted
+ 2e3 | 10/08/2026 | 16:02:36 | Processor #0x4f | State Asserted | Asserted
+ 2e4 | 10/08/2026 | 16:02:37 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2e5 | 10/08/2026 | 16:02:38 | Processor #0x4f | State Asserted | Deasserted
+ 2e6 | 10/08/2026 | 16:02:40 | Processor #0x4f | State Asserted | Asserted
+ 2e7 | 10/08/2026 | 16:03:10 | Processor #0x4f | State Asserted | Deasserted
+ 2e8 | 10/08/2026 | 16:03:13 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2e9 | 10/08/2026 | 16:03:18 | Processor #0x4f | State Asserted | Asserted
+ 2ea | 10/08/2026 | 16:03:19 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2eb | 10/08/2026 | 16:04:05 | Processor #0x4f | State Asserted | Deasserted
+ 2ec | 10/08/2026 | 16:04:06 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2ed | 10/08/2026 | 16:04:12 | Processor #0x4f | State Asserted | Asserted
+ 2ee | 10/08/2026 | 16:04:13 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2ef | 10/08/2026 | 16:04:51 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2f0 | 10/08/2026 | 16:04:53 | Processor #0x4f | State Asserted | Deasserted
+ 2f1 | 10/08/2026 | 16:04:58 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2f2 | 10/08/2026 | 16:04:59 | Processor #0x4f | State Asserted | Asserted
+ 2f3 | 10/08/2026 | 16:05:42 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2f4 | 10/08/2026 | 16:05:44 | Processor #0x4f | State Asserted | Deasserted
+ 2f5 | 10/08/2026 | 16:05:48 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2f6 | 10/08/2026 | 16:05:51 | Processor #0x4f | State Asserted | Asserted
+ 2f7 | 10/08/2026 | 16:06:32 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2f8 | 10/08/2026 | 16:06:33 | Processor #0x4f | State Asserted | Deasserted
+ 2f9 | 10/08/2026 | 16:06:40 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2fa | 10/08/2026 | 16:06:40 | Processor #0x4f | State Asserted | Asserted
+ 2fb | 10/08/2026 | 16:07:18 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 2fc | 10/08/2026 | 16:07:19 | Processor #0x4f | State Asserted | Deasserted
+ 2fd | 10/08/2026 | 16:07:23 | Processor #0x4f | State Asserted | Asserted
+ 2fe | 10/08/2026 | 16:07:25 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 2ff | 10/08/2026 | 16:07:27 | Processor #0x4f | State Asserted | Deasserted
+ 300 | 10/08/2026 | 16:07:29 | Processor #0x4f | State Asserted | Asserted
+ 301 | 10/08/2026 | 16:08:08 | Processor #0x4f | State Asserted | Deasserted
+ 302 | 10/08/2026 | 16:08:09 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 303 | 10/08/2026 | 16:08:15 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 304 | 10/08/2026 | 16:08:16 | Processor #0x4f | State Asserted | Asserted
+ 305 | 10/08/2026 | 16:08:55 | Processor #0x4f | State Asserted | Deasserted
+ 306 | 10/08/2026 | 16:08:56 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 307 | 10/08/2026 | 16:09:01 | Processor #0x4f | State Asserted | Asserted
+ 308 | 10/08/2026 | 16:09:02 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 309 | 10/08/2026 | 16:09:47 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 30a | 10/08/2026 | 16:09:48 | Processor #0x4f | State Asserted | Deasserted
+ 30b | 10/08/2026 | 16:09:57 | Processor #0x4f | State Asserted | Asserted
+ 30c | 10/08/2026 | 16:09:57 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 30d | 10/08/2026 | 16:10:38 | Processor #0x4f | State Asserted | Deasserted
+ 30e | 10/08/2026 | 16:10:46 | Processor #0x4f | State Asserted | Asserted
+ 30f | 10/08/2026 | 16:10:51 | Processor #0x4f | State Asserted | Deasserted
+ 310 | 10/08/2026 | 16:10:53 | Processor #0x4f | State Asserted | Asserted
+ 311 | 10/08/2026 | 16:11:29 | Processor #0x4f | State Asserted | Deasserted
+ 312 | 10/08/2026 | 16:11:29 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 313 | 10/08/2026 | 16:11:35 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 314 | 10/08/2026 | 16:11:36 | Processor #0x4f | State Asserted | Asserted
+ 315 | 10/08/2026 | 16:12:16 | Processor #0x4f | State Asserted | Deasserted
+ 316 | 10/08/2026 | 16:12:17 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 317 | 10/08/2026 | 16:12:22 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 318 | 10/08/2026 | 16:12:23 | Processor #0x4f | State Asserted | Asserted
+ 319 | 10/08/2026 | 16:13:06 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 31a | 10/08/2026 | 16:13:06 | Processor #0x4f | State Asserted | Deasserted
+ 31b | 10/08/2026 | 16:13:09 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 31c | 10/08/2026 | 16:13:10 | Processor #0x4f | State Asserted | Asserted
+ 31d | 10/08/2026 | 16:13:51 | Processor #0x4f | State Asserted | Deasserted
+ 31e | 10/08/2026 | 16:13:52 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 31f | 10/08/2026 | 16:14:00 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 320 | 10/08/2026 | 16:14:01 | Processor #0x4f | State Asserted | Asserted
+ 321 | 10/08/2026 | 16:14:43 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 322 | 10/08/2026 | 16:14:44 | Processor #0x4f | State Asserted | Deasserted
+ 323 | 10/08/2026 | 16:14:49 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 324 | 10/08/2026 | 16:14:49 | Processor #0x4f | State Asserted | Asserted
+ 325 | 10/08/2026 | 16:15:34 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 326 | 10/08/2026 | 16:15:34 | Processor #0x4f | State Asserted | Deasserted
+ 327 | 10/08/2026 | 16:15:42 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 328 | 10/08/2026 | 16:15:44 | Processor #0x4f | State Asserted | Asserted
+ 329 | 10/08/2026 | 16:16:23 | Processor #0x4f | State Asserted | Deasserted
+ 32a | 10/08/2026 | 16:16:23 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 32b | 10/08/2026 | 16:16:33 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 32c | 10/08/2026 | 16:16:34 | Processor #0x4f | State Asserted | Asserted
+ 32d | 10/08/2026 | 16:16:36 | Processor #0x4f | State Asserted | Deasserted
+ 32e | 10/08/2026 | 16:16:38 | Processor #0x4f | State Asserted | Asserted
+ 32f | 10/08/2026 | 16:17:21 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 330 | 10/08/2026 | 16:17:21 | Processor #0x4f | State Asserted | Deasserted
+ 331 | 10/08/2026 | 16:17:31 | Processor #0x4f | State Asserted | Asserted
+ 332 | 10/08/2026 | 16:17:31 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 333 | 10/08/2026 | 16:18:16 | Processor #0x4f | State Asserted | Deasserted
+ 334 | 10/08/2026 | 16:18:16 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 335 | 10/08/2026 | 16:18:24 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 336 | 10/08/2026 | 16:18:25 | Processor #0x4f | State Asserted | Asserted
+ 337 | 10/08/2026 | 16:19:04 | Processor #0x4f | State Asserted | Deasserted
+ 338 | 10/08/2026 | 16:19:08 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 339 | 10/08/2026 | 16:19:14 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 33a | 10/08/2026 | 16:19:14 | Processor #0x4f | State Asserted | Asserted
+ 33b | 10/08/2026 | 16:19:53 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 33c | 10/08/2026 | 16:19:53 | Processor #0x4f | State Asserted | Deasserted
+ 33d | 10/08/2026 | 16:19:58 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 33e | 10/08/2026 | 16:20:02 | Processor #0x4f | State Asserted | Asserted
+ 33f | 10/08/2026 | 16:20:40 | Processor #0x4f | State Asserted | Deasserted
+ 340 | 10/08/2026 | 16:20:41 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 341 | 10/08/2026 | 16:20:49 | Processor #0x4f | State Asserted | Asserted
+ 342 | 10/08/2026 | 16:20:51 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 343 | 10/08/2026 | 16:21:38 | Processor #0x4f | State Asserted | Deasserted
+ 344 | 10/08/2026 | 16:21:39 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 345 | 10/08/2026 | 16:21:50 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 346 | 10/08/2026 | 16:21:51 | Processor #0x4f | State Asserted | Asserted
+ 347 | 10/08/2026 | 16:22:37 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 348 | 10/08/2026 | 16:22:38 | Processor #0x4f | State Asserted | Deasserted
+ 349 | 10/08/2026 | 16:22:44 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 34a | 10/08/2026 | 16:22:49 | Processor #0x4f | State Asserted | Asserted
+ 34b | 10/08/2026 | 16:22:51 | Processor #0x4f | State Asserted | Deasserted
+ 34c | 10/08/2026 | 16:22:53 | Processor #0x4f | State Asserted | Asserted
+ 34d | 10/08/2026 | 16:23:25 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 34e | 10/08/2026 | 16:23:25 | Processor #0x4f | State Asserted | Deasserted
+ 34f | 10/08/2026 | 16:23:32 | Processor #0x4f | State Asserted | Asserted
+ 350 | 10/08/2026 | 16:23:33 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 351 | 10/08/2026 | 16:24:13 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 352 | 10/08/2026 | 16:24:14 | Processor #0x4f | State Asserted | Deasserted
+ 353 | 10/08/2026 | 16:24:23 | Processor #0x4f | State Asserted | Asserted
+ 354 | 10/08/2026 | 16:24:25 | Processor #0x4f | State Asserted | Deasserted
+ 355 | 10/08/2026 | 16:24:28 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 356 | 10/08/2026 | 16:24:29 | Processor #0x4f | State Asserted | Asserted
+ 357 | 10/08/2026 | 16:25:06 | Processor #0x4f | State Asserted | Deasserted
+ 358 | 10/08/2026 | 16:25:07 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 359 | 10/08/2026 | 16:25:17 | Processor #0x4f | State Asserted | Asserted
+ 35a | 10/08/2026 | 16:25:18 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 35b | 10/08/2026 | 16:26:03 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 35c | 10/08/2026 | 16:26:04 | Processor #0x4f | State Asserted | Deasserted
+ 35d | 10/08/2026 | 16:26:13 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 35e | 10/08/2026 | 16:26:14 | Processor #0x4f | State Asserted | Asserted
+ 35f | 10/08/2026 | 16:26:59 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 360 | 10/08/2026 | 16:27:00 | Processor #0x4f | State Asserted | Deasserted
+ 361 | 10/08/2026 | 16:27:02 | Processor #0x4f | State Asserted | Asserted
+ 362 | 10/08/2026 | 16:27:05 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 363 | 10/08/2026 | 16:27:37 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 364 | 10/08/2026 | 16:27:38 | Processor #0x4f | State Asserted | Deasserted
+ 365 | 10/08/2026 | 17:01:56 | Processor #0x4f | State Asserted | Asserted
+ 366 | 10/08/2026 | 17:01:57 | Processor #0x4f | State Asserted | Deasserted
+ 367 | 10/08/2026 | 17:01:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 368 | 10/08/2026 | 17:01:59 | Processor #0x4f | State Asserted | Asserted
+ 369 | 10/08/2026 | 17:02:11 | Processor #0x4f | State Asserted | Deasserted
+ 36a | 10/08/2026 | 17:02:11 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 36b | 10/08/2026 | 17:02:31 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 36c | 10/08/2026 | 17:02:31 | Processor #0x4f | State Asserted | Asserted
+ 36d | 10/08/2026 | 17:02:52 | Processor #0x4f | State Asserted | Deasserted
+ 36e | 10/08/2026 | 17:02:52 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 36f | 10/08/2026 | 17:03:09 | Processor #0x4f | State Asserted | Asserted
+ 370 | 10/08/2026 | 17:03:09 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 371 | 10/08/2026 | 17:03:35 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 372 | 10/08/2026 | 17:03:35 | Processor #0x4f | State Asserted | Deasserted
+ 373 | 10/08/2026 | 17:03:45 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 374 | 10/08/2026 | 17:03:46 | Processor #0x4f | State Asserted | Asserted
+ 375 | 10/08/2026 | 17:04:22 | Processor #0x4f | State Asserted | Deasserted
+ 376 | 10/08/2026 | 17:04:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 377 | 10/08/2026 | 17:04:30 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 378 | 10/08/2026 | 17:04:31 | Processor #0x4f | State Asserted | Asserted
+ 379 | 10/08/2026 | 17:04:46 | Processor #0x4f | State Asserted | Deasserted
+ 37a | 10/08/2026 | 17:04:48 | Processor #0x4f | State Asserted | Asserted
+ 37b | 10/08/2026 | 17:04:56 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 37c | 10/08/2026 | 17:04:58 | Processor #0x4f | State Asserted | Deasserted
+ 37d | 10/08/2026 | 17:05:01 | Processor #0x4f | State Asserted | Asserted
+ 37e | 10/08/2026 | 17:05:03 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 37f | 10/08/2026 | 17:05:18 | Processor #0x4f | State Asserted | Deasserted
+ 380 | 10/08/2026 | 17:05:19 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 381 | 10/08/2026 | 17:05:29 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 382 | 10/08/2026 | 17:05:29 | Processor #0x4f | State Asserted | Asserted
+ 383 | 10/08/2026 | 17:05:37 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 384 | 10/08/2026 | 17:05:37 | Processor #0x4f | State Asserted | Deasserted
+ 385 | 10/08/2026 | 17:05:56 | Processor #0x4f | State Asserted | Asserted
+ 386 | 10/08/2026 | 17:05:57 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 387 | 10/08/2026 | 17:06:33 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 388 | 10/08/2026 | 17:06:33 | Processor #0x4f | State Asserted | Deasserted
+ 389 | 10/08/2026 | 17:06:50 | Processor #0x4f | State Asserted | Asserted
+ 38a | 10/08/2026 | 17:06:51 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 38b | 10/08/2026 | 17:07:26 | Processor #0x4f | State Asserted | Deasserted
+ 38c | 10/08/2026 | 17:07:27 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 38d | 10/08/2026 | 17:07:38 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 38e | 10/08/2026 | 17:07:39 | Processor #0x4f | State Asserted | Asserted
+ 38f | 10/08/2026 | 17:07:44 | Processor #0x4f | State Asserted | Deasserted
+ 390 | 10/08/2026 | 17:07:46 | Processor #0x4f | State Asserted | Asserted
+ 391 | 10/08/2026 | 17:08:18 | Processor #0x4f | State Asserted | Deasserted
+ 392 | 10/08/2026 | 17:08:19 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 393 | 10/08/2026 | 17:08:29 | Processor #0x4f | State Asserted | Asserted
+ 394 | 10/08/2026 | 17:08:30 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 395 | 10/08/2026 | 17:08:33 | Processor #0x4f | State Asserted | Deasserted
+ 396 | 10/08/2026 | 17:08:35 | Processor #0x4f | State Asserted | Asserted
+ 397 | 10/08/2026 | 17:08:39 | Processor #0x4f | State Asserted | Deasserted
+ 398 | 10/08/2026 | 17:08:41 | Processor #0x4f | State Asserted | Asserted
+ 399 | 10/08/2026 | 17:09:18 | Processor #0x4f | State Asserted | Deasserted
+ 39a | 10/08/2026 | 17:09:19 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 39b | 10/08/2026 | 17:09:33 | Processor #0x4f | State Asserted | Asserted
+ 39c | 10/08/2026 | 17:09:33 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 39d | 10/08/2026 | 17:09:35 | Processor #0x4f | State Asserted | Deasserted
+ 39e | 10/08/2026 | 17:09:37 | Processor #0x4f | State Asserted | Asserted
+ 39f | 10/08/2026 | 17:10:18 | Processor #0x4f | State Asserted | Deasserted
+ 3a0 | 10/08/2026 | 17:10:19 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3a1 | 10/08/2026 | 17:10:42 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3a2 | 10/08/2026 | 17:10:43 | Processor #0x4f | State Asserted | Asserted
+ 3a3 | 10/08/2026 | 17:10:45 | Processor #0x4f | State Asserted | Deasserted
+ 3a4 | 10/08/2026 | 17:10:46 | Processor #0x4f | State Asserted | Asserted
+ 3a5 | 10/08/2026 | 17:10:48 | Processor #0x4f | State Asserted | Deasserted
+ 3a6 | 10/08/2026 | 17:10:50 | Processor #0x4f | State Asserted | Asserted
+ 3a7 | 10/08/2026 | 17:11:18 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3a8 | 10/08/2026 | 17:11:18 | Processor #0x4f | State Asserted | Deasserted
+ 3a9 | 10/08/2026 | 17:11:33 | Processor #0x4f | State Asserted | Asserted
+ 3aa | 10/08/2026 | 17:11:35 | Processor #0x4f | State Asserted | Deasserted
+ 3ab | 10/08/2026 | 17:11:39 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3ac | 10/08/2026 | 17:11:39 | Processor #0x4f | State Asserted | Asserted
+ 3ad | 10/08/2026 | 17:12:09 | Processor #0x4f | State Asserted | Deasserted
+ 3ae | 10/08/2026 | 17:12:10 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3af | 10/08/2026 | 17:12:28 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3b0 | 10/08/2026 | 17:12:31 | Processor #0x4f | State Asserted | Asserted
+ 3b1 | 10/08/2026 | 17:12:35 | Processor #0x4f | State Asserted | Deasserted
+ 3b2 | 10/08/2026 | 17:12:37 | Processor #0x4f | State Asserted | Asserted
+ 3b3 | 10/08/2026 | 17:13:13 | Processor #0x4f | State Asserted | Deasserted
+ 3b4 | 10/08/2026 | 17:13:14 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3b5 | 10/08/2026 | 17:13:24 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3b6 | 10/08/2026 | 17:13:24 | Processor #0x4f | State Asserted | Asserted
+ 3b7 | 10/08/2026 | 17:14:03 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3b8 | 10/08/2026 | 17:14:03 | Processor #0x4f | State Asserted | Deasserted
+ 3b9 | 10/08/2026 | 17:14:21 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3ba | 10/08/2026 | 17:14:22 | Processor #0x4f | State Asserted | Asserted
+ 3bb | 10/08/2026 | 17:14:26 | Processor #0x4f | State Asserted | Deasserted
+ 3bc | 10/08/2026 | 17:14:28 | Processor #0x4f | State Asserted | Asserted
+ 3bd | 10/08/2026 | 17:15:07 | Processor #0x4f | State Asserted | Deasserted
+ 3be | 10/08/2026 | 17:15:10 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3bf | 10/08/2026 | 17:15:26 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3c0 | 10/08/2026 | 17:15:26 | Processor #0x4f | State Asserted | Asserted
+ 3c1 | 10/08/2026 | 17:16:06 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3c2 | 10/08/2026 | 17:16:07 | Processor #0x4f | State Asserted | Deasserted
+ 3c3 | 10/08/2026 | 17:16:15 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3c4 | 10/08/2026 | 17:16:18 | Processor #0x4f | State Asserted | Asserted
+ 3c5 | 10/08/2026 | 17:16:50 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3c6 | 10/08/2026 | 17:16:50 | Processor #0x4f | State Asserted | Deasserted
+ 3c7 | 10/08/2026 | 17:17:03 | Processor #0x4f | State Asserted | Asserted
+ 3c8 | 10/08/2026 | 17:17:03 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3c9 | 10/08/2026 | 17:17:05 | Processor #0x4f | State Asserted | Deasserted
+ 3ca | 10/08/2026 | 17:17:07 | Processor #0x4f | State Asserted | Asserted
+ 3cb | 10/08/2026 | 17:17:46 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3cc | 10/08/2026 | 17:17:46 | Processor #0x4f | State Asserted | Deasserted
+ 3cd | 10/08/2026 | 17:17:58 | Processor #0x4f | State Asserted | Asserted
+ 3ce | 10/08/2026 | 17:17:58 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3cf | 10/08/2026 | 17:18:00 | Processor #0x4f | State Asserted | Deasserted
+ 3d0 | 10/08/2026 | 17:18:02 | Processor #0x4f | State Asserted | Asserted
+ 3d1 | 10/08/2026 | 17:18:36 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3d2 | 10/08/2026 | 17:18:37 | Processor #0x4f | State Asserted | Deasserted
+ 3d3 | 10/08/2026 | 17:18:45 | Processor #0x4f | State Asserted | Asserted
+ 3d4 | 10/08/2026 | 17:18:46 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3d5 | 10/08/2026 | 17:18:50 | Processor #0x4f | State Asserted | Deasserted
+ 3d6 | 10/08/2026 | 17:18:52 | Processor #0x4f | State Asserted | Asserted
+ 3d7 | 10/08/2026 | 17:19:12 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3d8 | 10/08/2026 | 17:19:13 | Processor #0x4f | State Asserted | Deasserted
+ 3d9 | 10/08/2026 | 17:19:22 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3da | 10/08/2026 | 17:19:22 | Processor #0x4f | State Asserted | Asserted
+ 3db | 10/08/2026 | 17:19:59 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3dc | 10/08/2026 | 17:20:00 | Processor #0x4f | State Asserted | Deasserted
+ 3dd | 10/08/2026 | 17:20:11 | Processor #0x4f | State Asserted | Asserted
+ 3de | 10/08/2026 | 17:20:12 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3df | 10/08/2026 | 17:20:13 | Processor #0x4f | State Asserted | Deasserted
+ 3e0 | 10/08/2026 | 17:20:15 | Processor #0x4f | State Asserted | Asserted
+ 3e1 | 10/08/2026 | 17:20:17 | Processor #0x4f | State Asserted | Deasserted
+ 3e2 | 10/08/2026 | 17:20:18 | Processor #0x4f | State Asserted | Asserted
+ 3e3 | 10/08/2026 | 17:21:02 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3e4 | 10/08/2026 | 17:21:03 | Processor #0x4f | State Asserted | Deasserted
+ 3e5 | 10/08/2026 | 17:21:04 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3e6 | 10/08/2026 | 17:21:05 | Processor #0x4f | State Asserted | Asserted
+ 3e7 | 10/08/2026 | 17:21:07 | Processor #0x4f | State Asserted | Deasserted
+ 3e8 | 10/08/2026 | 17:21:08 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3e9 | 10/08/2026 | 17:21:22 | Processor #0x4f | State Asserted | Asserted
+ 3ea | 10/08/2026 | 17:21:23 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3eb | 10/08/2026 | 17:22:07 | Processor #0x4f | State Asserted | Deasserted
+ 3ec | 10/08/2026 | 17:22:08 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3ed | 10/08/2026 | 17:22:25 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3ee | 10/08/2026 | 17:22:26 | Processor #0x4f | State Asserted | Asserted
+ 3ef | 10/08/2026 | 17:23:09 | Processor #0x4f | State Asserted | Deasserted
+ 3f0 | 10/08/2026 | 17:23:12 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3f1 | 10/08/2026 | 17:23:22 | Processor #0x4f | State Asserted | Asserted
+ 3f2 | 10/08/2026 | 17:23:22 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3f3 | 10/08/2026 | 17:24:07 | Processor #0x4f | State Asserted | Deasserted
+ 3f4 | 10/08/2026 | 17:24:07 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3f5 | 10/08/2026 | 17:24:18 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3f6 | 10/08/2026 | 17:24:18 | Processor #0x4f | State Asserted | Asserted
+ 3f7 | 10/08/2026 | 17:25:01 | Processor #0x4f | State Asserted | Deasserted
+ 3f8 | 10/08/2026 | 17:25:03 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3f9 | 10/08/2026 | 17:25:13 | Processor #0x4f | State Asserted | Asserted
+ 3fa | 10/08/2026 | 17:25:13 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3fb | 10/08/2026 | 17:25:56 | Processor #0x4f | State Asserted | Deasserted
+ 3fc | 10/08/2026 | 17:25:57 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 3fd | 10/08/2026 | 17:26:07 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 3fe | 10/08/2026 | 17:26:07 | Processor #0x4f | State Asserted | Asserted
+ 3ff | 10/08/2026 | 17:26:56 | Processor #0x4f | State Asserted | Deasserted
+ 400 | 10/08/2026 | 17:26:56 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 401 | 10/08/2026 | 17:27:11 | Processor #0x4f | State Asserted | Asserted
+ 402 | 10/08/2026 | 17:27:12 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 403 | 10/08/2026 | 17:27:50 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 404 | 10/08/2026 | 17:27:50 | Processor #0x4f | State Asserted | Deasserted
+ 405 | 10/08/2026 | 17:27:52 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 406 | 10/08/2026 | 17:27:52 | Processor #0x4f | State Asserted | Asserted
+ 407 | 10/08/2026 | 17:28:18 | Processor #0x4f | State Asserted | Deasserted
+ 408 | 10/08/2026 | 17:28:20 | Processor #0x4f | State Asserted | Asserted
+ 409 | 10/08/2026 | 17:28:48 | Processor #0x4f | State Asserted | Deasserted
+ 40a | 10/08/2026 | 17:28:49 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 40b | 10/08/2026 | 17:28:57 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 40c | 10/08/2026 | 17:28:58 | Processor #0x4f | State Asserted | Asserted
+ 40d | 10/08/2026 | 17:29:33 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 40e | 10/08/2026 | 17:29:33 | Processor #0x4f | State Asserted | Deasserted
+ 40f | 10/08/2026 | 17:29:37 | Processor #0x4f | State Asserted | Asserted
+ 410 | 10/08/2026 | 17:29:38 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 411 | 10/08/2026 | 17:29:41 | Processor #0x4f | State Asserted | Deasserted
+ 412 | 10/08/2026 | 17:29:43 | Processor #0x4f | State Asserted | Asserted
+ 413 | 10/08/2026 | 17:30:20 | Processor #0x4f | State Asserted | Deasserted
+ 414 | 10/08/2026 | 17:30:21 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 415 | 10/08/2026 | 17:30:29 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 416 | 10/08/2026 | 17:30:30 | Processor #0x4f | State Asserted | Asserted
+ 417 | 10/08/2026 | 17:31:07 | Processor #0x4f | State Asserted | Deasserted
+ 418 | 10/08/2026 | 17:31:11 | Processor #0x4f | State Asserted | Asserted
+ 419 | 10/08/2026 | 17:31:52 | Processor #0x4f | State Asserted | Deasserted
+ 41a | 10/08/2026 | 17:31:52 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 41b | 10/08/2026 | 17:31:59 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 41c | 10/08/2026 | 17:32:00 | Processor #0x4f | State Asserted | Asserted
+ 41d | 10/08/2026 | 17:32:46 | Processor #0x4f | State Asserted | Deasserted
+ 41e | 10/08/2026 | 17:32:47 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 41f | 10/08/2026 | 17:32:54 | Processor #0x4f | State Asserted | Asserted
+ 420 | 10/08/2026 | 17:32:56 | Processor #0x4f | State Asserted | Deasserted
+ 421 | 10/08/2026 | 17:32:57 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 422 | 10/08/2026 | 17:32:58 | Processor #0x4f | State Asserted | Asserted
+ 423 | 10/08/2026 | 17:33:30 | Processor #0x4f | State Asserted | Deasserted
+ 424 | 10/08/2026 | 17:33:32 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 425 | 10/08/2026 | 17:33:37 | Processor #0x4f | State Asserted | Asserted
+ 426 | 10/08/2026 | 17:33:38 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 427 | 10/08/2026 | 17:34:22 | Processor #0x4f | State Asserted | Deasserted
+ 428 | 10/08/2026 | 17:34:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 429 | 10/08/2026 | 17:34:28 | Processor #0x4f | State Asserted | Asserted
+ 42a | 10/08/2026 | 17:34:29 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 42b | 10/08/2026 | 17:35:11 | Processor #0x4f | State Asserted | Deasserted
+ 42c | 10/08/2026 | 17:35:11 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 42d | 10/08/2026 | 17:35:16 | Processor #0x4f | State Asserted | Asserted
+ 42e | 10/08/2026 | 17:35:19 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 42f | 10/08/2026 | 17:36:01 | Processor #0x4f | State Asserted | Deasserted
+ 430 | 10/08/2026 | 17:36:02 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 431 | 10/08/2026 | 17:36:16 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 432 | 10/08/2026 | 17:36:16 | Processor #0x4f | State Asserted | Asserted
+ 433 | 10/08/2026 | 17:36:18 | Processor #0x4f | State Asserted | Deasserted
+ 434 | 10/08/2026 | 17:36:20 | Processor #0x4f | State Asserted | Asserted
+ 435 | 10/08/2026 | 17:37:00 | Processor #0x4f | State Asserted | Deasserted
+ 436 | 10/08/2026 | 17:37:00 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 437 | 10/08/2026 | 17:37:15 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 438 | 10/08/2026 | 17:37:18 | Processor #0x4f | State Asserted | Asserted
+ 439 | 10/08/2026 | 17:37:54 | Processor #0x4f | State Asserted | Deasserted
+ 43a | 10/08/2026 | 17:37:54 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 43b | 10/08/2026 | 17:38:03 | Processor #0x4f | State Asserted | Asserted
+ 43c | 10/08/2026 | 17:38:05 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 43d | 10/08/2026 | 17:38:50 | Processor #0x4f | State Asserted | Deasserted
+ 43e | 10/08/2026 | 17:38:51 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 43f | 10/08/2026 | 17:38:55 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 440 | 10/08/2026 | 17:38:56 | Processor #0x4f | State Asserted | Asserted
+ 441 | 10/08/2026 | 17:39:41 | Processor #0x4f | State Asserted | Deasserted
+ 442 | 10/08/2026 | 17:39:41 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 443 | 10/08/2026 | 17:39:49 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 444 | 10/08/2026 | 17:39:50 | Processor #0x4f | State Asserted | Asserted
+ 445 | 10/08/2026 | 17:39:52 | Processor #0x4f | State Asserted | Deasserted
+ 446 | 10/08/2026 | 17:39:54 | Processor #0x4f | State Asserted | Asserted
+ 447 | 10/08/2026 | 17:40:34 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 448 | 10/08/2026 | 17:40:35 | Processor #0x4f | State Asserted | Deasserted
+ 449 | 10/08/2026 | 17:40:39 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 44a | 10/08/2026 | 17:40:39 | Processor #0x4f | State Asserted | Asserted
+ 44b | 10/08/2026 | 17:40:41 | Processor #0x4f | State Asserted | Deasserted
+ 44c | 10/08/2026 | 17:40:43 | Processor #0x4f | State Asserted | Asserted
+ 44d | 10/08/2026 | 17:40:45 | Processor #0x4f | State Asserted | Deasserted
+ 44e | 10/08/2026 | 17:40:47 | Processor #0x4f | State Asserted | Asserted
+ 44f | 10/08/2026 | 17:41:28 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 450 | 10/08/2026 | 17:41:28 | Processor #0x4f | State Asserted | Deasserted
+ 451 | 10/08/2026 | 17:41:32 | Processor #0x4f | State Asserted | Asserted
+ 452 | 10/08/2026 | 17:41:32 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 453 | 10/08/2026 | 17:42:18 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 454 | 10/08/2026 | 17:42:18 | Processor #0x4f | State Asserted | Deasserted
+ 455 | 10/08/2026 | 17:42:26 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 456 | 10/08/2026 | 17:42:28 | Processor #0x4f | State Asserted | Asserted
+ 457 | 10/08/2026 | 17:43:15 | Processor #0x4f | State Asserted | Deasserted
+ 458 | 10/08/2026 | 17:43:15 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 459 | 10/08/2026 | 17:43:19 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 45a | 10/08/2026 | 17:43:24 | Processor #0x4f | State Asserted | Asserted
+ 45b | 10/08/2026 | 17:44:12 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 45c | 10/08/2026 | 17:44:13 | Processor #0x4f | State Asserted | Deasserted
+ 45d | 10/08/2026 | 17:44:18 | Processor #0x4f | State Asserted | Asserted
+ 45e | 10/08/2026 | 17:44:20 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 45f | 10/08/2026 | 17:44:22 | Processor #0x4f | State Asserted | Deasserted
+ 460 | 10/08/2026 | 17:44:24 | Processor #0x4f | State Asserted | Asserted
+ 461 | 10/08/2026 | 17:45:00 | Processor #0x4f | State Asserted | Deasserted
+ 462 | 10/08/2026 | 17:45:00 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 463 | 10/08/2026 | 17:45:08 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 464 | 10/08/2026 | 17:45:09 | Processor #0x4f | State Asserted | Asserted
+ 465 | 10/08/2026 | 17:45:51 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 466 | 10/08/2026 | 17:45:52 | Processor #0x4f | State Asserted | Deasserted
+ 467 | 10/08/2026 | 17:45:56 | Processor #0x4f | State Asserted | Asserted
+ 468 | 10/08/2026 | 17:45:56 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 469 | 10/08/2026 | 17:46:48 | Processor #0x4f | State Asserted | Deasserted
+ 46a | 10/08/2026 | 17:46:49 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 46b | 10/08/2026 | 17:46:55 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 46c | 10/08/2026 | 17:47:00 | Processor #0x4f | State Asserted | Asserted
+ 46d | 10/08/2026 | 17:47:36 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 46e | 10/08/2026 | 17:47:37 | Processor #0x4f | State Asserted | Deasserted
+ 46f | 10/08/2026 | 17:47:43 | Processor #0x4f | State Asserted | Asserted
+ 470 | 10/08/2026 | 17:47:45 | Processor #0x4f | State Asserted | Deasserted
+ 471 | 10/08/2026 | 17:47:46 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 472 | 10/08/2026 | 17:47:46 | Processor #0x4f | State Asserted | Asserted
+ 473 | 10/08/2026 | 17:48:24 | Processor #0x4f | State Asserted | Deasserted
+ 474 | 10/08/2026 | 17:48:27 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 475 | 10/08/2026 | 17:48:36 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 476 | 10/08/2026 | 17:48:37 | Processor #0x4f | State Asserted | Asserted
+ 477 | 10/08/2026 | 17:49:20 | Processor #0x4f | State Asserted | Deasserted
+ 478 | 10/08/2026 | 17:49:22 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 479 | 10/08/2026 | 17:49:30 | Processor #0x4f | State Asserted | Asserted
+ 47a | 10/08/2026 | 17:49:30 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 47b | 10/08/2026 | 17:49:33 | Processor #0x4f | State Asserted | Deasserted
+ 47c | 10/08/2026 | 17:49:35 | Processor #0x4f | State Asserted | Asserted
+ 47d | 10/08/2026 | 17:50:16 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 47e | 10/08/2026 | 17:50:16 | Processor #0x4f | State Asserted | Deasserted
+ 47f | 10/08/2026 | 17:50:24 | Processor #0x4f | State Asserted | Asserted
+ 480 | 10/08/2026 | 17:50:24 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 481 | 10/08/2026 | 17:51:05 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 482 | 10/08/2026 | 17:51:05 | Processor #0x4f | State Asserted | Deasserted
+ 483 | 10/08/2026 | 17:51:16 | Processor #0x4f | State Asserted | Asserted
+ 484 | 10/08/2026 | 17:51:18 | Processor #0x4f | State Asserted | Deasserted
+ 485 | 10/08/2026 | 17:51:20 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 486 | 10/08/2026 | 17:51:20 | Processor #0x4f | State Asserted | Asserted
+ 487 | 10/08/2026 | 17:51:58 | Processor #0x4f | State Asserted | Deasserted
+ 488 | 10/08/2026 | 17:51:58 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 489 | 10/08/2026 | 17:52:05 | Processor #0x4f | State Asserted | Asserted
+ 48a | 10/08/2026 | 17:52:07 | Processor #0x4f | State Asserted | Deasserted
+ 48b | 10/08/2026 | 17:52:08 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 48c | 10/08/2026 | 17:52:09 | Processor #0x4f | State Asserted | Asserted
+ 48d | 10/08/2026 | 17:52:43 | Processor #0x4f | State Asserted | Deasserted
+ 48e | 10/08/2026 | 17:52:44 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 48f | 10/08/2026 | 17:52:52 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 490 | 10/08/2026 | 17:52:52 | Processor #0x4f | State Asserted | Asserted
+ 491 | 10/08/2026 | 17:52:54 | Processor #0x4f | State Asserted | Deasserted
+ 492 | 10/08/2026 | 17:52:58 | Processor #0x4f | State Asserted | Asserted
+ 493 | 10/08/2026 | 17:53:37 | Processor #0x4f | State Asserted | Deasserted
+ 494 | 10/08/2026 | 17:53:38 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 495 | 10/08/2026 | 17:53:43 | Processor #0x4f | State Asserted | Asserted
+ 496 | 10/08/2026 | 17:53:45 | Processor #0x4f | State Asserted | Deasserted
+ 497 | 10/08/2026 | 17:53:47 | Processor #0x4f | State Asserted | Asserted
+ 498 | 10/08/2026 | 17:53:47 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 499 | 10/08/2026 | 17:54:31 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 49a | 10/08/2026 | 17:54:32 | Processor #0x4f | State Asserted | Deasserted
+ 49b | 10/08/2026 | 17:54:38 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 49c | 10/08/2026 | 17:54:39 | Processor #0x4f | State Asserted | Asserted
+ 49d | 10/08/2026 | 17:54:41 | Processor #0x4f | State Asserted | Deasserted
+ 49e | 10/08/2026 | 17:54:43 | Processor #0x4f | State Asserted | Asserted
+ 49f | 10/08/2026 | 17:55:25 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4a0 | 10/08/2026 | 17:55:26 | Processor #0x4f | State Asserted | Deasserted
+ 4a1 | 10/08/2026 | 17:55:33 | Processor #0x4f | State Asserted | Asserted
+ 4a2 | 10/08/2026 | 17:55:34 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4a3 | 10/08/2026 | 17:56:18 | Processor #0x4f | State Asserted | Deasserted
+ 4a4 | 10/08/2026 | 17:56:19 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4a5 | 10/08/2026 | 17:56:24 | Processor #0x4f | State Asserted | Asserted
+ 4a6 | 10/08/2026 | 17:56:24 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4a7 | 10/08/2026 | 17:57:10 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4a8 | 10/08/2026 | 17:57:11 | Processor #0x4f | State Asserted | Deasserted
+ 4a9 | 10/08/2026 | 17:57:18 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4aa | 10/08/2026 | 17:57:18 | Processor #0x4f | State Asserted | Asserted
+ 4ab | 10/08/2026 | 17:57:20 | Processor #0x4f | State Asserted | Deasserted
+ 4ac | 10/08/2026 | 17:57:22 | Processor #0x4f | State Asserted | Asserted
+ 4ad | 10/08/2026 | 17:57:35 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4ae | 10/08/2026 | 17:57:35 | Processor #0x4f | State Asserted | Deasserted
+ 4af | 10/08/2026 | 20:21:35 | Processor #0x4f | State Asserted | Asserted
+ 4b0 | 10/08/2026 | 20:21:40 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4b1 | 10/08/2026 | 20:22:30 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4b2 | 10/08/2026 | 20:22:31 | Processor #0x4f | State Asserted | Deasserted
+ 4b3 | 10/09/2026 | 11:14:41 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4b4 | 10/09/2026 | 11:14:42 | Processor #0x4f | State Asserted | Asserted
+ 4b5 | 10/09/2026 | 11:17:53 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4b6 | 10/09/2026 | 11:17:55 | Processor #0x4f | State Asserted | Deasserted
+ 4b7 | 10/09/2026 | 22:16:14 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4b8 | 10/09/2026 | 22:16:15 | Processor #0x4f | State Asserted | Asserted
+ 4b9 | 10/09/2026 | 22:16:21 | Processor #0x4f | State Asserted | Deasserted
+ 4ba | 10/09/2026 | 22:16:21 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4bb | 10/09/2026 | 22:17:27 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4bc | 10/09/2026 | 22:17:28 | Processor #0x4f | State Asserted | Asserted
+ 4bd | 10/09/2026 | 22:17:42 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4be | 10/09/2026 | 22:17:43 | Processor #0x4f | State Asserted | Deasserted
+ 4bf | 10/09/2026 | 22:19:06 | Processor #0x4f | State Asserted | Asserted
+ 4c0 | 10/09/2026 | 22:19:07 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4c1 | 10/09/2026 | 22:19:25 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4c2 | 10/09/2026 | 22:19:26 | Processor #0x4f | State Asserted | Deasserted
+ 4c3 | 10/09/2026 | 23:19:48 | Temperature #0x03 | Upper Non-critical going high | Asserted
+ 4c4 | 10/09/2026 | 23:19:48 | Processor #0x4f | State Asserted | Asserted
+ 4c5 | 10/09/2026 | 23:44:38 | Temperature #0x03 | Upper Non-critical going high | Deasserted
+ 4c6 | 10/09/2026 | 23:44:39 | Processor #0x4f | State Asserted | Deasserted

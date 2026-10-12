@@ -1,0 +1,77 @@
+# __switch_to 与 vsnprintf 故障窗口反汇编（两内核符号地址一致）
+# __switch_to 基址 ffff800080eeec80；+0xc8: f949e661 = ldr x1, [x19, #5064]（读 next->thread.sctlr_user，task_struct+0x13c8）
+# panic#4: x19=ffff80008db23c70, +0x13c8=ffff80008db25038=故障地址精确命中（读必然已映射的 task_struct 字段报 pte=0）
+# vsnprintf 基址 ffff800080ee0180；+0x6e8: bl 0xffff800080ee9de0(__stack_chk_fail)，+0x6ec 为 panic 消息所引返回地址（金丝雀读回失配）
+
+ffff800080eeec80:	d503233f 	paciasp
+ffff800080eeec84:	a9be7bfd 	stp	x29, x30, [sp, #-32]!
+ffff800080eeec88:	910003fd 	mov	x29, sp
+ffff800080eeec8c:	a90153f3 	stp	x19, x20, [sp, #16]
+ffff800080eeec90:	aa0103f3 	mov	x19, x1
+ffff800080eeec94:	aa0003f4 	mov	x20, x0
+ffff800080eeec98:	aa0103e0 	mov	x0, x1
+ffff800080eeec9c:	97c4a9d5 	bl	0xffff8000800193f0
+ffff800080eeeca0:	d53bd040 	mrs	x0, tpidr_el0
+ffff800080eeeca4:	d5384101 	mrs	x1, sp_el0
+ffff800080eeeca8:	f9400023 	ldr	x3, [x1]
+ffff800080eeecac:	d2820102 	mov	x2, #0x1008                	// #4104
+ffff800080eeecb0:	8b020022 	add	x2, x1, x2
+ffff800080eeecb4:	91400421 	add	x1, x1, #0x1, lsl #12
+ffff800080eeecb8:	720a007f 	tst	w3, #0x400000
+ffff800080eeecbc:	9a820021 	csel	x1, x1, x2, eq	// eq = none
+ffff800080eeecc0:	f9000020 	str	x0, [x1]
+ffff800080eeecc4:	f9400260 	ldr	x0, [x19]
+ffff800080eeecc8:	37b00e40 	tbnz	w0, #22, 0xffff800080eeee90
+ffff800080eeeccc:	d51bd07f 	msr	tpidrro_el0, xzr
+ffff800080eeecd0:	f9400260 	ldr	x0, [x19]
+ffff800080eeecd4:	36b00e60 	tbz	w0, #22, 0xffff800080eeeea0
+ffff800080eeecd8:	f9480660 	ldr	x0, [x19, #4104]
+ffff800080eeecdc:	d51bd040 	msr	tpidr_el0, x0
+ffff800080eeece0:	aa1303e0 	mov	x0, x19
+ffff800080eeece4:	97c520e9 	bl	0xffff800080037088
+ffff800080eeece8:	b9882260 	ldrsw	x0, [x19, #2080]
+ffff800080eeecec:	d518d020 	msr	contextidr_el1, x0
+ffff800080eeecf0:	d5033fdf 	isb
+ffff800080eeecf4:	900063a1 	adrp	x1, 0xffff800081b62000
+ffff800080eeecf8:	910b6021 	add	x1, x1, #0x2d8
+ffff800080eeecfc:	d538d080 	mrs	x0, tpidr_el1
+ffff800080eeed00:	f8206833 	str	x19, [x1, x0]
+ffff800080eeed04:	d503201f 	nop
+ffff800080eeed08:	b9404660 	ldr	w0, [x19, #68]
+ffff800080eeed0c:	37a800a0 	tbnz	w0, #21, 0xffff800080eeed20
+ffff800080eeed10:	14000058 	b	0xffff800080eeee70
+ffff800080eeed14:	d503201f 	nop
+ffff800080eeed18:	aa1303e0 	mov	x0, x19
+ffff800080eeed1c:	97c4fac3 	bl	0xffff80008002d828
+ffff800080eeed20:	52800920 	mov	w0, #0x49                  	// #73
+ffff800080eeed24:	97c4e077 	bl	0xffff800080026f00
+ffff800080eeed28:	36000060 	tbz	w0, #0, 0xffff800080eeed34
+ffff800080eeed2c:	aa1303e0 	mov	x0, x19
+ffff800080eeed30:	97c4ae5c 	bl	0xffff80008001a6a0
+ffff800080eeed34:	14000039 	b	0xffff800080eeee18
+ffff800080eeed38:	d503201f 	nop
+ffff800080eeed3c:	1400002d 	b	0xffff800080eeedf0
+ffff800080eeed40:	d503201f 	nop
+ffff800080eeed44:	d5033b9f 	dsb	ish
+ffff800080eeed48:	f949e661 	ldr	x1, [x19, #5064]
+ffff800080eeed4c:	f949e680 	ldr	x0, [x20, #5064]
+ffff800080eeed50:	eb01001f 	cmp	x0, x1
+ffff800080eeed54:	54000160 	b.eq	0xffff800080eeed80  // b.none
+ffff800080eeed58:	d5381002 	mrs	x2, sctlr_el1
+ffff800080ee0840:	8b3bc340 	add	x0, x26, w27, sxtw
+ffff800080ee0844:	2a0103fb 	mov	w27, w1
+ffff800080ee0848:	b9800002 	ldrsw	x2, [x0]
+ffff800080ee084c:	17ffff06 	b	0xffff800080ee0464
+ffff800080ee0850:	8b3bc340 	add	x0, x26, w27, sxtw
+ffff800080ee0854:	2a0103fb 	mov	w27, w1
+ffff800080ee0858:	b9400002 	ldr	w2, [x0]
+ffff800080ee085c:	17ffff02 	b	0xffff800080ee0464
+ffff800080ee0860:	a90253f3 	stp	x19, x20, [sp, #32]
+ffff800080ee0864:	a9035bf5 	stp	x21, x22, [sp, #48]
+ffff800080ee0868:	9400255e 	bl	0xffff800080ee9de0
+ffff800080ee086c:	d503201f 	nop
+ffff800080ee0870:	b4000281 	cbz	x1, 0xffff800080ee08c0
+ffff800080ee0874:	d503233f 	paciasp
+ffff800080ee0878:	a9bc7bfd 	stp	x29, x30, [sp, #-64]!
+ffff800080ee087c:	aa0303e4 	mov	x4, x3
+ffff800080ee0880:	910003fd 	mov	x29, sp

@@ -223,5 +223,6 @@ DECLARE_TEST(sve512_gather_scatter_svd,
     .test_init = sve512_gather_scatter_svd_init,
     .test_run = sve512_gather_scatter_svd_run,
     .test_cleanup = sve512_gather_scatter_svd_cleanup,
+    .fracture_loop_count = -1,
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

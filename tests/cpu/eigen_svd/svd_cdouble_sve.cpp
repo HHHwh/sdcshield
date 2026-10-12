@@ -89,9 +89,16 @@ static int size_matrix(struct test *test, int *out_nthreads, double *out_gb_per_
     long pages = sysconf(_SC_PHYS_PAGES);
     long page_size = sysconf(_SC_PAGESIZE);
     int nthreads = thread_count();
+    /* 0.65: reserve 35% of physical DRAM for kernel/pagecache/framework.
+     * The un-reserved sizing let 608 workers hit peak RSS simultaneously
+     * at exactly 100% of node DRAM and the batch system OOM-killed whole
+     * jobs ("reason: job oom", 2026-10-09, four nodes in lockstep on the
+     * 17th test of the campaign). 0.85 itself still sized 608 workers
+     * at ~480 GB, brushing the dynamic batch mem limit (node free RAM
+     * hovers at 450-530 GB), so the reserve was widened to 35%. */
     if (out_nthreads) *out_nthreads = nthreads;
     double ram_per_worker = (pages > 0 && page_size > 0 && nthreads > 0)
-                                ? (double)pages * (double)page_size / nthreads
+                                ? (double)pages * (double)page_size * 0.65 / nthreads
                                 : 0.0;
     if (out_gb_per_worker) *out_gb_per_worker = ram_per_worker / (1 << 30);
 

@@ -34,6 +34,15 @@ PAUSE_C="${THERMAL_PAUSE_C:-95}"
 RESUME_C="${THERMAL_RESUME_C:-90}"
 DISK_WARN="${DISK_WARN_PCT:-85}"
 DISK_STOP="${DISK_STOP_PCT:-95}"
+# 板侧联锁传感器适配（默认=参考机 TaiShan 2280 SDR 命名；其他单板用 systemd
+# drop-in Environment= 或 campaign.env 覆盖；冒号分隔以容纳含空格的传感器名，
+# 名字按 sdr_raw 的正则语义匹配）：
+#   THERMAL_SENSORS — 额外 CPU 温度传感器名，取值并入 maxt 参与热联锁
+#                     （空=不新增，参考板 c1/c2 路径不变）
+#   FAN_SENSORS    — 风扇传感器名，任一缺失/0rpm 视为异常（保持"缺失即异常"）；
+#                    置空=显式关闭风扇联锁（无风扇读数板卡记录在案的选择）
+THERMAL_SENSORS="${THERMAL_SENSORS:-}"
+FAN_SENSORS="${FAN_SENSORS:-FAN2 Speed:FAN3 Speed}"
 
 # ---- monitor.csv v3 表头（v5 §6.4/§6.6/§6.7 单元 4：SDR 发现式列集 + RAS/OS 固定尾列）----
 # 列 = ts + 发现式模拟量列（sdr_analog_columns 归一化名，列序持久化于 sensors_v3.json，
@@ -452,6 +461,14 @@ PYEOF
     #      Prochot 传感器本板全程 0x00 无用（节流只见于 SEL Processor State 事件））----
     maxt=0
     for t in "$c1" "$c2"; do [ -n "$t" ] && [ "$t" -gt "$maxt" ] 2>/dev/null && maxt=$t; done
+    # 板侧适配：THERMAL_SENSORS（冒号分隔）——参考板外的 CPU 温度命名
+    # （如 R240K V2 的 CPU1_TEMP..CPU4_TEMP）经此并入 maxt
+    IFS=: read -ra _ts_arr <<< "$THERMAL_SENSORS"
+    for s in "${_ts_arr[@]}"; do
+        [ -n "$s" ] || continue
+        t=$(sdr_val "$s")
+        [ -n "$t" ] && [ "$t" -gt "$maxt" ] 2>/dev/null && maxt=$t
+    done
     if [ "$maxt" -ge 88 ] 2>/dev/null; then SLEEP_NEXT=20; else SLEEP_NEXT=60; fi
     if [ "$maxt" -ge "$PAUSE_C" ] 2>/dev/null; then
         if ! paused_for thermal; then set_pause thermal "CPU ${maxt}C >= ${PAUSE_C}C"; fi
@@ -471,12 +488,21 @@ PYEOF
         thermal_hot=0
     fi
 
-    # ---- 风扇联锁（FAN2/3 任一异常；连续 3 个采样异常才暂停，恢复即放行）----
-    if [ "$bmc" = 1 ]; then
-        if [ -z "$f2" ] || [ -z "$f3" ] || [ "$f2" = 0 ] || [ "$f3" = 0 ]; then
+    # ---- 风扇联锁（FAN_SENSORS 任一缺失/0rpm；连续 3 个采样异常才暂停，恢复即放行）----
+    #      默认 FAN2/FAN3 Speed（参考板）；板侧经 FAN_SENSORS 覆盖；置空=显式关闭。
+    if [ "$bmc" = 1 ] && [ -n "$FAN_SENSORS" ]; then
+        fan_bad_names=""; fan_seen=0
+        IFS=: read -ra _fs_arr <<< "$FAN_SENSORS"
+        for s in "${_fs_arr[@]}"; do
+            [ -n "$s" ] || continue
+            fan_seen=$((fan_seen+1))
+            fv=$(sdr_val "$s")
+            if [ -z "$fv" ] || [ "$fv" = 0 ]; then fan_bad_names="${fan_bad_names}${fan_bad_names:+ }$s=${fv:-na}"; fi
+        done
+        if [ "$fan_seen" -gt 0 ] && [ -n "$fan_bad_names" ]; then
             if [ "$fan_bad" -lt 3 ]; then
                 fan_bad=$((fan_bad+1))
-                if [ "$fan_bad" = 3 ] && ! paused_for fan; then set_pause fan "FAN2=${f2:-na} FAN3=${f3:-na}"; fi
+                if [ "$fan_bad" = 3 ] && ! paused_for fan; then set_pause fan "$fan_bad_names"; fi
             fi
         else
             fan_bad=0; clr_pause_if fan

@@ -256,7 +256,10 @@ if host_machine.cpu_family() == 'aarch64'
     if cpp.has_argument(sme_march)
         arm64_sme_lib = static_library(
             'tests_arm64_sme',
-            files('sme_za_tileview_arm.cpp'),
+            files(
+                'sme_za_tileview_arm.cpp',
+                'sme_fmopa_stress_arm.cpp',
+            ),
             build_by_default: false,
             include_directories: [
                 framework_incdir,
