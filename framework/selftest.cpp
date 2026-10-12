@@ -875,6 +875,69 @@ static int selftest_crash_run(struct test *test, int thread)
     return EXIT_SUCCESS;
 }
 
+// ---------------------------------------------------------------------------
+// SME SIGILL probe (aarch64 only): settles whether the CURRENT KERNEL
+// actually enables SME in one run. Rationale: cn23154 (HiSilicon 0xd22)
+// has SME hardware (SMFR0_EL1) but its 5.10 kernel predates the
+// HWCAP2_SME exposure (mainline 5.19+) — userspace SMSTART is expected
+// to SIGILL there, but the expectation must be settled by experiment,
+// not assumption. The probe forks a child that attempts SMSTART (with
+// SMSTOP immediately after); the parent classifies:
+//   child exits 0          -> SME usable right now (sme_fmopa_za_arm runs)
+//   child killed by SIGILL -> kernel does not enable SME (hardware may
+//                             still be present; that is a kernel policy)
+//   anything else          -> unexpected, reported as failure
+// ---------------------------------------------------------------------------
+#ifdef __aarch64__
+// The framework library compiles at the baseline march (no +sme), so the
+// SME probe function lifts its target locally (random.cpp precedent:
+// per-function #pragma GCC target).
+#pragma GCC push_options
+#pragma GCC target("arch=armv9-a+sme")
+static int selftest_sme_sigill_probe_run(struct test *test, int)
+{
+    pid_t pid = fork();
+    if (pid == 0) {
+        // child: reset SIGILL to default FIRST — the child inherits the
+        // framework's crash handlers, which would swallow the trap and
+        // hang the child (caught live: 'Child did not exit').
+        signal(SIGILL, SIG_DFL);
+        // Attempt to enter+exit streaming ZA mode. If the kernel has not
+        // enabled SME, SMSTART traps SIGILL here.
+        __asm__ volatile(
+            "smstart za\n\t"
+            "smstop za\n\t"
+            ::: "memory");
+        _exit(0);
+    }
+    if (pid < 0) {
+        log_warning("selftest_sme_sigill_probe: fork failed: %s",
+                    strerror(errno));
+        return EXIT_FAILURE;
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) != pid) {
+        log_warning("selftest_sme_sigill_probe: waitpid failed");
+        return EXIT_FAILURE;
+    }
+    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGILL) {
+        log_info("SME probe: SMSTART trapped SIGILL — kernel does not "
+                 "enable SME (HWCAP2_SME policy); sme_fmopa_za_arm will "
+                 "clean-skip");
+        return EXIT_SUCCESS;
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        log_info("SME probe: SMSTART executed — SME is usable on this "
+                 "kernel; sme_fmopa_za_arm will run for real");
+        return EXIT_SUCCESS;
+    }
+    log_warning("selftest_sme_sigill_probe: unexpected child status %d",
+                status);
+    return EXIT_FAILURE;
+}
+#pragma GCC pop_options
+#endif
+
 static void cause_sigill()
 {
     // some values for us to see in the register dump
@@ -2376,6 +2439,16 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
 },
+#ifdef __aarch64__
+{
+    .id = "selftest_sme_sigill_probe",
+    .description = "Settles kernel SME support in one run (fork + SMSTART)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_sme_sigill_probe_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
 {
     .id = "selftest_sigfpe",
     .description = "Crashes with SIGFPE",

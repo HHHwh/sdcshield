@@ -1,0 +1,55 @@
+== v-register decode (low lane as double) ==
+v0: 1.0000000000000002
+v1: 0.9999696929907796
+v2: -0.007785441536999976
+v3: low=3.27617529043031e-07  high=2.5507244236895373e-09
+v4: -0.9999696929907796
+v5: low=3.27617529043031e-07  high=2.5507244236895373e-09
+v6: low=4.207951448593077e-05  high=3.27617529043031e-07
+v7: -0.0022567074694209038
+v8: -8.497464257699151e-19
+v9: 0.0077854415369999755
+v10: 0.007785677497599682
+v11: 1.8109140734332816
+v12: 0.0
+v13: 0.0
+v14: 0.0
+v15: 0.0
+v16: -0.004294855347344157
+v17: -0.0012878314535736898
+v18: 0.0
+v19: 0.0
+v20: 0.2442638926397001
+v21: 0.0
+v22: 1.0
+v23: 0.0
+v24: -0.017448491165869218
+v25: 0.18945303469326283
+v26: 0.13261106974605452
+v27: 0.09452733666599149
+v28: 0.42331235693798275
+v29: 0.6038326271677275
+v30: 0.03307962327232147
+v31: -0.246173804989902
+
+u            = 0.007785677497599682
+tmp          = 1.000030307927763
+rot1.s=1/tmp = 0.9999696929907796   v1 = 0.9999696929907796   bit-exact: True
+rot1.c=u/tmp = 0.0077854415369999755   v9 = 0.0077854415369999755   bit-exact: True
+v4 == -v1 (exact)             : True
+v2 vs -v9: XOR = 0x000000000000003f  (1-ULP diff: True)
+v9/v1 = 0.007785677497599682  == v10 bit-exact: True
+theta_rot1  = 89.553922552 deg
+theta_right = 0.446077448 deg
+sum         = 90.000000000 deg  (identity atan2(1,u)+atan2(u,1)=90)
+d8 = j_left.c = -8.497464257699151e-19  ->  eps = 8.497464257699151e-19 = 2^-60.03
+d0 = j_left.s = 1.0000000000000002  ->  d0-1 = 2^-52.00 (1 ULP)
+cos(eps) computed = 1.0  (d0 = 1+1ULP: rounding of the composition)
+|t| = v11 = 1.8109140734332816; d = t/u = 232.59556717980996
+makeJacobi tau-probe: 1/(tau+w) = 0.9923045429540819 vs t = 0.007785677497599682  match: False
+
+MATHEMATICAL CLOSURE: theta_rot1 + theta_right = atan2(1,u) + atan2(u,1) = 90 deg for any u.
+j_left = 90-deg rotation: c=-sin(eps), s=cos(eps), eps~2^-60.
+CONCLUSION: v-register state at crash is a COMPLETE, SELF-CONSISTENT, CORRECT
+computation of real_2x2_jacobi_svd for u=0.007785677497599682 (|t|=1.8109, d=232.6).
+No FP register is corrupted. The ONLY corrupted state is x20 (pointer, 4 bits).

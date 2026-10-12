@@ -920,7 +920,24 @@ static bool print_signal_info(const CrashContext::Fixed &ctx)
     }
     if (ctx.rip != ctx.crash_address)
 #ifdef __aarch64__
+    {
         message += stdprintf(", FAR = %p", ctx.crash_address);
+        // NUMA3 VA-path transient-fault signature readout (0xd22 field
+        // diagnosis 2026-09): the fault lands in VA[55:48] while
+        // TCR.TBI0=1 makes VA[63:56] silently ignored, so half the
+        // manifestations are SEGVs whose si_addr has intact low-48 bits
+        // and a NON-ZERO VA[55:48]. A normal userspace fault address has
+        // bits 63:48 all zero, so a nonzero pattern there is worth
+        // flagging — report-only, never a verdict (confirming the
+        // signature needs the cluster-anchored campaign context).
+        uint64_t fa = uintptr_t(ctx.crash_address);
+        if (fa != 0 && (fa & 0x00FF000000000000ULL) != 0) {
+            message += stdprintf(" [VA55:48=0x%02llx nonzero — matches the "
+                                 "known VA[55:48] transient-fault signature "
+                                 "shape; see run_cluster_anchored.sh]",
+                                 (unsigned long long)((fa >> 48) & 0xFF));
+        }
+    }
 #else
         message += stdprintf(", CR2 = %p", ctx.crash_address);
 #endif
