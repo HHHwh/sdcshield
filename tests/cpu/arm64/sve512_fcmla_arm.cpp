@@ -91,24 +91,26 @@ struct FcmlaData {
 #ifdef __aarch64__
 
 // Scalar golden step for one lane pair, per the DDI 0616 expansion above.
+// `rot` is the rotation INDEX 0..3 = 0/90/180/270 degrees, matching both
+// the callers (loop index) and the hardware dispatch (fcmla_hw_rot*).
 static inline void fcmla_golden_pair(double &acc_e, double &acc_i,
                                      double b_e, double b_i,
                                      double c_e, double c_i, int rot)
 {
     switch (rot) {
-    case 0:
+    case 0: // 0 degrees
         acc_e = std::fma( b_e, c_e, acc_e);
         acc_i = std::fma( b_e, c_i, acc_i);
         break;
-    case 90:
+    case 1: // 90 degrees
         acc_e = std::fma(-b_i, c_i, acc_e);
         acc_i = std::fma( b_i, c_e, acc_i);
         break;
-    case 180:
+    case 2: // 180 degrees
         acc_e = std::fma(-b_e, c_e, acc_e);
         acc_i = std::fma(-b_e, c_i, acc_i);
         break;
-    default: // 270
+    default: // 3 -> 270 degrees
         acc_e = std::fma( b_i, c_i, acc_e);
         acc_i = std::fma(-b_i, c_e, acc_i);
         break;
