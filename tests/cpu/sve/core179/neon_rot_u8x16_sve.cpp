@@ -18,10 +18,11 @@
  * vector, 32 at VL=256) — rate holds => op width matters, collapses =>
  * the 2x64b lane structure matters.
  *
- * Buffers are 16384 bytes each; the phase is per BYTE index
- * ((base+k)%4), golden precomputed per byte in init. The temp reload is
- * asm-guaranteed (the u8x16 original documents that intrinsic reloads
- * get eliminated by the compiler).
+ * Buffers are 16384 bytes each (plus a 256-byte slack on the buffers read
+ * by the unpredicated full-VL `ldr z`, so the tail batch at any VL stays
+ * in-bounds); the phase is per BYTE index ((base+k)%4), golden precomputed
+ * per byte in init. The temp reload is asm-guaranteed (the u8x16 original
+ * documents that intrinsic reloads get eliminated by the compiler).
  * @endparblock
  */
 
@@ -46,6 +47,12 @@
 #endif
 
 #define NEON_ROT_U8X16_SVE_BYTES 16384   /* bytes per buffer */
+/* 满 VL `ldr z` 尾部松弛: SVE 架构最大 VL 2048bit = 256 字节。非 2 幂 VL
+ * (如 48B) 下尾批 n<svcntb(), 无谓词的全宽加载会读到缓冲末尾之外; 给被该
+ * helper 读取的缓冲(srcA/srcB/temp)各留 256B 松弛, 任意 VL 都不越界
+ * (review 4249143905)。 */
+#define NEON_ROT_U8X16_SVE_LDR_SLACK 256
+#define NEON_ROT_U8X16_SVE_ALLOC (NEON_ROT_U8X16_SVE_BYTES + NEON_ROT_U8X16_SVE_LDR_SLACK)
 
 struct NeonRotU8x16SveData {
     uint8_t *srcA;
@@ -64,12 +71,13 @@ static int neon_rot_u8x16_sve_init(struct test *test)
     }
 #endif
     auto *data = static_cast<NeonRotU8x16SveData *>(malloc(sizeof(NeonRotU8x16SveData)));
-    data->srcA = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
-    data->srcB = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
+    data->srcA = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_ALLOC));
+    data->srcB = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_ALLOC));
     data->expected = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
 
-    memset_random(data->srcA, NEON_ROT_U8X16_SVE_BYTES);
-    memset_random(data->srcB, NEON_ROT_U8X16_SVE_BYTES);
+    /* 填满含松弛的整段, 使尾部全宽加载读到的松弛字节为已初始化值 */
+    memset_random(data->srcA, NEON_ROT_U8X16_SVE_ALLOC);
+    memset_random(data->srcB, NEON_ROT_U8X16_SVE_ALLOC);
 
     /* golden: 逐字节同旋转, 在相同 SVE 单元上预计算 */
     for (int j = 0; j < NEON_ROT_U8X16_SVE_BYTES; j++) {
@@ -105,9 +113,11 @@ static int neon_rot_u8x16_sve_run(struct test *test, int cpu)
     (void)cpu;
     auto *data = static_cast<NeonRotU8x16SveData *>(test->data);
 
-    uint8_t *temp = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
+    uint8_t *temp = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_ALLOC));
     uint8_t *dst  = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
     const int lanes = svcntb();   /* bytes per vector */
+    /* temp 被满 VL ldr z 读取(含尾部松弛区), 先置 0 保证读取字节已初始化 */
+    memset(temp, 0, NEON_ROT_U8X16_SVE_ALLOC);
     /* SVE 架构最大 VL 2048bit → svcntb() ≤ 256 (movbe_slf_sweep
      * VL-portable 范式): n = min(bytes-base, svcntb()) 全 VL 覆盖 */
     uint8_t phase[SVE_MAX_VECTOR_BYTES];
