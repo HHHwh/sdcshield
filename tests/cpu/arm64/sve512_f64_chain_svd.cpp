@@ -171,6 +171,21 @@ static int sve512_f64_chain_svd_init(struct test *test)
             uint64_t exp = 0x3FEU + (random64() & 1ULL);  /* [0.5, 2) */
             return sign | (exp << 52) | mantissa;
         };
+
+        /* Value-domain knob (SEVI ASPLOS'26 Obs.19: bounded vs unbounded
+         * inputs differ up to 245x in SDC frequency on the same core).
+         * bounded=1 (default): the |x| <= 2 finite band above — the
+         * randomization-hardened path, untouched.
+         * bounded=0: full-entropy mantissas with the exponent clamped to
+         * [2^-8, 1) so the chain still cannot overflow to Inf/NaN and
+         * the byte-exact golden stays valid. */
+        int64_t bounded = get_testspecific_knob_value_int(test, "bounded", 1);
+        auto random_unbounded_f64 = []() -> uint64_t {
+            uint64_t sign = (random64() & 1ULL) << 63;
+            uint64_t mantissa = random64() & 0x000FFFFFFFFFFFFFULL;
+            uint64_t exp = 0x3F7ULL + ((random64() >> 61) & 7ULL);
+            return sign | (exp << 52) | mantissa;
+        };
         data->seeds_f64.resize(data->vl_d);
         for (size_t lane = 0; lane < data->vl_d; ++lane) {
             data->seeds_f64[lane] = 0x3FF0000000000000ULL |
@@ -188,8 +203,10 @@ static int sve512_f64_chain_svd_init(struct test *test)
         data->m_f64.resize(total);
         data->a_f64.resize(total);
         for (size_t i = 0; i < total; ++i) {
-            data->m_f64[i] = random_finite_f64();
-            data->a_f64[i] = random_finite_f64();
+            data->m_f64[i] = bounded ? random_finite_f64()
+                                     : random_unbounded_f64();
+            data->a_f64[i] = bounded ? random_finite_f64()
+                                     : random_unbounded_f64();
         }
 
         test->data = data.release();

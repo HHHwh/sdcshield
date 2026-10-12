@@ -475,3 +475,36 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
       → V3 真实上线, 结论回写本台账
 - [ ] V6: 检索清除板上残留 udev cap 规则（保留防自动上线注释）
 - [ ] 内核升级 SOP 增补"先重编模块再谈上线"（脚本门0 强制）
+
+## 2026-10-12 激发增强套件合并 main + 本机最大检测
+
+- **合并落地**:`feat/sdc-excitation-enhancement-20260917`(22 commits,19 任务,
+  9-20 起滞留)经 `feat/sdc-excitation-enhancement-integration` 并入:
+  1 个 merge commit(74c68ac5,三类冲突口径)+ 3 个后续 commit(旋钮移植
+  cb70bc9e / gather 断言移植 bf96a508 / 簇锚定脚本二进制发现修复 9dd4dfd3)。
+- **冲突解决口径**(30 文件):①fma 11 + gather 10 取 main——main 已独立落地
+  等价 W1 修复(598d178f/59989676/0445a218/3d731d24)且含 issue #182 VL-skip
+  等后续加固;②meson 以 main 结构为底追加(SVE 库 +5 成员、新建 sve2 库带
+  编译器守卫与 sanitizer 豁免、SME 库 +fmopa_za;neon_rot 同名重复随 main
+  删除);③链 4 文件 + gather_scatter 取 main 后移植分支增量;isal 取 main
+  vendored-static 方案(分支动态链接解法被取代,注明于 merge commit)。
+- **随合并修复**:分支代码对 main 构建标准的 9 处告警(%lu 格式×4 → 1UL、
+  strict-aliasing×3 → memcpy、死 lambda×1 删除);cluster-anchored 脚本
+  硬编码 ./builddir 导致 exit=127(验证矩阵实测抓到)→ 采用 sdc_detect.sh
+  二进制发现约定(SDC_BIN → ./builddir → ./builddir-gcc → fail-loud)。
+- **计数**:440 PROD / 446 quality=0 / 451 全量(合并增量精确 +10 注册;
+  main 基线 430 较 CLAUDE.md 10-09 口径 428 多 2 = 10-09 后落地的
+  eigen_gemm_double_max_arm 与 sme_fmopa_stress_arm;selftest 不入 list)。
+- **验证矩阵实录**(920 真机):fma 家族/fpcr 笛卡尔(NEON+FPCR 真跑,
+  FPCR 无污染复查)/mesh f64 单核+192 核全 pass;SVE/SME 10 测试干净
+  skip(框架编译特性门);objdump 签名指令全在(whilelt→whilelo 无符号
+  同族降级、串行链 fmla×3+yield×1 为正确形态,原计划 ≥8/≥10 阈值系
+  未验证预估,如实修正);lane 直方图 11/11 失败注入全出指纹行;崩溃
+  VA[55:48] 掩码逻辑单元验证通过(本机内核对非规范地址上报 FAR 已清洗,
+  运行时触发需真故障,与分支原计划记载一致);SME 探针结论
+  "SMSTART trapped SIGILL — kernel does not enable SME"(0xd01 预期)。
+- **遗留(后续工作,不在本次范围)**:SVE/SME 类 byte-exact golden 真机
+  首验在 cn23154(SIGILL-probe 定论 SME → 单核 nt_reload → 满簇
+  cluster-anchored → bounded=0 值域档);selftest_sme_sigill_probe 首两次
+  运行出现 132/167s 瞬态慢跑(稳态 0.2s,未复现,疑冷启动页入伪象,记录在案)。
+- **检测战役**:合并二进制上启动 sdc_detect.sh 全核优先序轮转(见后续条目)。

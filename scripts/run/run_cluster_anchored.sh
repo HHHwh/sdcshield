@@ -18,14 +18,31 @@
 #   -q        快速轮换模式(60s × N 轮测试轮换 — Ripple 7% 类
 #             "只有频繁切换才触发"的缺陷需要此节奏)
 #
-# 依赖:builddir/sdcshield;sysfs topology(cluster_cpus_list,
+# 依赖:sdcshield 二进制(SDC_BIN 覆盖 → ./builddir → ./builddir-gcc);
+# sysfs topology(cluster_cpus_list,
 # 缺失时回退 die_cpus_list,再回退均匀切分)。
 #
 # 崩溃判读提示(自动打印):si_addr 低 48 位完好 + VA[55:48] 非零
 # = 已知 NUMA3 签名形状(详见仓库 memory/诊断记录)。
 # ============================================================
 
-SDCSHIELD="./builddir/sdcshield"
+# 二进制发现（与 scripts/run/sdc_detect.sh 同约定）:
+# SDC_BIN 显式覆盖 → ./builddir/sdcshield → ./builddir-gcc/sdcshield，
+# 都缺失则 fail-loud（占位诚实原则——绝不静默空转）。
+if [ -n "${SDC_BIN:-}" ]; then
+    SDCSHIELD="$SDC_BIN"
+else
+    SDCSHIELD=""
+    for c in ./builddir/sdcshield ./builddir-gcc/sdcshield; do
+        [ -x "$c" ] && SDCSHIELD="$c" && break
+    done
+fi
+if [ -z "${SDCSHIELD:-}" ] || [ ! -x "$SDCSHIELD" ]; then
+    echo "FATAL: 未找到可执行的 sdcshield（SDC_BIN=${SDC_BIN:-未设置}；" \
+         "已尝试 ./builddir/sdcshield 与 ./builddir-gcc/sdcshield）。" >&2
+    echo "       请先构建（README「从源码构建」）或 export SDC_BIN=<路径>。" >&2
+    exit 1
+fi
 TIMEOUT=1800
 ROUNDS=4
 TESTS="sve512_nt_reload_arm,sve512_f64_chain_arm,sve512_f32_chain_arm,sve512_gather_scatter_arm,sve512_stencil_axis_arm,power_virus_dit"

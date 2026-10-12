@@ -48,7 +48,7 @@ bash scripts/run/sdc_detect.sh
 
 | 旗标 | 作用 |
 |---|---|
-| `--quality=0` | 跑 PROD+BETA 全部 434 用例（源码构建口径；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
+| `--quality=0` | 跑 PROD+BETA 全部 446 用例（源码构建口径；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
 | `--test-list-file` | 优先序测试列表：由脚本从当前二进制动态生成（顺序即执行序，对新用例自适应） |
 | `-T forever` | 整套用例无限轮转。SDC 故障窗口极稀疏（CPU179 实测占空比 ~0.06%），长驻留是检出关键；一轮 ≈ 7 小时 |
 | `-t 60s` | 每用例 60 秒。SEVI 实测 >80% 的首错在 10 秒内出现，60s 有 6 倍余量 |
@@ -115,7 +115,7 @@ sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断�
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
-预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（428）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（440）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
 
 ```bash
 git clone --recurse-submodules <repo-url>   # 含子模块
@@ -147,7 +147,7 @@ sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzs
 ./third-party/acl/build.sh               # → install/lib/libarm_compute-core.a（acl_gemm NEGEMM + fisttp_arm；NEON runtime core 目标，v23.02）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
-./builddir/sdcshield --list-tests        # 应列出 428 个 PROD 用例（gcc + 全部 vendored 依赖，实测于 2026-10-09）
+./builddir/sdcshield --list-tests        # 应列出 440 个 PROD 用例（gcc + 全部 vendored 依赖，实测于 2026-10-12）
 ```
 
 > ARM64 要求 Eigen 5.0.0+（系统 Eigen 3.3.x 在 GCC 12+ 下编译失败）。仓库自带 `third-party/eigen5/`，aarch64 构建路径在 `tests/cpu/meson.build` 中直接 `include_directories` 指向它，**无需系统安装 eigen3**；`PKG_CONFIG_PATH` 仅为兼容 x86 路径而保留，带上无害。
@@ -342,7 +342,7 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 
 ## 测试用例与检测能力
 
-当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）默认 quality 下共 **428 个用例**（gcc + 全部 vendored 依赖齐备时，`--list-tests` 实测 2026-10-09；`--quality=0` 434、`--quality=-1` 439），含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）默认 quality 下共 **440 个用例**（gcc + 全部 vendored 依赖齐备时，`--list-tests` 实测 2026-10-12；`--quality=0` 446、`--quality=-1` 451），含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
@@ -363,6 +363,7 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
 | ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`、`sve512_stencil_axis_arm`、`sve512_xlswave_ctx_arm`、`sve512_f64_chain_svd`、`sve512_f64_special_svd`、`sve512_f32_chain_svd`、`sve512_gather_scatter_svd`、`libomp_ctx_arm`、`sme_za_tileview_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀）、XLSDFT 复合上下文触发器（同一 per-core 循环内交错 64× stencil 轴核、SVD 尺度 gather/scatter 与 7 槽指针表金丝雀 + 每轮 VA[63:48] 金丝雀，三阶段字节精确 memcmp，复现已知故障窗口配方而无 MPI/libomp 脚手架；无 SVE 或 VL≠512-bit 诚实 SKIP）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、libomp fork/join 上下文仿真（SVE FMLA 突发 × 时间同步集体停放窗口交替 + 函数指针表/计数器元数据金丝雀——指针比对、间接调用返回值、逐字节 memcmp 三层校验；只仿真访问模式、不复刻真实 libomp TLS/元数据布局（如实标注），无等待对端进度的设计天然无死锁；无 SVE 或 VL≠512-bit 诚实 SKIP）、SME ZA tile 语义压力（h 装载 round-trip / v 列转置读出 / 向量选择 imm 旋转 / za1h 独立 round-trip + za0 隔离，逐字节 golden；无 HWCAP2_SME 或 SVL≠512-bit 诚实 SKIP；需 clang +sme 工具链，gcc 构建自动剔除） |
+| SDC 激发增强套件（2026-09-17 研究落地，2026-10-12 合并） | `sve512_nt_reload_arm`、`sve512_fmmla_arm`、`sve2_cross_precision_arm`、`sve512_fcmla_arm`、`sve512_pred_ops_arm`、`sve_fpcr_cartesian_arm`、`fpcr_rounding_cartesian_arm`、`power_virus_dit_sve_arm`、`mesh_upi_avx512_symm_f64`、`sme_fmopa_za_arm` + 既有测试增强 | 针对已知鲲鹏故障签名与 SEVI(ASPLOS'26)/ITHICA 研究结论定向编写：**nt_reload** = NUMA3 VA 通路触发指令窗口首覆盖（ld1rd/ldnt1d/stnt1d 非时间访存 + 栈重装载距离旋钮 1..4）；**FMMLA/跨精度/FCMLA/谓词** = SVE2 矩阵外积、FP16/BF16 加宽乘加、复数 FMA 全旋转（0/90/180/270）、谓词网络（whilelt 密度扫描/谓词翻转/FADDA 串行归约/LDFF1+FFR/FMAXV）——此前零指令级覆盖的数据通路；**FPCR 笛卡尔**（NEON + SVE 伴生）= 舍入模式 RNE/RTZ/RDN/RUP × FZ 8 配档全扫（FPCR 现场保存/恢复纪律，本机 920 真机验证）；**power_virus SVE** = 全宽 SVE di/dt 病毒（突发内嵌地址生成）；**mesh f64** = 首个 FP mesh 变体（跨核共享数据 FP 生产/消费，0.5 倍数精确块校验和使总和无序可判定）；**SME FMOPA** = 纯 inline asm 的 ZA 外积链（gcc 可建，内核未暴露 HWCAP2_SME 时干净 skip——`selftest_sme_sigill_probe` 一跑定论）。既有增强：sve512 链族值域旋钮 `-O <test>.bounded=0|1`（SEVI Obs.19 有界/无界域 SDC 频率差 245×，默认 1 不改行为）；gather_scatter 读偏移显式断言（源值携带自身索引，76% 内存类 SDC 为错偏移读）+ u64base/宽步距变体。框架诊断：memcmp 失败 lane 偏移直方图（单 lane/相邻 lane = 单物理单元指纹，SEVI Obs.13）、aarch64 崩溃消息 VA[55:48] 签名判读（只报不判）。SVE/SME 类在 920 上干净 skip（编译+指令生成已验证），byte-exact golden 真机首验在 cn23154（SVE512 故障机） |
 | ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别（uint64x2 旋转 ALU + 向量 store/reload/store）、ldr_at_top 扫描顺序变体（升/降序交替，区分槽位局部 vs 前进位置特征）、core-179 字节交换往返触发探针组 |
 | SVE 版 avx53 套件（tests/cpu/sve/，53 个） | `fma_tail_sve{,_wide}`、`fmatail_sve{,_wide}`×4 对、`fma_patterns_sve_wide_{ps,pd}`、`mesh_upi_sve_*` 18 个、`eigen_svd_bidiag_sve`、`ipsec_*_sve{,_wide}` 24 个 | 53 个 avx 命名 NEON 测试的 SVE1 移植（负载环境不变：向量宽度/随机域/特殊值注入/块结构/原子协议/golden 模式全保留；命名 `_avx/_avx2→_sve`、`_avx512→_sve_wide`）。FMA 10 + Mesh 18 = 纯指令替换（SVE 谓词访存）；eigen 1 = 自写 Householder 双对角化 SVE 负载（替代崩溃的 Eigen-SVE 后端路径）；ipsec 17 = EVP 加密 + 多流 SVE HMAC（SHA 内核与 OpenSSL 全向量比对 5200+1360 全对，lane0=原 MAC 语义+变体填 lane），7 个 EVP-only（GCM/CMAC/XCBC）如实标注计算路径。构建于 `tests_sve_avx53`/`tests_sve_avx53_ipsec` 库（`-march=armv8.2-a+sve`，init 探 HWCAP_SVE 干净 skip） |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
@@ -373,10 +374,10 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 6 |
-| 2 | PROD（默认）| `quality >= 2` | 428（gcc + 全部 vendored 依赖，实测 2026-10-09） |
-| | **合计** | | **439** |
+| 2 | PROD（默认）| `quality >= 2` | 440（gcc + 全部 vendored 依赖，实测 2026-10-12） |
+| | **合计** | | **451** |
 
-> 上表为 gcc 参考平台（2026-10-09 实测）口径。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
+> 上表为 gcc 参考平台（2026-10-12 实测）口径。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
