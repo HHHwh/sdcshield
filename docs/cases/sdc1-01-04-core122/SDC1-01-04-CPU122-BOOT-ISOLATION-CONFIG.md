@@ -6,12 +6,13 @@
 > **本文定位**: 研究前提的配置总账——把"启动期隔离 core122 + 启动后上线 123–127 + core122 永久下线"这一规则所依赖的**全部系统配置**（GRUB、udev、systemd 启动脚本、sysctl、看门狗、kdump、netconsole、SEL/vmcore 归档、实验上下线通道）统一成一份可核查、可复用、可回退的文档。微架构级故障分析见同目录《SDC1-01-04-CPU122-MICROARCH-DIAGNOSIS-REPORT.md》。
 > **命名注**: 用户口径中偶称 "sdc1-02-04"；本仓全部证据（本目录名、既有报告标题）均为 **sdc1-01-04**，本文统一按 sdc1-01-04 撰写。
 > **变更记录**: 2026-10-09 深夜 vmcore 转储目录由 `/home/vmcore` 迁移至 `/home/sdc/vmcore`（同卷 `mv` 原子改名，**数据原样保留**）；`/etc/kdump.conf`（`path sdc/vmcore`）、vmcore-sync、postboot-check 及 vmcore-project 正本/README/runbook/install-all 同步更新，kdump 已重启并验证 operational。
+> **变更记录**: 2026-10-10 新增上线即封顶体系——内核模块 `cpu122-capfreq`（kprobe+freq_qos 双拦截，时刻②③窗口归零）+ 脚本 v2 三门/后验/封顶子命令；设计见 `docs/superpowers/specs/2026-10-10-cpu122-online-atomic-freqcap-design.md`，模块正本 `docs/cases/sdc1-01-04-core122/cpu122-capfreq/`。
 
 ---
 
 ## 0. 一页结论
 
-**规则**：内核以 `maxcpus=122` 启动（只拉起逻辑 CPU0–121，坏核 122 从不执行一条启动代码）→ systemd `cpu-good-online.service` 在 multi-user 阶段把 CPU123–127 热插拔上线 → **终态 127 核在线、逻辑 CPU122（MPIDR 0x0900060200）永久下线**。实验需要坏核时，走 `cpu122-online-offline.sh` 受控通道（上线 + 降频封顶 + MPIDR 核对），重启后自动回到隔离态。
+**规则**：内核以 `maxcpus=122` 启动（只拉起逻辑 CPU0–121，坏核 122 从不执行一条启动代码）→ systemd `cpu-good-online.service` 在 multi-user 阶段把 CPU123–127 热插拔上线 → **终态 127 核在线、逻辑 CPU122（MPIDR 0x0900060200）永久下线**。实验需要坏核时，走 `cpu122-online-offline.sh` v2 受控通道（模块 `cpu122-capfreq` 上线即封顶 + 门0/门1 预检 + MPIDR/频率后验，2026-10-10 起），重启后自动回到隔离态。
 
 **当前实态（2026-10-09 22:15 启动实例实测）**：
 
@@ -273,13 +274,25 @@ options netconsole netconsole=6666@172.168.234.165/enp23s0f0,6666@172.168.177.97
 
 ### 4.1 `cpu122-online-offline.sh`——坏核上下线的唯一正门
 
-`/home/sdc/cpu122-online-offline.sh`，用法 `sudo ./cpu122-online-offline.sh {上线|on|1|下线|off|0}`（参数强制二选一）。**每次执行前自动完成三项幂等准备**：
+`/home/sdc/cpu122-online-offline.sh`，用法 `sudo ./cpu122-online-offline.sh {上线|on|1|下线|off|0}` 或 `sudo ./cpu122-online-offline.sh {封顶|cap} <kHz>`（参数强制显式指定）。**每次执行前自动完成三项幂等准备**：
 
 1. **准备1（udev 防线）**：检索并注释全部规则目录中激活状态的 CPU 自动上线规则（§3.2），复核无残留后 `udevadm control --reload`；检测旧方案残留（`/etc/udev/rules.d/40-openEuler.rules` 整文件覆盖）并告警。
 2. **准备2（GRUB 防线）**：确保 `/etc/default/grub` 的 `GRUB_CMDLINE_LINUX` 含 `maxcpus=122 panic=30`——先清除历史残留的 `maxcpus=`/`panic=`/`nr_cpus=`（nr_cpus 硬截断 possible，会破坏"128 核可见"设计；09-24 曾发生生效层残留 `nr_cpus=12` 的事故）再追加；仅在改动过时 `grub2-mkconfig -o /boot/efi/EFI/openEuler/grub.cfg`；随后用 `grubby --info=ALL` 逐条目核对生效层，不一致则 `grubby --update-kernel=ALL --remove-args="nr_cpus" --args="maxcpus=122 panic=30"`；最后对 `/proc/cmdline` 做一致性提示（运行中内核需重启才生效）。
 3. **准备3（补齐好核）**：上线除 122 外的全部 offline 核（0..最大核号，逐个 `echo 1`，失败即中止）。
 
-**主功能**：`echo <0|1> > /sys/devices/system/cpu/cpu122/online` 并回读验证。收尾提示：上线时若 `scaling_max_freq ≠ 1450000` 会提醒坏核曾降额 1.45GHz 运行及封顶命令；并明确"**重启后 CPU122 将回到离线（maxcpus=122 启动限制），上线仅为运行时状态**"。
+**主功能**：`echo <0|1> > /sys/devices/system/cpu/cpu122/online` 并回读验证（v1 曾在收尾提醒手动降额封顶——v2 起封顶由模块在上线路径内自动完成，该提示已废弃；重启后回离线的语义不变）。
+
+**v2 上线即封顶（2026-10-10 起，模块 `cpu122-capfreq`）**：坏核满频致死竞态
+（上线后 ~10ms 即死，uevent 未出、用户态封顶架构性迟到）由内核模块归零——
+kprobe `cppc_set_perf` 钳位（驱动 init 的 2.9G slam 在写硬件前被改写）+
+freq_qos MAX 挂 policy（跨热插拔存活，governor 稳态封顶）。脚本 v2 流程：
+门0（模块加载 + cap 边界：0 拒绝、>2.9G 拒绝、>2.0G 高危警告）→ 门1
+（present=0-127、offline=122、cpu121-123 同簇序——编号漂移即拒）→ 上线
+（封顶在上线路径内完成）→ 后验1（journalctl MPIDR==0x0900060200，不符自动
+下线）→ 后验2（scaling_max_freq/cur ≤ cap，qos 疑失效自动下线）。**切档
+免上下线**：`封顶 2000000` 在线生效（qos 自动传导），每加电会话只需一次
+上线。残余：时刻①（PSCI 热启动早期段，固件域）不可归零，靠会话一次上线
+纪律 + 错峰缓解；长期治本走 BIOS/BMC per-core 限频。
 
 ### 4.2 狩猎/批次脚本的安全预检（实验侧的第二道闸）
 
@@ -294,8 +307,9 @@ options netconsole netconsole=6666@172.168.234.165/enp23s0f0,6666@172.168.177.97
 ### 4.3 降频封顶协议与频率依赖结论
 
 - 封顶机制：本板 cpufreq 驱动为 **cppc_cpufreq**（每核独立 policy，`performance` governor，可用连续范围 400000–2900000 kHz）——注意仓库 CLAUDE.md 的"No cpufreq"平台注记描述的是另一台 192-CPU 单板，**本板 cpufreq 可用**。
-- **cpu122 离线时其 cpufreq 目录不存在**——封顶只在在线期间存在，**每次上线后必须重新封顶**（狩猎脚本预检正是为此）。
+- **cpu122 离线时其 cpufreq 目录不存在**——封顶只在在线期间存在，**每次上线后必须重新封顶**（狩猎脚本预检正是为此；v2 起由模块 `cpu122-capfreq` 在上线路径内自动完成）。
 - 频率依赖 A/B（2026-09-24，同二进制同种子同核）：2.9GHz 满频单核 `zstd19` 60s 两连崩（SIGSEGV，<4s）；1.45GHz 同种子精确重放 60s 184/184 迭代全 pass，整机存活——**坏核故障是频率依赖的**（时序/电压裕量劣化形态）。此后狩猎 v3 以 122@1.45GHz + 其余 127 核@2.9GHz 全核跑完 116 项×30min（67.6h）；10-08 起频率研究改 2.0GHz 档（40 项×15min 全净），10-09 按用户裁定改为全核心复跑。台账见 `docs_xu/2026-10-08-cpu122-frequency-sdc-study.md`。
+- **封顶机制 v2（2026-10-10 起）**：模块 `cpu122-capfreq` 在 CPU 上线路径内完成"首次 CPPC 写入即封顶 + governor 稳态封顶"，`scaling_max_freq` 的用户态补写不再是安全边界（降级为后验读数）；封顶跨 offline/online 自动保持，1.45G↔2.0G 切档走 `cpu122-online-offline.sh 封顶 <kHz>`，免上下线。
 
 ### 4.4 机器死亡后的恢复流程（狩猎脚本头注释原文规则）
 
@@ -412,6 +426,8 @@ $ grep -rn 'ATTR{online}' /usr/lib/udev/rules.d/ /run/udev/rules.d/ /etc/udev/ru
 
 无自动守卫：122 被误上线（udev 规则还原、误操作、异常热插拔事件）后**不会被自动纠正**，且离线前其 cpufreq 封顶不存在（新上线默认满频 2.9GHz——最危险状态）。恢复：`echo 0 > /sys/devices/system/cpu/cpu122/online` 或直接重启（maxcpus 保证回到隔离态）。若实验授权上线，必须同步完成封顶（§4.3）——这正是 vmcore-project 红线 #2 的实验例外通道：**用户明示授权 + 降频封顶 + MPIDR 核对 + 死亡容忍设计**。
 
+2026-10-10 起：模块 `cpu122-capfreq` 使"意外上线后满频裸奔"窗口从用户态封顶链路（50–500ms，实测致死）缩小到 PSCI 热启动早期段（固件域，历史实证低风险）；若模块被 `封顶 0` 显式解锁或卸载，恢复裸奔态——脚本门0 会拒绝 cap=0 态的上线，但已在线期间的风险自担。
+
 ### 6.7 其他注意
 
 - panic 超时是**两阶段**语义：早期启动 30s（grub）、进系统后 10s（sysctl）——解读"崩溃后多久自愈"时注意区分。
@@ -461,5 +477,8 @@ $ grep -rn 'ATTR{online}' /usr/lib/udev/rules.d/ /run/udev/rules.d/ /etc/udev/ru
 | `/home/sdc/vmcore-project/`（`configs/` 为正本，git 管理） | 捕获体系部署源 + 设计/runbook/测试报告 | 全局 |
 | `/home/sdc/root-xupeng/sdcshield/scripts/run/*.sh` | 狩猎/频率批次脚本（MPIDR/封顶预检） | 实验 |
 | `/home/sdc/vmcore/` | kdump 转储落点（2026-10-09 由 `/home/vmcore` 迁入；已有 09-29、09-30、10-09 三次实战捕获） | L2 |
+| `docs/cases/sdc1-01-04-core122/cpu122-capfreq/`（板上 `/home/sdc/cpu122-capfreq/`） | 上线即封顶内核模块正本（c/Makefile/README/deploy/tests） | 实验 |
+| `/etc/modules-load.d/cpu122-capfreq.conf` + `/etc/modprobe.d/cpu122-capfreq.conf` | 模块开机自动加载与默认参数（target_cpu=122 cap_khz=1450000） | 实验 |
+| `docs/superpowers/specs/2026-10-10-cpu122-online-atomic-freqcap-design.md` | 上线即封顶设计（三时刻/双拦截/验证 V1–V6/已排除方案） | 实验 |
 
 ---
