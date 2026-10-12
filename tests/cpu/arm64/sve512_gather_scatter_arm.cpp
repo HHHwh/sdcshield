@@ -33,10 +33,11 @@
  *
  * Gather variants (round-robin): u64index (scalar base + u64 element
  * indices — the original), u64base (per-lane base addresses in a vector,
- * svld1_gather_u64base_f64), and a wide-stride variant (indices stepped
- * by 64 elements, forcing L1 misses on the gather path — ITHICA MemDiv:
- * forcing different memory-hierarchy paths exposes faults homogeneous
- * traffic never sees).
+ * svld1_gather_u64base_f64), and a wide-stride variant walking a
+ * dedicated 2 MiB backing table (larger than L1D and L2) with element
+ * stride 64 and a per-round 512 KiB window rotation, so every gather is
+ * a genuine L1 miss into L2/L3 — ITHICA MemDiv: forcing different
+ * memory-hierarchy paths exposes faults homogeneous traffic never sees.
  *
  * The scatter destination is byte-compared against a scalar golden that
  * indexes through the SAME indirection (a permutation does NOT commute
@@ -76,10 +77,16 @@ static inline uint64_t splitmix64(uint64_t x)
 // table below.
 static constexpr uint64_t IDX_TAG_MASK = 0xFFFFFULL;
 
+// Wide-stride backing table: 256K f64 = 2 MiB — larger than the 64 KiB L1D
+// (and than the 512 KiB per-core L2) of the target parts, so the stride
+// walk genuinely traverses L1 -> L2/L3 (ITHICA MemDiv).
+static constexpr size_t STRIDE_ELEMS = 256 * 1024;
+
 struct SveGatherScatterData {
     size_t vl_d;
     std::vector<uint64_t> gather_src;  // 只读共享
     std::vector<uint64_t> gather_idx;  // 只读共享(置换索引表)
+    std::vector<uint64_t> stride_src;  // 只读共享(2 MiB 宽步距后备表)
     // 注意: scatter_dst / scatter_golden 是每线程每迭代的可变 scratch,不能放共享 data ——
     // -n>1 时框架对每个 worker 线程共享同一个 test->data,并发改写同一块 scatter 缓冲会
     // 相互踩踏(实测 -n 4 时上半 lane 读到 0x0:某线程的 std::fill 清掉了另一线程正在比对的
@@ -176,6 +183,21 @@ static int sve512_gather_scatter_arm_init(struct test *test)
             data->gather_idx[j] = t;
         }
 
+        /* Wide-stride backing table (Codex review, PR #233): the stride
+         * variant used to index the 4 KiB gather_src, where (i*64) % 512
+         * touches only eight L1-resident lines — no L1 miss ever
+         * happened. A dedicated 2 MiB table (STRIDE_ELEMS) exceeds L1D
+         * and L2, so the stride walk genuinely traverses the hierarchy.
+         * Same index-revealing encoding v2 (256K < 2^20 tag width). */
+        data->stride_src.resize(STRIDE_ELEMS);
+        for (size_t i = 0; i < STRIDE_ELEMS; ++i) {
+            uint64_t sign = (random64() & 1ULL) << 63;
+            uint64_t exp = 0x3FEULL + (random64() & 1ULL);          // [0.5, 2)
+            uint64_t entropy = (random64() & 0xFFFFFFFFULL) << 20;  // mant [51:20]
+            data->stride_src[i] = sign | (exp << 52) | entropy |
+                                  (uint64_t)(i & IDX_TAG_MASK);
+        }
+
         test->data = data.release();
         return EXIT_SUCCESS;
     } catch (const std::exception &e) {
@@ -209,12 +231,17 @@ static bool check_read_offsets(const SveGatherScatterData *d,
     return ok;
 }
 
-// Wide-stride index table (forces L1 misses on the gather path).
-static void build_stride_idx(std::vector<uint64_t> &idx, size_t n, size_t span)
+// Wide-stride index table: element stride 64 (512 B) over a backing table
+// larger than L1, with a per-round rotating base. The rotation advances by
+// 64K elements (512 KiB) — more than one round's 256 KiB window — so
+// consecutive rounds touch disjoint line sets and every gather is a
+// genuine L1 miss instead of re-hitting the previous round's lines.
+static void build_stride_idx(std::vector<uint64_t> &idx, size_t n,
+                             size_t span, size_t base)
 {
     idx.resize(n);
     for (size_t i = 0; i < n; ++i)
-        idx[i] = (i * 64) % span;   // stride 64 elements
+        idx[i] = (base + i * 64) % span;
 }
 
 static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
@@ -230,9 +257,9 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
     for (size_t i = 0; i < gn; ++i)
         base_addrs[i] = reinterpret_cast<uintptr_t>(&d->gather_src[d->gather_idx[i]]);
 
-    // wide-stride variant table
+    // wide-stride variant table (rebuilt every round with a rotating base)
     std::vector<uint64_t> stride_idx;
-    build_stride_idx(stride_idx, gn, d->gather_src.size());
+    size_t stride_base = 0;
 
     // 每线程每迭代的栈上 scratch(dst/golden 可写),不共享 —— 规避 -n>1 并发踩踏
     // (与 sve512_f64_chain_arm 的 hw/gold 同模式)。
@@ -269,18 +296,19 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
                 all_passed = false;
         }
 
-        // ---- variant 3: wide stride (L1-miss gather path) ----
+        // ---- variant 3: wide stride (genuine L1-miss gather path) ----
         {
-            const size_t n = stride_idx.size();
-            std::vector<uint64_t> raw(n);
+            build_stride_idx(stride_idx, gn, d->stride_src.size(), stride_base);
+            stride_base = (stride_base + 64 * 1024) % d->stride_src.size();
+            std::vector<uint64_t> raw(gn);
             const svbool_t pg = svptrue_b64();
-            for (size_t off = 0; off < n; off += lanes) {
+            for (size_t off = 0; off < gn; off += lanes) {
                 svuint64_t vidx = svld1_u64(pg, &stride_idx[off]);
                 svfloat64_t v = svld1_gather_u64index_f64(
-                    pg, reinterpret_cast<const double *>(d->gather_src.data()), vidx);
+                    pg, reinterpret_cast<const double *>(d->stride_src.data()), vidx);
                 svst1_f64(pg, reinterpret_cast<double *>(&raw[off]), v);
             }
-            if (!check_read_offsets(d, raw.data(), stride_idx.data(), n))
+            if (!check_read_offsets(d, raw.data(), stride_idx.data(), gn))
                 all_passed = false;
         }
 
