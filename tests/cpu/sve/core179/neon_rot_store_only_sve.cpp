@@ -125,6 +125,26 @@ static int neon_rot_store_only_sve_run(struct test *test, int cpu)
         }
 
         if (memcmp(dst, data->expected, NEON_ROT_STORE_ONLY_SVE_COUNT * sizeof(uint64_t)) != 0) {
+            /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
+            {
+                size_t _dump_bad = 0;
+                int _dump_shown = 0;
+                for (size_t _dump_j = 0; _dump_j < (size_t)(NEON_ROT_STORE_ONLY_SVE_COUNT); ++_dump_j) {
+                    if (dst[_dump_j] != data->expected[_dump_j]) {
+                        ++_dump_bad;
+                        if (_dump_shown < 8) {
+                            log_error("neon_rot_store_only_sve: mismatch at index %zu: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                                      _dump_j,
+                                      (unsigned long long)data->expected[_dump_j],
+                                      (unsigned long long)dst[_dump_j],
+                                      (unsigned long long)(data->expected[_dump_j] ^ dst[_dump_j]));
+                            ++_dump_shown;
+                        }
+                    }
+                }
+                log_error("neon_rot_store_only_sve: total mismatched elements: %zu / %d",
+                          _dump_bad, NEON_ROT_STORE_ONLY_SVE_COUNT);
+            }
             report_fail_msg("neon_rot_store_only_sve data miscompare");
         }
     }
