@@ -218,6 +218,43 @@ if host_machine.cpu_family() == 'aarch64'
             # the fault window, access-pattern only (layout honestly not
             # replicated). Deadlock-free by construction.
             'libomp_ctx_arm.cpp',
+            # Non-temporal access + stack-reload window family: the first
+            # coverage of ld1rd/ldnt1d/stnt1d — the NUMA3 VA-path fault's
+            # trigger-instruction window (field diagnosis 2026-09). Inline
+            # asm (no ACLE intrinsic exists for ld1rd/ldnt1d-with-offset);
+            # reload->use distance is a 1..4 knob; base pointer re-
+            # materializes from the stack at every noinline step; per-step
+            # ld1rd broadcasts; byte-exact golden with identical op order;
+            # VA[63:48] canary per outer iteration.
+            'sve512_nt_reload_arm.cpp',
+            # Complex FMA (FCMLA) all-rotation chain: svcmla_f64 at
+            # 0/90/180/270 (literal rotation -> one specialized function
+            # each) over dependent 512-step chains; golden is the DDI 0616
+            # fused-semantics fma expansion (NOT std::complex — its
+            # multiply is double-rounded); worked-example self-check per
+            # rotation. Complex datapath had zero instruction-level
+            # coverage (eigen_svd_cdouble only goes through scalar
+            # complex expansion). SVE1 — any SVE machine runs it.
+            'sve512_fcmla_arm.cpp',
+            # Predicate-dimension stress: the predicate network every
+            # full-true SVE test leaves untested — whilelt density sweep
+            # (sentinel-guarded inactive lanes), svnot_b_z complement FMA,
+            # FADDA sequential reduction chain, LDFF1+FFR first-fault
+            # state, FMAXV masked-tree reduction. Predicate bit corruption
+            # is silent (wrong lanes compute; result stays bit-legal) —
+            # exactly an SDC shape.
+            'sve512_pred_ops_arm.cpp',
+            # SVE companion of fpcr_rounding_cartesian_arm: the same FPCR
+            # RMode x FZ cartesian on the SVE datapath (the rounding
+            # decision silicon is per-engine even though FPCR is shared).
+            'sve_fpcr_cartesian_arm.cpp',
+            # Full-width SVE di/dt power virus: dependent svmla_f64_x burst
+            # with alternating high-Hamming operands + periodic
+            # stack-reload SVE loads inside the burst window (address
+            # generation x burst compound), yield stalls between bursts —
+            # the SVE-512 port of power_virus_dit (SEVI Obs.4: wider
+            # vectors carry additional low-frequency SDC).
+            'power_virus_dit_sve_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [
@@ -235,6 +272,59 @@ if host_machine.cpu_family() == 'aarch64'
             sve_sanitize_exempt,
         ],
     )
+
+    # SVE2 matrix-multiply (FMMLA) SDC stress tests. Separate library
+    # because FMMLA requires -march=armv9-a+sve2+f32mm+f64mm — stronger
+    # than the tests_arm64_sve library's armv8.2-a+sve, and keeping the
+    # SVE2-only instructions out of the SVE1 library means SVE1-only
+    # machines can still run every other SVE test. test_init probes
+    # HWCAP2 (SVE2 + F32MM + F64MM) and returns a clean EXIT_SKIP when
+    # absent. Compiler-support guard follows the SME pattern below (the
+    # gmp/acl/openblas graceful-degradation convention); the library is
+    # also exempt from sanitizer instrumentation like every SVE library
+    # (GCC 12.3 SVE-intrinsics + b_sanitize codegen ICE, see
+    # tests/cpu/meson.build).
+    sve2_march = '-march=armv9-a+sve2+bf16+f32mm+f64mm'
+    if cpp.has_argument(sve2_march)
+        arm64_sve2_lib = static_library(
+            'tests_arm64_sve2',
+            files(
+                # FMMLA f32/f64 dependent chain over the packed 2D-tile lane
+                # mapping, byte-exact vs a same-k-order scalar golden, with a
+                # one-step lane-mapping self-check (the mapping is worked out
+                # in the docblock — a golden bug must never report as SDC).
+                'sve512_fmmla_arm.cpp',
+                # Cross-precision chains: svmlalb/svmlalt (FP16->FP32) and
+                # svbfdot (BF16->FP32) — independent low-precision pipelines
+                # and widening accumulators the regular FMLA tests never
+                # touch; exact-table operands keep the chain byte-comparable;
+                # per-family one-step self-checks.
+                'sve2_cross_precision_arm.cpp',
+            ),
+            build_by_default: false,
+            include_directories: [
+                framework_incdir,
+            ],
+            dependencies: [
+                boost_dep,
+            ],
+            cpp_args: [
+                debug_c_flags,
+                default_cpp_warn,
+                default_cpp_flags,
+                march_generic_flags,
+                sve2_march,
+                sve_sanitize_exempt,
+            ],
+        )
+
+        sandstone_tests += [
+            arm64_sve2_lib,
+        ]
+    else
+        message('Compiler lacks SVE2 matrix-mult support (' + sve2_march
+                + ') - FMMLA/cross-precision tests are not built')
+    endif
 
     # SME/ZA tile-view SDC stress (sme_za_tileview_arm). Own static_library
     # because the naked-asm ZA kernel needs armv9-a+sve+sme+sme-f64f64, which
@@ -259,6 +349,14 @@ if host_machine.cpu_family() == 'aarch64'
             files(
                 'sme_za_tileview_arm.cpp',
                 'sme_fmopa_stress_arm.cpp',
+                # SME FMOPA/ZA outer-product chain: 256-step fmopa za0.s
+                # accumulation inside one SMSTART..SMSTOP asm block (operands
+                # staged through memory), row-slice extraction via mova,
+                # byte-exact vs an exact-integer scalar golden, one-step
+                # tile-mapping self-check. Pure inline asm: GCC 12.3's
+                # <arm_sme.h> is an empty shell; runtime-gated on
+                # HWCAP2_SME (kernel >= 5.19 exposure).
+                'sme_fmopa_za_arm.cpp',
             ),
             build_by_default: false,
             include_directories: [

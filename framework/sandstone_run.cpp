@@ -323,6 +323,39 @@ void SandstoneMemcmpOrFail::report(const void *_actual, const void *_expected, s
         ptrdiff_t offset = memcmp_offset(actual, expected, size);
 
         logging_report_mismatched_data(type, actual, expected, size, offset, formatter, t1, t2);
+
+        // Lane-offset histogram of the mismatching bytes (SEVI ASPLOS'26
+        // Obs.13: 98.5% of vector-SDC cases corrupt a single lane, and
+        // multi-lane corruption is 96% adjacent-lane — a single-lane or
+        // adjacent-lane pattern is the fingerprint of one bad physical
+        // unit, while scattered offsets suggest a datapath/buffer fault).
+        // Failure-branch only: the pass path never runs this loop.
+        {
+            std::string hist = "lane offsets:";
+            ptrdiff_t first_bad = -1, last_bad = -1;
+            size_t count = 0;
+            for (size_t i = 0; i < size; ++i) {
+                if (actual[i] != expected[i]) {
+                    if (first_bad < 0)
+                        first_bad = ptrdiff_t(i);
+                    last_bad = ptrdiff_t(i);
+                    ++count;
+                }
+            }
+            if (count > 0) {
+                // per-8-byte lane summary (f64/f32 vector lanes both
+                // align to 4/8-byte boundaries; report byte offsets)
+                hist += stdprintf(" %zu mismatching bytes in [%td..%td]",
+                                  count, first_bad, last_bad);
+                if (count == 1)
+                    hist += " (single-lane pattern — one bad physical unit fingerprint)";
+                else if (size_t(last_bad - first_bad + 1) <= count + 8)
+                    hist += " (adjacent-lane pattern — one bad physical unit fingerprint)";
+                else
+                    hist += " (scattered offsets — datapath/buffer fault?)";
+                log_yaml(SANDSTONE_LOG_WARNING, hist.c_str());
+            }
+        }
     }
 
     report_fail_common();

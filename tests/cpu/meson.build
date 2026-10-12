@@ -160,6 +160,12 @@ tests_set_base.add(
         'mesh/mesh_upi_avx512_asymm_write_only_int.cpp',
         'mesh/mesh_upi_avx512_sym.cpp',
         'mesh/mesh_upi_avx512_symm_int.cpp',
+        # First FP mesh variant: cross-core shared-data f64
+        # production/consumption — NEON vfmaq_f64 chains on both sides
+        # of the shared buffer with exact 0.5-multiple arithmetic
+        # (order-independent sums, byte-exact). The remote-access x
+        # compute compound the int-only mesh family never covered.
+        'mesh/mesh_upi_avx512_symm_f64.cpp',
         'mesh/mesh_upi_sse_asymm_distrib_int.cpp',
         'mesh/mesh_upi_sse_asymm_distrib_write_int.cpp',
         'mesh/mesh_upi_sse_asymm_int.cpp',
@@ -644,6 +650,12 @@ tests_set_base.add(
 tests_set_base.add(
     files(
         'fma/fma.cpp',
+        # FPCR rounding-mode x FZ cartesian (NEON): the rounding network is
+        # a distinct FPU silicon region the rest of the suite exercises
+        # only at the reset default. Same-mode fesetround golden, software
+        # FZ flush mirror, per-mode tie liveness assertion, FPCR
+        # save/restore discipline. Runs on ANY aarch64 (no SVE needed).
+        'fma/fpcr_rounding_cartesian_arm.cpp',
         'fma/fma_patterns_avx512_pd.cpp',
         'fma/fma_patterns_avx512_ps.cpp',
         'fma/fma_tail_avx2.cpp',
@@ -754,6 +766,9 @@ tests_set_base.add(
 # to this tests/cpu/ subdir while the archive probe and link args use the
 # joined absolute path (same pattern as the openblas/sleef blocks above and
 # the vendored OpenSSL block in framework/meson.build).
+# (The excitation-enhancement branch had switched this to dynamic linking to
+# sidestep the non-PIC system static lib; superseded by the vendored build,
+# which controls PIC itself — the merge keeps the vendored-first solution.)
 isal_install = meson.current_source_dir() / '../../third-party/isa-l/install'
 if run_command('test', '-f', isal_install / 'lib' / 'libisal.a', check: false).returncode() == 0
     isal_lib = declare_dependency(
