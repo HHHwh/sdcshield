@@ -92,8 +92,14 @@ static int movbe_dump_golden_sve_init(struct test *test)
         size_t len = MOVBE_DUMP_GOLDEN_SVE_BUFFER_SIZE * sizeof(uint32_t);
         while ((size_t)total < len) {
             ssize_t n = write(fd, buf + total, len - (size_t)total);
+            if (n < 0 && errno == EINTR) continue;   /* 重试被信号打断的写 */
             if (n <= 0) break;
             total += n;
+        }
+        if ((size_t)total != len) {
+            log_error("movbe_dump_golden_sve: incomplete golden write to %s "
+                      "(%zd/%zu bytes) — cross-validation golden is truncated",
+                      path, total, len);
         }
         close(fd);
     } else {
