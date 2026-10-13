@@ -66,14 +66,18 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>     # 导出意见�
   + 有待处置意见或数据不完整）/ `READY_TO_MERGE`（完成 + 过静默窗 + 零意见）。
   annotations 拉取失败时数据不完整，不给 `READY_TO_MERGE`（诚实性：无法确认「零意见」
   时不提示合并），转 `READY_TO_FIX` 由人工复核。
-- **双锚定（防误判）**：review / 评论类信号须 `submitted_at`/`created_at` ≥ head commit
-  的 committer date（fallback author date）才计入——甄别 GitHub 把旧评论重锚定到新 PR
-  的情况；在此之上做 commit 锚——review 的 `commit_id`、行级评论的
+- **双锚定（防误判）**：review / 评论类信号须 `submitted_at`/`created_at` ≥ 当前 head
+  的 **push 时间**（仓库 events 的 PushEvent `created_at`——本地 commit 与 push 之间
+  存在窗口期，窗口内旧 head 的意见会被 committer date 锚误计入；events API 只保留
+  最近事件（约 90 天/300 条）、翻不到时回退 head commit 的 committer date（fallback
+  author date），行为不劣于回退前）才计入——甄别 GitHub 把旧评论重锚定到新 PR 的情况；
+  在此之上做 commit 锚——review 的 `commit_id`、行级评论的
   `original_commit_id`（重锚定会改写 `commit_id`，原值才可靠）、pr-agent 评论尾部
   review-state JSON 的 `last_run.head_sha` 均须匹配当前 head（字段缺失/解析失败回退
-  时间锚定）。PR(issue)评论仅时间锚：timeline 的 `committed` 事件无 `created_at` 字段
-  （实证），无法作 push 边界。check-run 信号须 `head_sha` 精确等于 PR head 且
-  `status == completed`。
+  时间锚定）。PR(issue)评论仅时间锚：无 commit 绑定字段，timeline 的 `committed`
+  事件无 `created_at` 字段、`head_ref_force_pushed` 仅 force push 产生（均实证）——
+  PushEvent 的 push 时间是可作下界的最强锚定。check-run 信号须 `head_sha` 精确等于
+  PR head 且 `status == completed`。
 - **意见计数口径**：双锚定后的**待处置意见**数 = 有正文的 COMMENTED/CHANGES_REQUESTED
   review + 行级评论 + PR 评论 + check annotations。摘要/LGTM 类不计：APPROVED/
   DISMISSED review（结论性信号非意见）、coderabbit walkthrough/汇总评论（其发现以

@@ -25,12 +25,15 @@
 #                 (PR #240 实证: greptile 可只产 check-run 不发评论)
 # 在此之上做更强的 head 锚定过滤,甄别 GitHub 评论重锚定(push 新 head 后旧行级
 # 评论的 commit_id 被更新指向新 head,但 created_at 不变)与「旧检视算到新提交」:
-#   信号仅计入 head commit 的 committer date 之后产生者;review 另要求 commit_id
-#   匹配当前 head,行级评论要求 original_commit_id 匹配(未被重锚定改写的原值),
-#   pr-agent 评论要求尾部 review-state JSON 的 last_run.head_sha 匹配(解析失败
-#   回退时间锚定);check-run 另要求 head_sha 匹配且 status == completed。
-#   timeline 的 committed 事件无 created_at 字段(实证),无法作 push 边界,故
-#   PR(issue)评论维持时间锚定。
+#   时间锚定下界取当前 head 的 push 时间(仓库 events 的 PushEvent.created_at,
+#   精确于 committer date——本地 commit 与 push 之间存在窗口期,窗口内旧 head 的
+#   PR 评论会被误计入);events 翻不到(只保留最近事件,约 90 天/300 条)时回退
+#   committer date。review 另要求 commit_id 匹配当前 head,行级评论要求
+#   original_commit_id 匹配(未被重锚定改写的原值),pr-agent 评论要求尾部
+#   review-state JSON 的 last_run.head_sha 匹配(解析失败回退时间锚定);check-run
+#   另要求 head_sha 匹配且 status == completed。PR(issue)评论无 commit 绑定字段,
+#   只能时间锚定——push 时间已是可作下界的最强锚定(timeline 的 committed 事件
+#   无 created_at 字段、head_ref_force_pushed 仅 force push 产生,均实证)。
 #
 # 意见计数与「信号」分开: 摘要/LGTM 类不计入待处置意见——APPROVED/DISMISSED
 # review、coderabbit walkthrough/汇总评论(其发现以行级评论另行计入)、bot-coverage
@@ -219,6 +222,7 @@ class PRData:
     head_time: datetime                # head commit 的 committer date
     url: str
     author: str
+    push_time: Optional[datetime] = None  # 当前 head 的 push 时间(events PushEvent,尽力而为;None → 时间锚回退 head_time)
     reviews: list = field(default_factory=list)             # 原始 API 数据
     review_comments: list = field(default_factory=list)
     issue_comments: list = field(default_factory=list)
@@ -256,10 +260,11 @@ def bot_of(item: dict) -> Optional[str]:
     return LOGIN_TO_BOT.get((item.get("user") or {}).get("login") or "")
 
 
-def is_after_head(item: dict, ts_key: str, head_time: datetime) -> bool:
-    """时间锚定: 条目时间 ≥ head commit 时间(甄别 GitHub 重锚定的旧意见)。"""
+def is_after_head(item: dict, ts_key: str, anchor_time: datetime) -> bool:
+    """时间锚定: 条目时间 ≥ 锚定下界(甄别 GitHub 重锚定的旧意见;
+    anchor_time = 当前 head 的 push 时间(可得)或 committer date(回退))。"""
     ts = parse_ts(item.get(ts_key))
-    return ts is not None and ts >= head_time
+    return ts is not None and ts >= anchor_time
 
 
 def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
@@ -325,6 +330,48 @@ def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
 
 # ============ 拉取与判定 ============
 
+_EVENTS_CACHE: dict = {}   # slug → events 列表(进程内缓存;status 总览多 PR 只拉一次)
+
+
+def repo_events(slug: str) -> list:
+    """仓库 events(进程内缓存,尽力而为)。Events API 分页受限——实测第 4 页
+    (per_page=100 时 >300 条)起 HTTP 422 "pagination is limited for this
+    resource",故逐页拉取、失败即止: 首页失败 → 空列表(push_time 取不到,
+    调用方回退);后续页失败(含分页上限) → 保留已取到的页,不因翻页到头
+    而丢弃数据。"""
+    if slug not in _EVENTS_CACHE:
+        events: list = []
+        for page in range(1, MAX_PAGES + 1):
+            try:
+                batch = gh_api(f"repos/{slug}/events?per_page=100&page={page}")
+            except GhError:
+                break
+            if not isinstance(batch, list):
+                break
+            events.extend(batch)
+            if len(batch) < 100:
+                break
+        _EVENTS_CACHE[slug] = events
+    return _EVENTS_CACHE[slug]
+
+
+def fetch_push_time(slug: str, branch: str, head_sha: str) -> Optional[datetime]:
+    """当前 head 的精确 push 时间: events 中 payload.head == head_sha 且 ref 匹配
+    分支的 PushEvent.created_at。events API 只保留最近事件(约 90 天、每仓库约
+    300 条),翻不到时返回 None → 调用方回退 head commit 的 committer date
+    (时间锚定语义不劣于回退前)。timeline 的 committed 事件无 created_at、
+    head_ref_force_pushed 仅 force push 产生(均实证)——PushEvent 是唯一可得
+    的普通 push 时间边界。"""
+    ref = f"refs/heads/{branch}"
+    for ev in repo_events(slug):
+        if ev.get("type") != "PushEvent":
+            continue
+        payload = ev.get("payload") or {}
+        if payload.get("head") == head_sha and payload.get("ref") == ref:
+            return parse_ts(ev.get("created_at"))
+    return None
+
+
 def fetch_pr(slug: str, number: int) -> PRData:
     """拉取单个 PR 的全部检视信号并完成四 bot 判定。"""
     pr = gh_api(f"repos/{slug}/pulls/{number}")
@@ -343,6 +390,11 @@ def fetch_pr(slug: str, number: int) -> PRData:
                  or parse_ts((cinfo.get("author") or {}).get("date")))
     if head_time is None:
         raise GhError(f"PR #{number}: 无法解析 head commit {head_sha[:8]} 时间")
+    # push 时间: 本地 commit 与 push 之间存在窗口期,窗口内旧 head 的评论会被
+    # committer date 锚误计入(意见#22)。PushEvent 是唯一可得的精确 push 边界;
+    # 不可得时回退 committer date(行为不劣于修复前)。
+    push_time = fetch_push_time(slug, head.get("ref") or "", head_sha)
+    anchor = push_time or head_time
 
     reviews = gh_api_paged(f"repos/{slug}/pulls/{number}/reviews")
     review_comments = gh_api_paged(f"repos/{slug}/pulls/{number}/comments")
@@ -362,6 +414,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
         head_time=head_time,
         url=pr.get("html_url") or "",
         author=(pr.get("user") or {}).get("login") or "",
+        push_time=push_time,
         reviews=reviews,
         review_comments=review_comments,
         issue_comments=issue_comments,
@@ -396,7 +449,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
                     data.annotations_fetch_failed = True  # 诚实降级: 计数可能低估
             data.signals.append(Signal(
                 bot=matched, kind="check_run",
-                time=entry.completed_at or head_time, counted=True,
+                time=entry.completed_at or anchor, counted=True,
                 detail=f'check "{name}"({entry.conclusion or entry.status})',
             ))
         data.check_runs.append(entry)
@@ -407,10 +460,10 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
-        counted = (ts is not None and ts >= head_time
+        counted = (ts is not None and ts >= anchor
                    and commit_anchored(r, ("commit_id",), head_sha))
         data.signals.append(Signal(
-            bot=bot, kind="review", time=ts or head_time, counted=counted,
+            bot=bot, kind="review", time=ts or anchor, counted=counted,
             detail=f'review({r.get("state")})',
         ))
 
@@ -420,23 +473,25 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
-        counted = (ts is not None and ts >= head_time
+        counted = (ts is not None and ts >= anchor
                    and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha))
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
         data.signals.append(Signal(
-            bot=bot, kind="review_comment", time=ts or head_time, counted=counted,
+            bot=bot, kind="review_comment", time=ts or anchor, counted=counted,
             detail=f'行级评论 {loc}',
         ))
 
     # ---- PR(issue)评论: pr-agent 评论按内容标记纳入(head_sha 锚定见 issue_comment_bot) ----
+    # issue 评论无 commit 绑定字段,时间锚定下界用 push 时间(意见#22: commit→push
+    # 窗口内旧 head 的评论不得计入;push 时间不可得时 anchor 已回退 committer date)。
     for c in issue_comments:
         bot = issue_comment_bot(c, head_sha)
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
         data.signals.append(Signal(
-            bot=bot, kind="issue_comment", time=ts or head_time,
-            counted=ts is not None and ts >= head_time,
+            bot=bot, kind="issue_comment", time=ts or anchor,
+            counted=ts is not None and ts >= anchor,
             detail='PR 评论',
         ))
 
@@ -458,18 +513,18 @@ def fetch_pr(slug: str, number: int) -> PRData:
     for r in reviews:
         body = (r.get("body") or "").strip()
         if (bot_of(r) and r.get("state") in REVIEW_OPINION_STATES
-                and is_after_head(r, "submitted_at", head_time)
+                and is_after_head(r, "submitted_at", anchor)
                 and commit_anchored(r, ("commit_id",), head_sha)
                 and body and not is_summary_text(body)):
             n_review += 1
     n_rcomment = sum(1 for c in review_comments
-                     if bot_of(c) and is_after_head(c, "created_at", head_time)
+                     if bot_of(c) and is_after_head(c, "created_at", anchor)
                      and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha))
     n_icomment = 0
     for c in issue_comments:
         body = (c.get("body") or "")
         if (issue_comment_bot(c, head_sha)
-                and is_after_head(c, "created_at", head_time)
+                and is_after_head(c, "created_at", anchor)
                 and body.strip() and not is_summary_text(body)):
             if pragent_comment(c):
                 # pr-agent: 按尾部 JSON 的 ACTIVE findings 计(outside-diff 的
@@ -554,7 +609,10 @@ def print_detail(pr: PRData, slug: str, quiet: int) -> None:
     marks = ("  [DRAFT]" if pr.draft else "") + ("  [FORK]" if pr.fork else "")
     print(f"  仓库: {slug}  状态: {pr.state}{marks}")
     print(f"  分支: {pr.head_ref} -> {pr.base_ref}  作者: {pr.author}")
-    print(f"  head: {pr.head_sha}  提交于 {fmt_ts(pr.head_time)}")
+    head_line = f"  head: {pr.head_sha}  提交于 {fmt_ts(pr.head_time)}"
+    if pr.push_time:
+        head_line += f"  push 于 {fmt_ts(pr.push_time)}"
+    print(head_line)
     if pr.url:
         print(f"  链接: {pr.url}")
     print("  四 bot 信号(仅计入当前 head 之后; 顺序 codex/coderabbit/pr-agent/greptile):")
@@ -751,7 +809,10 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
     A(f"- 标题: {pr.title}")
     marks = ("(DRAFT)" if pr.draft else "") + ("(FORK)" if pr.fork else "")
     A(f"- 分支: {pr.head_ref} -> {pr.base_ref} {marks}".rstrip())
-    A(f"- head: `{pr.head_sha}`(提交于 {fmt_ts(pr.head_time)})")
+    head_line = f"- head: `{pr.head_sha}`(提交于 {fmt_ts(pr.head_time)})"
+    if pr.push_time:
+        head_line += f"(push 于 {fmt_ts(pr.push_time)})"
+    A(head_line)
     A(f"- 导出时间: {fmt_ts(now)}")
     bd = pr.opinion_breakdown
     A(f"- 状态判定: {state}(当前 head 待处置意见 {pr.opinion_count} 条: "

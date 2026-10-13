@@ -61,7 +61,20 @@
 
 ### Requirement: PR 状态判定（status）
 
-系统 SHALL 提供 `pr_loop.py status [<pr>]`，基于 GitHub 实时数据输出每个 open PR 的四 bot（codex / coderabbit / pr-agent / greptile）完成度、当前 head 意见计数与行动建议。四 bot 完成判据 SHALL 与 `bot-coverage.yml` 实测值一致：codex = 作者 `chatgpt-codex-connector[bot]`；coderabbit = 作者 `coderabbitai[bot]` **或** check-run `CodeRabbit`；pr-agent = check-run `pr-agent`；greptile = 作者 `greptile-apps[bot]`。信号仅计入当前 head commit 的 committer date 之后产生者（`created_at`/`submitted_at` ≥ head 时间），以甄别 GitHub 评论重锚定（旧意见 commit\_id 被更新指向新 head）造成的误判。
+系统 SHALL 提供 `pr_loop.py status [<pr>]`，基于 GitHub 实时数据输出每个 open PR 的四 bot（codex / coderabbit / pr-agent / greptile）完成度、当前 head 意见计数与行动建议。
+
+四 bot 完成判据 SHALL 与 `bot-coverage.yml` 实测值一致：
+
+* codex = 作者 `chatgpt-codex-connector[bot]`
+* coderabbit = 作者 `coderabbitai[bot]` **或** check-run 名 `CodeRabbit`
+* pr-agent = check-run 名 `pr-agent`，**或** 作者 `github-actions[bot]` 且正文含 `<!-- pr-agent:review:full -->` 标记的检视评论（不能裸认该作者——bot-coverage 报告同作者，靠内容标记区分）
+* greptile = 作者 `greptile-apps[bot]` **或** check-run app slug `greptile-apps`（PR #240 实证：greptile 可只产 check-run 不发评论）
+
+信号计入 SHALL 双锚定，以甄别 GitHub 评论重锚定（push 新 head 后旧意见 `commit_id` 被更新指向新 head）与「旧检视算到新提交」：
+
+* 时间锚：`created_at`/`submitted_at` ≥ 当前 head 的 push 时间（仓库 events 的 PushEvent `created_at`——本地 commit 与 push 之间存在窗口期，窗口内旧 head 的意见不得计入；events API 只保留最近事件、不可得时回退 head commit 的 committer date）
+* commit 锚：review `commit_id`、行级评论 `original_commit_id`（重锚定不改写原值）、pr-agent 检视评论尾部 JSON `last_run.head_sha` 须匹配当前 head（字段缺失/解析失败回退时间锚定）；check-run 须 `head_sha` 匹配且 `status == completed`
+* PR(issue) 评论无 commit 绑定字段，仅时间锚——push 时间是可作下界的最强锚定（timeline 的 `committed` 事件无 `created_at` 字段、`head_ref_force_pushed` 仅 force push 产生，均实证）
 
 #### Scenario: 总览
 
