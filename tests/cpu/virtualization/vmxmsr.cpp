@@ -15,6 +15,7 @@ struct TestData {
 };
 
 // 读取 ARM64 系统寄存器（用户态可读）
+#ifdef __aarch64__
 [[maybe_unused]] static bool read_midr_el1(int cpu, uint64_t *val) {
     (void)cpu;  // ARM64 上读取系统寄存器与 CPU 无关，但保留参数用于日志
     // 使用内联汇编读取 MIDR_EL1
@@ -24,14 +25,15 @@ struct TestData {
     return true;
 }
 
+#endif
 static int vmxmsr_init(struct test *test) {
-#ifdef __aarch64__
-    // ARM64 has no VT-x/VMX virtualization — the previous "simulated" path
+#ifndef __aarch64__
+    // x86_64 has no ARM64 virtualization — the previous "simulated" path
     // (single constant store+reload, no TEST_LOOP) passed vacuously while
     // stressing nothing. Honest skip per the placeholder-honesty rule.
     (void)test;
     log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): no VT-x/VMX virtualization on ARM64");
+             "to be implemented (placeholder): this test is an ARM64 test, unsupported on x86_64");
     return EXIT_SKIP;
 #else
     auto *data = new TestData;
@@ -95,12 +97,12 @@ static int vmxmsr_init(struct test *test) {
 }
 
 static int vmxmsr_run(struct test *test, int cpu) {
-#ifdef __aarch64__
-    // Unreachable on ARM64: init already returned EXIT_SKIP. Kept honest
+#ifndef __aarch64__
+    // Unreachable on x86_64: init already returned EXIT_SKIP. Kept honest
     // (no vacuous EXIT_SUCCESS) in case init is ever bypassed.
     (void)test; (void)cpu;
     log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): no VT-x/VMX virtualization on ARM64");
+             "to be implemented (placeholder): this test is an ARM64 test, unsupported on x86_64");
     return EXIT_SKIP;
 #else
     auto *data = static_cast<TestData*>(test->data);
