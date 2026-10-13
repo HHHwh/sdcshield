@@ -159,7 +159,7 @@ gh workflow run bot-coverage.yml -f pr-number=<N>
 | --- | --- | --- |
 | codex | 已生效（有 PR 产物证据；注意外部配额可能耗尽，限额提示时无实际检视内容） | 读取根 `AGENTS.md` |
 | CodeRabbit | 已生效（有 PR 产物证据） | 读取根 `.coderabbit.yaml` |
-| PR-Agent | 已生效（实测：PR #235 已产出 pr-agent 检视） | workflow 位于 `main`；读取根 `.pr_agent.toml`；LLM 用 Gemini 免费层 |
+| PR-Agent | 已生效（实测：PR #235 已产出 pr-agent 检视） | workflow 位于 `main`；读取根 `.pr_agent.toml`；LLM 用 Gemini 免费层；2026-10-13 修复回退模型（2.5-flash 已对新用户下线，见 7.1） |
 | Greptile | 已生效（实测：PR #238 已产出 greptile-apps[bot] 检视） | 2026-10-13 完成安装授权；读取 `.greptile/config.json` + `rules.md` |
 
 > 诚实说明：Greptile 曾长期如实标注为「待人工安装」；2026-10-13 管理员完成 GitHub App
@@ -172,7 +172,13 @@ PR-Agent 软件本身免费、公共仓库 Actions 分钟数也免费，唯一�
 `.github/workflows/pr-agent.yml` 走 **Google AI Studio 免费层** + `gemini/gemini-3.8-flash`：
 
 - `CONFIG.MODEL: "gemini/gemini-3.8-flash"`
-- `CONFIG.FALLBACK_MODELS: '["gemini/gemini-2.5-flash"]'`
+- `CONFIG.FALLBACK_MODELS: '["gemini/gemini-3.5-flash-lite", "gemini/gemini-3.6-flash"]'`
+
+回退链演进：初始配置的回退模型 `gemini/gemini-2.5-flash` 已被 Google 下线——免费层
+新项目调用一律 404「no longer available to new users」（2.5 系列仅向历史活跃用户开放）。
+2026-10-13 PR #237 恰逢主模型 503（免费层高峰限流，瞬时）叠加回退 404，回退链失效导致
+check 失败；已将回退链换为对新项目开放的 `3.5-flash-lite` + `3.6-flash`。注意
+`3.1-flash-lite` 将于 2027-05-07 关停，勿用作回退。
 
 密钥配置（仓库 Secret `GEMINI_API_KEY`，已配置并实测通过）：
 
