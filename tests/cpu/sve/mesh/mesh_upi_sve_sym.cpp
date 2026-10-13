@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_sve.h>
 #include <sys/auxv.h>
@@ -16,9 +15,13 @@
 #endif
 
 #define TOTAL_ELEMENTS 1024
-#define VECTOR_SIZE 4                     // 原负载：一次处理 4 个 int32（SVE 谓词分批）
-#define BLOCK_ELEMENTS (VECTOR_SIZE * 2)  // 每个块 8 个元素（两个向量）
-#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 128
+#define VECTOR_SIZE 4                     // 原负载：一次处理 4 个 float（SVE 谓词分批）
+/* 执行期勘误（B1-001 修复时发现）：原移植为 (VECTOR_SIZE * 2)，但写阶段
+ * 每块只存 1 个向量（4 元素）——块距 8、半数元素从未被 SVE store 覆盖
+ * （全靠 memset 的 0 补偿求和）。改回 VECTOR_SIZE（与 NEON 侧 sse_sym
+ * 参照一致），全部 1024 元素进入写入路径。 */
+#define BLOCK_ELEMENTS VECTOR_SIZE
+#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 256
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(float))
 
 struct TestData {
@@ -27,9 +30,13 @@ struct TestData {
     std::atomic<double> global_sum;      // 用 double 累加，减少误差
     std::atomic<uint32_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
-    std::atomic<uint32_t> round_done;
-    std::atomic<uint64_t> iter;
-    std::atomic<uint32_t> read_done;
+    /* sense-reversal barrier (B1-001 fix, ported from NEON-side 2731971d):
+     * the original iter/read_done/round_done protocol deadlocked from
+     * round 1 (read_done was never set to 1; iter only advanced after a
+     * completed round), so the sum check never executed and the test
+     * passed vacuously. */
+    std::atomic<uint32_t> arrived;
+    std::atomic<uint32_t> epoch;
 };
 
 static int mesh_upi_sve_sym_init(struct test *test) {
@@ -56,9 +63,8 @@ static int mesh_upi_sve_sym_init(struct test *test) {
     td->global_sum.store(0.0, std::memory_order_relaxed);
     td->allocated_blocks.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->round_done.store(0, std::memory_order_relaxed);
-    td->iter.store(0, std::memory_order_relaxed);
-    td->read_done.store(0, std::memory_order_relaxed);
+    td->arrived.store(0, std::memory_order_relaxed);
+    td->epoch.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -84,28 +90,19 @@ static int mesh_upi_sve_sym_run(struct test *test, int cpu) {
         return EXIT_SKIP;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1000.0f, 1000.0f);
+    /* randomization hardening (B1-002, aligned with 2731971d): framework
+     * RNG (per-thread stream, -s reproducible) replaces std::mt19937;
+     * range [-1000, 1000). */
+    auto dist = []() { return frandomf_scale(2000.0f) - 1000.0f; };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
     #define RESET "\033[0m"
 
+    uint32_t my_epoch = 0;
     do {
         // ---------- 阶段 1：所有线程共同填充数据 ----------
-        uint64_t current_iter = td->iter.load(std::memory_order_acquire);
-        while ((td->read_done.load(std::memory_order_seq_cst) != 0 ||
-                td->iter.load(std::memory_order_acquire) == current_iter) &&
-               test_time_condition(test)) {
-            __asm__ volatile("yield");
-        }
-        if (!test_time_condition(test)) break;
-
-        // 重置状态
-        td->global_sum.store(0.0, std::memory_order_seq_cst);
-        td->next_block.store(0, std::memory_order_seq_cst);
-        td->allocated_blocks.store(0, std::memory_order_seq_cst);
-        td->round_done.store(0, std::memory_order_seq_cst);
+        // （本轮状态已由上一轮 sense-reversal 屏障的最后到达线程重置）
 
         // 所有线程竞争分配块并写入随机浮点数据
         while (true) {
@@ -115,7 +112,7 @@ static int mesh_upi_sve_sym_run(struct test *test, int cpu) {
             float vals[VECTOR_SIZE];
             double local_sum = 0.0;
             for (int j = 0; j < VECTOR_SIZE; ++j) {
-                vals[j] = dist(rng);
+                vals[j] = dist();
                 local_sum += (double)vals[j];
             }
             // SVE 向量存储（等价原 NEON vld1q_f32/vst1q_f32）
@@ -208,18 +205,26 @@ static int mesh_upi_sve_sym_run(struct test *test, int cpu) {
             return EXIT_FAILURE;
         }
 
-        // ---------- 阶段 3：最后一个完成读取的线程重置状态并增加轮次 ----------
-        uint32_t done = td->round_done.fetch_add(1, std::memory_order_seq_cst) + 1;
+        // ---------- 阶段 3：sense-reversal 屏障进入下一轮 ----------
+        // 最后到达的线程在此重置下一轮状态（global_sum/next_block/
+        // allocated_blocks）：fetch_add(acq_rel) 的到达顺序保证所有线程
+        // 都已离开阶段 2 的校验，epoch 的 release 存储保证重置先于任何
+        // 线程的下一轮填充可见 —— 这正是原协议想做而没做对的轮次隔离。
+        uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (done == total_threads) {
-            td->read_done.store(0, std::memory_order_seq_cst);
-            td->iter.fetch_add(1, std::memory_order_release);
+            td->global_sum.store(0.0, std::memory_order_seq_cst);
+            td->next_block.store(0, std::memory_order_seq_cst);
+            td->allocated_blocks.store(0, std::memory_order_seq_cst);
+            td->arrived.store(0, std::memory_order_relaxed);
+            td->epoch.store(my_epoch + 1, std::memory_order_release);
         } else {
-            while (td->read_done.load(std::memory_order_seq_cst) != 0 &&
+            while (td->epoch.load(std::memory_order_acquire) == my_epoch &&
                    test_time_condition(test)) {
                 __asm__ volatile("yield");
             }
             if (!test_time_condition(test)) break;
         }
+        ++my_epoch;
 
     } while (test_time_condition(test));
 

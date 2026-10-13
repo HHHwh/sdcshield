@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_sve.h>
 #include <sys/auxv.h>
@@ -17,8 +16,8 @@
 
 #define TOTAL_ELEMENTS 1024
 #define VECTOR_SIZE 4                     // 原负载：一次处理 4 个 int32（SVE 谓词分批）
-#define BLOCK_ELEMENTS (VECTOR_SIZE * 2)
-#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)
+#define BLOCK_ELEMENTS (VECTOR_SIZE * 2)  // 每个块 8 个元素（两个向量）
+#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 128
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
 
 struct TestData {
@@ -27,11 +26,15 @@ struct TestData {
     std::atomic<uint64_t> global_sum;
     std::atomic<uint32_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
-    std::atomic<uint32_t> round_done;
-    std::atomic<uint64_t> iter;
-    std::atomic<uint32_t> num_threads;
-    std::atomic<uint32_t> ready;
-    std::atomic<uint32_t> reader_count;   // 读核心数量
+    /* sense-reversal 轮屏障（B1-001 修复，移植自 NEON 侧 2731971d）：
+     * 原协议结构性互等——写者外层每轮先等 `allocated_blocks == 0 &&
+     * round_done == 0`（round_done 由读者复位，读者却在等写者写满
+     * NUM_BLOCKS 块），且写者每轮只写 1 块即回外层，首轮即死锁，读者
+     * 校验从未执行、测试 vacuous pass；reader_count（入场注册计数）作
+     * 完成判据还是移动目标。arrived/epoch 以固定参与者计数（写者 +
+     * 全体读者 = thread_count()）隔离轮次，无此缺陷。 */
+    std::atomic<uint32_t> arrived;       // 本轮已到达屏障的线程数（写者+读者）
+    std::atomic<uint32_t> epoch;         // 轮次代（sense 位）
 };
 
 static int mesh_upi_sve_asymm_distrib_int_init(struct test *test) {
@@ -58,11 +61,8 @@ static int mesh_upi_sve_asymm_distrib_int_init(struct test *test) {
     td->global_sum.store(0, std::memory_order_relaxed);
     td->allocated_blocks.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->round_done.store(0, std::memory_order_relaxed);
-    td->iter.store(0, std::memory_order_relaxed);
-    td->num_threads.store(0, std::memory_order_relaxed);
-    td->ready.store(0, std::memory_order_relaxed);
-    td->reader_count.store(0, std::memory_order_relaxed);
+    td->arrived.store(0, std::memory_order_relaxed);
+    td->epoch.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -75,117 +75,209 @@ static int mesh_upi_sve_asymm_distrib_int_run(struct test *test, int cpu) {
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_writer = (id == 0);
 
-    if (!is_writer) {
-        td->reader_count.fetch_add(1, std::memory_order_relaxed);
+    /* 屏障参与者总数取框架权威值 thread_count()（自动尊重 --cpuset / -n /
+     * test.max_threads，每个线程取值一致；2731971 修法）。原协议以
+     * reader_count（入场时才自增的注册计数）为完成判据目标，孵化窗口
+     * 内仍在单调增长，判据可被部分 cohort 提前满足 —— 连同
+     * round_done/reader_count 协议一并移除（见 TestData 注释）。
+     * 另注：NEON 参照（15895cd4）无单线程防护，-n 1 时写者独跑、读者
+     * 数为 0，轮次空转 vacuous；按家族政策（556d54e3：-n 1 干净跳过
+     * inter-core 测试）SVE 移植补上。 */
+    uint32_t total_threads = thread_count();
+    if (total_threads < 2) {
+        log_skip(CpuTopologyIssueSkipCategory,
+                 "mesh_upi_sve_asymm_distrib_int requires at least 2 threads (inter-core test); "
+                 "skipping on this thread count");
+        return EXIT_SKIP;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening (B1-002, aligned with 2731971d): framework
+     * RNG (per-thread stream, -s reproducible) replaces std::mt19937;
+     * range [-1000000, 1000000]. */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
     #define RESET "\033[0m"
 
+    uint32_t my_epoch = 0;
     do {
         if (is_writer) {
-            while (test_time_condition(test)) {
-                // 等待读核心完成上一轮（allocated_blocks == 0 且 round_done == 0）
-                while (td->allocated_blocks.load(std::memory_order_seq_cst) > 0 ||
-                       td->round_done.load(std::memory_order_seq_cst) > 0) {
-                    if (!test_time_condition(test)) break;
-                    __asm__ volatile("yield");
-                }
-                if (!test_time_condition(test)) break;
+            /* 写者（固定 id==0）：本轮状态已由上一轮 sense-reversal 屏障的
+             * 最后到达者复位（首轮由 init 复位）——原“等
+             * allocated_blocks==0 且 round_done==0”的顶屏障连同
+             * round_done/reader_count 协议一并移除：它等的是读者复位，
+             * 而读者在等写者写满，首轮即互等死锁。 */
 
+            /* 串行填充所有块：有限工作量（NUM_BLOCKS×BLOCK_ELEMENTS 个
+             * 元素，微秒级），不逐块消耗 fracture 预算 —— 原实现每块
+             * 烧 2 次 test_time_condition，一轮 128 块远超预算，写者
+             * 在填充中途预算耗尽退出。同 2731971 写者的无守卫填充。 */
+            while (true) {
                 uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
-                if (block < NUM_BLOCKS) {
-                    // 生成随机数据并写入（8个 int32，分两个向量）
-                    int32_t vals[BLOCK_ELEMENTS];
-                    uint64_t local_sum = 0;
-                    for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
-                        vals[j] = dist(rng);
-                        local_sum += (uint64_t)vals[j];
-                    }
-                    // 前 4 个 + 后 4 个（SVE 谓词分批）
-                    for (int v = 0; v < 2; ++v) {
-                        svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)VECTOR_SIZE);
-                        svint32_t vec = svld1_s32(pg, vals + v * VECTOR_SIZE);
-                        svst1_s32(pg, td->data + v * VECTOR_SIZE, vec);
-                    }
-                    // 内存屏障确保数据对其它核心可见
-                    __sync_synchronize();
-
-                    td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
-                    td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
+                if (block >= NUM_BLOCKS) {
+                    break;
                 }
+
+                size_t offset = block * BLOCK_ELEMENTS;
+                int32_t vals[BLOCK_ELEMENTS];
+                uint64_t local_sum = 0;
+                for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
+                    vals[j] = dist();
+                    local_sum += (uint64_t)vals[j];
+                }
+                /* 分两个向量存储（SVE 谓词分批）。原移植缺 offset：所有
+                 * 块都写 data[0..7]，128 块互相覆盖且其余 1016 个元素
+                 * 恒为 0 —— 该 bug 从未暴露，因为首轮死锁使读者校验
+                 * 从未执行。 */
+                for (int v = 0; v < 2; ++v) {
+                    svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)VECTOR_SIZE);
+                    svint32_t vec = svld1_s32(pg, vals + v * VECTOR_SIZE);
+                    svst1_s32(pg, td->data + offset + v * VECTOR_SIZE, vec);
+                }
+                __sync_synchronize();  // 类似 _mm_sfence
+
+                // 一致性测试：立即读回比较
+                bool block_ok = true;
+                for (int v = 0; v < 2; ++v) {
+                    svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)VECTOR_SIZE);
+                    svint32_t written = svld1_s32(pg, vals + v * VECTOR_SIZE);
+                    svint32_t loaded = svld1_s32(pg, td->data + offset + v * VECTOR_SIZE);
+                    svbool_t cmp = svcmpeq_s32(pg, written, loaded);
+                    if (svcntp_b32(pg, cmp) != VECTOR_SIZE) block_ok = false;
+                }
+                /* 写者的立即读回是唯一逐字节的写入内容校验——读核心的
+                 * sum 校验可被保和损坏（如元素交换）绕过，所以 block_ok
+                 * 为假必须直接判失败并保留证据，不能丢弃结果（原实现
+                 * 此处无读回校验；同 87ebc4b / 8502e491 SVE-wide 的修法）。 */
+                if (!block_ok) {
+                    fprintf(stderr, "mesh_upi_sve_asymm_distrib_int: Thread %d (writer), block %u immediate read-back mismatch, written vals[0..7]=(%d,%d,%d,%d,%d,%d,%d,%d), loaded data[0..7] at offset %zu=(%d,%d,%d,%d,%d,%d,%d,%d), result=%sFAIL%s\n",
+                            id, block,
+                            vals[0], vals[1], vals[2], vals[3],
+                            vals[4], vals[5], vals[6], vals[7],
+                            offset,
+                            td->data[offset], td->data[offset + 1],
+                            td->data[offset + 2], td->data[offset + 3],
+                            td->data[offset + 4], td->data[offset + 5],
+                            td->data[offset + 6], td->data[offset + 7],
+                            RED, RESET);
+                    fflush(stderr);
+                    report_fail_msg("mesh_upi_sve_asymm_distrib_int: writer immediate read-back mismatch (store/load corruption)");
+                    return EXIT_FAILURE;
+                }
+
+                td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
+                td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
             }
         } else {
-            // 读核心
-            while (test_time_condition(test)) {
-                // 等待写核心完成写入
-                while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
-                       test_time_condition(test)) {
+            /* 读核心：等待所有块分配完成。原实现每次自旋都调
+             * test_time_condition：读者 40 次预算在微秒级就被自旋
+             * 烧光，等待提前中断 → 校验被跳过 → vacuous pass。
+             * 按 2731971 已验证的节流模式：等待条件每自旋检查、
+             * ttc 预算每 1024 自旋检查一次，预算耗尽走 out_of_budget
+             * 干净退出。 */
+            uint32_t spin = 0;
+            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
+                if ((++spin & 1023u) == 0) {
+                    if (!test_time_condition(test)) goto out_of_budget;
+                } else {
                     __asm__ volatile("yield");
                 }
-                if (!test_time_condition(test)) break;
+            }
 
-                // 读取数据（两个向量）
+            // 全内存屏障
+            __sync_synchronize();
+
+            /* 全数组遍历校验。原移植只读 data[0..7]（首块 8 元素，无偏移
+             * 遍历）却与全数组 128 块的 expected_sum 比较 —— 结构性恒
+             * 失败，被首轮死锁掩盖而从未暴露。 */
+            uint64_t read_sum = 0;
+            bool consistent = true;
+            alignas(16) int32_t store_buf[BLOCK_ELEMENTS];
+
+            for (size_t i = 0; i < TOTAL_ELEMENTS; i += BLOCK_ELEMENTS) {
                 int32_t vals[BLOCK_ELEMENTS];
                 for (int v = 0; v < 2; ++v) {
                     svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)VECTOR_SIZE);
-                    svint32_t vec = svld1_s32(pg, td->data + v * VECTOR_SIZE);
+                    svint32_t vec = svld1_s32(pg, td->data + i + v * VECTOR_SIZE);
                     svst1_s32(pg, vals + v * VECTOR_SIZE, vec);
                 }
-                uint64_t read_sum = 0;
                 for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
                     read_sum += (uint64_t)vals[j];
                 }
 
-                uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
-                bool passed = (read_sum == expected_sum);
-
-                // 输出结果（仅第一个读核心输出以节省日志）
-                if (id == 1) {
-                    fprintf(stderr, "mesh_upi_sve_asymm_distrib_int: Thread %d (reader), data[0..7]=(%d,%d,%d,%d,%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, result=%s%s%s\n",
-                            id,
-                            td->data[0], td->data[1], td->data[2], td->data[3],
-                            td->data[4], td->data[5], td->data[6], td->data[7],
-                            read_sum, expected_sum,
-                            passed ? GREEN : RED,
-                            passed ? "PASS" : "FAIL",
-                            RESET);
-                    fflush(stderr);
+                // 一致性测试：Store/Load 回读比较
+                for (int v = 0; v < 2; ++v) {
+                    svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)VECTOR_SIZE);
+                    svint32_t orig = svld1_s32(pg, vals + v * VECTOR_SIZE);
+                    svst1_s32(pg, store_buf + v * VECTOR_SIZE, orig);
+                    svint32_t reload = svld1_s32(pg, store_buf + v * VECTOR_SIZE);
+                    svbool_t cmp = svcmpeq_s32(pg, orig, reload);
+                    if (svcntp_b32(pg, cmp) != VECTOR_SIZE)
+                        consistent = false;
                 }
+            }
 
-                if (!passed) {
-                    /* cold path: record bit-level evidence for the failing leg(s) */
-                    if (read_sum != expected_sum)
-                        log_error("mesh_upi_sve_asymm_distrib_int: sum mismatch: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
-                                  (unsigned long long)expected_sum, (unsigned long long)read_sum,
-                                  (unsigned long long)(expected_sum ^ read_sum));
-                    report_fail_msg("mesh_upi_sve_asymm_distrib_int: Sum mismatch");
-                    return EXIT_FAILURE;
-                }
+            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
+            bool passed = (read_sum == expected_sum) && consistent;
 
-                // 同步重置：最后一个读核心重置状态
-                uint32_t done = td->round_done.fetch_add(1, std::memory_order_seq_cst) + 1;
-                uint32_t total_readers = td->reader_count.load(std::memory_order_acquire);
-                if (done == total_readers) {
-                    td->allocated_blocks.store(0, std::memory_order_seq_cst);
-                    td->next_block.store(0, std::memory_order_seq_cst);
-                    td->global_sum.store(0, std::memory_order_seq_cst);
-                    td->round_done.store(0, std::memory_order_seq_cst);
-                } else {
-                    while (td->round_done.load(std::memory_order_seq_cst) != 0 &&
-                           test_time_condition(test)) {
+            if (!passed) {
+                // 首次失败证据（原先每轮都打印 PASS 行；与 Task 5 家族统一移入失败分支）
+                fprintf(stderr, "mesh_upi_sve_asymm_distrib_int: Thread %d (reader), data[0..7]=(%d,%d,%d,%d,%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
+                        id,
+                        td->data[0], td->data[1], td->data[2], td->data[3],
+                        td->data[4], td->data[5], td->data[6], td->data[7],
+                        read_sum, expected_sum, consistent,
+                        passed ? GREEN : RED,
+                        passed ? "PASS" : "FAIL",
+                        RESET);
+                fflush(stderr);
+                /* cold path: record bit-level evidence for the failing leg(s) */
+                if (read_sum != expected_sum)
+                    log_error("mesh_upi_sve_asymm_distrib_int: sum mismatch: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                              (unsigned long long)expected_sum, (unsigned long long)read_sum,
+                              (unsigned long long)(expected_sum ^ read_sum));
+                report_fail_msg("mesh_upi_sve_asymm_distrib_int: Sum mismatch or consistency failure");
+                return EXIT_FAILURE;
+            }
+
+        }
+
+        /* ---------- 轮屏障：sense-reversal，写者与全体读者都到达 ----------
+         * 最后到达者在此复位下一轮状态（global_sum/next_block/
+         * allocated_blocks）后翻转 epoch：fetch_add(acq_rel) 的到达链
+         * 保证复位发生时所有线程都已离开本轮的填充/校验（这正是原
+         * reader_count 移动目标判据想做而没做对的轮次隔离），epoch 的
+         * release 存储保证复位先于任何线程的下一轮访问可见。 */
+        {
+            uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (done == total_threads) {
+                td->global_sum.store(0, std::memory_order_seq_cst);
+                td->next_block.store(0, std::memory_order_seq_cst);
+                td->allocated_blocks.store(0, std::memory_order_seq_cst);
+                td->arrived.store(0, std::memory_order_relaxed);
+                td->epoch.store(my_epoch + 1, std::memory_order_release);
+            } else {
+                /* 自旋按 131072 一档节流预算检查：该等待必须覆盖实测
+                 * 2.7-6.7ms 的线程孵化偏斜（首轮早到者要等最晚到达者，
+                 * 1024 一档在 40 次预算下只覆盖 ~70µs，会把每轮都变成
+                 * 预算耗尽的 vacuous 退出），40 次 × 131072 自旋 ×
+                 * ~1.7ns ≈ 8.9ms 覆盖实测最大值（8502e491 既证参数）；
+                 * 等待条件本身每自旋都查，响应不受影响。 */
+                uint32_t spin = 0;
+                while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
+                    if ((++spin & 131071u) == 0) {
+                        if (!test_time_condition(test)) goto out_of_budget;
+                    } else {
                         __asm__ volatile("yield");
                     }
-                    if (!test_time_condition(test)) break;
                 }
             }
         }
+        ++my_epoch;
     } while (test_time_condition(test));
 
+out_of_budget:
     return EXIT_SUCCESS;
 
     #undef GREEN
