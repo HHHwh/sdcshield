@@ -47,4 +47,4 @@ ARM64 上未实现的功能必须从 `test_init` 返回 `EXIT_SKIP`（-255，并
 
 ## 四、GitHub App 安装说明
 
-Greptile 以 GitHub App（账号 `greptile-apps[bot]`）形式工作，需要**仓库管理员在 greptile.com 授权安装本仓库**后，检视才会生效。当前 `.greptile/` 配置先就位，待管理员完成安装授权后即可启用。
+Greptile 以 GitHub App（账号 `greptile-apps[bot]`）形式工作，需**仓库管理员在 greptile.com 授权安装本仓库**后方生效。安装授权已于 2026-10-13 完成，Greptile 检视已实测生效（PR #238 首次产出：review + 行级评论 + check-run "Greptile Review" pass）。
