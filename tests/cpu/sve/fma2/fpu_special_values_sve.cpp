@@ -57,8 +57,10 @@ static constexpr int NUM_SPECIALS = 16;
  * framework RNG (re-seeded per fracture fragment), so the cartesian
  * sweep covers fresh finite-operand combinations on every fragment
  * instead of replaying one fixed table (PR #234 review, greptile
- * 4254737399). Random values are finite and non-NaN, so they always
- * take the byte-exact comparison branch. */
+ * 4254737399). Random values are finite and non-NaN, but triples that
+ * mix them with the table's NaN/Inf specials can still produce NaN
+ * results — those are compared class-only; every non-NaN result is
+ * byte-exact-compared (see sweep_f32_sve/sweep_f64_sve). */
 static void build_specials_f32(float t[NUM_SPECIALS])
 {
     t[0]  = NAN;
