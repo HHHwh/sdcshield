@@ -44,8 +44,9 @@
  *   - per-lane results are logged only on mismatch; chrono timing
  *     dropped (the framework times tests itself).
  *
- * Requires 512-bit SVE (svcntd() == 8); other SVE vector lengths return
- * a clean EXIT_SKIP, non-SVE CPUs are skipped by the framework's
+ * Full-VL support: bt = 2*svcntd() f64 lanes (128..1024-bit SVE), all
+ * layout offsets scale at runtime; out-of-range VLs return a clean
+ * EXIT_SKIP, non-SVE CPUs are skipped by the framework's
  * compiler-feature gate. Built only on aarch64.
  * @endparblock
  */
@@ -68,7 +69,13 @@ using std::size_t;
 using std::ptrdiff_t;
 
 constexpr size_t RADIUS = 6;
-constexpr size_t B_TILE = 16;
+/* Full-VL support (128..1024-bit): the kernel writes two result vectors
+ * (res0+res1), so the tile width is bt = 2*svcntd() f64 lanes, read at
+ * runtime (4..32). Originally 512-bit-only (B_TILE=16); the parameterized
+ * geometry has been verified at VL 128/256/512/1024 in gem5 (gem5-fi
+ * feat/sve-sme-all-vl, kernel stencil_axis_dual, 16-run all-green incl.
+ * the 512-bit regression anchor). */
+constexpr size_t kTileMax = 32;   /* VL=1024bit upper bound */
 
 // Grid geometry (shared between init and run).
 static constexpr size_t coord = 10;
@@ -83,7 +90,9 @@ static constexpr size_t iterations = 100'000'000;
 static thread_local size_t j;
 
 struct SveStencilAxisData {
-    // [extent][stride][B_TILE] grid, filled with (i % 16) + 1 per tile.
+    // Tile width in f64 lanes = 2*svcntd() at the runtime VL (4..32).
+    size_t bt;
+    // [extent][stride][bt] grid of random small integers.
     std::vector<double> src;
     // Points at the coord=10 layer's first tile (negative offsets legal).
     const double *s_base = nullptr;
@@ -102,25 +111,26 @@ static inline uint64_t bits_of(double d)
 inline void axis_generic_16x2(
     const double* s_base, const size_t coord,
     const size_t extent, const size_t stride,
-    const svbool_t ptrue, const double* coeff,
+    const svbool_t ptrue, const double* coeff, const size_t bt,
     svfloat64_t& res0, svfloat64_t& res1)
 {
+    const size_t lanes = bt / 2;   /* f64 lanes per result vector */
 #if defined(__clang__)
 #pragma clang loop unroll(full)
 #endif
     for (size_t r = 1; r <= RADIUS; ++r) {
-        const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * B_TILE;
+        const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * bt;
         const svfloat64_t c = svdup_f64(coeff[r]);
 
         if (coord >= r) {
             const double* n = s_base - off;
             res0 = svmla_x(ptrue, res0, svld1(ptrue, n), c);
-            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + 8), c);
+            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + lanes), c);
         }
         if (coord + r < extent) {
             const double* n = s_base + off;
             res0 = svmla_x(ptrue, res0, svld1(ptrue, n), c);
-            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + 8), c);
+            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + lanes), c);
         }
     }
 }
@@ -134,37 +144,35 @@ static int sve512_stencil_axis_arm_init(struct test *test)
         return EXIT_SKIP;
     }
 
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
+    /* Full-VL support: bt = 2*svcntd() scales every layout offset below.
+     * The 512-bit geometry was characterized on HiSilicon 0xd22; the
+     * parameterized geometry is verified at all four VLs in gem5 (the
+     * historical issue #182 mismatch was the stale RADIUS=4 analytic
+     * expectation, since fixed — see the @parblock). */
+    const size_t bt = 2 * svcntd();
+    if (bt < 4 || bt > kTileMax) {
         log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
-    if (svcntd() != 8) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "sve512_stencil_axis_arm requires a 512-bit SVE vector "
-                 "length (16 lanes across two vectors); current f64 lanes "
-                 "= %zu", static_cast<size_t>(svcntd()));
+                 "sve512_stencil_axis_arm: SVE vector length %zu bytes is "
+                 "outside the supported 128..1024-bit range",
+                 static_cast<size_t>(svcntb()));
         return EXIT_SKIP;
     }
 
     try {
         auto data = std::make_unique<SveStencilAxisData>();
 
-        // Layout: [extent][stride][B_TILE]; per-element random small
+        // Layout: [extent][stride][bt]; per-element random small
         // integers from the framework RNG keep every lane independently
         // checkable while varying the input combinations across fracture
         // fragments (the RNG is re-seeded per fragment; PR #234 review,
         // greptile 4254737399). Exact integers keep the accumulation
         // bit-exact — see the scalar reference in _run.
-        data->src.resize(extent * stride * B_TILE);
+        data->bt = bt;
+        data->src.resize(extent * stride * bt);
         for (size_t i = 0; i < data->src.size(); ++i)
             data->src[i] = static_cast<double>(1 + random32() % 256);
 
-        data->s_base = data->src.data() + coord * stride * B_TILE;
+        data->s_base = data->src.data() + coord * stride * bt;
 
         test->data = data.release();
         return EXIT_SUCCESS;
@@ -187,6 +195,8 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
         coeff[r] = 0.125;
 
     const double* s_base = d->s_base;
+    const size_t bt = d->bt;
+    const size_t lanes = bt / 2;
     const svbool_t ptrue = svptrue_b64();
 
     /* Scalar reference for the randomized src: one kernel call adds, per
@@ -196,13 +206,13 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
      * stays below 12 * 0.125 * 512 = 768, so both the hardware
      * accumulation over 1e8 calls and this reference stay on the exact
      * 1/8 grid below 2^53: order-independent, bit-exact equality. */
-    double expected[B_TILE];
-    for (size_t j = 0; j < B_TILE; ++j)
+    double expected[kTileMax];
+    for (size_t j = 0; j < bt; ++j)
         expected[j] = 0.0;
     for (size_t r = 1; r <= RADIUS; ++r) {
         const ptrdiff_t off =
-            static_cast<ptrdiff_t>(r * stride) * B_TILE;
-        for (size_t j = 0; j < B_TILE; ++j) {
+            static_cast<ptrdiff_t>(r * stride) * bt;
+        for (size_t j = 0; j < bt; ++j) {
             double delta = 0.0;
             if (coord >= r)
                 delta += s_base[-off + static_cast<ptrdiff_t>(j)];
@@ -211,7 +221,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
             expected[j] += 0.125 * delta;
         }
     }
-    for (size_t j = 0; j < B_TILE; ++j)
+    for (size_t j = 0; j < bt; ++j)
         expected[j] *= static_cast<double>(iterations);
 
     do {
@@ -224,12 +234,12 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                             j, static_cast<void *>(&res0));
             }
             axis_generic_16x2(
-                s_base, coord, extent, stride, ptrue, coeff, res0, res1);
+                s_base, coord, extent, stride, ptrue, coeff, bt, res0, res1);
         }
 
-        double result[B_TILE];
+        double result[kTileMax];
         svst1(ptrue, result, res0);
-        svst1(ptrue, result + 8, res1);
+        svst1(ptrue, result + lanes, res1);
 
         /* Per-lane bit-exact comparison: compare the raw IEEE-754 bit
          * patterns instead of C++ == so the check is byte-exact like the
@@ -237,7 +247,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
          * both patterns — %.0f would round away the sub-1.0 1/8-grid
          * fraction and the failing bits. */
         bool ok = true;
-        for (size_t j = 0; j < B_TILE; ++j) {
+        for (size_t j = 0; j < bt; ++j) {
             if (bits_of(result[j]) != bits_of(expected[j])) {
                 log_warning("sve512_stencil_axis: lane %2zu "
                             "result=0x%016" PRIx64 " "
