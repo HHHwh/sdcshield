@@ -140,3 +140,7 @@ END_DECLARE_TEST
   `docs/sdcshield-cpu.schema.json`; **provenance/compliance**:
   `docs/misc/OPEN_SOURCE_PROVENANCE.md`.
 - **Process artifacts**: `docs/superpowers/` (plans/, specs/, inventory/).
+- **PR review-fix loop** (agent-driven: four bots → subagent critical triage →
+  fix → loop → human merge; never auto-merge): `docs/misc/pr-loop.md`; engine
+  `scripts/pr_loop.py`; `/pr-loop` command (`.claude/commands/`) and Trae rule
+  (`.trae/rules/`) are content-twins.

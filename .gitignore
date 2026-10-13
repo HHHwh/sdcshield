@@ -20,9 +20,13 @@ tags
 # clangd background-index cache
 /.cache/
 /.vscode/
-# Claude Code local artifacts (session state, agent memory)
-/.claude/
+# Claude Code local artifacts (session state, agent memory);
+# commands/ is project tooling and lives in-repo (self-containment)
+/.claude/*
+!/.claude/commands/
 /memory/
+# python bytecode caches (e.g. scripts/__pycache__/ after local runs)
+__pycache__/
 # pytest cache (rootdir is repo root, see tools/telemetry/)
 .pytest_cache/
 # M5 故障演练产物（drills/out/<类名>/root/ 隔离根证据——本地可再生）
