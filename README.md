@@ -6,7 +6,7 @@ SDCShield is an open-source project designed to identify defects and bugs in ARM
 
 SDCShield is derived from OpenDCDiag (which contains the Intel `sandstone` framework), licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for full derivation and upstream provenance.
 
-## 一行命令检测鲲鹏 CPU SDC（傻瓜化）
+## 一行命令检测鲲鹏 CPU SDC
 
 **源码树（推荐）**：
 
@@ -65,7 +65,7 @@ bash scripts/run/sdc_detect.sh
 ./run-sdcshield.sh --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
 ```
 
-**为什么是这条命令**：CPU179 故障核的实证——优先序全套件全核轮转约 100 秒出首错，而单测试单跑（含 11180 个 seed 轮换）零复现。全核并发 + 负载多样性 + 长驻留三者齐备才有检出率，这条命令一次配齐。
+**为什么是这条命令**：0102单板故障核的实证——优先序全套件全核轮转约 100 秒出首错，而单测试单跑（含 11180 个 seed 轮换）零复现。全核并发 + 负载多样性 + 长驻留三者齐备才有检出率，这条命令一次配齐。
 
 **结果判读**：
 
@@ -85,14 +85,10 @@ bash  scripts/sdc-excite-reproduce/excite.sh --status     # 只读巡检
 sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断点）
 ```
 
-**更激进（单模式深驻留）**：给 sdcshield 追加 `--max-test-loop-count=0`——关闭
-fracturing，测试窗口内不再换种子重启，固定种子单模式连续运行（CORE179 类单模式持续
-暴露；选项语义见 `docs/research/usage.md`）。战役 L4 深驻留阶段已内置该模式；以深驻留
-为主的独立战役用模式 D（`scripts/run/run_sdc_spectrum.sh` 阶段 2）。等效命令（无脚本
-时，直接传给程序）：
+**更激进（单模式深驻留）**：给 sdcshield 追加 `--max-test-loop-count=10`（自动模式默认40，你可以根据需求控制种子随机生成的频次）
 
 ```bash
-./builddir/sdcshield --quality=0 -T forever -t 60s --max-test-loop-count=0 -Y -F -o sdc-$(date +%m%d-%H%M).yaml
+./builddir/sdcshield --quality=0 -T forever -t 60s --max-test-loop-count=10 -Y -F -o sdc-$(date +%m%d-%H%M).yaml
 ```
 
 **使用方法要点**（`excite.sh -h` 看完整帮助）：`--smoke` 模式无需 root、不触碰 systemd（预检 + 战役冒烟门）；run 模式需 root（sudo），幂等可重入——已安装/已活跃的服务自动跳过，`state.json` 断点保留，重复执行安全。环境变量：`SDC_BIN` 指定 sdcshield 二进制；`SMOKE_TIMEOUT_S` 覆盖战役冒烟门上限（默认 2400 秒；冒烟为 L1-L5 短时长单遍，实测约 23 分钟，L5 专项每次轮换一支分支——慢板机器可调大）。
