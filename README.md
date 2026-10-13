@@ -80,6 +80,7 @@ bash scripts/run/sdc_detect.sh
 
 ```bash
 sudo bash scripts/sdc-excite-reproduce/excite.sh          # 一键上线 7×24 战役
+SDC_EXTRA_ARGS=\"--max-test-loop-count=0\" sudo bash scripts/sdc-excite-reproduce/excite.sh # 更激进的激发模式（启用默认的 fracture 自动按需调整机制）
 bash  scripts/sdc-excite-reproduce/excite.sh --smoke      # 只预检+冒烟（无需 root）
 bash  scripts/sdc-excite-reproduce/excite.sh --status     # 只读巡检
 sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断点）
