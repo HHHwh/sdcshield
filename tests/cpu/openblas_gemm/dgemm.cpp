@@ -9,11 +9,14 @@
  * @parblock
  * Stress test for the vector FMA units using OpenBLAS's hand-written NEON
  * dgemm micro-kernel (TSV110). Literature identifies vector FMA as the #1
- * SDC source (SEVI ASPLOS'26: >92% of vector SDC incidents; Veritas HPCA'25:
+ * SEVI ASPLOS'26: >92% of vector SDC incidents; Veritas HPCA'25:
  * vector units orders of magnitude above scalar). Each iteration copies the
- * inputs, computes C = A*B, and byte-compares against the golden product
- * from init (copy->compute->verify, the most frequent CORE179 trigger
- * structure). A third scheduling sample beside Eigen/ACL GEMM.
+ * inputs, computes C = A*B, and byte-compares against a golden product
+ * computed from freshly re-rolled operands every kRerollEvery iterations
+ * (per-thread, framework RNG — B2-004; init's copy stays only as the
+ * init-time finiteness canary): copy->compute->verify, the most frequent
+ * CORE179 trigger structure. A third scheduling sample beside Eigen/ACL
+ * GEMM.
  * The matrix dimension is runtime-configurable via the test knob
  * "-O openblas_dgemm.mdim=N" (16..4096, default 256; the test-id
  * prefix is required — a bare "mdim=N" is silently ignored), sweeping
@@ -59,21 +62,30 @@ struct gemm_test_data {
                              C read-modify-write path) */
     double *a;
     double *b;
-    double *golden;      /* C = alpha*op(A)*op(B) + beta*C computed once in init; read-only after */
+    double *golden;      /* C = alpha*op(A)*op(B) + beta*C computed once in init as the finiteness
+                             canary for the operand distribution; not read by test_run (B2-004: run
+                             keeps its own per-thread re-rolled l_a/l_b/l_golden) */
 };
 
 /* Scratch buffers are per-thread: the framework runs one worker thread per
  * core and they all share test->data, so anything written during test_run
  * must be thread-local (a_copy/b_copy are the copy-in destinations, c is
- * the product destination; all three are written every iteration). They are
- * allocated lazily on first use and intentionally not freed in cleanup:
- * the worker threads are gone (or never existed) when the main thread runs
- * test_cleanup, and the whole forked child exits right after, so the OS
- * reclaims the storage. calloc zeroes c once so a skipped/short first
- * iteration can never compare garbage. */
+ * the product destination; all three are written every iteration). l_a/
+ * l_b/l_golden are this thread's re-rolled operands and golden (B2-004):
+ * the shared d->a/b/golden are never read by test_run — init's fill stays
+ * only as the init-time finiteness canary, matching the 46141ed4 Eigen
+ * pattern where run owns its inputs outright. All are allocated lazily
+ * on first use and intentionally not
+ * freed in cleanup: the worker threads are gone (or never existed) when
+ * the main thread runs test_cleanup, and the whole forked child exits
+ * right after, so the OS reclaims the storage. calloc zeroes c once so a
+ * skipped/short first iteration can never compare garbage. */
 static thread_local double *a_copy = nullptr;
 static thread_local double *b_copy = nullptr;
 static thread_local double *c = nullptr;
+static thread_local double *l_a = nullptr;
+static thread_local double *l_b = nullptr;
+static thread_local double *l_golden = nullptr;
 }
 
 #define CAST(_x) static_cast<struct gemm_test_data *>(_x)
@@ -161,24 +173,58 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
     size_t bytes = (size_t)d->mdim * d->mdim * sizeof(double);
     size_t n2 = (size_t)d->mdim * d->mdim;
     long iter = 0;
+    /* B2-004 (R2b freeze blind spot): this thread's operands and golden
+     * are re-rolled from the framework RNG every kRerollEvery iterations
+     * instead of replaying init's frozen bytes forever; the shared
+     * d->a/d->b/d->golden are never read here (init's fill stays only as
+     * the init-time finiteness canary, like the 46141ed4 Eigen pattern).
+     * The golden is recomputed with the very same cblas call and knob set
+     * the verified call below uses, on the same operand distribution, so
+     * the finiteness bound argued in init carries over; -s replays stay
+     * reproducible since the framework RNG is seeded per test. */
+    constexpr int kRerollEvery = 16;
+    int since_reroll = kRerollEvery; /* force the first-iteration fill */
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
-        if (__builtin_expect(!a_copy || !b_copy || !c, 0)) {
-            a_copy = (double *)malloc(bytes);
-            b_copy = (double *)malloc(bytes);
-            c      = (double *)calloc(1, bytes);
-            if (!a_copy || !b_copy || !c)
-                report_fail_msg("OOM allocating thread scratch (%zu bytes)", bytes * 3);
+        if (__builtin_expect(!a_copy || !b_copy || !c || !l_a || !l_b || !l_golden, 0)) {
+            a_copy   = (double *)malloc(bytes);
+            b_copy   = (double *)malloc(bytes);
+            c        = (double *)calloc(1, bytes);
+            l_a      = (double *)malloc(bytes);
+            l_b      = (double *)malloc(bytes);
+            l_golden = (double *)malloc(bytes);
+            if (!a_copy || !b_copy || !c || !l_a || !l_b || !l_golden)
+                report_fail_msg("OOM allocating thread scratch (%zu bytes)", bytes * 6);
+        }
+
+        /* re-roll (first iteration, then every kRerollEvery-th): fresh
+         * high-entropy operands for this thread; golden recomputed with
+         * the same cblas call, seeded with the same deterministic C
+         * pattern the per-iteration seeding below uses (beta semantics) */
+        if (++since_reroll >= kRerollEvery) {
+            since_reroll = 0;
+            for (size_t i = 0; i < n2; ++i) {
+                l_a[i] = random_bounded();
+                l_b[i] = random_bounded();
+            }
+            for (size_t i = 0; i < n2; ++i)
+                l_golden[i] = 0.5 * (double)(i & 63) / 64.0;
+            cblas_dgemm(CblasRowMajor,
+                        (d->transab & 2) ? CblasTrans : CblasNoTrans,
+                        (d->transab & 1) ? CblasTrans : CblasNoTrans,
+                        d->mdim, d->mdim, d->mdim,
+                        1.0, l_a, d->mdim, l_b, d->mdim,
+                        d->beta, l_golden, d->mdim);
         }
 
         /* copy-in (dirties cache lines, then reloads them in the kernel) */
-        memcpy(a_copy, d->a, bytes);
-        memcpy(b_copy, d->b, bytes);
+        memcpy(a_copy, l_a, bytes);
+        memcpy(b_copy, l_b, bytes);
 
         /* re-seed C's initial content every iteration: with beta != 0 the
          * kernel reads C (read-modify-write), so each iteration must start
          * from the same deterministic pattern the golden product was seeded
-         * with in init (recomputed inline — no extra shared array) */
+         * with at the reroll (recomputed inline — no extra shared array) */
         for (size_t i = 0; i < n2; ++i)
             c[i] = 0.5 * (double)(i & 63) / 64.0;
 
@@ -191,13 +237,13 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
 
         ++iter;
         /* verify-out: byte-exact golden compare of inputs and product */
-        if (memcmp(a_copy, d->a, bytes) != 0) {
+        if (memcmp(a_copy, l_a, bytes) != 0) {
             report_fail_msg("input A corrupted after GEMM (iteration %ld)", iter);
         }
-        if (memcmp(b_copy, d->b, bytes) != 0) {
+        if (memcmp(b_copy, l_b, bytes) != 0) {
             report_fail_msg("input B corrupted after GEMM (iteration %ld)", iter);
         }
-        memcmp_or_fail(c, d->golden, (size_t)d->mdim * d->mdim);
+        memcmp_or_fail(c, l_golden, (size_t)d->mdim * d->mdim);
     }
     return EXIT_SUCCESS;
 }
