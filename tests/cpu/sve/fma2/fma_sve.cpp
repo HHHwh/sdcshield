@@ -120,6 +120,6 @@ DECLARE_TEST(fma_sve, "FMA instruction basic test (SVE single-precision, port of
     .test_init = fma_sve_init,
     .test_run = fma_sve_run,
     .test_cleanup = fma_sve_finish,
-    .fracture_loop_count = -1,
+    .fracture_loop_count = 0,
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

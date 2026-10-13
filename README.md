@@ -85,6 +85,16 @@ bash  scripts/sdc-excite-reproduce/excite.sh --status     # 只读巡检
 sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断点）
 ```
 
+**更激进（单模式深驻留）**：给 sdcshield 追加 `--max-test-loop-count=0`——关闭
+fracturing，测试窗口内不再换种子重启，固定种子单模式连续运行（CORE179 类单模式持续
+暴露；选项语义见 `docs/research/usage.md`）。战役 L4 深驻留阶段已内置该模式；以深驻留
+为主的独立战役用模式 D（`scripts/run/run_sdc_spectrum.sh` 阶段 2）。等效命令（无脚本
+时，直接传给程序）：
+
+```bash
+./builddir/sdcshield --quality=0 -T forever -t 60s --max-test-loop-count=0 -Y -F -o sdc-$(date +%m%d-%H%M).yaml
+```
+
 **使用方法要点**（`excite.sh -h` 看完整帮助）：`--smoke` 模式无需 root、不触碰 systemd（预检 + 战役冒烟门）；run 模式需 root（sudo），幂等可重入——已安装/已活跃的服务自动跳过，`state.json` 断点保留，重复执行安全。环境变量：`SDC_BIN` 指定 sdcshield 二进制；`SMOKE_TIMEOUT_S` 覆盖战役冒烟门上限（默认 2400 秒；冒烟为 L1-L5 短时长单遍，实测约 23 分钟，L5 专项每次轮换一支分支——慢板机器可调大）。
 
 一条命令完成：预检（二进制 fail-loud + L0 冒烟门）→ 按需安装 systemd 单元 →
