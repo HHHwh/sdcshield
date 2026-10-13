@@ -1,0 +1,57 @@
+# CodeRabbit 配置：对本仓库 PR 自动 + 增量代码检视
+# 校验依据：CodeRabbit 官方 schema v2（https://coderabbit.ai/integrations/schema.v2.json）
+# 账号：coderabbitai[bot]
+
+# 审查输出语言（schema 顶层键，枚举内含 zh-CN）
+language: zh-CN
+
+# 审查语气（schema 顶层键，maxLength=250）；聚焦 SDC 激发能力与正确性，不纠缠纯风格
+tone_instructions: 聚焦 SDC 激发能力与正确性：压载强度与覆盖、golden 字节比对、x86-64 非回归、ARM64 占位诚实性、SVE/NEON 向量长度、失败现场留证；不纠缠纯风格。
+
+reviews:
+  # 更激进的审查风格，宁可多报潜在问题
+  profile: assertive
+
+  # 自动审查：PR 创建即审，并在每次 push 时增量复审
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+
+  # 降噪：关闭走查诗与进度 fortune 文案
+  poem: false
+  in_progress_fortune: false
+
+  # 按路径给出 SDC 激发专属检视要点
+  path_instructions:
+    - path: "tests/cpu/**"
+      instructions: |-
+        本目录是 SDC 激发测试用例，请重点审查「激发能力」与「正确性」：
+        1) 激发强度与覆盖：是否真正压到目标计算单元（FMA/SIMD/压缩/SVD/crypto）、正确的数据宽度（8/16/32/64-bit、向量宽度）与数据模式（位模式/边界值）；TEST_LOOP 的定时压力是否充足（迭代次数、每轮工作量、超时）。
+        2) golden 比对：必须字节级 memcmp（memcmp_or_fail），浮点结果必须可复现——注意 SNaN/NaN 位型跨架构一致性（框架统一 quiet SNaN）。
+        3) 正确性基线（x86-64 非回归）：新增/修改不得改变 x86-64 行为，仅在真正共享处放宽守卫，其余用 #elif __aarch64__ 或按架构 meson 守卫。
+        4) 诚实性：ARM64 未实现项必须 EXIT_SKIP 且理由为 "to be implemented (placeholder): ..."（先 log_skip 说明缺什么），禁止 EXIT_SUCCESS 假通过或空跑。
+        5) 架构相关缺陷：SVE/NEON 向量长度（VL）相关的越界/误报；CI runner VL=128 会掩盖 512-bit VL 缺陷。
+        6) 失败现场：失败时保留冷路径 bit dump / sum-bit / failing-vector 记录，便于 SDC 定位，不要只报 fail 而不留证据。
+
+    - path: "framework/**"
+      instructions: |-
+        本目录是测试框架，请重点审查「正确性基线」与「可复现性」：
+        1) x86-64 非回归：改动必须保持 x86-64 行为不变；仅在真正共享处把 #ifdef __x86_64__ 放宽为包含 __aarch64__，其余用 #elif __aarch64__ 或按架构 meson 守卫，禁止隐式改变既有架构语义。
+        2) golden 比对：字节级 memcmp 语义不得被削弱；浮点须可复现，注意 SNaN/NaN 位型跨架构一致（统一 quiet SNaN）。
+        3) 激发强度与覆盖：TEST_LOOP 定时循环与每 CPU 工作线程（fork 子进程 + forkfd 收集）须仍提供充足且确定的压力，避免破坏确定性（-n 1）。
+        4) 架构相关缺陷：SVE/NEON 向量长度（VL）相关处理是否存在越界/误报——CI runner VL=128 会掩盖 512-bit VL 缺陷，警惕运行期 VL 与编译期 VL 不一致（如固定 VL=128 的启动器）。
+        5) 诚实性：框架对未实现特性应走 EXIT_SKIP + 理由 "to be implemented (placeholder): ..."，不得让占位测试报告 pass。
+        6) 失败现场：失败路径应保留冷路径 bit dump / sum-bit / failing-vector 记录。
+
+    - path: "device/**"
+      instructions: |-
+        本目录为设备/平台相关代码，请重点审查「架构相关缺陷」与「失败现场」：
+        1) 架构相关缺陷：SVE/NEON 向量长度（VL）相关的越界、对齐与误报；CI runner VL=128 会掩盖 512-bit VL 缺陷，警惕编译期/运行期 VL 不一致。
+        2) 激发强度与覆盖：设备相关路径是否仍能压到目标计算单元（FMA/SIMD/压缩/SVD/crypto）及相应数据宽度/模式，TEST_LOOP 压力是否充足。
+        3) 诚实性：ARM64 未实现项必须 EXIT_SKIP + 理由 "to be implemented (placeholder): ..."，禁止假通过。
+        4) 失败现场：失败时保留冷路径 bit dump / sum-bit / failing-vector 记录。
+        5) x86-64 非回归：新增按架构守卫（#elif __aarch64__ / meson），不改变 x86-64 行为。
+
+chat:
+  # 允许免 @ 自动回复
+  auto_reply: true

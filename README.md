@@ -206,6 +206,10 @@ CI 哨兵（与上节 `release-all.sh` 发布链路互补）：每天 UTC 04:00�
 
 PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历史/DCO（人工提交必须 Signed-off-by，Copilot Autofix 机器提交豁免）→ `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，结果矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3；源码/适配层改动才跑，docs-only PR 自动跳过）。安全（`security.yaml` + `codeql.yaml`，每周全量 + PR 增量）：zizmor / gitleaks / osv-scanner / CodeQL cpp。基准趋势：nightly 的 24.03-LTS-SP3 `benchmark.tsv` 经 github-action-benchmark 推 gh-pages 分支，出跨 commit 趋势图 + 150% 回归告警（观测期不硬门）。网页侧操作清单（原生失败通知、分支保护、Code scanning 确认）见 [docs/build-deploy/ci-web-operations.md](docs/build-deploy/ci-web-operations.md)。
 
+### 代码检视机器人（PR 自动检视，聚焦 SDC 激发）
+
+仓库接入 codex、CodeRabbit、PR-Agent、Greptile 四个代码检视机器人，在 PR 打开/更新时自动检视；四者配置（`AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、`.greptile/`）均内嵌 SDC 激发专属检视要点（激发强度与覆盖、golden 字节比对、x86-64 非回归、占位诚实性、SVE/NEON VL、失败现场留证）。新增 `bot-coverage.yml` 做**非阻塞**覆盖度校验：有界轮询四个 bot 是否已检视，结果写入 step summary 并评论告警，**恒 exit 0、绝不阻塞合并**。其中 codex / CodeRabbit / PR-Agent 已生效，**Greptile 待管理员人工安装**。生效核查方法（`gh` 命令与账号对照）、Greptile 手动安装步骤与 SDC 检视要点汇总见 [docs/misc/pr-review-bots.md](docs/misc/pr-review-bots.md)。
+
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
 本地 podman 上的**最严格**验证入口（GHA 日报的本地超集）：15 个镜像 × 29 条目严格选项矩阵 × 全部测试用例（含 `--quality=-1` SKIP 级、三 RNG 引擎、cpuset 跨 NUMA、全部 `-O` 测试旋钮、selftests、`--on-crash=context` 等）。`run-all-15.sh` 一键全矩阵（`--smoke` 链路快检），`run-lts-stability.sh <series> <sp>` 单镜像全矩阵；每镜像容器内原生构建全功能二进制（`-Dssl_link_type=static` + vendored 库）后跑严格矩阵，全部 15 PASS 才 exit 0。2026-09-17 全链路实测 **15/15 PASS**（main `ebe0bf1`，290 测试集），过程中发现并修复 8 个跨版本软件 bug。用法与设计见 [scripts/lts-stability/README.md](scripts/lts-stability/README.md)。
