@@ -479,11 +479,13 @@ tests_set_base.add(
 )
 
 # CRC test suite (15 tests, tests/cpu/crc/). Three groups:
-#  - zpclmul / zpclmul_rep: zlib CRC32 with an ARM NEON instruction exercised
-#    on aarch64 (gated by #ifdef __aarch64__ in the source; on other arches
-#    they degrade to a portable zlib-only path, so they build everywhere
-#    zlib is present). Wired under the zlib_dep gate since they call
-#    zlib crc32().
+#  - zpclmul / zpclmul_rep: CRC-32 folded over NEON PMULL/PMULL2
+#    carry-less multiplication on aarch64 (DUT, structure after
+#    libdeflate's crc32_arm_pmullx4, function-level target("+crypto")
+#    so no extra -march is needed here) vs the independent zlib
+#    crc32() software golden. On non-aarch64 they compile to a clean
+#    EXIT_SKIP placeholder. Wired under the zlib_dep gate since the
+#    golden calls zlib crc32().
 #  - 10 isal_* tests: isa-l (libisal) CRC functions. isal is a portable C
 #    library with arch-optimised dispatch internally; the tests declare their
 #    own extern "C" prototypes. Wired under the isal_lib gate below.
