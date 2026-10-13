@@ -1,0 +1,172 @@
+name: Bot Coverage
+
+# 轮询四个代码检视机器人（codex / CodeRabbit / PR-Agent / Greptile）是否已对目标 PR 产出检视。
+# 结果写入 step summary，并对每个缺失项以 ::warning:: 与 PR 评论告警。
+# 本检查仅供提示，绝不阻塞合并：脚本始终 exit 0。
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "要检查的 PR 编号（手动触发时填写）"
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write      # 发布/更新 PR 评论所需
+
+# 同一 PR 的新 push 取消旧 run（PR 场景用事件里的 PR 号；手动用 inputs.pr-number）
+concurrency:
+  group: bot-coverage-${{ github.event.pull_request.number || github.event.inputs.pr-number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bot-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20       # 覆盖默认 900s 等待上限 + API/评论开销，避免 run 挂死
+    env:
+      # 所有动态值经 env 注入，不把 ${{ }} 表达式拼进脚本正文（避免脚本注入告警）
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr-number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      # 等待上限（秒）与轮询间隔（秒），允许在 env 层覆盖
+      BOT_COVERAGE_MAX_WAIT: "900"
+      BOT_COVERAGE_INTERVAL: "30"
+    steps:
+      - name: 轮询检视机器人覆盖情况并汇总
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # 上限/间隔从 env 读取，缺失时回退默认值，允许覆盖
+          max_wait="${BOT_COVERAGE_MAX_WAIT:-900}"
+          interval="${BOT_COVERAGE_INTERVAL:-30}"
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::warning::未取得 PR 编号（PR_NUMBER 为空），跳过机器人覆盖检查"
+            exit 0
+          fi
+
+          # head SHA：优先用事件注入值，缺失时回退 gh pr view
+          sha="${HEAD_SHA:-}"
+          if [ -z "$sha" ]; then
+            sha="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid 2>/dev/null || true)"
+          fi
+
+          echo "检查 PR #${PR_NUMBER}（head=${sha:-未知}）的四个检视机器人覆盖情况…"
+
+          # 三类来源的作者登录名（issue 评论 / review / review-comment）；调用失败容忍
+          fetch_authors() {
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].user.login' 2>/dev/null || true
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" --jq '.[].user.login' 2>/dev/null || true
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments?per_page=100" --jq '.[].user.login' 2>/dev/null || true
+          }
+
+          # check-run 名称；调用失败容忍
+          fetch_checks() {
+            if [ -n "$sha" ]; then
+              gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" --jq '.check_runs[].name' 2>/dev/null || true
+            fi
+          }
+
+          deadline=$(( $(date +%s) + max_wait ))
+          found_codex=0
+          found_coderabbit=0
+          found_pragent=0
+          found_greptile=0
+          authors=""
+          checks=""
+
+          # 轮询直到四个判据全部命中或到达 deadline
+          while :; do
+            authors="$(fetch_authors)"
+            checks="$(fetch_checks)"
+
+            if printf '%s\n' "$authors" | grep -Fxq 'chatgpt-codex-connector[bot]'; then found_codex=1; fi
+            if printf '%s\n' "$authors" | grep -Fxq 'coderabbitai[bot]' \
+               || printf '%s\n' "$checks" | grep -Fxq 'CodeRabbit'; then found_coderabbit=1; fi
+            if printf '%s\n' "$checks" | grep -Fxq 'pr-agent'; then found_pragent=1; fi
+            if printf '%s\n' "$authors" | grep -Fxq 'greptile-apps[bot]'; then found_greptile=1; fi
+
+            if [ "$found_codex" -eq 1 ] && [ "$found_coderabbit" -eq 1 ] \
+               && [ "$found_pragent" -eq 1 ] && [ "$found_greptile" -eq 1 ]; then
+              break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              break
+            fi
+            sleep "$interval"
+          done
+
+          # 汇总各 bot 的状态与佐证账号/check-run
+          if [ "$found_codex" -eq 1 ]; then s_codex="✅ 已检视"; e_codex="chatgpt-codex-connector[bot]"; else s_codex="❌ 未检视"; e_codex="—"; fi
+
+          if [ "$found_coderabbit" -eq 1 ]; then s_coderabbit="✅ 已检视"; else s_coderabbit="❌ 未检视"; fi
+          e_coderabbit="—"
+          if printf '%s\n' "$authors" | grep -Fxq 'coderabbitai[bot]'; then e_coderabbit="coderabbitai[bot]"; fi
+          if printf '%s\n' "$checks" | grep -Fxq 'CodeRabbit'; then
+            if [ "$e_coderabbit" = "—" ]; then e_coderabbit="check-run: CodeRabbit"; else e_coderabbit="${e_coderabbit}；check-run: CodeRabbit"; fi
+          fi
+
+          if [ "$found_pragent" -eq 1 ]; then s_pragent="✅ 已检视"; e_pragent="check-run: pr-agent"; else s_pragent="❌ 未检视"; e_pragent="—"; fi
+          if [ "$found_greptile" -eq 1 ]; then s_greptile="✅ 已检视"; e_greptile="greptile-apps[bot]"; else s_greptile="❌ 未检视"; e_greptile="—"; fi
+
+          report_body="$(cat <<EOF
+          | 机器人 | 状态 | 判据 | 佐证 |
+          | --- | --- | --- | --- |
+          | codex | ${s_codex} | 作者 login: chatgpt-codex-connector[bot] | ${e_codex} |
+          | CodeRabbit | ${s_coderabbit} | 作者 login: coderabbitai[bot]，或 check-run: CodeRabbit | ${e_coderabbit} |
+          | PR-Agent | ${s_pragent} | check-run: pr-agent | ${e_pragent} |
+          | Greptile | ${s_greptile} | 作者 login: greptile-apps[bot] | ${e_greptile} |
+          EOF
+          )"
+
+          # 写入 step summary（Markdown 表格）
+          {
+            echo "## 🤖 检视机器人覆盖情况（PR #${PR_NUMBER}）"
+            echo
+            echo "$report_body"
+            echo
+            echo "> 等待上限 ${max_wait}s / 轮询间隔 ${interval}s；本检查仅供提示，**绝不阻塞合并**。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "## 检视机器人覆盖情况（PR #${PR_NUMBER}）"
+          echo "$report_body"
+
+          # 对每个缺失 bot 告警
+          if [ "$found_codex" -eq 0 ]; then echo "::warning::未检测到 codex（作者 chatgpt-codex-connector[bot]）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_coderabbit" -eq 0 ]; then echo "::warning::未检测到 coderabbit（作者 coderabbitai[bot] 或 check-run CodeRabbit）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_pragent" -eq 0 ]; then echo "::warning::未检测到 pr-agent（check-run pr-agent）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_greptile" -eq 0 ]; then echo "::warning::未检测到 greptile（作者 greptile-apps[bot]）对 PR #${PR_NUMBER} 的检视"; fi
+
+          # 带隐藏标记的 PR 评论：已存在则更新（PATCH），否则新建（POST），避免每次 synchronize 重复刷屏
+          comment_body="$(cat <<EOF
+          <!-- bot-coverage-report -->
+          ### 🤖 检视机器人覆盖情况
+
+          ${report_body}
+
+          > 等待上限 ${max_wait}s / 轮询间隔 ${interval}s；本检查仅供提示，**绝不阻塞合并**。
+          EOF
+          )"
+
+          existing_id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq '[.[] | select((.body // "") | contains("<!-- bot-coverage-report -->")) | .id] | first // empty' \
+            2>/dev/null || true)"
+
+          if [ -n "$existing_id" ]; then
+            if gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing_id" -f body="$comment_body" >/dev/null 2>&1; then
+              echo "已更新既有 bot 覆盖评论（id=${existing_id}）"
+            else
+              echo "::warning::更新 bot 覆盖评论失败（id=${existing_id}）"
+            fi
+          elif gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="$comment_body" >/dev/null 2>&1; then
+            echo "已发布 bot 覆盖评论"
+          else
+            echo "::warning::发布 bot 覆盖评论失败"
+          fi
+
+          # 非阻塞：无论是否有缺失，均成功退出
+          exit 0

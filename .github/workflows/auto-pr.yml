@@ -1,0 +1,58 @@
+# .github/workflows/auto-pr.yml
+# 特性分支(非 main)首次推送后自动开一个 PR;同一分支后续 push 由 GitHub 复用
+# 该 PR(pull_request: synchronize),从而「一个特性分支 = 一个 PR」。
+#
+# 为何用 PAT 而非默认 GITHUB_TOKEN 建 PR:
+#   GITHUB_TOKEN 创建的 PR **不会**触发 pull_request 事件(GitHub 为防工作流
+#   自触发死循环的刻意设计),会导致 pr-agent.yml / bot-coverage.yml 不在 opened
+#   时评审;PAT 发起的 PR 视为「人」创建,可正常触发下游检视机器人。
+#
+# 前置:仓库 Secret `PR_TOKEN` = 一个有 contents:read + pull_requests:write 的
+#   fine-grained PAT(或 GitHub App token)。未配置时本 workflow 优雅跳过。
+name: Auto PR
+
+on:
+  push:
+    # main 不建 PR;gh-pages 是 benchmark-trend 自动推送的趋势分支,不建 PR
+    branches-ignore: [main, gh-pages]
+
+permissions:
+  contents: read            # 建 PR 走 PAT,GITHUB_TOKEN 保持最小只读
+
+concurrency:
+  group: auto-pr-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  auto-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for gh pr create branch context)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0            # gh pr create 需比较分支与 base 的提交差异
+          persist-credentials: false
+      - name: Create PR for this branch if none open
+        env:
+          GH_TOKEN: ${{ secrets.PR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::PR_TOKEN 未配置 → 跳过自动开 PR(可手动 gh pr create)"
+            exit 0
+          fi
+          b="${GITHUB_REF_NAME}"
+          # 已有 open PR → 什么都不做(后续 push 自动 synchronize 到同一 PR)
+          if gh pr list --repo "$GITHUB_REPOSITORY" --head "$b" --state open \
+               --json number --jq '.[0].number' | grep -q .; then
+            echo "PR 已存在($b) → push 会自动更新同一 PR,跳过"
+            exit 0
+          fi
+          # 分支相对 main 无新提交(或已存在)时 gh pr create 非 0;以 notice 优雅收场
+          if gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$b" \
+               --title "WIP: $b" \
+               --body "自动为特性分支 \`$b\` 创建。后续 push 会更新本 PR 并触发检视机器人。"; then
+            echo "已自动创建 PR($b → main)"
+          else
+            echo "::notice::未创建 PR(分支相对 main 可能无新提交,或已存在)"
+          fi

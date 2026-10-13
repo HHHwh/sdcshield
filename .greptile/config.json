@@ -1,0 +1,56 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "security", "performance"],
+  "triggerOnUpdates": true,
+  "ignorePatterns": [
+    "builddir/**",
+    "third-party/**",
+    "install/**",
+    "subprojects/**",
+    "*.o",
+    "*.obj",
+    "*.a",
+    "*.so",
+    "*.dylib",
+    "*.png",
+    "*.pdf"
+  ],
+  "rules": [
+    {
+      "id": "sdc-excitation-intensity-coverage",
+      "rule": "激发强度与覆盖：新增或修改的测试必须真正对目标计算单元（FMA / SIMD / 压缩 / SVD / crypto 等）施加持续且多样的压力——覆盖不同数据宽度与数据模式，并使用 TEST_LOOP 施加时间/迭代压力，保证被测单元长时间处于活跃激发状态。禁止恒定输入、退化输入或惰性路径使被测单元空转；请指出缺少激发强度、覆盖不足，或所写的激发代码在编译优化后实际被消除（激发行不成活）的改动。",
+      "scope": "tests/cpu/**",
+      "severity": "error"
+    },
+    {
+      "id": "sdc-golden-bytewise-memcmp",
+      "rule": "golden 比对必须字节级 memcmp：所有结果比对必须使用 memcmp / memcmp_or_fail（或等价的逐字节比较），保证位级一致。浮点结果必须可复现——SNaN / NaN 位型需与框架 sandstone_data.cpp 中统一 quiet SNaN 的策略一致，禁止依赖含 NaN 的松散容差比较来掩盖 SDC。请指出引入容差比较、非字节级比较或不可复现浮点路径（例如依赖未定义求值顺序、非确定归约）的改动。",
+      "scope": "tests/**",
+      "severity": "error"
+    },
+    {
+      "id": "x86-64-non-regression",
+      "rule": "x86-64 非回归：ARM64 移植必须是增量式的——新架构代码须置于 #elif __aarch64__ 分支或按架构的 meson 守卫中；只有在确属共享时才可将 #ifdef __x86_64__ 扩大为包含 __aarch64__。禁止改动 x86-64 既有行为或改写其语义。请指出可能导致 x86-64 参考架构行为变化、或不当扩大架构宏条件的改动。",
+      "scope": "framework/**",
+      "severity": "error"
+    },
+    {
+      "id": "arm64-placeholder-honesty",
+      "rule": "诚实性：ARM64 上任何未实现的功能必须从 test_init 返回 EXIT_SKIP（-255，且先通过 log_skip 记录原因），原因文本格式必须为 \"to be implemented (placeholder): <缺失内容>\"；严禁以 EXIT_SUCCESS 或空操作让未实现的测试假通过。请指出把未实现路径回报为 pass、吞掉跳过状态，或让无实际检视逻辑的测试报告通过的改动。",
+      "scope": "tests/**",
+      "severity": "error"
+    },
+    {
+      "id": "sve-neon-vector-length",
+      "rule": "SVE / NEON 向量长度（VL）相关越界与误报：向量代码不得对固定 VL 做硬编码假设，尤其在 CI runner 上 VL=128 会掩盖 512-bit 等高 VL 下的越界或位型差异。请检查与 VL 相关的循环边界、谓词掩码与越界访问，指出在高 VL 下才会暴露的错误，以及在 CI 低 VL 下被掩盖的误报。",
+      "scope": "tests/**",
+      "severity": "warning"
+    },
+    {
+      "id": "failure-scene-recording",
+      "rule": "失败现场记录：一旦检测到不一致，必须记录足以离线复现的现场信息——冷路径上的 bit dump、sum-bit 校验以及触发失败的向量 / 输入数据；同时避免在高频热路径上做昂贵的打印或格式化。请指出失败时缺少可复现现场信息的改动，或在不该打印的热路径上引入昂贵输出的行为。",
+      "scope": "tests/**",
+      "severity": "warning"
+    }
+  ]
+}
