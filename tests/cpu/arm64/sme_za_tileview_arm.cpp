@@ -68,12 +68,19 @@
 #define HWCAP2_SME (1UL << 23)
 #endif
 
-/* Measured geometry on cn23154: SME SVL = 512-bit -> 8 f64 per ZA slice
- * and an 8x8 f64 tile per ZAd view. Other SVLs are skipped, not guessed. */
-static constexpr long kTileN = 8;
+/* Full-SVL support (128..1024-bit): n = SVL/8 f64 per ZA slice is read
+ * at runtime (rdsvl); each ZAd view is an n x n f64 tile. Originally
+ * measured at 512-bit on cn23154 (8x8); the parameterized asm has been
+ * verified at SVL 128/256/512/1024 in gem5 (gem5-fi feat/sve-sme-all-vl,
+ * kernel sme_za_tileview_dual, 16-run all-green incl. the 512-bit
+ * regression anchor; za0h/za0v/za0h.d[r,1] semantics measured
+ * SVL-independent by the za_semantics probe). */
+static constexpr long kTileNMax = 16;   /* SVL=1024bit upper bound */
 
 struct SmeZaTileviewData {
-    /* Shared read-only inputs and byte-exact goldens, each kTileN*kTileN. */
+    /* f64 per ZA slice at the runtime SVL (2..16). */
+    long n;
+    /* Shared read-only inputs and byte-exact goldens, each n*n. */
     std::vector<double> a, b;
     std::vector<double> golden_id_a, golden_tr_a, golden_rot_a;
     std::vector<double> golden_id_b;
@@ -89,6 +96,7 @@ struct SmeZaParams {
     double *rot_a;  /* za0h.d[r, 1] read              */
     double *id_b;   /* za1h round trip of b           */
     double *id_a2;  /* za0h re-read after za1h writes */
+    long n;         /* f64 per slice (runtime SVL)    */
 };
 
 /* One smstart/smstop window, five store phases, all against the
@@ -105,14 +113,14 @@ static void za_tileview_kernel(const SmeZaParams *p)
         "ldr x5, [x0, #32]\n\t"
         "ldr x6, [x0, #40]\n\t"
         "ldr x7, [x0, #48]\n\t"
+        "ldr x8, [x0, #56]\n\t"     /* n (runtime)   */
         "smstart sm\n\t"
         "smstart za\n\t"
         "zero {za}\n\t"
         "ptrue p0.d\n\t"
-        "mov x8, #8\n\t"
         "mov x9, #0\n"
         "1:\n\t"
-        "cmp x9, #8\n\t"
+        "cmp x9, x8\n\t"
         "b.ge 2f\n\t"
         "mov w12, w9\n\t"
         "mul x10, x9, x8\n\t"
@@ -122,7 +130,7 @@ static void za_tileview_kernel(const SmeZaParams *p)
         "2:\n\t"
         "mov x9, #0\n"
         "3:\n\t"
-        "cmp x9, #8\n\t"
+        "cmp x9, x8\n\t"
         "b.ge 4f\n\t"
         "mov w12, w9\n\t"
         "mul x10, x9, x8\n\t"
@@ -134,7 +142,7 @@ static void za_tileview_kernel(const SmeZaParams *p)
         "4:\n\t"
         "mov x9, #0\n"
         "5:\n\t"
-        "cmp x9, #8\n\t"
+        "cmp x9, x8\n\t"
         "b.ge 6f\n\t"
         "mov w12, w9\n\t"
         "mul x10, x9, x8\n\t"
@@ -144,7 +152,7 @@ static void za_tileview_kernel(const SmeZaParams *p)
         "6:\n\t"
         "mov x9, #0\n"
         "7:\n\t"
-        "cmp x9, #8\n\t"
+        "cmp x9, x8\n\t"
         "b.ge 8f\n\t"
         "mov w12, w9\n\t"
         "mul x10, x9, x8\n\t"
@@ -182,20 +190,20 @@ static int sme_za_tileview_arm_init(struct test *test)
      * length in bytes. SME implies SVE, so rdsvl cannot SIGILL here. */
     long svl_bytes;
     asm volatile("rdsvl %0, #1" : "=r"(svl_bytes));
-    if (svl_bytes != kTileN * 8) {
+    const long n = svl_bytes / 8;
+    if (n < 2 || n > kTileNMax) {
         log_skip(CpuNotSupportedSkipCategory,
                  "sme_za_tileview_arm: SME streaming vector length %ld "
-                 "bytes is not the characterized 64-byte (512-bit) "
-                 "geometry; tile-view semantics at other SVLs are "
-                 "unmeasured", svl_bytes);
+                 "bytes is outside the supported 128..1024-bit range",
+                 svl_bytes);
         return EXIT_SKIP;
     }
 
     try {
         auto data = std::make_unique<SmeZaTileviewData>();
-        constexpr long n = kTileN;
-        constexpr size_t nn = static_cast<size_t>(n) * n;
+        const size_t nn = static_cast<size_t>(n) * n;
 
+        data->n = n;
         data->a.resize(nn);
         data->b.resize(nn);
         data->golden_id_a.resize(nn);
@@ -261,22 +269,22 @@ static int sme_za_tileview_arm_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 #else
     auto *d = static_cast<SmeZaTileviewData *>(test->data);
-    constexpr long n = kTileN;
-    constexpr size_t count = static_cast<size_t>(n) * n;
-    constexpr size_t bytes = count * sizeof(double);
+    const long n = d->n;
+    const size_t count = static_cast<size_t>(n) * n;
+    const size_t bytes = count * sizeof(double);
 
     /* Per-thread output buffers: 608 CPUs run this concurrently and a
      * shared dst would be a cross-thread race. Every byte of each
      * buffer is rewritten by the kernel on every pass, so no memset. */
-    double id_a[kTileN * kTileN];
-    double tr_a[kTileN * kTileN];
-    double rot_a[kTileN * kTileN];
-    double id_b[kTileN * kTileN];
-    double id_a2[kTileN * kTileN];
+    double id_a[kTileNMax * kTileNMax];
+    double tr_a[kTileNMax * kTileNMax];
+    double rot_a[kTileNMax * kTileNMax];
+    double id_b[kTileNMax * kTileNMax];
+    double id_a2[kTileNMax * kTileNMax];
 
     SmeZaParams params = {
         d->a.data(), d->b.data(),
-        id_a, tr_a, rot_a, id_b, id_a2,
+        id_a, tr_a, rot_a, id_b, id_a2, n,
     };
 
     do {
