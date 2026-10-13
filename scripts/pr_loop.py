@@ -685,6 +685,13 @@ def cmd_wait(args: argparse.Namespace) -> int:
     start = time.monotonic()
     deadline = start + args.timeout
     while True:
+        # 意见#24: 首轮(或轮询中)未取到当前 head 的 PushEvent 时,repo_events 缓存的
+        # 不完整事件列表会跨轮固定,导致 fetch_push_time 持续返回 None → 时间锚永久
+        # 回退 committer date(push 前产生的 bot 信号被计入,wait 提前结束)。故仅在
+        # push_time 为 None(已回退)时清该 slug 缓存以重试;已拿到 push 时间则不清,
+        # 保留 repo_events 的进程级缓存收益(status 总览多 PR 只拉一次)。
+        if pr.push_time is None:
+            _EVENTS_CACHE.pop(slug, None)
         pr = fetch_pr(slug, args.pr)
         now = now_utc()
         state = classify_state(pr, args.quiet, now)
