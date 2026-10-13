@@ -15,7 +15,6 @@ struct TestData {
 };
 
 // 读取 ARM64 系统寄存器（用户态可读）
-#ifdef __aarch64__
 [[maybe_unused]] static bool read_midr_el1(int cpu, uint64_t *val) {
     (void)cpu;  // ARM64 上读取系统寄存器与 CPU 无关，但保留参数用于日志
     // 使用内联汇编读取 MIDR_EL1
@@ -25,9 +24,8 @@ struct TestData {
     return true;
 }
 
-#endif
 static int vmxmsr_init(struct test *test) {
-#ifndef __aarch64__
+#ifdef __aarch64__
     // ARM64 has no VT-x/VMX virtualization — the previous "simulated" path
     // (single constant store+reload, no TEST_LOOP) passed vacuously while
     // stressing nothing. Honest skip per the placeholder-honesty rule.
@@ -97,7 +95,7 @@ static int vmxmsr_init(struct test *test) {
 }
 
 static int vmxmsr_run(struct test *test, int cpu) {
-#ifndef __aarch64__
+#ifdef __aarch64__
     // Unreachable on ARM64: init already returned EXIT_SKIP. Kept honest
     // (no vacuous EXIT_SUCCESS) in case init is ever bypassed.
     (void)test; (void)cpu;

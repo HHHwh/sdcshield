@@ -11,7 +11,7 @@ static inline uint64_t read_cntvct_el0() {
 }
 
 static int vmx_vmexit_pause_init(struct test *test) {
-#ifndef __aarch64__
+#ifdef __aarch64__
     // ARM64 has no VT-x/VMX virtualization — the previous "simulated" path
     // (single constant store+reload, no TEST_LOOP) passed vacuously while
     // stressing nothing. Honest skip per the placeholder-honesty rule.
@@ -25,7 +25,7 @@ static int vmx_vmexit_pause_init(struct test *test) {
 }
 
 static int vmx_vmexit_pause_run(struct test *test, int cpu) {
-#ifndef __aarch64__
+#ifdef __aarch64__
     // Unreachable on ARM64: init already returned EXIT_SKIP. Kept honest
     // (no vacuous EXIT_SUCCESS) in case init is ever bypassed.
     (void)test; (void)cpu;
