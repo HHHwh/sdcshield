@@ -14,8 +14,11 @@
  * store->load scatter pressure across the working set, the access
  * structure that discriminates the CORE179 defect. Each iteration
  * copies the input, runs the forward transform and byte-compares the
- * spectrum against the init-time golden spectrum (deterministic for
- * fixed input + fixed binary). The inverse cfft (1/N scaling) is then
+ * spectrum against a golden computed from freshly re-rolled operands
+ * every kRerollEvery iterations (per-thread, framework RNG — B2-005;
+ * fixed input + fixed binary => bit-identical spectrum, and the
+ * framework RNG keeps -s replays reproducible). The inverse cfft
+ * (1/N scaling) is then
  * run as pure additional load: the forward->backward round trip is NOT
  * bit-exact under FFT rounding (measured max rel err ~3e-11 on this
  * very payload) and is therefore never compared — the SDC verdict
@@ -45,8 +48,9 @@
  * halfcomplex-packed output in the same n doubles (a third transform
  * structure: the real-input packing halves the stored spectrum and
  * walks the radf* butterflies with different data layouts). Its
- * spectrum is likewise byte-compared against an init-time golden.
- * The inverse transforms (cfft_backward AND rfft_backward) are verified
+ * spectrum is likewise byte-compared against a per-thread golden
+ * recomputed from re-rolled operands. The inverse transforms
+ * (cfft_backward AND rfft_backward) are verified
  * with a tolerance round-trip check: neither round trip is bit-exact under
  * FFT rounding (measured max rel err ~3e-11), so their outputs are compared
  * against the original inputs at 1e-6 relative — catching gross inverse-path
@@ -70,12 +74,15 @@ extern "C" {
 namespace {
 struct fft_test_data {
     int n;                /* transform length, from the -O pocketfft_fft.n=N knob */
-    double *input;        /* interleaved re,im — length 2*n, read-only after init */
-    double *golden_spec;  /* forward cfft spectrum of input, computed once in init */
+    double *input;        /* interleaved re,im — length 2*n; init fill stays only as
+                             the init-time finiteness canary, not read by test_run
+                             (B2-005: run keeps per-thread re-rolled l_input) */
+    double *golden_spec;  /* forward cfft spectrum of input, computed once in init;
+                             same canary role, not read by test_run */
     cfft_plan plan;       /* shared, see the threading note below */
-    double *rinput;       /* real FFT input — length n, read-only after init */
+    double *rinput;       /* real FFT input — length n; canary role as above */
     double *rgolden;      /* forward rfft spectrum of rinput (halfcomplex packed,
-                             n doubles), computed once in init */
+                             n doubles), computed once in init; canary role */
     rfft_plan rplan;      /* shared, same threading note as plan */
 };
 }
@@ -101,9 +108,20 @@ struct fft_test_data {
  * intentionally not freed in cleanup — the worker threads are gone (or
  * never existed) when the main thread runs test_cleanup, and the forked
  * child exits right after, so the OS reclaims the storage. calloc zeroes
- * them once so a skipped/short first iteration can never compare garbage. */
+ * them once so a skipped/short first iteration can never compare garbage.
+ *
+ * B2-005 (R2b freeze blind spot): l_input/l_golden_spec (complex, 2*n
+ * doubles) and l_rinput/l_rgolden (real, n doubles) are this thread's
+ * re-rolled inputs and goldens — the shared d->input/golden_spec/
+ * rinput/rgolden are never read by test_run; init's fills stay only as
+ * the init-time finiteness canaries, matching the 46141ed4 Eigen
+ * pattern where run owns its inputs outright. */
 static thread_local double *work = nullptr;   /* complex, 2*n doubles */
 static thread_local double *rwork = nullptr;  /* real, n doubles */
+static thread_local double *l_input = nullptr;       /* complex, 2*n doubles */
+static thread_local double *l_golden_spec = nullptr; /* complex, 2*n doubles */
+static thread_local double *l_rinput = nullptr;      /* real, n doubles */
+static thread_local double *l_rgolden = nullptr;     /* real, n doubles */
 
 /* Map a random uint64 onto a double in [-1, 1) (top 53 bits as mantissa
  * fraction, folded around zero). FFT has no domain restriction on its
@@ -228,9 +246,22 @@ static int pocketfft_fft_init(struct test *test)
 static int pocketfft_fft_run(struct test *test, int cpu)
 {
     auto d = CAST(test->data);
+    /* B2-005 (R2b freeze blind spot): this thread's inputs and goldens
+     * are re-rolled from the framework RNG every kRerollEvery iterations
+     * instead of replaying init's frozen bytes forever; the shared
+     * d->input/golden_spec/rinput/rgolden are never read here (init's
+     * fills stay only as the init-time finiteness canaries, like the
+     * 46141ed4 Eigen pattern). The goldens are recomputed with the very
+     * same plans the verified calls below use, on the same input
+     * distribution, so the finiteness bounds argued in init carry over;
+     * -s replays stay reproducible since the framework RNG is seeded
+     * per test. */
+    constexpr int kRerollEvery = 16;
+    int since_reroll = kRerollEvery; /* force the first-iteration fill */
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
-        if (__builtin_expect(!work || !rwork, 0)) {
+        if (__builtin_expect(!work || !rwork || !l_input || !l_golden_spec ||
+                             !l_rinput || !l_rgolden, 0)) {
             if (!work) {
                 work = (double *)calloc(2 * d->n, sizeof(double));
                 if (!work)
@@ -243,17 +274,58 @@ static int pocketfft_fft_run(struct test *test, int cpu)
                     report_fail_msg("OOM allocating rfft thread scratch (%zu bytes)",
                                     d->n * sizeof(double));
             }
+            if (!l_input) {
+                l_input = (double *)malloc(2 * d->n * sizeof(double));
+                if (!l_input)
+                    report_fail_msg("OOM allocating complex input (%zu bytes)",
+                                    2 * d->n * sizeof(double));
+            }
+            if (!l_golden_spec) {
+                l_golden_spec = (double *)malloc(2 * d->n * sizeof(double));
+                if (!l_golden_spec)
+                    report_fail_msg("OOM allocating complex golden (%zu bytes)",
+                                    2 * d->n * sizeof(double));
+            }
+            if (!l_rinput) {
+                l_rinput = (double *)malloc(d->n * sizeof(double));
+                if (!l_rinput)
+                    report_fail_msg("OOM allocating real input (%zu bytes)",
+                                    d->n * sizeof(double));
+            }
+            if (!l_rgolden) {
+                l_rgolden = (double *)malloc(d->n * sizeof(double));
+                if (!l_rgolden)
+                    report_fail_msg("OOM allocating real golden (%zu bytes)",
+                                    d->n * sizeof(double));
+            }
+        }
+
+        /* re-roll (first iteration, then every kRerollEvery-th): fresh
+         * high-entropy inputs for this thread; goldens recomputed with
+         * the same plans and the same in-place forward calls init uses */
+        if (++since_reroll >= kRerollEvery) {
+            since_reroll = 0;
+            for (int i = 0; i < 2 * d->n; ++i)
+                l_input[i] = random_bounded();
+            memcpy(l_golden_spec, l_input, 2 * d->n * sizeof(double));
+            if (cfft_forward(d->plan, l_golden_spec, 1.0) != 0)
+                report_fail_msg("cfft_forward failed while re-rolling the golden spectrum");
+            for (int i = 0; i < d->n; ++i)
+                l_rinput[i] = random_bounded();
+            memcpy(l_rgolden, l_rinput, d->n * sizeof(double));
+            if (rfft_forward(d->rplan, l_rgolden, 1.0) != 0)
+                report_fail_msg("rfft_forward failed while re-rolling the golden spectrum");
         }
 
         /* copy-in (dirties the cache lines, then the butterflies reload
          * them through the decimated access pattern) */
-        memcpy(work, d->input, 2 * d->n * sizeof(double));
+        memcpy(work, l_input, 2 * d->n * sizeof(double));
 
         /* forward: the SDC verdict — spectrum must be byte-identical to
-         * the init-time golden spectrum */
+         * this thread's just-re-rolled golden spectrum */
         if (cfft_forward(d->plan, work, 1.0) != 0)
             report_fail_msg("cfft_forward failed on cpu %d", cpu);
-        memcmp_or_fail(work, d->golden_spec, 2 * d->n, "golden spectrum");
+        memcmp_or_fail(work, l_golden_spec, 2 * d->n, "golden spectrum");
 
         /* inverse with 1/N scaling. The round trip is not bit-exact under
          * FFT rounding (measured max rel err ~3e-11 on this payload), so it
@@ -268,7 +340,7 @@ static int pocketfft_fft_run(struct test *test, int cpu)
         if (cfft_backward(d->plan, work, 1.0 / d->n) != 0)
             report_fail_msg("cfft_backward failed on cpu %d", cpu);
         for (int i = 0; i < 2 * d->n; ++i) {
-            double x = d->input[i];
+            double x = l_input[i];
             double diff = fabs(work[i] - x);
             double tol = 1e-6 * fmax(fabs(x), 1e-9);
             if (diff > tol) {
@@ -280,17 +352,17 @@ static int pocketfft_fft_run(struct test *test, int cpu)
 
         /* real-FFT segment: same copy->forward->byte-compare structure
          * on the rfft plan (halfcomplex packed spectrum, n doubles). */
-        memcpy(rwork, d->rinput, d->n * sizeof(double));
+        memcpy(rwork, l_rinput, d->n * sizeof(double));
         if (rfft_forward(d->rplan, rwork, 1.0) != 0)
             report_fail_msg("rfft_forward failed on cpu %d", cpu);
-        memcmp_or_fail(rwork, d->rgolden, d->n, "rfft golden spectrum");
+        memcmp_or_fail(rwork, l_rgolden, d->n, "rfft golden spectrum");
 
         /* rfft_backward mirrors cfft_backward above: checked against a
          * tolerance (same calibration rationale) instead of being dead load. */
         if (rfft_backward(d->rplan, rwork, 1.0 / d->n) != 0)
             report_fail_msg("rfft_backward failed on cpu %d", cpu);
         for (int i = 0; i < d->n; ++i) {
-            double x = d->rinput[i];
+            double x = l_rinput[i];
             double diff = fabs(rwork[i] - x);
             double tol = 1e-6 * fmax(fabs(x), 1e-9);
             if (diff > tol) {
