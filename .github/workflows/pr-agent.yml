@@ -27,9 +27,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # 使用 Google AI Studio 免费额度,模型 ID 可按需替换
+          # 使用 Google AI Studio 免费额度,模型 ID 可按需替换。
+          # 回退链约束: 2.5 系列已对免费层新用户下线(404 "no longer available
+          # to new users"),只能用对新项目开放的模型(3.8/3.6/3.5-flash-lite);
+          # 3.1-flash-lite 将于 2027-05-07 关停,不用作回退。
           CONFIG.MODEL: "gemini/gemini-3.8-flash"
-          CONFIG.FALLBACK_MODELS: '["gemini/gemini-2.5-flash"]'
+          CONFIG.FALLBACK_MODELS: '["gemini/gemini-3.5-flash-lite", "gemini/gemini-3.6-flash"]'
           # GitHub Action 模式下自动执行的命令
           GITHUB_ACTION_CONFIG.AUTO_REVIEW: "true"
           GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "true"
