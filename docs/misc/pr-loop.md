@@ -30,7 +30,7 @@ python3 scripts/pr_loop.py status  # 3) 总览 open PR 与四 bot 完成度
 | 1 现状总览 | `status`（全部 open PR）/ `status <PR>`（单 PR 详情） | head SHA、四 bot 完成度、意见数、建议动作（按状态路由） |
 | 2 等待四 bot | `wait <PR>` 阻塞轮询（默认 timeout 7200 / interval 60 / quiet 900） | 完成 → 四 bot 时间线（exit 0）；超时 → 逐 bot 报告缺失者（exit 1），可复跑 |
 | 3 导出意见 | `collect <PR> -o /tmp/pr<N>-review.md` | 结构化 Markdown：四类意见源按时间排序，头部防注入横幅，旧意见标「历史轮次」 |
-| 4 subagent 处置修复 | 对每个 open PR 派**上下文隔离 subagent**（提示词见命令文件） | 逐条批判性处置（采纳/变通/驳回，驳回须实证）→ 修复 → 验证 → `-s` 提交 push |
+| 4 subagent 处置修复 | 范围按用户指令绑定：指定 PR 时只处置该 PR；「全部 open PR」时逐 PR 派**上下文隔离 subagent**（提示词见命令文件） | 逐条批判性处置（采纳/变通/驳回，驳回须实证）→ 修复 → 验证 → `-s` 提交 push |
 | 5 循环 | 新 head 自动触发新一轮检视 → 回到阶段 2，直到 `READY_TO_MERGE` | 每轮闭环记录；建议 4 轮上限转人工 |
 | 6 人工 merge 提醒 | 向用户报告 PR 链接与状态摘要 | **由人执行 merge；工具绝不自动 merge、不自动 resolve review threads** |
 
@@ -49,23 +49,40 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>     # 导出意见�
 ```
 
 - `--repo` 默认从 `git remote` 解析，通常省略。
-- **退出码**：0 成功（含「无 open PR」诚实路径）；1 wait 超时 / draft、fork、非 open PR；
-  2 gh 错误（未认证 / 网络 / PR 不存在）；130 Ctrl-C。
-- **四 bot 判据**（与 [bot-coverage.yml](../../.github/workflows/bot-coverage.yml) 逐字
-  一致，同步维护）：codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]`
-  作者或 `CodeRabbit` check（精确等值）；pr-agent = `pr-agent` check（精确等值）；
-  greptile = `greptile-apps[bot]`。
+- **退出码**：0 成功（含「无 open PR」诚实路径）；1 wait 超时 / draft、fork、非 open PR
+  （含等待期间转入这些停止态）；2 gh 错误（未认证 / 网络 / PR 不存在）；130 Ctrl-C。
+- **四 bot 判据**（与 [bot-coverage.yml](../../.github/workflows/bot-coverage.yml) 一致，
+  同步维护）：codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]`
+  作者或 `CodeRabbit` check（精确等值）；pr-agent = `pr-agent` check（精确等值），或
+  `github-actions[bot]` 作者且正文含 `<!-- pr-agent:review:full -->` 标记的检视评论
+  （workflow 用 GITHUB_TOKEN 触发、评论作者是 `github-actions[bot]`，与 bot-coverage
+  报告同作者，靠内容标记区分）；greptile = `greptile-apps[bot]` 作者，或 check-run
+  app slug `greptile-apps`（PR #240 实证：greptile 可只产 check-run 不发评论）。
 
 ## 4. 判定规则
 
 - **状态机**：`DRAFT` / `FORK` / `CLOSED` / `WAITING_BOTS`（任一 bot 无计入信号）/
   `QUIET_WINDOW`（四 bot 完成但最新信号距今 < quiet）/ `READY_TO_FIX`（完成 + 过静默窗
-  + 有意见）/ `READY_TO_MERGE`（完成 + 过静默窗 + 零意见）。
+  + 有待处置意见或数据不完整）/ `READY_TO_MERGE`（完成 + 过静默窗 + 零意见）。
+  annotations 拉取失败时数据不完整，不给 `READY_TO_MERGE`（诚实性：无法确认「零意见」
+  时不提示合并），转 `READY_TO_FIX` 由人工复核。
 - **双锚定（防误判）**：review / 评论类信号须 `submitted_at`/`created_at` ≥ head commit
   的 committer date（fallback author date）才计入——甄别 GitHub 把旧评论重锚定到新 PR
-  的情况；check-run 信号须 `head_sha` 精确等于 PR head 且 `status == completed`。
-- **意见计数口径**：当前 head 锚定后，有正文的 review + 行级评论 + PR 评论 + check
-  annotations。annotations 拉取失败时如实提示「计数可能低估」，不假报。
+  的情况；在此之上做 commit 锚——review 的 `commit_id`、行级评论的
+  `original_commit_id`（重锚定会改写 `commit_id`，原值才可靠）、pr-agent 评论尾部
+  review-state JSON 的 `last_run.head_sha` 均须匹配当前 head（字段缺失/解析失败回退
+  时间锚定）。PR(issue)评论仅时间锚：timeline 的 `committed` 事件无 `created_at` 字段
+  （实证），无法作 push 边界。check-run 信号须 `head_sha` 精确等于 PR head 且
+  `status == completed`。
+- **意见计数口径**：双锚定后的**待处置意见**数 = 有正文的 COMMENTED/CHANGES_REQUESTED
+  review + 行级评论 + PR 评论 + check annotations。摘要/LGTM 类不计：APPROVED/
+  DISMISSED review（结论性信号非意见）、coderabbit walkthrough/汇总评论（其发现以
+  行级评论另行计入）、bot-coverage 报告；pr-agent 检视按尾部 JSON 的
+  `findings[].state == ACTIVE` 计数（解析失败按 1 条计）。annotations 拉取失败时如实
+  提示「计数可能低估」，不假报。
+- **collect 全量导出**：意见明细不因「摘要/计数排除」而丢弃——摘要/报告类条目标注
+  「未计入待处置意见数」，锚定不符的条目标注「非当前 head」，由 subagent 通读甄别。
+  check-run 的 `output.summary`/`output.text` 一并导出（标注为不可信检视数据）。
 - **范围**：只处理同仓库分支的 PR；fork / draft 如实标注跳过。
 
 ## 5. 双端差异（Trae / Claude Code）

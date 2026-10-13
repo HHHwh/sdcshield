@@ -17,12 +17,25 @@
 # 四 bot 判据与 .github/workflows/bot-coverage.yml 逐字一致(两处需同步维护):
 #   codex       = 作者 chatgpt-codex-connector[bot]
 #   coderabbit  = 作者 coderabbitai[bot] 或 check-run 名 "CodeRabbit"
-#   pr-agent    = check-run 名 "pr-agent"
-#   greptile    = 作者 greptile-apps[bot]
+#   pr-agent    = check-run 名 "pr-agent"; 检视评论另须作者 github-actions[bot] 且
+#                 正文含 "<!-- pr-agent:review:full -->" 标记(workflow 用 GITHUB_TOKEN
+#                 触发、评论作者是 github-actions[bot]; 不能裸认该作者——bot-coverage
+#                 报告同作者,仅靠内容标记区分)
+#   greptile    = 作者 greptile-apps[bot] 或 check-run app slug "greptile-apps"
+#                 (PR #240 实证: greptile 可只产 check-run 不发评论)
 # 在此之上做更强的 head 锚定过滤,甄别 GitHub 评论重锚定(push 新 head 后旧行级
-# 评论的 commit_id 被更新指向新 head,但 created_at 不变):
-#   信号仅计入 head commit 的 committer date 之后产生者;check-run 另要求
-#   head_sha 匹配且 status == completed。
+# 评论的 commit_id 被更新指向新 head,但 created_at 不变)与「旧检视算到新提交」:
+#   信号仅计入 head commit 的 committer date 之后产生者;review 另要求 commit_id
+#   匹配当前 head,行级评论要求 original_commit_id 匹配(未被重锚定改写的原值),
+#   pr-agent 评论要求尾部 review-state JSON 的 last_run.head_sha 匹配(解析失败
+#   回退时间锚定);check-run 另要求 head_sha 匹配且 status == completed。
+#   timeline 的 committed 事件无 created_at 字段(实证),无法作 push 边界,故
+#   PR(issue)评论维持时间锚定。
+#
+# 意见计数与「信号」分开: 摘要/LGTM 类不计入待处置意见——APPROVED/DISMISSED
+# review、coderabbit walkthrough/汇总评论(其发现以行级评论另行计入)、bot-coverage
+# 报告均排除;pr-agent 检视按尾部 JSON 的 findings[].state == ACTIVE 计数(解析
+# 失败回退按 1 条计)。
 #
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
@@ -44,6 +57,9 @@ CODERABBIT_LOGIN = "coderabbitai[bot]"         # coderabbit: 作者 …
 CODERABBIT_CHECK = "CodeRabbit"                #   …或 check-run 名(精确匹配)
 PRAGENT_CHECK = "pr-agent"                     # pr-agent: check-run 名(精确匹配)
 GREPTILE_LOGIN = "greptile-apps[bot]"          # greptile: 评论/review 作者
+GREPTILE_APP_SLUG = "greptile-apps"            #   …或 check-run app slug(只产 check 的场景)
+PRAGENT_LOGIN = "github-actions[bot]"          # pr-agent 检视评论作者(GITHUB_TOKEN 触发)
+PRAGENT_MARKER = "pr-agent:review:full"        #   …且正文须含此标记(区分 bot-coverage 报告)
 
 BOT_ORDER = ("codex", "coderabbit", "pr-agent", "greptile")
 LOGIN_TO_BOT = {
@@ -51,6 +67,8 @@ LOGIN_TO_BOT = {
     CODERABBIT_LOGIN: "coderabbit",
     GREPTILE_LOGIN: "greptile",
 }
+# 注意: github-actions[bot] 不入 LOGIN_TO_BOT——bot-coverage 报告同作者,
+# pr-agent 检视评论靠 PRAGENT_MARKER 内容标记单独判定(见 pragent_comment)。
 CHECK_NAME_TO_BOT = {
     CODERABBIT_CHECK: "coderabbit",
     PRAGENT_CHECK: "pr-agent",
@@ -58,6 +76,17 @@ CHECK_NAME_TO_BOT = {
 
 # review 的有效信号态(PENDING 未提交,显式排除以求严谨)
 REVIEW_SIGNAL_STATES = {"COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
+# 其中计入「待处置意见」的态: APPROVED/DISMISSED 是结论性信号,不是意见
+REVIEW_OPINION_STATES = {"COMMENTED", "CHANGES_REQUESTED"}
+
+# 摘要/报告类机器标记: 命中者不计入意见数(bot 完成信号仍计)。
+# 依据 PR #243 实证: coderabbit walkthrough 的发现以行级评论另行计入;
+# 「for review status」汇总是行级意见的汇总;bot-coverage 报告非检视意见。
+SUMMARY_MARKERS = (
+    "summarize by coderabbit.ai",   # coderabbit walkthrough 评论
+    "for review status",            # coderabbit review 汇总评论
+    "bot-coverage-report",          # bot-coverage workflow 报告
+)
 
 GH_TIMEOUT = 45          # 单次 gh api 子进程超时(秒)
 MAX_PAGES = 20           # 分页上限(20 页 × 100 条 = 2000 条)
@@ -170,8 +199,9 @@ class CheckRun:
     head_sha: Optional[str]
     completed_at: Optional[datetime]
     html_url: Optional[str]
-    matched_bot: Optional[str]   # 命中四 bot 判据者(coderabbit / pr-agent)
+    matched_bot: Optional[str]   # 命中四 bot 判据者(coderabbit / pr-agent / greptile)
     counted: bool                # matched 且 head_sha 匹配且 completed
+    output: dict = field(default_factory=dict)   # API 原始 output(title/summary/text)
     annotations: list = field(default_factory=list)
 
 
@@ -231,6 +261,67 @@ def is_after_head(item: dict, ts_key: str, head_time: datetime) -> bool:
     return ts is not None and ts >= head_time
 
 
+def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
+    """commit 锚定: 条目锚定的 commit 匹配当前 head 才计入。
+    sha_keys 按优先级取第一个非空字段(review 用 commit_id;行级评论用
+    original_commit_id——重锚定会改写 commit_id,原值才可靠)。
+    字段缺失时回退 True(时间锚定兜底,不因数据缺字段而丢意见)。"""
+    for key in sha_keys:
+        sha = item.get(key)
+        if sha:
+            return sha == head_sha
+    return True
+
+
+def is_summary_text(body: str) -> bool:
+    """摘要/报告类正文(bot 机器标记)→ 不计入待处置意见。"""
+    return any(m in (body or "") for m in SUMMARY_MARKERS)
+
+
+def pragent_comment(item: dict) -> bool:
+    """pr-agent 检视评论: 作者 github-actions[bot] 且正文含 pr-agent 标记。
+    (bot-coverage 报告同作者但无此标记,借此区分。)"""
+    return (((item.get("user") or {}).get("login") == PRAGENT_LOGIN)
+            and PRAGENT_MARKER in (item.get("body") or ""))
+
+
+def pragent_state_json(body: str) -> Optional[dict]:
+    """解析 pr-agent 评论尾部 <!-- pr-agent-review-state:v1 {...} --> 的 JSON。
+    失败/不存在返回 None(调用方回退保守路径,不丢数据)。"""
+    idx = body.find("pr-agent-review-state:v1")
+    if idx < 0:
+        return None
+    start = body.find("{", idx)
+    end = body.find("-->", idx)
+    if start < 0 or end < 0 or end <= start:
+        return None
+    try:
+        obj = json.loads(body[start:end])
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def pragent_comment_head(item: dict) -> Optional[str]:
+    """pr-agent 评论尾部 JSON 的 last_run.head_sha(其检视所针对的 head)。"""
+    obj = pragent_state_json(item.get("body") or "")
+    return ((obj.get("last_run") or {}).get("head_sha") or None) if obj else None
+
+
+def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
+    """issue 评论的 bot 判定(信号/计数用):
+    LOGIN_TO_BOT 作者直接命中;pr-agent 须内容标记命中且 last_run.head_sha
+    匹配当前 head(旧 head 的检视不算当前信号;解析失败回退时间锚定语义)。"""
+    bot = bot_of(item)
+    if bot is not None:
+        return bot
+    if pragent_comment(item):
+        head = pragent_comment_head(item)
+        if head is None or head == head_sha:
+            return "pr-agent"
+    return None
+
+
 # ============ 拉取与判定 ============
 
 def fetch_pr(slug: str, number: int) -> PRData:
@@ -279,6 +370,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
     for cr in raw_checks:
         name = cr.get("name") or ""
         matched = CHECK_NAME_TO_BOT.get(name)   # 精确等值,同 bot-coverage.yml 的 grep -Fxq
+        if matched is None and ((cr.get("app") or {}).get("slug") or "") == GREPTILE_APP_SLUG:
+            matched = "greptile"   # greptile 只产 check-run 不发评论的场景(PR #240)
         completed = cr.get("status") == "completed"
         counted = matched is not None and completed and cr.get("head_sha") == head_sha
         entry = CheckRun(
@@ -290,6 +383,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
             html_url=cr.get("html_url"),
             matched_bot=matched,
             counted=counted,
+            output=cr.get("output") or {},
         )
         if counted:
             ann_url = cr.get("annotations_url")
@@ -306,34 +400,36 @@ def fetch_pr(slug: str, number: int) -> PRData:
             ))
         data.check_runs.append(entry)
 
-    # ---- reviews: 作者判据 + 有效态 + 时间锚定 ----
+    # ---- reviews: 作者判据 + 有效态 + 时间锚定 + commit 锚定 ----
     for r in reviews:
         bot = bot_of(r)
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
+        counted = (ts is not None and ts >= head_time
+                   and commit_anchored(r, ("commit_id",), head_sha))
         data.signals.append(Signal(
-            bot=bot, kind="review", time=ts or head_time,
-            counted=ts is not None and ts >= head_time,
+            bot=bot, kind="review", time=ts or head_time, counted=counted,
             detail=f'review({r.get("state")})',
         ))
 
-    # ---- 行级评论 ----
+    # ---- 行级评论: 时间锚定 + commit 锚定(original_commit_id 为重锚定前的原值) ----
     for c in review_comments:
         bot = bot_of(c)
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
+        counted = (ts is not None and ts >= head_time
+                   and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha))
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
         data.signals.append(Signal(
-            bot=bot, kind="review_comment", time=ts or head_time,
-            counted=ts is not None and ts >= head_time,
+            bot=bot, kind="review_comment", time=ts or head_time, counted=counted,
             detail=f'行级评论 {loc}',
         ))
 
-    # ---- PR(issue)评论 ----
+    # ---- PR(issue)评论: pr-agent 评论按内容标记纳入(head_sha 锚定见 issue_comment_bot) ----
     for c in issue_comments:
-        bot = bot_of(c)
+        bot = issue_comment_bot(c, head_sha)
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
@@ -356,17 +452,36 @@ def fetch_pr(slug: str, number: int) -> PRData:
     counted_times = [s.time for s in data.signals if s.counted]
     data.latest_signal = max(counted_times) if counted_times else None
 
-    # ---- 意见计数(当前 head): 有正文的 review + 行级评论 + PR 评论 + annotations ----
+    # ---- 意见计数(当前 head,双锚定;摘要/LGTM 类不计,见文件头「意见计数」注释) ----
     n_review = 0
     for r in reviews:
-        if (bot_of(r) and r.get("state") in REVIEW_SIGNAL_STATES
+        body = (r.get("body") or "").strip()
+        if (bot_of(r) and r.get("state") in REVIEW_OPINION_STATES
                 and is_after_head(r, "submitted_at", head_time)
-                and (r.get("body") or "").strip()):
+                and commit_anchored(r, ("commit_id",), head_sha)
+                and body and not is_summary_text(body)):
             n_review += 1
     n_rcomment = sum(1 for c in review_comments
-                     if bot_of(c) and is_after_head(c, "created_at", head_time))
-    n_icomment = sum(1 for c in issue_comments
-                     if bot_of(c) and is_after_head(c, "created_at", head_time))
+                     if bot_of(c) and is_after_head(c, "created_at", head_time)
+                     and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha))
+    n_icomment = 0
+    for c in issue_comments:
+        body = (c.get("body") or "")
+        if (issue_comment_bot(c, head_sha)
+                and is_after_head(c, "created_at", head_time)
+                and body.strip() and not is_summary_text(body)):
+            if pragent_comment(c):
+                # pr-agent: 按尾部 JSON 的 ACTIVE findings 计(outside-diff 的
+                # actionable finding 只在正文里,不会另行变行级评论);解析失败按 1 条。
+                state = pragent_state_json(body)
+                findings = state.get("findings") if state else None
+                if isinstance(findings, list):
+                    n_icomment += sum(1 for f in findings
+                                      if isinstance(f, dict) and f.get("state") == "ACTIVE")
+                else:
+                    n_icomment += 1
+            else:
+                n_icomment += 1
     n_annot = sum(len(e.annotations) for e in data.check_runs if e.counted)
     data.opinion_breakdown = {
         "review": n_review, "review_comment": n_rcomment,
@@ -388,7 +503,11 @@ def classify_state(pr: PRData, quiet: int, now: datetime) -> str:
         return "WAITING_BOTS"
     if pr.latest_signal is None or (now - pr.latest_signal).total_seconds() < quiet:
         return "QUIET_WINDOW"
-    return "READY_TO_FIX" if pr.opinion_count > 0 else "READY_TO_MERGE"
+    # annotations 拉取失败 → 计数可能低估,数据不完整时不给 READY_TO_MERGE
+    # (诚实性: 不在无法确认「零意见」时提示合并),转 READY_TO_FIX 由人工复核。
+    if pr.opinion_count > 0 or pr.annotations_fetch_failed:
+        return "READY_TO_FIX"
+    return "READY_TO_MERGE"
 
 
 # ============ 渲染 ============
@@ -399,9 +518,10 @@ def fmt_bots(pr: PRData) -> str:
 
 def print_opinions(pr: PRData) -> None:
     bd = pr.opinion_breakdown
-    print(f"  当前 head 意见: {pr.opinion_count} 条"
+    print(f"  当前 head 待处置意见: {pr.opinion_count} 条"
           f"(reviews {bd['review']} / 行级评论 {bd['review_comment']}"
-          f" / PR 评论 {bd['issue_comment']} / annotations {bd['annotations']})")
+          f" / PR 评论 {bd['issue_comment']} / annotations {bd['annotations']};"
+          f"摘要/LGTM 类不计)")
     if pr.annotations_fetch_failed:
         print("  注意: 部分 annotations 拉取失败,annotations 计数可能低估")
 
@@ -513,6 +633,11 @@ def cmd_wait(args: argparse.Namespace) -> int:
             print(f"  状态: {state}")
             print(f"  建议: {SUGGESTIONS[state].replace('<PR>', str(pr.number))}")
             return 0
+        if state in ("DRAFT", "FORK", "CLOSED"):
+            # 等待期间 PR 被转草稿 / 关闭 / fork 变更 → 停止态,继续等待无意义
+            print(f"\nPR #{pr.number} 在等待期间变为 {state}——停止等待,退出。",
+                  file=sys.stderr)
+            return 1
         if state == "QUIET_WINDOW":
             remain = int(args.quiet - (now - pr.latest_signal).total_seconds())
             print(f"[{now:%H:%M:%S}] 已等待 {waited}s: 四 bot 完成,静默窗剩 {remain}s"
@@ -544,7 +669,9 @@ def cmd_wait(args: argparse.Namespace) -> int:
 # ============ 子命令: collect ============
 
 def _collect_entries(pr: PRData) -> list:
-    """(排序时间, 标题, 正文) 三元组列表——四类意见源统一条目化。"""
+    """(排序时间, 标题, 正文) 三元组列表——四类意见源统一条目化。
+    收录一切 bot 数据供 subagent 批判性处置(含摘要类,标注后由人工甄别);
+    「当前 head / 历史轮次」与锚定不符处另加括注。"""
     entries = []
 
     def era_mark(ts: datetime) -> str:
@@ -559,8 +686,12 @@ def _collect_entries(pr: PRData) -> list:
         ts = parse_ts(r.get("submitted_at"))
         if ts is None:
             continue
+        extra = ""
+        cid = r.get("commit_id")
+        if cid and cid != pr.head_sha:
+            extra = f" — review 锚定 head {cid[:8]}(非当前 head)"
         entries.append((ts,
-                        f"[{bot}] Review(state={r.get('state')}) — {fmt_ts(ts)} — {era_mark(ts)}",
+                        f"[{bot}] Review(state={r.get('state')}) — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
                         (r.get("body") or "").strip() or "(无正文)"))
     for c in pr.review_comments:
         bot = bot_of(c)
@@ -570,18 +701,31 @@ def _collect_entries(pr: PRData) -> list:
         if ts is None:
             continue
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
+        extra = ""
+        oid = c.get("original_commit_id") or c.get("commit_id")
+        if oid and oid != pr.head_sha:
+            extra = f" — 评论锚定 head {oid[:8]}(非当前 head)"
         entries.append((ts,
-                        f"[{bot}] 行级评论 {loc} — {fmt_ts(ts)} — {era_mark(ts)}",
+                        f"[{bot}] 行级评论 {loc} — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
                         (c.get("body") or "").strip() or "(无正文)"))
     for c in pr.issue_comments:
         bot = bot_of(c)
+        if bot is None and pragent_comment(c):
+            bot = "pr-agent"   # 收录一切 pr-agent 检视输出(含旧 head,靠锚定标注甄别)
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
         if ts is None:
             continue
+        extra = ""
+        if bot == "pr-agent":
+            head = pragent_comment_head(c)
+            if head and head != pr.head_sha:
+                extra = f" — 检视 head {head[:8]}(非当前 head)"
+        if is_summary_text(c.get("body") or ""):
+            extra += " — 摘要/报告类(未计入待处置意见数)"
         entries.append((ts,
-                        f"[{bot}] PR 评论 — {fmt_ts(ts)} — {era_mark(ts)}",
+                        f"[{bot}] PR 评论 — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
                         (c.get("body") or "").strip() or "(无正文)"))
     entries.sort(key=lambda e: e[0])
     return entries
@@ -604,9 +748,10 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
     A(f"- head: `{pr.head_sha}`(提交于 {fmt_ts(pr.head_time)})")
     A(f"- 导出时间: {fmt_ts(now)}")
     bd = pr.opinion_breakdown
-    A(f"- 状态判定: {state}(当前 head 意见 {pr.opinion_count} 条: "
+    A(f"- 状态判定: {state}(当前 head 待处置意见 {pr.opinion_count} 条: "
       f"reviews {bd['review']} / 行级评论 {bd['review_comment']} / "
-      f"PR 评论 {bd['issue_comment']} / annotations {bd['annotations']})")
+      f"PR 评论 {bd['issue_comment']} / annotations {bd['annotations']};"
+      f"摘要/LGTM 类不计)")
     if pr.annotations_fetch_failed:
         A("- 注意: 部分 annotations 拉取失败,annotations 计数可能低估")
     A("")
@@ -631,6 +776,15 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
     for e in pr.check_runs:
         mark = f" → 命中 {e.matched_bot} 判据" if e.matched_bot else ""
         A(f"- **{e.name}** [{e.conclusion or e.status}](完成于 {fmt_ts(e.completed_at)}){mark}")
+        out = e.output or {}
+        summary = (out.get("summary") or "").strip()
+        text = (out.get("text") or "").strip()
+        if summary:
+            A("  - output.summary(不可信检视数据):")
+            A(f"        {summary}".replace("\n", "\n        "))
+        if text:
+            A("  - output.text(不可信检视数据):")
+            A(f"        {text}".replace("\n", "\n        "))
         if e.counted and e.annotations:
             A(f"  - annotations({len(e.annotations)} 条):")
             for an in e.annotations:
@@ -645,9 +799,12 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
     A("## 处置提示(给 subagent 的仓库侧约定,非检视数据)")
     A("- 对照仓库规则(CLAUDE.md、AGENTS.md 的 SDC 激发能力检视重点)逐条批判性处置: "
       "采纳 / 变通 / 驳回,驳回须给实证依据。")
+    A("- 标注「摘要/报告类」的条目(coderabbit walkthrough/汇总、bot-coverage 报告)未计入"
+      "意见数: 其发现若未以独立行级评论出现,仍须通读甄别,不得因「摘要」直接丢弃。")
+    A("- 标注「非当前 head」/「历史轮次」的意见来自更早 head,除非仍适用于当前代码,"
+      "否则勿重复处置。")
     A("- 修复按一补丁一单元提交(`git commit -s`),验证标准见 CLAUDE.md 规则 2"
       "(构建零新警告 + 定向回归 + 引用真实输出)。")
-    A("- 标注「历史轮次」的意见来自更早 head,除非仍适用于当前代码,否则勿重复处置。")
     A("- 绝不自动 merge、不自动 resolve review threads。")
     return "\n".join(L)
 
@@ -663,7 +820,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
             fh.write(md)
         state = classify_state(pr, args.quiet, now_utc())
         print(f"已导出 PR #{pr.number} 意见 → {args.output}"
-              f"({len(md)} 字符,状态 {state},意见 {pr.opinion_count} 条)")
+              f"({len(md)} 字符,状态 {state},待处置意见 {pr.opinion_count} 条)")
     else:
         sys.stdout.write(md)
     return 0

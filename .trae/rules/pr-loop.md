@@ -30,7 +30,9 @@ merge」，全程不切换工具；所有依赖均在仓库内（自闭环）。
 
 ### 阶段 4 — subagent 批判性处置与修复
 
-对每个 open PR 分别派**上下文隔离的 subagent**（Trae 用 Task 工具），提示词原文：
+范围按用户指令绑定：**用户指定 PR 时只处置该 PR**（本轮意见全部来自该 PR，不得
+扩散到其他 open PR）；用户要求「全部 open PR」时才对每个 open PR 分别派**上下文
+隔离的 subagent**（Trae 用 Task 工具），提示词原文：
 
 > 访问github，对每个open的pr分别使用subagent，对他们的检视意见进行系统性分析与批判性理解，梳理其中提出的问题、改进建议及潜在风险。基于分析结果，制定详细的解决方案，包括问题优先级排序、具体实施步骤、资源需求评估及时间规划。方案实施完成后，需进行全面测试验证，确保所有检视意见均得到妥善解决，并符合项目质量标准。最终形成解决方案报告，记录问题分析过程、解决方案细节、实施结果及经验总结。
 
@@ -62,8 +64,10 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>           # 导出�
     [-o FILE] [--quiet 900]
 ```
 
-- 退出码：0 成功（含「无 open PR」诚实路径）；1 wait 超时 / draft、fork、非 open PR；2 gh 错误（未认证 / 网络 / PR 不存在）；130 Ctrl-C。
-- 状态机：DRAFT / FORK / CLOSED / WAITING_BOTS / QUIET_WINDOW / READY_TO_FIX / READY_TO_MERGE。
-- 四 bot 判据与 `.github/workflows/bot-coverage.yml` 逐字一致（codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]` 作者或 `CodeRabbit` check；pr-agent = `pr-agent` check；greptile = `greptile-apps[bot]`）。
+- 退出码：0 成功（含「无 open PR」诚实路径）；1 wait 超时 / draft、fork、非 open PR（含等待期间转入这些停止态）；2 gh 错误（未认证 / 网络 / PR 不存在）；130 Ctrl-C。
+- 状态机：DRAFT / FORK / CLOSED / WAITING_BOTS / QUIET_WINDOW / READY_TO_FIX / READY_TO_MERGE（annotations 拉取失败时数据不完整，不给 READY_TO_MERGE）。
+- 四 bot 判据与 `.github/workflows/bot-coverage.yml` 一致（codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]` 作者或 `CodeRabbit` check；pr-agent = `pr-agent` check，或 `github-actions[bot]` 作者 + 正文 `<!-- pr-agent:review:full -->` 标记的检视评论；greptile = `greptile-apps[bot]` 作者或 check-run app slug `greptile-apps`）。
+- head 锚定：时间锚（≥ head committer date）+ commit 锚（review `commit_id` / 行级评论 `original_commit_id` / pr-agent 评论 `last_run.head_sha` 须匹配当前 head）；issue 评论仅时间锚（timeline committed 事件无 `created_at`，实证无法作 push 边界）。
+- 意见计数：双锚定后的待处置意见（摘要/LGTM 类不计：APPROVED/DISMISSED review、coderabbit walkthrough/汇总、bot-coverage 报告；pr-agent 按 findings `ACTIVE` 计数）；collect 全量导出并标注「摘要/报告类」「非当前 head」。
 - 前置：gh 已认证（`gh auth status` 通过，或 `export GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"`）；四 bot 已在仓库使能（见 `docs/misc/pr-review-bots.md`）。
 - 端到端手册：`docs/misc/pr-loop.md`。
