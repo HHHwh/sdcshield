@@ -174,6 +174,51 @@ PR-Agent 软件本身免费、公共仓库 Actions 分钟数也免费，唯一�
 > 说明：gemini-cli 的免费额度靠交互式 OAuth 登录，**无法**在 GitHub Actions 中无人值守
 > 使用；PR-Agent 在 CI 只能走 API Key，故此处选用 AI Studio 免费层 API Key。
 
+### 7.2 自动开 PR：一个特性分支一个 PR
+
+GitHub 天然保证「同一 head 分支 → 同一 base 分支**只能有 1 个 open PR**」：对同一特性
+分支再 push 只会触发 `pull_request: synchronize`、**复用/更新**该 PR，不会新建。因此
+「一个特性分支 = 一个 PR」无需额外实现；本节新增的
+[`.github/workflows/auto-pr.yml`](../../.github/workflows/auto-pr.yml) 只补齐**首次 push
+免手动点建**这一步。
+
+- **触发**：`push` 到非 `main`、非 `gh-pages` 的分支（`branches-ignore: [main, gh-pages]`）。
+- **为何排除 `main`**：本仓约定不直接推 `main`，故不为 `main` 建 PR。
+- **为何排除 `gh-pages`**：[`.github/workflows/multi-os-verify.yml`](../../.github/workflows/multi-os-verify.yml)
+  的 `benchmark-trend` job 用 `benchmark-action auto-push: true` **自动推送** `gh-pages`
+  分支，若不一并排除会被误开一个无意义的 `gh-pages -> main` PR。
+- **行为**：先用 `gh pr list --head <branch> --state open` 判重——已有 open PR 则跳过
+  （后续 push 会 `synchronize` 更新它）；否则 `gh pr create --base main --head <branch>`。
+  分支相对 `main` 无新提交、或 PR 已存在时 `gh pr create` 非 0 退出，以 `::notice` 优雅
+  收场，**不让 job 变红**。
+
+**必须用 `PR_TOKEN`（而非默认 `GITHUB_TOKEN`）建 PR**——这是本 workflow 的关键约束：
+
+- 用默认 `GITHUB_TOKEN` 创建的事件（push / PR / comment 等）**不会启动新的 workflow
+  run**，这是 GitHub 为防工作流自触发死循环的刻意设计（例外仅 `workflow_dispatch` /
+  `repository_dispatch`）。后果是 `pr-agent.yml` / `bot-coverage.yml` **不会在该 PR 上
+  被触发**，四 bot 也就不会在 `opened` 时评审——症状是「静默」：无失败 run，必需检查
+  永远停在 `Expected — Waiting for status to be reported`。
+- 用 **fine-grained PAT**（或 GitHub App token）发起的 PR 被视为「人」创建，可**正常
+  触发**下游检视机器人。这是选用 PAT 的唯一理由。
+- 额外原因：本仓 Actions 的 `default_workflow_permissions` 为 `read`、
+  `can_approve_pull_request_reviews: false`，默认 `GITHUB_TOKEN` 连 PR 都**建不了**；改用
+  PAT 后该设置无需改动。
+
+配置步骤（仓库 Secret `PR_TOKEN`）：
+
+1. 建 fine-grained PAT：`Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens`；Repository access 选 `wangxumarshall/sdcshield`；权限
+   `Contents: Read`、`Pull requests: Read and write`；生成后复制。
+2. 仓库 `Settings → Secrets and variables → Actions → New repository secret`，名
+   `PR_TOKEN`，值粘贴 PAT。
+3. （可选）设置过期时间并在到期前轮换，以减小暴露面。
+
+> 诚实说明：`PR_TOKEN` **未配置**时本 workflow **优雅跳过**——日志输出
+> `::warning::PR_TOKEN 未配置 → 跳过自动开 PR`，job 仍绿，**绝不假报「已开 PR」**。
+> 备选方案：长期/团队场景可用 GitHub App token（`actions/create-github-app-token`）
+> 替代 PAT，权限更细、不受个人账号过期影响。
+
 ## 8. 延伸阅读
 
 - [代码检视代理仓库上下文 `AGENTS.md`](../../AGENTS.md)
@@ -182,3 +227,4 @@ PR-Agent 软件本身免费、公共仓库 Actions 分钟数也免费，唯一�
 - [Greptile 检视上下文 `.greptile/rules.md`](../../.greptile/rules.md)
 - [仓库 README](../../README.md)
 - [覆盖度校验 workflow `.github/workflows/bot-coverage.yml`](../../.github/workflows/bot-coverage.yml)
+- [自动开 PR workflow `.github/workflows/auto-pr.yml`](../../.github/workflows/auto-pr.yml)
