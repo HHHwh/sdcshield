@@ -72,7 +72,7 @@ greptile.com 网页授权安装**到本仓库，**无法通过代码或 CLI 完�
 - 在 Codex / Codex code review 设置中，确认本仓库 `wangxumarshall/sdcshield` 已**使能**，
   即已在对应集成中完成授权与仓库选择。
 - codex 会读取**仓库根**的 [`AGENTS.md`](../../AGENTS.md) 作为仓库上下文；该文件已内嵌
-  SDC 激发检视指令，使能后即可按其中的 6 条要点检视本仓库 PR。
+  SDC 激发检视指令，使能后即可按其中的 8 条要点检视本仓库 PR。
 - 复核方式：见第 2 节的 `gh` 命令——若 issue 评论 / review 中出现作者
   `chatgpt-codex-connector[bot]`，即表示 codex 已对本 PR 生效。
 
@@ -80,42 +80,52 @@ greptile.com 网页授权安装**到本仓库，**无法通过代码或 CLI 完�
 
 SDC 检视的独特之处在于：不仅看代码「对不对」，更看它**是否真的能把计算单元逼出
 错误比特**。四份配置文件（`AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、
-`.greptile/rules.md`）均围绕下列 6 条要点组织检视指令：
+`.greptile/rules.md`）均围绕下列 8 条要点组织检视指令：
 
-1. **激发强度与覆盖**：是否真正压到目标计算单元（FMA / SIMD / 压缩 / SVD / crypto）、
-   覆盖目标数据宽度（如 128/256/512-bit 向量、FP16/BF16/FP32/FP64）与数据模式
-   （随机、全 0/全 1、边界值、NaN/Inf、极值）；`TEST_LOOP` 的定时压力是否充足，
-   能否在给定时长内持续打满目标单元。
-2. **golden 比对**：是否使用字节级 `memcmp`（`memcmp_or_fail`）而非近似/容差比较；
-   浮点是否逐位可复现（SNaN/NaN 位型跨架构一致，依赖框架在 `sandstone_data.cpp`
-   统一 quiet SNaN）。
-3. **正确性基线（x86-64 非回归）**：是否以 `#elif __aarch64__` / 按架构 meson 守卫的
+1. **激发强度与覆盖**：是否真正压到目标计算单元（FMA / SIMD / 压缩 / SVD / crypto），
+   靶点优先 FMA/乘法器（现场向量 SDC >75% 来自 FMA）；数据宽度覆盖目标位宽
+   （128/256/512-bit 向量、FP16/BF16/FP32/FP64）；`TEST_LOOP` 定时持续压满目标单元
+   （SDC 激发窗口概率 <10⁻⁵，需长时压测捕获）；指令序列长度达数十条级下限
+   （数十条级短循环即可检出崩塌）。
+2. **数据模式与缺陷激活**：随机 / 全 0 / 全 1 / 边界值 / NaN/Inf / 极值多模式覆盖；
+   长时固定电平后翻转（BTI）、SDF 模式、双值域档（有界/无界）、FP64 指数/符号位
+   敏感；标注所需的频率/电压条件空间。
+3. **golden 比对**：字节级 `memcmp`（`memcmp_or_fail`）而非近似/容差比较（容差即
+   盲区）；浮点逐位可复现（SNaN/NaN 位型跨架构一致，依赖框架在 `sandstone_data.cpp`
+   统一 quiet SNaN）；per-lane 独立比对（98.5% 向量 SDC 仅单 lane 出错），禁止跨
+   lane 聚合校验。
+4. **正确性基线（x86-64 非回归）**：是否以 `#elif __aarch64__` / 按架构 meson 守卫的
    方式**增量**添加，未破坏 x86-64 参考路径；是否**不当扩大** `#ifdef __x86_64__`
    （仅当代码真正跨架构共享时才允许）。
-4. **诚实性**：ARM64 未实现项是否从 `test_init` 返回 `EXIT_SKIP`、且理由为
+5. **诚实性**：ARM64 未实现项是否从 `test_init` 返回 `EXIT_SKIP`、且理由为
    `"to be implemented (placeholder): <缺失内容>"`，禁止以 `EXIT_SUCCESS` 假通过的
    no-op 测试。
-5. **架构相关缺陷（SVE/NEON VL）**：是否存在与向量长度（VL）相关的越界读写或误报；
-   注意 CI runner 的 VL=128 会**掩盖** 512-bit 等高 VL 下才暴露的缺陷。
-6. **失败现场留存**：失败路径是否保留冷路径的 bit dump、sum-bit、failing-vector
-   记录，以免过早返回而丢弃足以定位 SDC 的现场信息。
+6. **架构相关缺陷（SVE/NEON VL）**：是否存在与向量长度（VL）相关的越界读写或误报；
+   注意 CI runner 的 VL=128 会**掩盖** 512-bit 等高 VL 下才暴露的缺陷；关注新指令
+   代际效应（SVE2 / FCMLA / FMMLA / 谓词等首代实现优先覆盖）。
+7. **失败现场留存**：失败路径是否保留冷路径的 bit dump、sum-bit、failing-vector
+   记录与 lane 偏移直方图，并保证 RNG 可重放（`-s seed`），以免过早返回而丢弃
+   足以定位 SDC 的现场信息。
+8. **多样性与检出率口径**：新增测试须满足激发维度多样性要求（相对既有覆盖是否
+   带来新维度）；检出能力的论证须给出检出率下界口径。
 
 **四份配置文件各自的内嵌方式**：
 
-- [`AGENTS.md`](../../AGENTS.md)：以「代码检视重点：SDC 激发能力」小节列出上述 6 条
+- [`AGENTS.md`](../../AGENTS.md)：以「代码检视重点：SDC 激发能力」小节列出上述 8 条
   要点，作为 codex 的仓库级上下文与检视指令。
 - [`.coderabbit.yaml`](../../.coderabbit.yaml)：通过 `reviews.path_instructions` 按路径
-  （`tests/cpu/**`、`framework/**`、`device/**`）分别内嵌 6 条要点，并配以
+  （`tests/cpu/**`、`framework/**`、`device/**`）分别内嵌 8 条要点，并配以
   `language: zh-CN`、`reviews.profile: assertive`、`reviews.auto_review`
   （`enabled` + `auto_incremental_review`）、`chat.auto_reply`。
 - [`.pr_agent.toml`](../../.pr_agent.toml)：在 `[pr_reviewer].extra_instructions` 中内嵌
-  6 条要点与**降噪约束**（只聚焦 SDC 激发能力、正确性与架构守卫，不输出无关的风格/
+  8 条要点与**降噪约束**（只聚焦 SDC 激发能力、正确性与架构守卫，不输出无关的风格/
   命名/格式意见），并设 `[config].response_language = "zh-CN"`。
-- [`.greptile/rules.md`](../../.greptile/rules.md)：以人读版上下文呈现 6 条要点；
+- [`.greptile/rules.md`](../../.greptile/rules.md)：以人读版上下文呈现 8 条要点；
   与之配套的 [`.greptile/config.json`](../../.greptile/config.json) 以 `triggerOnUpdates: true`
-  与 6 条结构化 rules（对应 `sdc-excitation-intensity-coverage`、
+  与 8 条结构化 rules（对应 `sdc-excitation-intensity-coverage`、
   `sdc-golden-bytewise-memcmp`、`x86-64-non-regression`、`arm64-placeholder-honesty`、
-  `sve-neon-vector-length`、`failure-scene-recording`）落地同一套要点。
+  `sve-neon-vector-length`、`failure-scene-recording`，及「数据模式与缺陷激活」
+  「多样性与检出率口径」两条新增 rules）落地同一套要点。
 
 ## 6. 覆盖度校验 workflow 用法
 

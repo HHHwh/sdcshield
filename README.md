@@ -218,7 +218,7 @@ PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历�
 
 ### 代码检视机器人（PR 自动检视，聚焦 SDC 激发）
 
-仓库接入 codex、CodeRabbit、PR-Agent、Greptile 四个代码检视机器人，在 PR 打开/更新时自动检视；四者配置（`AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、`.greptile/`）均内嵌 SDC 激发专属检视要点（激发强度与覆盖、golden 字节比对、x86-64 非回归、占位诚实性、SVE/NEON VL、失败现场留证）。新增 `bot-coverage.yml` 做**非阻塞**覆盖度校验：有界轮询四个 bot 是否已检视，结果写入 step summary 并评论告警，**恒 exit 0、绝不阻塞合并**。其中 codex / CodeRabbit / PR-Agent 已生效，**Greptile 待管理员人工安装**。生效核查方法（`gh` 命令与账号对照）、Greptile 手动安装步骤与 SDC 检视要点汇总见 [docs/misc/pr-review-bots.md](docs/misc/pr-review-bots.md)。
+仓库接入 codex、CodeRabbit、PR-Agent、Greptile 四个代码检视机器人，在 PR 打开/更新时自动检视；四者配置（`AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、`.greptile/`）均内嵌 SDC 激发专属检视要点（激发强度与覆盖、数据模式与缺陷激活、golden 字节比对、x86-64 非回归、占位诚实性、SVE/NEON VL、失败现场留证、多样性与检出率口径）。新增 `bot-coverage.yml` 做**非阻塞**覆盖度校验：有界轮询四个 bot 是否已检视，结果写入 step summary 并评论告警，**恒 exit 0、绝不阻塞合并**。其中 codex / CodeRabbit / PR-Agent 已生效，**Greptile 待管理员人工安装**。生效核查方法（`gh` 命令与账号对照）、Greptile 手动安装步骤与 SDC 检视要点汇总见 [docs/misc/pr-review-bots.md](docs/misc/pr-review-bots.md)。
 
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
