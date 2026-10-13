@@ -3,8 +3,9 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <ctime>
-#include <unistd.h>
+
+#ifdef __aarch64__
+#include <arm_neon.h>
 
 static int kreg5_init(struct test *test) {
     (void)test;
@@ -20,27 +21,35 @@ static int kreg5_run(struct test *test, int cpu) {
         uint16_t a_val = mask16_dist();
         uint16_t b_val = mask16_dist();
 
-        // ---- 模拟 KUNPCK：低16位 = a_val，高16位 = b_val ----
-        uint32_t hw_c = (uint32_t)a_val | ((uint32_t)b_val << 16);
+        /* 硬件: KUNPCK 用真交织指令 vzip1q (lane 交替 [a,b,a,b,...]);
+         * KNOT 用按位取反指令 vmvnq。数据全程驻留向量通路。 */
+        uint16_t zo[8], no[8];
+        uint32_t hw_c;
+        {
+            uint16x8_t va = vdupq_n_u16(a_val);
+            uint16x8_t vb = vdupq_n_u16(b_val);
+            uint16x8_t z = vzip1q_u16(va, vb);
+            uint16x8_t n = vmvnq_u16(va);
+            vst1q_u16(zo, z);
+            vst1q_u16(no, n);
+            /* 小端 32 位视图: 低 16 位 = a, 高 16 位 = b */
+            hw_c = ((uint32_t)zo[1] << 16) | zo[0];
+        }
 
-        // ---- 模拟 KNOT：对 hw_c 的低16位取反 ----
-        uint16_t hw_d = static_cast<uint16_t>(~(hw_c & 0xFFFF));
+        /* 软件参考: 独立标量 (原版 sw 直接赋值自 hw, 结构上恒 pass —— B1-004)。 */
+        uint32_t sw_c = ((uint32_t)b_val << 16) | a_val;
+        uint16_t sw_not = (uint16_t)~a_val;
 
-        // ---- 软件参考（与硬件模拟完全相同） ----
-        uint32_t sw_c = hw_c;
-        uint16_t sw_d = hw_d;
-
-        // ---- 存储一致性测试：保存输入掩码再加载比较 ----
-        uint16_t store_a = a_val, store_b = b_val;
-        uint16_t reload_a, reload_b;
-        memcpy(&reload_a, &store_a, sizeof(store_a));
-        memcpy(&reload_b, &store_b, sizeof(store_b));
-        bool consistent = (reload_a == a_val) && (reload_b == b_val);
-
-        // ---- 比较硬件（模拟）与软件参考 ----
-        bool kunpack_pass = (hw_c == sw_c);
-        bool knot_pass = (hw_d == sw_d);
-        bool passed = kunpack_pass && knot_pass && consistent;
+        /* 交叉验证: 读回数组的全部 8 lane 与独立标量预期比对
+         * (交织: 偶 lane = a, 奇 lane = b; 取反: 每 lane = ~a),
+         * 任一 lane 被 SDC 破坏都会被捕获。 */
+        bool zip_pass = true;
+        for (int i = 0; i < 8; ++i)
+            zip_pass = zip_pass && (zo[i] == ((i & 1) ? b_val : a_val));
+        bool not_pass = true;
+        for (int i = 0; i < 8; ++i)
+            not_pass = not_pass && (no[i] == sw_not);
+        bool passed = zip_pass && not_pass && (hw_c == sw_c);
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
 
@@ -50,10 +59,9 @@ static int kreg5_run(struct test *test, int cpu) {
             fprintf(stderr, "kreg5: Iter %lu, a=0x%04X, b=0x%04X\n",
                     iteration, a_val, b_val);
             fprintf(stderr, "  KUNPCK: sw=0x%08X, hw=0x%08X\n", sw_c, hw_c);
-            fprintf(stderr, "  KNOT :  sw=0x%04X, hw=0x%04X\n", sw_d, hw_d);
-            fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
-                    consistent, color, result_str);
-            report_fail_msg("kreg5: mismatch in KUNPCK/KNOT or consistency");
+            fprintf(stderr, "  KNOT:   sw=0x%04X, hw=0x%04X\n", sw_not, no[0]);
+            fprintf(stderr, "  result=%s%s\033[0m\n", color, result_str);
+            report_fail_msg("kreg5: mismatch in NEON interleave/not");
             return EXIT_FAILURE;
         }
 
@@ -67,7 +75,33 @@ static int kreg5_finish(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(kreg5, "Mask unpack and not (KUNPCK, KNOT) simulation on ARM64")
+#else // !__aarch64__
+
+// On non-AArch64 (e.g. x86-64) there is no <arm_neon.h>; the test self-skips
+// in test_init so the result is marked ignored rather than spuriously
+// passing (kreg1.cpp precedent).
+static int kreg5_init(struct test *test) {
+    (void)test;
+    log_skip(TestResourceIssueSkipCategory,
+             "to be implemented (placeholder): ARM NEON required for "
+             "mask register unpack and not (interleave/not)");
+    return EXIT_SKIP;
+}
+
+static int kreg5_run(struct test *test, int cpu) {
+    (void)test;
+    (void)cpu;
+    __builtin_unreachable();    // init reports EXIT_SKIP, run never executes
+}
+
+static int kreg5_finish(struct test *test) {
+    (void)test;
+    return EXIT_SUCCESS;
+}
+
+#endif // __aarch64__
+
+DECLARE_TEST(kreg5, "Mask unpack and not (KUNPCK, KNOT) on real NEON interleave instruction (vzip1q)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = kreg5_init,
     .test_run = kreg5_run,

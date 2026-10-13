@@ -206,10 +206,11 @@ endif
 
 
 # Vector test suite: NEON-backed counterparts of the x86 AVX-512 k-register
-# (mask register) and swizzle/insert-extract tests. The 5 files that use
-# <arm_neon.h> (insert_extract, swizzle, kreg1, kreg4, kreg7) self-skip with
-# EXIT_SKIP on non-AArch64 via an #ifdef __aarch64__ guard; the other 6
-# (kreg2/3/5/6/8/9) are pure scalar integer simulations and build everywhere.
+# (mask register) and swizzle/insert-extract tests. All 11 files use
+# <arm_neon.h> under an #ifdef __aarch64__ guard and self-skip with
+# EXIT_SKIP on non-AArch64; the former scalar sw=hw self-comparisons in
+# kreg2/3/5/6/8/9 were replaced (B1-004) with real NEON vector paths
+# (vshlq/vorrq/vbicq/vzip1q/vmaxvq...) plus independent scalar goldens.
 tests_set_base.add(
     files(
         'vector/swizzle.cpp',
