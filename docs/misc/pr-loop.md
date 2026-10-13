@@ -78,8 +78,9 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>     # 导出意见�
   review + 行级评论 + PR 评论 + check annotations。摘要/LGTM 类不计：APPROVED/
   DISMISSED review（结论性信号非意见）、coderabbit walkthrough/汇总评论（其发现以
   行级评论另行计入）、bot-coverage 报告；pr-agent 检视按尾部 JSON 的
-  `findings[].state == ACTIVE` 计数（解析失败按 1 条计）。annotations 拉取失败时如实
-  提示「计数可能低估」，不假报。
+  `findings[].state == ACTIVE` 计数（解析失败按 1 条计）；check annotations 仅计
+  `failure`/`warning` 级（`notice` 级是信息性提示，不构成待处置意见；collect 导出仍
+  全量含 notice 级）。annotations 拉取失败时如实提示「计数可能低估」，不假报。
 - **collect 全量导出**：意见明细不因「摘要/计数排除」而丢弃——摘要/报告类条目标注
   「未计入待处置意见数」，锚定不符的条目标注「非当前 head」，由 subagent 通读甄别。
   check-run 的 `output.summary`/`output.text` 一并导出（标注为不可信检视数据）。

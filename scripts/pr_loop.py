@@ -35,7 +35,8 @@
 # 意见计数与「信号」分开: 摘要/LGTM 类不计入待处置意见——APPROVED/DISMISSED
 # review、coderabbit walkthrough/汇总评论(其发现以行级评论另行计入)、bot-coverage
 # 报告均排除;pr-agent 检视按尾部 JSON 的 findings[].state == ACTIVE 计数(解析
-# 失败回退按 1 条计)。
+# 失败回退按 1 条计);check annotations 仅计 failure/warning 级(notice 级是
+# 信息性提示,不构成待处置意见;collect 导出仍全量含 notice 级)。
 #
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
@@ -482,7 +483,12 @@ def fetch_pr(slug: str, number: int) -> PRData:
                     n_icomment += 1
             else:
                 n_icomment += 1
-    n_annot = sum(len(e.annotations) for e in data.check_runs if e.counted)
+    # check annotations: 仅 failure/warning 级计入待处置意见——notice 级是信息性
+    # 提示(GitHub Annotations API 三级枚举 notice/warning/failure),不构成意见;
+    # collect 导出仍全量含 notice 级,不丢数据。
+    n_annot = sum(1 for e in data.check_runs if e.counted
+                  for a in e.annotations
+                  if a.get("annotation_level") in ("failure", "warning"))
     data.opinion_breakdown = {
         "review": n_review, "review_comment": n_rcomment,
         "issue_comment": n_icomment, "annotations": n_annot,

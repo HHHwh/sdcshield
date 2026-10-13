@@ -68,6 +68,6 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>           # 导出�
 - 状态机：DRAFT / FORK / CLOSED / WAITING_BOTS / QUIET_WINDOW / READY_TO_FIX / READY_TO_MERGE（annotations 拉取失败时数据不完整，不给 READY_TO_MERGE）。
 - 四 bot 判据与 `.github/workflows/bot-coverage.yml` 一致（codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]` 作者或 `CodeRabbit` check；pr-agent = `pr-agent` check，或 `github-actions[bot]` 作者 + 正文 `<!-- pr-agent:review:full -->` 标记的检视评论；greptile = `greptile-apps[bot]` 作者或 check-run app slug `greptile-apps`）。
 - head 锚定：时间锚（≥ head committer date）+ commit 锚（review `commit_id` / 行级评论 `original_commit_id` / pr-agent 评论 `last_run.head_sha` 须匹配当前 head）；issue 评论仅时间锚（timeline committed 事件无 `created_at`，实证无法作 push 边界）。
-- 意见计数：双锚定后的待处置意见（摘要/LGTM 类不计：APPROVED/DISMISSED review、coderabbit walkthrough/汇总、bot-coverage 报告；pr-agent 按 findings `ACTIVE` 计数）；collect 全量导出并标注「摘要/报告类」「非当前 head」。
+- 意见计数：双锚定后的待处置意见（摘要/LGTM 类不计：APPROVED/DISMISSED review、coderabbit walkthrough/汇总、bot-coverage 报告；pr-agent 按 findings `ACTIVE` 计数；check annotations 仅计 failure/warning 级——notice 是信息性提示）；collect 全量导出并标注「摘要/报告类」「非当前 head」（annotations 导出含 notice 级）。
 - 前置：gh 已认证（`gh auth status` 通过，或 `export GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"`）；四 bot 已在仓库使能（见 `docs/misc/pr-review-bots.md`）。
 - 端到端手册：`docs/misc/pr-loop.md`。

@@ -27,6 +27,6 @@
 ## 端到端 dogfooding（本特性 PR 自身走全流程）
 - [x] push 后 `auto-pr.yml` 自动创建 PR（验证 PR_TOKEN 链路真实有效）——实测 push feat/pr-loop-tooling 后 50s 内 PR #243 自动创建（非 draft、OPEN、base main）
 - [x] `wait` 真实等到四 bot 完成（引用真实输出，非推测）——codex 11:49:30 / coderabbit 11:49:55 / pr-agent 11:55:25 / greptile 11:56:46 UTC，12:11:48 过静默窗 exit 0
-- [ ] `collect` 导出 → subagent 批判性处置 → 修复 → 验证（构建/回归真实输出）→ push，至少一轮完整循环
+- [x] `collect` 导出 → subagent 批判性处置 → 修复 → 验证（构建/回归真实输出）→ push，至少一轮完整循环——实测第 1 轮：collect 14 条意见 → subagent 处置（9 采纳/1 变通/1 部分采纳/3 无需处置）→ 修复 6 files +245/-60 → 49 断言回归 ALL PASS + `ninja: no work to do.` → commit b7a8bf5d push 成功
 - [ ] `status` 最终报 READY_TO_MERGE（或 bot 无意见时验证 CLEAN 判定路径）→ 已向用户发出人工 merge 提醒（含 PR 链接）
 - [ ] trae 会话内全流程走通；claude code cli 侧 `/pr-loop` 命令可发现、`scripts/pr_loop.py` 可独立执行、手册指引一致

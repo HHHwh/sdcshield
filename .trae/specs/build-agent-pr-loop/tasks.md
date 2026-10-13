@@ -21,7 +21,8 @@
 - [ ] Task 5: 端到端 dogfooding 验证（用本特性 PR 自身走全流程）
   - [x] 5.1 `wait <pr>` 真实等到四 bot 完成（引用真实输出；timeout 用小值如 900 验证轮询，必要时复跑）
     - 如实记录：两次运行覆盖双路径——第 1 次 timeout 900s 超时退出非 0（诚实报告「四 bot 已全部完成,仅静默窗未过」并逐 bot 列信号）；第 2 次（timeout 600s）于 12:11:48 UTC 过静默窗后退出 0，输出四 bot 完成时间线 + 状态 READY_TO_FIX + 建议 collect
-  - [ ] 5.2 `collect <pr>` 导出意见 → 每个相关 PR 一个上下文隔离 subagent 按提示词分析处置 → 修复 → 验证（构建零新警告 + 定向回归）→ `-s` 提交 push
+  - [x] 5.2 `collect <pr>` 导出意见 → 每个相关 PR 一个上下文隔离 subagent 按提示词分析处置 → 修复 → 验证（构建零新警告 + 定向回归）→ `-s` 提交 push
+    - 如实记录：collect 927 行/14 条意见 → 1 个 subagent 批判性处置（9 采纳/1 变通/1 部分采纳/3 无需处置，逐条给依据）→ 修复 6 files +245/-60（commit 锚定、意见计数排除摘要类、annotations 失败不给 READY_TO_MERGE、wait 停止态退出、greptile app-slug/pr-agent 标记判据、collect 导出 output）；主会话独立复跑 49 断言回归 ALL PASS + ninja no work to do → commit b7a8bf5d 已 push
   - [ ] 5.3 循环：push 后新 head 重新 wait/collect/status，直到 `READY_TO_MERGE`；若 bot 无意见则验证 CLEAN 判定路径
   - [ ] 5.4 向用户发出人工 merge 提醒（含 PR 链接与状态摘要）
   - [ ] 5.5 双端抽验：trae 主验证全流程；claude code cli 侧确认 `/pr-loop` 命令可发现、`scripts/pr_loop.py` 可直接执行、手册指引一致
