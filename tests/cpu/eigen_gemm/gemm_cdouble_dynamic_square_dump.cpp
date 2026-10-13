@@ -15,6 +15,10 @@
  * element index, the golden/actual real and imag doubles, their IEEE-754
  * bit xors, and a per-byte breakdown, so an SDC bit-flip can be located.
  * Mirrors the movbe_dump / mrn_rmw_dump design: no extra hot-path reads.
+ * Operand freshness (B2-007, R2b freeze blind spot): like the non-dump
+ * gemm files (46141ed4), the run loop keeps per-thread lhs/rhs re-rolled
+ * from the framework RNG every 16 iterations with the golden recomputed
+ * the same batch — the init-time Mat::Random draw is no longer replayed.
  *
  * @note This test requires at least 2 threads to run.
  * @endparblock
@@ -54,17 +58,37 @@ static int eigen_gemm_cdouble_dynamic_square_init(struct test *test) {
 }
 
 static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
+    /* Operand freshness (B2-007, R2b freeze blind spot): per-thread
+     * operands re-rolled from the framework RNG every kRerollEvery
+     * iterations, both components [-1, 1) bounded like Mat::Random, with
+     * the golden recomputed the same batch (46141ed4 non-dump gemm
+     * pattern) — the init-time Mat::Random draw is never replayed. */
+    constexpr int kRerollEvery = 16;
+    auto fill_rand = [](Mat &m) {
+        for (int r = 0; r < m.rows(); ++r)
+            for (int c = 0; c < m.cols(); ++c)
+                m(r, c) = std::complex<double>(frandom_scale(2.0) - 1.0,
+                                               frandom_scale(2.0) - 1.0);
+    };
+    Mat l_lhs, l_rhs, l_prod;
+    l_lhs.resize(M_DIM, M_DIM);
+    l_rhs.resize(M_DIM, M_DIM);
+    l_prod.resize(M_DIM, M_DIM);
+    fill_rand(l_lhs);
+    fill_rand(l_rhs);
+    l_prod = l_lhs * l_rhs;
+    int since_reroll = 0;
+
     do {
-        auto testdata = CAST(test->data);
         Mat x;
-        x = testdata->lhs * testdata->rhs;          // FMA hot path: unchanged
+        x = l_lhs * l_rhs;                          // FMA hot path: unchanged
 
         // Original compared the raw double stream (real,imag interleaved).
         // Keep that exact byte-level semantics: compare as 2*M_DIM*M_DIM
         // doubles, and on first mismatch map back to a complex element +
         // real/imag component for the dump.
         const double *xd = reinterpret_cast<const double *>(x.data());
-        const double *pd = reinterpret_cast<const double *>(testdata->prod.data());
+        const double *pd = reinterpret_cast<const double *>(l_prod.data());
         const int N = 2 * M_DIM * M_DIM;
         for (int idx = 0; idx < N; ++idx) {
             if (xd[idx] != pd[idx]) {
@@ -94,6 +118,12 @@ static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
                           xb[7], xb[6], xb[5], xb[4], xb[3], xb[2], xb[1], xb[0]);
                 report_fail_msg("eigen_gemm_cdouble_dump: product miscompare at [%d,%d].%s", row, col, comp);
             }
+        }
+        if (++since_reroll >= kRerollEvery) {
+            since_reroll = 0;
+            fill_rand(l_lhs);
+            fill_rand(l_rhs);
+            l_prod = l_lhs * l_rhs;
         }
     } while (test_time_condition(test));
     return EXIT_SUCCESS;

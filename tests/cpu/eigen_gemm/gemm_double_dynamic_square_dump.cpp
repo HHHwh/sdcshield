@@ -14,6 +14,10 @@
  * dumps its row/col, golden, actual, IEEE-754 bit xor, and a per-byte
  * breakdown, so an SDC bit-flip in the product can be located. Mirrors the
  * movbe_dump / mrn_rmw_dump design: no extra hot-path reads or snapshots.
+ * Operand freshness (B2-007, R2b freeze blind spot): like the non-dump
+ * gemm files (46141ed4), the run loop keeps per-thread lhs/rhs re-rolled
+ * from the framework RNG every 16 iterations with the golden recomputed
+ * the same batch — the init-time Mat::Random draw is no longer replayed.
  *
  * @note Although the test should run fine on a single thread, it is
  * only expected to catch defects if run on at least 2 cores.
@@ -31,8 +35,10 @@ using namespace Eigen;
 // Matrix dimension. Historically hardcoded to 256. Now configurable via
 // the GEMM_K_DIM environment variable (default 256 = original baseline) so
 // the fault-propagation-vs-k-dimension hypothesis can be tested without
-// touching random-generation / tolerance / report logic. Nothing else
-// changes: Mat::Random seeding and report_fail behavior are untouched.
+// touching the dump/report logic. Random generation: the run loop re-rolls
+// its own per-thread operands from the framework RNG every 16 iterations
+// (B2-007, same as the non-dump gemm files) — init's Mat::Random draw is
+// no longer replayed; report_fail behavior unchanged.
 static int gemm_k_dim() {
     static int dim = -1;
     if (dim < 0) {
@@ -72,13 +78,32 @@ static int eigen_gemm_double_dynamic_square_init(struct test *test) {
 }
 
 static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {
+    /* Operand freshness (B2-007, R2b freeze blind spot): per-thread
+     * operands re-rolled from the framework RNG every kRerollEvery
+     * iterations, [-1, 1) bounded like Mat::Random, with the golden
+     * recomputed the same batch (46141ed4 non-dump gemm pattern) — the
+     * init-time Mat::Random draw is never replayed. */
+    constexpr int kRerollEvery = 16;
+    auto fill_rand = [](Mat &m) {
+        for (int r = 0; r < m.rows(); ++r)
+            for (int c = 0; c < m.cols(); ++c)
+                m(r, c) = frandom_scale(2.0) - 1.0;
+    };
+    Mat l_lhs, l_rhs, l_prod;
+    l_lhs.resize(M_DIM, M_DIM);
+    l_rhs.resize(M_DIM, M_DIM);
+    l_prod.resize(M_DIM, M_DIM);
+    fill_rand(l_lhs);
+    fill_rand(l_rhs);
+    l_prod = l_lhs * l_rhs;
+    int since_reroll = 0;
+
     do {
-        auto testdata = CAST(test->data);
         Mat x;
-        x = testdata->lhs * testdata->rhs;          // FMA hot path: unchanged
+        x = l_lhs * l_rhs;                          // FMA hot path: unchanged
 
         const double *xd = x.data();
-        const double *pd = testdata->prod.data();
+        const double *pd = l_prod.data();
         // Element-wise byte-exact compare (same semantics as the original
         // memcmp_or_fail). On the first mismatch, dump golden/actual + the
         // IEEE-754 bit xor and per-byte breakdown, then fail. All of this
@@ -112,6 +137,12 @@ static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {
             }
         }
         (void)ok;
+        if (++since_reroll >= kRerollEvery) {
+            since_reroll = 0;
+            fill_rand(l_lhs);
+            fill_rand(l_rhs);
+            l_prod = l_lhs * l_rhs;
+        }
     } while (test_time_condition(test));
     return EXIT_SUCCESS;
 }
