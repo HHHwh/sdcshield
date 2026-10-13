@@ -98,15 +98,26 @@ static int cmac_avx512_run(struct test *test, int cpu) {
     uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
     uint8_t *mac = (uint8_t *)malloc(CMAC_DIGEST_SIZE);
 
+    /* R2b (B2-003): per-thread plaintext + golden, re-rolled every
+     * iteration (thread-safe: shared d is only read after init; the
+     * struct copy puts plaintext and the golden fields written by
+     * compute_golden — golden_ciphertext/golden_mac — on this
+     * thread's stack; keys/IV ride along as identical values). */
+    struct cmac_avx512_data local_d;
+    memcpy(&local_d, d, sizeof(local_d));
     TEST_LOOP(test, 256) {
-        des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "3DES-DOCSIS ciphertext mismatch (AVX-512)");
+        /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
+         * CMAC recomputed for this thread's data) */
+        memset_random(local_d.plaintext, DATA_SIZE);
+        cmac_avx512_compute_golden(&local_d);
+        des3_encrypt(local_d.des3_key, local_d.des3_iv, local_d.plaintext, ciphertext, DATA_SIZE);
+        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "3DES-DOCSIS ciphertext mismatch (AVX-512)");
 
-        des3_decrypt(d->des3_key, d->des3_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "3DES-DOCSIS decryption mismatch (AVX-512)");
+        des3_decrypt(local_d.des3_key, local_d.des3_iv, ciphertext, decrypted, DATA_SIZE);
+        memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "3DES-DOCSIS decryption mismatch (AVX-512)");
 
-        aes_cmac(d->aes_key, ciphertext, DATA_SIZE, mac);
-        memcmp_or_fail(mac, d->golden_mac, CMAC_DIGEST_SIZE, "AES-CMAC digest mismatch (AVX-512)");
+        aes_cmac(local_d.aes_key, ciphertext, DATA_SIZE, mac);
+        memcmp_or_fail(mac, local_d.golden_mac, CMAC_DIGEST_SIZE, "AES-CMAC digest mismatch (AVX-512)");
     }
 
     free(ciphertext);

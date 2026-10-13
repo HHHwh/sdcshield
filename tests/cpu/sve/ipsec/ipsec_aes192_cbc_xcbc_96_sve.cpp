@@ -151,15 +151,26 @@ static int aes_xcbc_avx_run(struct test *test, int cpu) {
     uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
     uint8_t *full_mac = (uint8_t *)malloc(XCBC_FULL_DIGEST_SIZE);
 
+    /* R2b (B2-003): per-thread plaintext + golden, re-rolled every
+     * iteration (thread-safe: shared d is only read after init; the
+     * struct copy puts plaintext and the golden fields written by
+     * compute_golden — golden_ciphertext/golden_mac — on this
+     * thread's stack; keys/IV ride along as identical values). */
+    struct aes_xcbc_avx_data local_d;
+    memcpy(&local_d, d, sizeof(local_d));
     TEST_LOOP(test, 256) {
-        aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "AES-192-CBC ciphertext mismatch (AVX)");
-        
-        aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "AES-192-CBC decryption mismatch (AVX)");
-        
-        aes_xcbc_96(d->xcbc_key, ciphertext, DATA_SIZE, full_mac);
-        memcmp_or_fail(full_mac, d->golden_mac, XCBC_96_DIGEST_SIZE, "XCBC-96 digest mismatch (AVX)");
+        /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
+         * XCBC-96 recomputed for this thread's data) */
+        memset_random(local_d.plaintext, DATA_SIZE);
+        aes_xcbc_avx_compute_golden(&local_d);
+        aes_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
+        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "AES-192-CBC ciphertext mismatch (AVX)");
+
+        aes_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
+        memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "AES-192-CBC decryption mismatch (AVX)");
+
+        aes_xcbc_96(local_d.xcbc_key, ciphertext, DATA_SIZE, full_mac);
+        memcmp_or_fail(full_mac, local_d.golden_mac, XCBC_96_DIGEST_SIZE, "XCBC-96 digest mismatch (AVX)");
     }
     free(ciphertext);
     free(decrypted);

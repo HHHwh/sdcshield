@@ -91,16 +91,27 @@ static int aes_gcm_avx_run(struct test *test, int cpu) {
     uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
     uint8_t *tag = (uint8_t *)malloc(GCM_TAG_SIZE);
 
+    /* R2b (B2-003): per-thread plaintext + golden, re-rolled every
+     * iteration (thread-safe: shared d is only read after init; the
+     * struct copy puts plaintext/golden_ciphertext on this thread's
+     * stack and compute_golden writes only into the copy — keys/IV/
+     * golden_tag ride along as identical values). */
+    struct aes_gcm_avx_data local_d;
+    memcpy(&local_d, d, sizeof(local_d));
     TEST_LOOP(test, 256) {
-        aes_gcm_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, tag, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "AES-192-GCM ciphertext mismatch (AVX)");
-        memcmp_or_fail(tag, d->golden_tag, GCM_TAG_SIZE, "AES-192-GCM tag mismatch (AVX)");
+        /* re-roll: fresh plaintext + same-iteration golden (EVP path
+         * recomputed for this thread's data) */
+        memset_random(local_d.plaintext, DATA_SIZE);
+        aes_gcm_avx_compute_golden(&local_d);
+        aes_gcm_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, tag, DATA_SIZE);
+        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "AES-192-GCM ciphertext mismatch (AVX)");
+        memcmp_or_fail(tag, local_d.golden_tag, GCM_TAG_SIZE, "AES-192-GCM tag mismatch (AVX)");
 
-        int ret = aes_gcm_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, tag, DATA_SIZE);
+        int ret = aes_gcm_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, tag, DATA_SIZE);
         if (ret != 1) {
             report_fail_msg("AES-192-GCM decryption failed (tag verification failed) (AVX)");
         }
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "AES-192-GCM decryption mismatch (AVX)");
+        memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "AES-192-GCM decryption mismatch (AVX)");
     }
     free(ciphertext);
     free(decrypted);

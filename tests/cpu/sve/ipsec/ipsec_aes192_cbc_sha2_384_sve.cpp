@@ -123,18 +123,29 @@ static int aes192_cbc_sha2_384_sve_run(struct test *test, int cpu) {
     uint8_t mac[NSTREAM][48];
     uint8_t *variant_msg = (uint8_t *)malloc((NSTREAM-1) * DATA_SIZE);
 
+    /* R2b (B2-003): per-thread plaintext + golden, re-rolled every
+     * iteration (thread-safe: shared d is only read after init; the
+     * struct copy puts plaintext and every golden field written by
+     * compute_golden — golden_ciphertext/golden_mac/variant_msg — on
+     * this thread's stack). */
+    struct aes192_cbc_sha2_384_sve_data local_d;
+    memcpy(&local_d, d, sizeof(local_d));
     TEST_LOOP(test, 256) {
-        aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "ciphertext mismatch (SVE)");
-        aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "decryption mismatch (SVE)");
+        /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
+         * SVE HMAC recomputed for this thread's data) */
+        memset_random(local_d.plaintext, DATA_SIZE);
+        aes192_cbc_sha2_384_sve_compute_golden(&local_d);
+        aes_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
+        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "ciphertext mismatch (SVE)");
+        aes_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
+        memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "decryption mismatch (SVE)");
 
         /* SVE 多流 HMAC (主消息 + 变体) */
         {
             const uint8_t *keys[NSTREAM], *msgs[NSTREAM];
             uint8_t variant_keys[NSTREAM][48];
             for (int s = 0; s < NSTREAM; ++s) {
-                memcpy(variant_keys[s], d->hmac_key, 48);
+                memcpy(variant_keys[s], local_d.hmac_key, 48);
                 if (s > 0) variant_keys[s][0] ^= (uint8_t)s;
                 keys[s] = variant_keys[s];
             }
@@ -147,7 +158,7 @@ static int aes192_cbc_sha2_384_sve_run(struct test *test, int cpu) {
             hmac_sha384_x4(mac, keys, 48, msgs, DATA_SIZE);
         }
         for (int s = 0; s < NSTREAM; ++s)
-            memcmp_or_fail(mac[s], d->golden_mac[s], 48, "HMAC-SHA384 digest mismatch (SVE)");
+            memcmp_or_fail(mac[s], local_d.golden_mac[s], 48, "HMAC-SHA384 digest mismatch (SVE)");
     }
     free(ciphertext);
     free(decrypted);
