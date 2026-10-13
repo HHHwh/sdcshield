@@ -3,7 +3,7 @@
 本文件汇总 SDCShield 仓库接入的四个 PR 代码检视机器人（codex / CodeRabbit /
 PR-Agent / Greptile）、各自的配置文件与触发方式、机器人生效的核查方法，以及四份
 配置共同内嵌的「SDC 激发专属检视要点」。所有账号/标识与配置路径均以仓库实际状态
-为准；**Greptile 当前尚未安装到本仓库**，详见第 3 节与第 7 节。
+为准；Greptile 已于 2026-10-13 完成安装授权并实测生效（首次产出见 PR #238），详见第 3 节与第 7 节。
 
 ## 1. 概述
 
@@ -14,11 +14,10 @@ PR-Agent / Greptile）、各自的配置文件与触发方式、机器人生效�
 | codex | 作者 login `chatgpt-codex-connector[bot]` | GitHub App（PR 事件） | `AGENTS.md`（仓库根） | 仓库级上下文 + SDC 激发检视指令 |
 | CodeRabbit | 作者 login `coderabbitai[bot]`；另产出 check-run `CodeRabbit` | GitHub App（PR 事件） | `.coderabbit.yaml`（仓库根） | `language: zh-CN`、`reviews.profile: assertive`、`reviews.path_instructions`、`chat.auto_reply` 等 |
 | PR-Agent | check-run `pr-agent` | workflow `.github/workflows/pr-agent.yml` | `.pr_agent.toml`（仓库根） | `[config].response_language`、`[pr_reviewer].extra_instructions` 等 |
-| Greptile | 作者 login `greptile-apps[bot]`（**待安装**） | GitHub App（PR 事件） | `.greptile/config.json` + `.greptile/rules.md` | 结构化 rules 与人读版检视上下文 |
+| Greptile | 作者 login `greptile-apps[bot]`（**已生效**） | GitHub App（PR 事件） | `.greptile/config.json` + `.greptile/rules.md` | 结构化 rules 与人读版检视上下文 |
 
 **触发方式**：当 PR 处于 opened / reopened / synchronize 事件时自动触发检视。
-codex、CodeRabbit、Greptile 由各自的 GitHub App 在 PR 事件上触发（Greptile 需先由
-管理员安装后才会生效）；PR-Agent 由 `.github/workflows/pr-agent.yml` 触发——该
+codex、CodeRabbit、Greptile 由各自的 GitHub App 在 PR 事件上触发；PR-Agent 由 `.github/workflows/pr-agent.yml` 触发——该
 workflow 位于 `main` 分支，故仅对以 `main` 为基的 PR 生效，且 fork PR 因无法读取
 仓库 Secret 会自动跳过。此外，`.github/workflows/bot-coverage.yml` 对本次 PR 做
 **非阻塞**的四机器人覆盖度校验（见第 6 节）。
@@ -50,15 +49,19 @@ gh run list --workflow "PR Agent Review"
 | codex | 作者 login 命中 `chatgpt-codex-connector[bot]`（issue 评论 / review / review 评论） |
 | CodeRabbit | 作者 login 命中 `coderabbitai[bot]`，或 check-run 名称命中 `CodeRabbit` |
 | PR-Agent | check-run 名称命中 `pr-agent` |
-| Greptile | 作者 login 命中 `greptile-apps[bot]`（安装生效后） |
+| Greptile | 作者 login 命中 `greptile-apps[bot]`（issue 评论 / review / review 评论） |
 
-## 3. Greptile 手动安装步骤
+## 3. Greptile 安装记录
 
 Greptile 以 GitHub App（账号 `greptile-apps[bot]`）形式工作，**只能由仓库管理员在
-greptile.com 网页授权安装**到本仓库，**无法通过代码或 CLI 完成**。在管理员完成
-授权前，`.greptile/` 下的配置不会被识别，PR 上也不会出现 `greptile-apps[bot]` 的评论。
+greptile.com 网页授权安装**到本仓库，**无法通过代码或 CLI 完成**。
 
-安装步骤：
+**状态：已完成（2026-10-13）。** 管理员在 greptile.com 完成授权安装后，Greptile 已识别
+仓库根 `.greptile/config.json`（结构化 rules）与 `.greptile/rules.md`（人读版上下文），
+并在 PR #238 上首次实测产出检视：review（COMMENTED）+ 4 条行级 review 评论 +
+check-run "Greptile Review" pass，bot-coverage 判据命中（汇总 4/4）。
+
+安装步骤（已完成，供恢复 / 重装时参考）：
 
 1. 由仓库管理员登录 [greptile.com](https://greptile.com)，授权安装 Greptile GitHub App。
 2. 在授权范围内只勾选本仓库 `wangxumarshall/sdcshield`（或按组织策略选择）。
@@ -150,17 +153,18 @@ SDC 检视的独特之处在于：不仅看代码「对不对」，更看它**�
 gh workflow run bot-coverage.yml -f pr-number=<N>
 ```
 
-## 7. 当前状态与待人工项
+## 7. 当前状态
 
 | 机器人 | 当前状态 | 备注 |
 | --- | --- | --- |
-| codex | 已生效（有 PR 产物证据） | 读取根 `AGENTS.md` |
+| codex | 已生效（有 PR 产物证据；注意外部配额可能耗尽，限额提示时无实际检视内容） | 读取根 `AGENTS.md` |
 | CodeRabbit | 已生效（有 PR 产物证据） | 读取根 `.coderabbit.yaml` |
 | PR-Agent | 已生效（实测：PR #235 已产出 pr-agent 检视） | workflow 位于 `main`；读取根 `.pr_agent.toml`；LLM 用 Gemini 免费层 |
-| Greptile | **待人工安装** | 需管理员在 greptile.com 授权安装 GitHub App 后方生效 |
+| Greptile | 已生效（实测：PR #238 已产出 greptile-apps[bot] 检视） | 2026-10-13 完成安装授权；读取 `.greptile/config.json` + `rules.md` |
 
-> 诚实说明：Greptile 的 `.greptile/` 配置已就位，但在管理员完成 Greptile GitHub App
-> 安装授权之前，**不会**对本仓库 PR 产生任何检视；上表如实标注为「待人工安装」。
+> 诚实说明：Greptile 曾长期如实标注为「待人工安装」；2026-10-13 管理员完成 GitHub App
+> 安装授权后，已在 PR #238 实测产出检视（review + 行级评论 + check-run pass），上表
+> 随之更新为「已生效」。
 
 ### 7.1 PR-Agent 的免费 LLM 配置（Google Gemini 免费层）
 
