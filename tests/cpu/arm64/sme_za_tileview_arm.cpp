@@ -206,15 +206,23 @@ static int sme_za_tileview_arm_init(struct test *test)
         for (long i = 0; i < n; ++i)
             for (long j = 0; j < n; ++j) {
                 const size_t ij = static_cast<size_t>(i) * n + j;
-                const size_t ji = static_cast<size_t>(j) * n + i;
-                const size_t rot = static_cast<size_t>((i + 1) % n) * n + j;
-                /* Exact doubles: small integers plus halves/quarters,
-                 * bit-dense and distinct per element so any flipped bit
-                 * shows up in the memcmp. */
-                data->a[ij] =
-                    static_cast<double>((i * 131 + j) % 977) + 0.5 * (i + 1);
-                data->b[ij] =
-                    static_cast<double>((i * 197 + j) % 883) + 0.25 * (j + 1);
+                /* Exact doubles from the framework RNG: a random multiple
+                 * of 64 plus the injective (i*n + j) index keeps all n*n
+                 * elements distinct, so any flipped bit or mis-permutation
+                 * still shows up in the memcmp. The top 46 random bits
+                 * (>> 18) keep every value <= 2^52 + 63, exactly
+                 * representable as a double. b additionally offsets by one
+                 * tile (nn): under the Constant RNG engine two consecutive
+                 * random64() draws return identical bits, which would make
+                 * a[ij] == b[ij] everywhere and blind the za0/za1 isolation
+                 * check — the offset keeps b = a + 64 there (PR #237
+                 * review, greptile). The RNG is re-seeded per fracture
+                 * fragment, so every fragment gets fresh values instead of
+                 * one fixed formula (PR #234 review, greptile 4254737399). */
+                data->a[ij] = static_cast<double>(
+                    (random64() >> 18) * 64 + (i * n + j));
+                data->b[ij] = static_cast<double>(
+                    (random64() >> 18) * 64 + nn + (i * n + j));
             }
 
         /* Goldens must be derived only after a/b are fully populated: the

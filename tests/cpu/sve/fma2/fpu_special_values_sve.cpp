@@ -50,8 +50,17 @@ static inline uint64_t bits_of(double d)
 }
 
 // Number of special values in the sweep table (per type).
-static constexpr int NUM_SPECIALS = 12;
+static constexpr int NUM_SPECIALS = 16;
 
+/* Indices 0..11 are the fixed IEEE-754 specials — the test's semantic
+ * core, kept constant. Indices 12..15 are finite values drawn from the
+ * framework RNG (re-seeded per fracture fragment), so the cartesian
+ * sweep covers fresh finite-operand combinations on every fragment
+ * instead of replaying one fixed table (PR #234 review, greptile
+ * 4254737399). Random values are finite and non-NaN, but triples that
+ * mix them with the table's NaN/Inf specials can still produce NaN
+ * results — those are compared class-only; every non-NaN result is
+ * byte-exact-compared (see sweep_f32_sve/sweep_f64_sve). */
 static void build_specials_f32(float t[NUM_SPECIALS])
 {
     t[0]  = NAN;
@@ -66,6 +75,8 @@ static void build_specials_f32(float t[NUM_SPECIALS])
     t[9]  = -std::numeric_limits<float>::max();
     t[10] =  std::numeric_limits<float>::min();
     t[11] = -std::numeric_limits<float>::min();
+    for (int i = 12; i < NUM_SPECIALS; ++i)
+        t[i] = (random32() & 1 ? -1.0f : 1.0f) * frandomf_scale(1.0f);
 }
 
 static void build_specials_f64(double t[NUM_SPECIALS])
@@ -82,6 +93,8 @@ static void build_specials_f64(double t[NUM_SPECIALS])
     t[9]  = -std::numeric_limits<double>::max();
     t[10] =  std::numeric_limits<double>::min();
     t[11] = -std::numeric_limits<double>::min();
+    for (int i = 12; i < NUM_SPECIALS; ++i)
+        t[i] = (random32() & 1 ? -1.0 : 1.0) * frandom_scale(1.0);
 }
 
 static int fpu_special_values_sve_init(struct test *test)
