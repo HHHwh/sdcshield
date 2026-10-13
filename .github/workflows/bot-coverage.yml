@@ -64,10 +64,20 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments?per_page=100" --jq '.[].user.login' 2>/dev/null || true
           }
 
-          # check-run 名称；调用失败容忍
+          # check-run 的名称与创建方 App slug 分属不同命名空间（App slug 全局
+          # 唯一且全小写），拆成两个集合分别保存，各判据只查自己的集合，
+          # 避免名称与 slug 互相串扰；只统计已完成的 check-run——检视尚在
+          # queued/in_progress 时不算产出，轮询继续等（PR #241 上曾出现
+          # Greptile 仍在 in_progress 即报"已检视"）；失败（conclusion=
+          # failure）也算已检视产出。调用失败容忍
           fetch_checks() {
+            checks_names=""
+            checks_slugs=""
             if [ -n "$sha" ]; then
-              gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" --jq '.check_runs[].name' 2>/dev/null || true
+              local json
+              json="$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" 2>/dev/null || true)"
+              checks_names="$(printf '%s' "$json" | jq -r '.check_runs[]? | select(.status == "completed") | .name' 2>/dev/null || true)"
+              checks_slugs="$(printf '%s' "$json" | jq -r '.check_runs[]? | select(.status == "completed") | .app.slug // empty' 2>/dev/null || true)"
             fi
           }
 
@@ -77,18 +87,23 @@ jobs:
           found_pragent=0
           found_greptile=0
           authors=""
-          checks=""
+          checks_names=""
+          checks_slugs=""
 
           # 轮询直到四个判据全部命中或到达 deadline
           while :; do
             authors="$(fetch_authors)"
-            checks="$(fetch_checks)"
+            fetch_checks
 
             if printf '%s\n' "$authors" | grep -Fxq 'chatgpt-codex-connector[bot]'; then found_codex=1; fi
             if printf '%s\n' "$authors" | grep -Fxq 'coderabbitai[bot]' \
-               || printf '%s\n' "$checks" | grep -Fxq 'CodeRabbit'; then found_coderabbit=1; fi
-            if printf '%s\n' "$checks" | grep -Fxq 'pr-agent'; then found_pragent=1; fi
-            if printf '%s\n' "$authors" | grep -Fxq 'greptile-apps[bot]'; then found_greptile=1; fi
+               || printf '%s\n' "$checks_names" | grep -Fxq 'CodeRabbit'; then found_coderabbit=1; fi
+            if printf '%s\n' "$checks_names" | grep -Fxq 'pr-agent'; then found_pragent=1; fi
+            # Greptile 双判据：bot 评论/review，或其 App 创建的 check-run（app slug
+            # 固定为 greptile-apps，比 check-run 名称更稳）——Greptile 有时只产出
+            # check-run 而不发 review/评论（如 PR #240），单一判据会误报未检视
+            if printf '%s\n' "$authors" | grep -Fxq 'greptile-apps[bot]' \
+               || printf '%s\n' "$checks_slugs" | grep -Fxq 'greptile-apps'; then found_greptile=1; fi
 
             if [ "$found_codex" -eq 1 ] && [ "$found_coderabbit" -eq 1 ] \
                && [ "$found_pragent" -eq 1 ] && [ "$found_greptile" -eq 1 ]; then
@@ -106,20 +121,25 @@ jobs:
           if [ "$found_coderabbit" -eq 1 ]; then s_coderabbit="✅ 已检视"; else s_coderabbit="❌ 未检视"; fi
           e_coderabbit="—"
           if printf '%s\n' "$authors" | grep -Fxq 'coderabbitai[bot]'; then e_coderabbit="coderabbitai[bot]"; fi
-          if printf '%s\n' "$checks" | grep -Fxq 'CodeRabbit'; then
+          if printf '%s\n' "$checks_names" | grep -Fxq 'CodeRabbit'; then
             if [ "$e_coderabbit" = "—" ]; then e_coderabbit="check-run: CodeRabbit"; else e_coderabbit="${e_coderabbit}；check-run: CodeRabbit"; fi
           fi
 
           if [ "$found_pragent" -eq 1 ]; then s_pragent="✅ 已检视"; e_pragent="check-run: pr-agent"; else s_pragent="❌ 未检视"; e_pragent="—"; fi
-          if [ "$found_greptile" -eq 1 ]; then s_greptile="✅ 已检视"; e_greptile="greptile-apps[bot]"; else s_greptile="❌ 未检视"; e_greptile="—"; fi
+          if [ "$found_greptile" -eq 1 ]; then s_greptile="✅ 已检视"; else s_greptile="❌ 未检视"; fi
+          e_greptile="—"
+          if printf '%s\n' "$authors" | grep -Fxq 'greptile-apps[bot]'; then e_greptile="greptile-apps[bot]"; fi
+          if printf '%s\n' "$checks_slugs" | grep -Fxq 'greptile-apps'; then
+            if [ "$e_greptile" = "—" ]; then e_greptile="check-run app: greptile-apps"; else e_greptile="${e_greptile}；check-run app: greptile-apps"; fi
+          fi
 
           report_body="$(cat <<EOF
           | 机器人 | 状态 | 判据 | 佐证 |
           | --- | --- | --- | --- |
           | codex | ${s_codex} | 作者 login: chatgpt-codex-connector[bot] | ${e_codex} |
-          | CodeRabbit | ${s_coderabbit} | 作者 login: coderabbitai[bot]，或 check-run: CodeRabbit | ${e_coderabbit} |
-          | PR-Agent | ${s_pragent} | check-run: pr-agent | ${e_pragent} |
-          | Greptile | ${s_greptile} | 作者 login: greptile-apps[bot] | ${e_greptile} |
+          | CodeRabbit | ${s_coderabbit} | 作者 login: coderabbitai[bot]，或已完成的 check-run: CodeRabbit | ${e_coderabbit} |
+          | PR-Agent | ${s_pragent} | 已完成的 check-run: pr-agent | ${e_pragent} |
+          | Greptile | ${s_greptile} | 作者 login: greptile-apps[bot]，或已完成的 check-run app: greptile-apps | ${e_greptile} |
           EOF
           )"
 
@@ -137,9 +157,9 @@ jobs:
 
           # 对每个缺失 bot 告警
           if [ "$found_codex" -eq 0 ]; then echo "::warning::未检测到 codex（作者 chatgpt-codex-connector[bot]）对 PR #${PR_NUMBER} 的检视"; fi
-          if [ "$found_coderabbit" -eq 0 ]; then echo "::warning::未检测到 coderabbit（作者 coderabbitai[bot] 或 check-run CodeRabbit）对 PR #${PR_NUMBER} 的检视"; fi
-          if [ "$found_pragent" -eq 0 ]; then echo "::warning::未检测到 pr-agent（check-run pr-agent）对 PR #${PR_NUMBER} 的检视"; fi
-          if [ "$found_greptile" -eq 0 ]; then echo "::warning::未检测到 greptile（作者 greptile-apps[bot]）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_coderabbit" -eq 0 ]; then echo "::warning::未检测到 coderabbit（作者 coderabbitai[bot] 或已完成的 check-run CodeRabbit）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_pragent" -eq 0 ]; then echo "::warning::未检测到 pr-agent（已完成的 check-run pr-agent）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_greptile" -eq 0 ]; then echo "::warning::未检测到 greptile（作者 greptile-apps[bot] 或已完成的 check-run app greptile-apps）对 PR #${PR_NUMBER} 的检视"; fi
 
           # 带隐藏标记的 PR 评论：已存在则更新（PATCH），否则新建（POST），避免每次 synchronize 重复刷屏
           comment_body="$(cat <<EOF

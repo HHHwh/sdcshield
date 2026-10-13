@@ -138,8 +138,16 @@ SDC 检视的独特之处在于：不仅看代码「对不对」，更看它**�
   `workflow_dispatch`（输入 `pr-number`）。
 - **行为**：有界轮询四个判据——codex（作者 `chatgpt-codex-connector[bot]`）、
   CodeRabbit（作者 `coderabbitai[bot]` 或 check-run `CodeRabbit`）、PR-Agent
-  （check-run `pr-agent`）、Greptile（作者 `greptile-apps[bot]`），直到全部命中或到达
-  等待上限。
+  （check-run `pr-agent`）、Greptile（作者 `greptile-apps[bot]` 或 check-run app
+  `greptile-apps`；Greptile 有时只产出 check-run 而不发 review/评论——如 PR #240，
+  故以 App 归属而非 check-run 名称为备选判据），直到全部命中或到达等待上限。
+  check-run 判据的口径（PR #241 加固）：check-run **名称**与创建方 **App slug**
+  分属不同命名空间（App slug 全局唯一且全小写），脚本一次拉取后拆成
+  `checks_names` / `checks_slugs` 两个集合——名称判据（CodeRabbit、pr-agent）
+  只查名称集，slug 判据（Greptile）只查 slug 集，互不串扰；且只统计
+  `status == "completed"` 的 check-run——queued / in_progress 不算产出（轮询
+  继续等），completed 但 conclusion=failure 仍算已检视产出（避免失败场景空轮
+  到等待上限）。
 - **输出位置**：结果表格写入 `$GITHUB_STEP_SUMMARY`（step summary），同时对每个缺失
   项以 `::warning::` 告警，并在 PR 上发布/更新一条带隐藏标记 `<!-- bot-coverage-report -->`
   的评论（已存在则更新，避免重复刷屏）。
