@@ -51,8 +51,10 @@
  */
 
 #include <sandstone.h>
+#include <cinttypes>
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -88,6 +90,14 @@ struct SveStencilAxisData {
 };
 
 #ifdef __aarch64__
+
+// Type-punning helper (mirrors fsu_byteexact_arm / fpu_special_values_sve).
+static inline uint64_t bits_of(double d)
+{
+    uint64_t u;
+    std::memcpy(&u, &d, sizeof(u));
+    return u;
+}
 
 inline void axis_generic_16x2(
     const double* s_base, const size_t coord,
@@ -221,11 +231,18 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
         svst1(ptrue, result, res0);
         svst1(ptrue, result + 8, res1);
 
+        /* Per-lane bit-exact comparison: compare the raw IEEE-754 bit
+         * patterns instead of C++ == so the check is byte-exact like the
+         * framework's memcmp_or_fail (PR #237 review, coderabbit), and log
+         * both patterns — %.0f would round away the sub-1.0 1/8-grid
+         * fraction and the failing bits. */
         bool ok = true;
         for (size_t j = 0; j < B_TILE; ++j) {
-            if (result[j] != expected[j]) {
-                log_warning("sve512_stencil_axis: lane %2zu result=%.0f "
-                            "expected=%.0f", j, result[j], expected[j]);
+            if (bits_of(result[j]) != bits_of(expected[j])) {
+                log_warning("sve512_stencil_axis: lane %2zu "
+                            "result=0x%016" PRIx64 " "
+                            "expected=0x%016" PRIx64,
+                            j, bits_of(result[j]), bits_of(expected[j]));
                 ok = false;
             }
         }
