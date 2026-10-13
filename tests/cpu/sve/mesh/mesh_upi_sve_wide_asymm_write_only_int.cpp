@@ -135,6 +135,7 @@ static int mesh_upi_sve_wide_asymm_write_only_int_run(struct test *test, int cpu
             // 读取整个数组，计算校验和并进行一致性测试
             uint64_t read_sum = 0;
             bool consistent = true;
+            size_t bad_vec = (size_t)-1;
             alignas(16) int32_t store_buf[BLOCK_ELEMENTS];
 
             for (size_t i = 0; i < TOTAL_ELEMENTS; i += BLOCK_ELEMENTS) {
@@ -170,6 +171,7 @@ static int mesh_upi_sve_wide_asymm_write_only_int_run(struct test *test, int cpu
 
                     if (svcntp_b32(pg, cmp) != NEON_VECTOR_SIZE) {
                         consistent = false;
+                        bad_vec = i + v * NEON_VECTOR_SIZE;
                         break;
                     }
                 }
@@ -193,6 +195,19 @@ static int mesh_upi_sve_wide_asymm_write_only_int_run(struct test *test, int cpu
             fflush(stderr);
 
             if (!passed) {
+                /* cold path: record bit-level evidence for the failing leg(s) */
+                if (read_sum != expected_sum)
+                    log_error("mesh_upi_sve_wide_asymm_write_only_int: sum mismatch: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                              (unsigned long long)expected_sum, (unsigned long long)read_sum,
+                              (unsigned long long)(expected_sum ^ read_sum));
+                if (!consistent)
+                    log_error("mesh_upi_sve_wide_asymm_write_only_int: store/reload consistency failed at vector %zu (post-hoc data at failing vector: "
+                              "0x%08x 0x%08x 0x%08x 0x%08x)",
+                              bad_vec,
+                              *(const uint32_t *)&td->data[bad_vec + 0],
+                              *(const uint32_t *)&td->data[bad_vec + 1],
+                              *(const uint32_t *)&td->data[bad_vec + 2],
+                              *(const uint32_t *)&td->data[bad_vec + 3]);
                 report_fail_msg("mesh_upi_sve_wide_asymm_write_only_int: Sum mismatch or consistency failure");
                 return EXIT_FAILURE;
             }

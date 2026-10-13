@@ -158,6 +158,11 @@ static int mesh_upi_sve_asymm_distrib_int_run(struct test *test, int cpu) {
                 }
 
                 if (!passed) {
+                    /* cold path: record bit-level evidence for the failing leg(s) */
+                    if (read_sum != expected_sum)
+                        log_error("mesh_upi_sve_asymm_distrib_int: sum mismatch: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                                  (unsigned long long)expected_sum, (unsigned long long)read_sum,
+                                  (unsigned long long)(expected_sum ^ read_sum));
                     report_fail_msg("mesh_upi_sve_asymm_distrib_int: Sum mismatch");
                     return EXIT_FAILURE;
                 }

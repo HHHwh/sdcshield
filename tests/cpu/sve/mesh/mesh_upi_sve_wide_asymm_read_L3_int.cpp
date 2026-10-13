@@ -64,6 +64,7 @@ static int mesh_upi_avx512_asymm_read_L3_int_run(struct test *test, int cpu) {
     do {
         uint64_t local_sum = 0;
         bool consistent = true;
+        size_t bad_vec = (size_t)-1;
 
         for (size_t i = 0; i < ARRAY_ELEMS; i += VECTOR_SIZE) {
             // 加载 16 个元素（分 4 个 NEON 向量）
@@ -98,6 +99,7 @@ static int mesh_upi_avx512_asymm_read_L3_int_run(struct test *test, int cpu) {
 
                 if (svcntp_b32(pg, cmp) != NEON_VECTOR_SIZE) {
                     consistent = false;
+                    bad_vec = i + v * VECTOR_SIZE;
                     break;
                 }
             }
@@ -122,6 +124,15 @@ static int mesh_upi_avx512_asymm_read_L3_int_run(struct test *test, int cpu) {
         }
 
         if (!passed) {
+            /* cold path: record bit-level evidence for the failing leg(s) */
+            if (!consistent)
+                log_error("mesh_upi_sve_wide_asymm_read_L3_int: store/reload consistency failed at vector %zu (post-hoc data at failing vector: "
+                          "0x%08x 0x%08x 0x%08x 0x%08x)",
+                          bad_vec,
+                          *(const uint32_t *)&td->data[bad_vec + 0],
+                          *(const uint32_t *)&td->data[bad_vec + 1],
+                          *(const uint32_t *)&td->data[bad_vec + 2],
+                          *(const uint32_t *)&td->data[bad_vec + 3]);
             report_fail_msg("mesh_upi_avx512_asymm_read_L3_int: Sum mismatch or consistency failure");
             return EXIT_FAILURE;
         }

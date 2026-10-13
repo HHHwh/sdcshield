@@ -73,6 +73,10 @@ static int movdq2q_sve_run(struct test *test, int cpu)
             uint64_t x0 = svlastb_u64(svptrue_b64(), zsrc);
 
             if (x0 != data->low_parts[i]) {
+                /* cold path: record bit-level evidence before failing */
+                log_error("movdq2q_sve: index %lu: golden=0x%016llx actual=0x%016llx xor=0x%016llx",
+                          i, (unsigned long long)data->low_parts[i], (unsigned long long)x0,
+                          (unsigned long long)(data->low_parts[i] ^ x0));
                 report_fail_msg("movdq2q_sve: Low 64-bit mismatch at index %lu", i);
             }
         }

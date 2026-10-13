@@ -889,11 +889,15 @@ static int selftest_crash_run(struct test *test, int thread)
 //   anything else          -> unexpected, reported as failure
 // ---------------------------------------------------------------------------
 #ifdef __aarch64__
-// The framework library compiles at the baseline march (no +sme), so the
-// SME probe function lifts its target locally (random.cpp precedent:
-// per-function #pragma GCC target).
-#pragma GCC push_options
-#pragma GCC target("arch=armv9-a+sme")
+// The SME probe must NOT lift the march per-function: '#pragma GCC
+// target("arch=armv9-a+sme")' hard-fails on upstream GCC 13 (the +sme
+// modifier is GCC 14+; only openEuler's GCC 12.3 backport accepts it —
+// caught by the ubuntu-24.04 CodeQL runner, 2026-10-12, after PR #231
+// landed). SMSTART/SMSTOP are MSR (immediate) encodings fixed by the
+// ISA, so emit them via .inst — compiler-independent (GCC 12/13/14,
+// clang) and byte-identical to the smstart za / smstop za mnemonics
+// (objdump-verified: d503457f / d503447f). Probe semantics unchanged:
+// attempt SMSTART; a kernel that has not enabled SME traps SIGILL.
 static int selftest_sme_sigill_probe_run(struct test *test, int)
 {
     pid_t pid = fork();
@@ -905,8 +909,8 @@ static int selftest_sme_sigill_probe_run(struct test *test, int)
         // Attempt to enter+exit streaming ZA mode. If the kernel has not
         // enabled SME, SMSTART traps SIGILL here.
         __asm__ volatile(
-            "smstart za\n\t"
-            "smstop za\n\t"
+            ".inst 0xd503457f\n\t"   // smstart za
+            ".inst 0xd503447f\n\t"   // smstop za
             ::: "memory");
         _exit(0);
     }
@@ -935,7 +939,6 @@ static int selftest_sme_sigill_probe_run(struct test *test, int)
                 status);
     return EXIT_FAILURE;
 }
-#pragma GCC pop_options
 #endif
 
 static void cause_sigill()

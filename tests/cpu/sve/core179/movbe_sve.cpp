@@ -58,6 +58,18 @@ static int movbe_sve_init(struct test *test)
 }
 
 #if defined(__aarch64__)
+/* 冷路径报告 (noinline): 让热循环里被比较的两个值在 cmp 后即死
+ * (本函数自行按地址重载), 基循环指令序列与加转储前保持一致 */
+[[gnu::noinline]] static void movbe_sve_report_mismatch(uint64_t idx,
+                                                        const uint32_t *golden,
+                                                        const uint32_t *actual)
+{
+    report_fail_msg("MovBE-SVE: Round-trip failed at index %u: "
+                    "golden=0x%08x actual=0x%08x xor=0x%08x",
+                    (unsigned)idx, (unsigned)*golden, (unsigned)*actual,
+                    (unsigned)(*golden ^ *actual));
+}
+
 static int movbe_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
@@ -101,8 +113,8 @@ static int movbe_sve_run(struct test *test, int cpu)
             memcpy(restored, out_bytes, n * 4);
             for (int i = 0; i < n; ++i) {
                 if (restored[i] != data->input[base + i]) {
-                    report_fail_msg("MovBE-SVE: Round-trip failed at index %u",
-                                    (unsigned)(base + i));
+                    movbe_sve_report_mismatch(base + i, &data->input[base + i],
+                                              &restored[i]);
                 }
             }
         }

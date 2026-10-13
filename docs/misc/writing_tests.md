@@ -970,3 +970,13 @@ SDCShield's public API can be found in
 in this file are documented. Readers should consult
 [sandstone.h](../framework/sandstone.h) for information about SDCShield's API
 that is not covered in this guide.
+
+### Failure dumps: cold-path bit records (纪律)
+
+SDC 证据要求失败时记录 golden/actual/xor 逐元素值。热路径（比较调用、分支、
+report_fail_msg）不得因加 dump 而改变指令时序——所有 dump 代码必须位于
+"健康核永远不进"的失败分支内部（自有 `{}` 块、自有 `_dump_` 前缀局部变量、
+无 early return），上限 8 条 mismatch + 1 行总数。提交前用 objdump 对照热循环
+不变（参考 tests/cpu/sve/core179/movbe_dump_probe_* 与本目录 55 个测试的
+2026-10-12 批量改造）。框架 `memcmp_or_fail` 自带 mismatch dump，新测试
+优先用它；只在需要保留自定义比较结构时才手写冷路径 dump。

@@ -152,6 +152,7 @@ static int mesh_upi_sve_sym_run(struct test *test, int cpu) {
         // ---------- 阶段 2：所有线程读取完整数组并验证 ----------
         double read_sum = 0.0;
         bool consistent = true;
+        size_t bad_vec = (size_t)-1;
         alignas(16) float store_buf[VECTOR_SIZE];
 
         for (size_t i = 0; i < TOTAL_ELEMENTS; i += VECTOR_SIZE) {
@@ -165,8 +166,10 @@ static int mesh_upi_sve_sym_run(struct test *test, int cpu) {
             svst1_f32(pg, store_buf, v);
             svfloat32_t reload = svld1_f32(pg, store_buf);
             svbool_t cmp = svcmpeq_f32(pg, v, reload);
-            if (svcntp_b32(pg, cmp) != VECTOR_SIZE)
+            if (svcntp_b32(pg, cmp) != VECTOR_SIZE) {
                 consistent = false;
+                bad_vec = i;
+            }
         }
 
         double expected_sum = td->global_sum.load(std::memory_order_seq_cst);
@@ -183,6 +186,24 @@ static int mesh_upi_sve_sym_run(struct test *test, int cpu) {
         fflush(stderr);
 
         if (!passed) {
+            /* cold path: record bit-level evidence for the failing leg(s) */
+            if (read_sum != expected_sum) {
+                uint64_t _dump_es, _dump_rs;
+                memcpy(&_dump_es, &expected_sum, 8);
+                memcpy(&_dump_rs, &read_sum, 8);
+                log_error("mesh_upi_sve_sym: sum mismatch: golden=0x%016llx (%g) actual=0x%016llx (%g) xor=0x%016llx",
+                          (unsigned long long)_dump_es, expected_sum,
+                          (unsigned long long)_dump_rs, read_sum,
+                          (unsigned long long)(_dump_es ^ _dump_rs));
+            }
+            if (!consistent)
+                log_error("mesh_upi_sve_sym: store/reload consistency failed at vector %zu (post-hoc data at failing vector: "
+                          "0x%08x 0x%08x 0x%08x 0x%08x)",
+                          bad_vec,
+                          *(const uint32_t *)&td->data[bad_vec + 0],
+                          *(const uint32_t *)&td->data[bad_vec + 1],
+                          *(const uint32_t *)&td->data[bad_vec + 2],
+                          *(const uint32_t *)&td->data[bad_vec + 3]);
             report_fail_msg("mesh_upi_sve_sym: Sum mismatch or consistency failure");
             return EXIT_FAILURE;
         }

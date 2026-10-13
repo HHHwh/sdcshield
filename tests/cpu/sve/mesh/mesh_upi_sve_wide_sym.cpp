@@ -180,6 +180,7 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
 
         // 阶段 2：读取并验证
         bool consistent = true;
+        size_t bad_vec = (size_t)-1;
         alignas(16) float store_buf[BLOCK_ELEMENTS];
 
         for (size_t i = 0; i < TOTAL_ELEMENTS; i += BLOCK_ELEMENTS) {
@@ -219,6 +220,7 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
                 svbool_t cmp = svcmpeq_f32(pg, orig, reload);
                 if (svcntp_b32(pg, cmp) != VECTOR_SIZE) {
                     consistent = false;
+                    bad_vec = i + v * VECTOR_SIZE;
                     break;
                 }
             }
@@ -239,6 +241,15 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
         fflush(stderr);
 
         if (!passed) {
+            /* cold path: record bit-level evidence for the failing leg(s) */
+            if (!consistent)
+                log_error("mesh_upi_sve_wide_sym: store/reload consistency failed at vector %zu (post-hoc data at failing vector: "
+                          "0x%08x 0x%08x 0x%08x 0x%08x)",
+                          bad_vec,
+                          *(const uint32_t *)&td->data[bad_vec + 0],
+                          *(const uint32_t *)&td->data[bad_vec + 1],
+                          *(const uint32_t *)&td->data[bad_vec + 2],
+                          *(const uint32_t *)&td->data[bad_vec + 3]);
             report_fail_msg("mesh_upi_sve_wide_sym: Sum mismatch or consistency failure");
             return EXIT_FAILURE;
         }
