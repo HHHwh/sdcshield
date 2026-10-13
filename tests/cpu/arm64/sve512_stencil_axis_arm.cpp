@@ -15,14 +15,19 @@
  * per-iteration VA[63:48] canary on the accumulator's stack slot.
  *
  * Math (per the field diagnosis, production stencil_kernel.h radius=6):
- * with src[i] = i%16+1 and coeff[r] = 0.125, every lane accumulates exact
- * integers — per call per lane j the increment is
- *   2 directions x 6 radii x (j+1) x 0.125 = 1.5 x (j+1),
- * so the exact expected result is 1.5 * iterations * (j+1). The original
- * standalone carried the stale RADIUS=4 expectation iterations*(j+1);
- * the diagnosis (5 bit-identical reruns, identical results on healthy
- * cores) proved that was a software false positive, fixed here per the
- * report's follow-up item 7.1.
+ * src holds per-element random small integers (1..256) drawn from the
+ * framework RNG — re-seeded per fracture fragment, so every fragment
+ * gets fresh inputs — and coeff[r] = 0.125. Per call per lane j the
+ * increment is sum over r of 0.125 * (src[coord-r][j] +
+ * src[coord+r][j]): every term is an exact multiple of 1/8 and the
+ * per-call increment stays below 768, so the expected result — the
+ * scalar reference in test_run scaled by iterations — stays on the
+ * exact 1/8 grid below 2^53: order-independent, bit-exact equality.
+ * (The original standalone used the fixed src[i] = i%16+1, where the
+ * expectation reduced to 1.5 * iterations * (j+1); its stale RADIUS=4
+ * expectation iterations*(j+1) was a software false positive — 5
+ * bit-identical reruns, identical results on healthy cores — fixed per
+ * the report's follow-up item 7.1.)
  *
  * Framework adaptations (each forced by the harness, structure-neutral):
  *   - main() -> test_init/test_run/test_cleanup; src and s_base are set
@@ -180,9 +185,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
      * Every term is an exact multiple of 1/8 and the per-call increment
      * stays below 12 * 0.125 * 512 = 768, so both the hardware
      * accumulation over 1e8 calls and this reference stay on the exact
-     * 1/8 grid below 2^53: order-independent, bit-exact equality. (With
-     * the original fixed src, tile values were {1..16} and this reduced
-     * to 1.5 * iterations * (j+1).) */
+     * 1/8 grid below 2^53: order-independent, bit-exact equality. */
     double expected[B_TILE];
     for (size_t j = 0; j < B_TILE; ++j)
         expected[j] = 0.0;
@@ -250,8 +253,8 @@ DECLARE_TEST(sve512_stencil_axis_arm,
              "NUMA3 field recipe): 16-wide tile, RADIUS=6 dual-direction "
              "svmla_x chain with svdup_f64 coefficients (ld1rd codegen), "
              "memory-resident loop counter and a per-iteration VA[63:48] "
-             "accumulator-address canary; exact-integer per-lane "
-             "verification against 1.5*iterations*(j+1)")
+             "accumulator-address canary; per-fragment randomized inputs "
+             "with exact-integer per-lane verification")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_stencil_axis_arm_init,
     .test_run = sve512_stencil_axis_arm_run,

@@ -199,10 +199,13 @@ if host_machine.cpu_family() == 'aarch64'
             # svdup_f64(coeff[r]) coefficient loads (ld1rd replicate-load
             # codegen under clang), dual-vector svmla_x chain, full unroll,
             # memory-resident loop counter, per-iteration VA[63:48] canary.
-            # One deliberate semantic fix vs the standalone, per the field
-            # diagnosis (5 bit-identical reruns): the expected value is
-            # 1.5*iterations*(j+1) (RADIUS=6), the stale RADIUS=4 formula
-            # iterations*(j+1) was a software false positive.
+            # Inputs are per-element random small integers from the
+            # framework RNG (re-seeded per fracture fragment), verified
+            # per lane against the scalar reference — exact multiples of
+            # 1/8 below 2^53, so byte-exact equality holds. (The original
+            # standalone's fixed src reduced the expectation to
+            # 1.5*iterations*(j+1); its stale RADIUS=4 formula
+            # iterations*(j+1) was a software false positive.)
             'sve512_stencil_axis_arm.cpp',
             # XLSDFT composite-context SDC stress (escalation T1):
             # interleaves the stencil axis kernel (phase A), the SVD-format
