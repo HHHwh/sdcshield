@@ -209,14 +209,20 @@ static int sme_za_tileview_arm_init(struct test *test)
                 /* Exact doubles from the framework RNG: a random multiple
                  * of 64 plus the injective (i*n + j) index keeps all n*n
                  * elements distinct, so any flipped bit or mis-permutation
-                 * still shows up in the memcmp. The RNG is re-seeded per
-                 * fracture fragment, so every fragment gets fresh values
-                 * instead of one fixed formula (PR #234 review, greptile
-                 * 4254737399). */
+                 * still shows up in the memcmp. The top 46 random bits
+                 * (>> 18) keep every value <= 2^52 + 63, exactly
+                 * representable as a double. b additionally offsets by one
+                 * tile (nn): under the Constant RNG engine two consecutive
+                 * random64() draws return identical bits, which would make
+                 * a[ij] == b[ij] everywhere and blind the za0/za1 isolation
+                 * check — the offset keeps b = a + 64 there (PR #237
+                 * review, greptile). The RNG is re-seeded per fracture
+                 * fragment, so every fragment gets fresh values instead of
+                 * one fixed formula (PR #234 review, greptile 4254737399). */
                 data->a[ij] = static_cast<double>(
-                    (random64() % 1024) * 64 + (i * n + j));
+                    (random64() >> 18) * 64 + (i * n + j));
                 data->b[ij] = static_cast<double>(
-                    (random64() % 1024) * 64 + (i * n + j));
+                    (random64() >> 18) * 64 + nn + (i * n + j));
             }
 
         /* Goldens must be derived only after a/b are fully populated: the
