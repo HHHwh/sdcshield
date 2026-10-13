@@ -6,7 +6,7 @@
 language: zh-CN
 
 # 审查语气（schema 顶层键，maxLength=250）；聚焦 SDC 激发能力与正确性，不纠缠纯风格
-tone_instructions: 聚焦 SDC 激发能力与正确性：压载强度与覆盖、golden 字节比对、x86-64 非回归、ARM64 占位诚实性、SVE/NEON 向量长度、失败现场留证；不纠缠纯风格。
+tone_instructions: 聚焦 SDC 激发能力与正确性：FMA/乘法器靶点优先、边际缺陷激活模式、per-lane 字节比对、x86-64 非回归、ARM64 占位诚实性、SVE/NEON VL 与新指令代际、失败现场与 RNG 可重放、多样性与检出率下界；不纠缠纯风格。
 
 reviews:
   # 更激进的审查风格，宁可多报潜在问题
@@ -26,31 +26,35 @@ reviews:
     - path: "tests/cpu/**"
       instructions: |-
         本目录是 SDC 激发测试用例，请重点审查「激发能力」与「正确性」：
-        1) 激发强度与覆盖：是否真正压到目标计算单元（FMA/SIMD/压缩/SVD/crypto）、正确的数据宽度（8/16/32/64-bit、向量宽度）与数据模式（位模式/边界值）；TEST_LOOP 的定时压力是否充足（迭代次数、每轮工作量、超时）。
-        2) golden 比对：必须字节级 memcmp（memcmp_or_fail），浮点结果必须可复现——注意 SNaN/NaN 位型跨架构一致性（框架统一 quiet SNaN）。
-        3) 正确性基线（x86-64 非回归）：新增/修改不得改变 x86-64 行为，仅在真正共享处放宽守卫，其余用 #elif __aarch64__ 或按架构 meson 守卫。
-        4) 诚实性：ARM64 未实现项必须 EXIT_SKIP 且理由为 "to be implemented (placeholder): ..."（先 log_skip 说明缺什么），禁止 EXIT_SUCCESS 假通过或空跑。
-        5) 架构相关缺陷：SVE/NEON 向量长度（VL）相关的越界/误报；CI runner VL=128 会掩盖 512-bit VL 缺陷。
-        6) 失败现场：失败时保留冷路径 bit dump / sum-bit / failing-vector 记录，便于 SDC 定位，不要只报 fail 而不留证据。
+        1) 激发强度与覆盖：真正压到目标计算单元（FMA/SIMD/压缩/SVD/crypto），靶点优先 FMA/乘法器（现场向量 SDC >75% 来自 FMA）；数据宽度覆盖目标位宽（8/16/32/64-bit、128/256/512-bit 向量）；TEST_LOOP 定时持续压测（存在 <10⁻⁵ 概率激发窗口，短跑通过不证明无缺陷）；指令序列须足够长且多样（截短至数十条时乘法器检出崩塌至 0%）。
+        2) 数据模式与缺陷激活：随机/全 0/全 1/边界值/NaN/Inf/极值之外，还应包含长时固定电平后翻转模式（BTI，FPU 易感路径 1366 vs ALU 11）、位翻转敏感（SDF）模式、有界值域+全域随机双档；FP64 注意指数/符号位敏感（现场可翻指数位，误差达 10⁴ 倍）；边际敏感测试标注频率/电压条件（无 cpufreq 平台检出打折）。
+        3) golden 比对：字节级 memcmp（memcmp_or_fail），浮点可复现（SNaN/NaN 位型跨架构一致）；必须 per-lane 独立比对——98.5% 向量 SDC 仅影响单 lane，禁止 sum/xor/reduce 跨 lane 聚合校验掩蔽单 lane 错误；任何容差=SDC 盲区。
+        4) x86-64 非回归：不得改变 x86-64 行为，仅在真正共享处放宽守卫，其余用 #elif __aarch64__ 或按架构 meson 守卫。
+        5) 诚实性：ARM64 未实现项必须 EXIT_SKIP 且理由为 "to be implemented (placeholder): ..."（先 log_skip），禁止 EXIT_SUCCESS 假通过或空跑。
+        6) SVE/NEON 向量长度（VL）：VL 相关越界/误报；CI runner VL=128 会掩盖 512-bit VL 缺陷；新指令代际效应——SVE2/FCMLA/FMMLA/谓词指令处首代部署期属最高风险窗口，优先保证覆盖密度。
+        7) 失败现场：冷路径 bit dump / sum-bit / failing-vector + 出错 lane 编号直方图（单 lane vs 多 lane、相邻 vs 跨 lane 是定位缺陷性质的一级证据）；随机输入必须经框架 RNG（-s seed 可重放），禁止直用 std::random_device。
+        8) 多样性与口径：新增测试须在指令×数据模式×结构要素至少一个维度上与既有测试不同（31% 现场故障测试是某机器唯一失败测试）；检出率数字必须标注口径（时长/线程/频率条件），检出率是下界。
 
     - path: "framework/**"
       instructions: |-
         本目录是测试框架，请重点审查「正确性基线」与「可复现性」：
         1) x86-64 非回归：改动必须保持 x86-64 行为不变；仅在真正共享处把 #ifdef __x86_64__ 放宽为包含 __aarch64__，其余用 #elif __aarch64__ 或按架构 meson 守卫，禁止隐式改变既有架构语义。
-        2) golden 比对：字节级 memcmp 语义不得被削弱；浮点须可复现，注意 SNaN/NaN 位型跨架构一致（统一 quiet SNaN）。
-        3) 激发强度与覆盖：TEST_LOOP 定时循环与每 CPU 工作线程（fork 子进程 + forkfd 收集）须仍提供充足且确定的压力，避免破坏确定性（-n 1）。
-        4) 架构相关缺陷：SVE/NEON 向量长度（VL）相关处理是否存在越界/误报——CI runner VL=128 会掩盖 512-bit VL 缺陷，警惕运行期 VL 与编译期 VL 不一致（如固定 VL=128 的启动器）。
-        5) 诚实性：框架对未实现特性应走 EXIT_SKIP + 理由 "to be implemented (placeholder): ..."，不得让占位测试报告 pass。
-        6) 失败现场：失败路径应保留冷路径 bit dump / sum-bit / failing-vector 记录。
+        2) golden 比对：字节级 memcmp 语义不得削弱；浮点可复现（统一 quiet SNaN）。
+        3) 激发强度：TEST_LOOP 定时循环与每 CPU 工作线程须仍提供充足且确定的压力，不破坏确定性（-n 1）。
+        4) RNG 可重放：框架 RNG 须保持受 -s seed 控制的可重放性，不得引入非受控熵源（std::random_device）；失败可重放是现场留存的前提。
+        5) SVE/NEON VL：越界/误报；CI VL=128 掩盖 512-bit 缺陷；警惕运行期与编译期 VL 不一致。
+        6) 诚实性：未实现特性走 EXIT_SKIP + "to be implemented (placeholder): ..."。
+        7) 失败现场：冷路径 bit dump / sum-bit / failing-vector / lane 直方图。
 
     - path: "device/**"
       instructions: |-
         本目录为设备/平台相关代码，请重点审查「架构相关缺陷」与「失败现场」：
-        1) 架构相关缺陷：SVE/NEON 向量长度（VL）相关的越界、对齐与误报；CI runner VL=128 会掩盖 512-bit VL 缺陷，警惕编译期/运行期 VL 不一致。
-        2) 激发强度与覆盖：设备相关路径是否仍能压到目标计算单元（FMA/SIMD/压缩/SVD/crypto）及相应数据宽度/模式，TEST_LOOP 压力是否充足。
-        3) 诚实性：ARM64 未实现项必须 EXIT_SKIP + 理由 "to be implemented (placeholder): ..."，禁止假通过。
-        4) 失败现场：失败时保留冷路径 bit dump / sum-bit / failing-vector 记录。
-        5) x86-64 非回归：新增按架构守卫（#elif __aarch64__ / meson），不改变 x86-64 行为。
+        1) SVE/NEON VL 越界、对齐与误报；CI VL=128 掩盖 512-bit 缺陷；编译期/运行期 VL 不一致。
+        2) 条件空间：无 cpufreq / thermal_zone 等平台特性缺失时须优雅跳过（EXIT_SKIP），且边际敏感测试不得默认等效——文档/注释应标注检出打折。
+        3) 激发强度：设备路径仍须压到目标计算单元及相应数据宽度/模式。
+        4) 诚实性：未实现项 EXIT_SKIP + "to be implemented (placeholder): ..."，禁止假通过。
+        5) 失败现场：bit dump / sum-bit / failing-vector / lane 直方图。
+        6) x86-64 非回归：按架构守卫增量添加。
 
 chat:
   # 允许免 @ 自动回复
