@@ -139,11 +139,15 @@ static int sve512_stencil_axis_arm_init(struct test *test)
     try {
         auto data = std::make_unique<SveStencilAxisData>();
 
-        // Layout: [extent][stride][B_TILE]; every tile is {1..16} so each
-        // lane is independently checkable.
+        // Layout: [extent][stride][B_TILE]; per-element random small
+        // integers from the framework RNG keep every lane independently
+        // checkable while varying the input combinations across fracture
+        // fragments (the RNG is re-seeded per fragment; PR #234 review,
+        // greptile 4254737399). Exact integers keep the accumulation
+        // bit-exact — see the scalar reference in _run.
         data->src.resize(extent * stride * B_TILE);
         for (size_t i = 0; i < data->src.size(); ++i)
-            data->src[i] = static_cast<double>(i % B_TILE + 1);
+            data->src[i] = static_cast<double>(1 + random32() % 256);
 
         data->s_base = data->src.data() + coord * stride * B_TILE;
 
@@ -170,6 +174,33 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
     const double* s_base = d->s_base;
     const svbool_t ptrue = svptrue_b64();
 
+    /* Scalar reference for the randomized src: one kernel call adds, per
+     * lane j, sum over r of coeff[r] * (src[coord-r][j] + src[coord+r][j])
+     * — coord=10 and RADIUS=6 make both directions valid for every r.
+     * Every term is an exact multiple of 1/8 and the per-call increment
+     * stays below 12 * 0.125 * 512 = 768, so both the hardware
+     * accumulation over 1e8 calls and this reference stay on the exact
+     * 1/8 grid below 2^53: order-independent, bit-exact equality. (With
+     * the original fixed src, tile values were {1..16} and this reduced
+     * to 1.5 * iterations * (j+1).) */
+    double expected[B_TILE];
+    for (size_t j = 0; j < B_TILE; ++j)
+        expected[j] = 0.0;
+    for (size_t r = 1; r <= RADIUS; ++r) {
+        const ptrdiff_t off =
+            static_cast<ptrdiff_t>(r * stride) * B_TILE;
+        for (size_t j = 0; j < B_TILE; ++j) {
+            double delta = 0.0;
+            if (coord >= r)
+                delta += s_base[-off + static_cast<ptrdiff_t>(j)];
+            if (coord + r < extent)
+                delta += s_base[+off + static_cast<ptrdiff_t>(j)];
+            expected[j] += 0.125 * delta;
+        }
+    }
+    for (size_t j = 0; j < B_TILE; ++j)
+        expected[j] *= static_cast<double>(iterations);
+
     do {
         svfloat64_t res0 = svdup_f64(0.0);
         svfloat64_t res1 = svdup_f64(0.0);
@@ -187,16 +218,11 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
         svst1(ptrue, result, res0);
         svst1(ptrue, result + 8, res1);
 
-        // coord=10, RADIUS=6: both directions valid for every r, so each
-        // call adds 2 * 6 * 0.125 * (j+1) = 1.5*(j+1) per lane — exact
-        // integers throughout, equality is bit-exact.
         bool ok = true;
         for (size_t j = 0; j < B_TILE; ++j) {
-            const double expected =
-                1.5 * static_cast<double>(iterations) * (j + 1);
-            if (result[j] != expected) {
+            if (result[j] != expected[j]) {
                 log_warning("sve512_stencil_axis: lane %2zu result=%.0f "
-                            "expected=%.0f", j, result[j], expected);
+                            "expected=%.0f", j, result[j], expected[j]);
                 ok = false;
             }
         }

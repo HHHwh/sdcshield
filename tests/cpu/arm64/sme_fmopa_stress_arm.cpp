@@ -165,16 +165,18 @@ static int sme_fmopa_stress_arm_init(struct test *test)
         data->b.resize(vec_count);
         data->golden.assign(nn, 0.0f);
 
-        /* Bit-dense finite operands: |a|, |b| <= 0.5625, so the 64-step
-         * f32 sums stay below 21 - no overflow, no NaN, every single
-         * flipped bit survives to the memcmp. Distinct per (k, lane). */
+        /* Bit-dense finite operands drawn from the framework RNG:
+         * |a|, |b| < 0.5625, so the 64-step f32 sums stay below 21 - no
+         * overflow, no NaN, every single flipped bit survives to the
+         * memcmp. The RNG is re-seeded per fracture fragment, so every
+         * fragment stresses fresh operand combinations instead of
+         * replaying one fixed formula (PR #234 review, greptile
+         * 4254737399). */
         for (long k = 0; k < k_rounds; ++k)
             for (long i = 0; i < n; ++i) {
                 const size_t ki = static_cast<size_t>(k) * n + i;
-                data->a[ki] = static_cast<float>(
-                    ((k * 37 + i * 11) % 64) / 64.0 - 0.28125);
-                data->b[ki] = static_cast<float>(
-                    ((k * 53 + i * 29) % 64) / 64.0 - 0.28125);
+                data->a[ki] = frandomf_scale(1.125f) - 0.5625f;
+                data->b[ki] = frandomf_scale(1.125f) - 0.5625f;
             }
 
         /* Scalar golden with the identical operation order and the same
