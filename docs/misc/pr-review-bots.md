@@ -146,11 +146,33 @@ gh workflow run bot-coverage.yml -f pr-number=<N>
 | --- | --- | --- |
 | codex | 已生效（有 PR 产物证据） | 读取根 `AGENTS.md` |
 | CodeRabbit | 已生效（有 PR 产物证据） | 读取根 `.coderabbit.yaml` |
-| PR-Agent | 已生效（有 PR 产物证据） | workflow 位于 `main`；读取根 `.pr_agent.toml` |
+| PR-Agent | 已生效（实测：PR #235 已产出 pr-agent 检视） | workflow 位于 `main`；读取根 `.pr_agent.toml`；LLM 用 Gemini 免费层 |
 | Greptile | **待人工安装** | 需管理员在 greptile.com 授权安装 GitHub App 后方生效 |
 
 > 诚实说明：Greptile 的 `.greptile/` 配置已就位，但在管理员完成 Greptile GitHub App
 > 安装授权之前，**不会**对本仓库 PR 产生任何检视；上表如实标注为「待人工安装」。
+
+### 7.1 PR-Agent 的免费 LLM 配置（Google Gemini 免费层）
+
+PR-Agent 软件本身免费、公共仓库 Actions 分钟数也免费，唯一成本是它调用的 LLM。
+`.github/workflows/pr-agent.yml` 走 **Google AI Studio 免费层** + `gemini/gemini-3.8-flash`：
+
+- `CONFIG.MODEL: "gemini/gemini-3.8-flash"`
+- `CONFIG.FALLBACK_MODELS: '["gemini/gemini-2.5-flash"]'`
+
+密钥配置（仓库 Secret `GEMINI_API_KEY`，已配置并实测通过）：
+
+1. 打开 [Google AI Studio](https://aistudio.google.com/apikey) 创建 Key。Key 必须挂在某个
+   Google Cloud 项目下；AI Studio 自 2026-05-28 起改发 `AQ.` 前缀的「授权密钥」，该格式
+   经实测与 PR-Agent（LiteLLM）兼容。
+2. 在仓库 `Settings → Secrets and variables → Actions` 建立/更新 Secret **`GEMINI_API_KEY`**。
+3. 无需改代码：下一次 PR（opened/reopened/synchronize）即以免费层运行检视。
+
+> 历史问题：早期 Key 所属项目**预付费额度耗尽**（HTTP `402 RESOURCE_EXHAUSTED`）导致失败；
+> 该错误**不会自动恢复**，需更换为额度未耗尽的 Key（现已更换，PR #235 实测成功）。
+
+> 说明：gemini-cli 的免费额度靠交互式 OAuth 登录，**无法**在 GitHub Actions 中无人值守
+> 使用；PR-Agent 在 CI 只能走 API Key，故此处选用 AI Studio 免费层 API Key。
 
 ## 8. 延伸阅读
 
