@@ -66,15 +66,18 @@ jobs:
 
           # check-run 的名称与创建方 App slug 分属不同命名空间（App slug 全局
           # 唯一且全小写），拆成两个集合分别保存，各判据只查自己的集合，
-          # 避免名称与 slug 互相串扰；调用失败容忍
+          # 避免名称与 slug 互相串扰；只统计已完成的 check-run——检视尚在
+          # queued/in_progress 时不算产出，轮询继续等（PR #241 上曾出现
+          # Greptile 仍在 in_progress 即报"已检视"）；失败（conclusion=
+          # failure）也算已检视产出。调用失败容忍
           fetch_checks() {
             checks_names=""
             checks_slugs=""
             if [ -n "$sha" ]; then
               local json
               json="$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" 2>/dev/null || true)"
-              checks_names="$(printf '%s' "$json" | jq -r '.check_runs[]? | .name' 2>/dev/null || true)"
-              checks_slugs="$(printf '%s' "$json" | jq -r '.check_runs[]? | .app.slug // empty' 2>/dev/null || true)"
+              checks_names="$(printf '%s' "$json" | jq -r '.check_runs[]? | select(.status == "completed") | .name' 2>/dev/null || true)"
+              checks_slugs="$(printf '%s' "$json" | jq -r '.check_runs[]? | select(.status == "completed") | .app.slug // empty' 2>/dev/null || true)"
             fi
           }
 
@@ -134,9 +137,9 @@ jobs:
           | 机器人 | 状态 | 判据 | 佐证 |
           | --- | --- | --- | --- |
           | codex | ${s_codex} | 作者 login: chatgpt-codex-connector[bot] | ${e_codex} |
-          | CodeRabbit | ${s_coderabbit} | 作者 login: coderabbitai[bot]，或 check-run: CodeRabbit | ${e_coderabbit} |
-          | PR-Agent | ${s_pragent} | check-run: pr-agent | ${e_pragent} |
-          | Greptile | ${s_greptile} | 作者 login: greptile-apps[bot]，或 check-run app: greptile-apps | ${e_greptile} |
+          | CodeRabbit | ${s_coderabbit} | 作者 login: coderabbitai[bot]，或已完成的 check-run: CodeRabbit | ${e_coderabbit} |
+          | PR-Agent | ${s_pragent} | 已完成的 check-run: pr-agent | ${e_pragent} |
+          | Greptile | ${s_greptile} | 作者 login: greptile-apps[bot]，或已完成的 check-run app: greptile-apps | ${e_greptile} |
           EOF
           )"
 
@@ -154,9 +157,9 @@ jobs:
 
           # 对每个缺失 bot 告警
           if [ "$found_codex" -eq 0 ]; then echo "::warning::未检测到 codex（作者 chatgpt-codex-connector[bot]）对 PR #${PR_NUMBER} 的检视"; fi
-          if [ "$found_coderabbit" -eq 0 ]; then echo "::warning::未检测到 coderabbit（作者 coderabbitai[bot] 或 check-run CodeRabbit）对 PR #${PR_NUMBER} 的检视"; fi
-          if [ "$found_pragent" -eq 0 ]; then echo "::warning::未检测到 pr-agent（check-run pr-agent）对 PR #${PR_NUMBER} 的检视"; fi
-          if [ "$found_greptile" -eq 0 ]; then echo "::warning::未检测到 greptile（作者 greptile-apps[bot] 或 check-run app greptile-apps）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_coderabbit" -eq 0 ]; then echo "::warning::未检测到 coderabbit（作者 coderabbitai[bot] 或已完成的 check-run CodeRabbit）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_pragent" -eq 0 ]; then echo "::warning::未检测到 pr-agent（已完成的 check-run pr-agent）对 PR #${PR_NUMBER} 的检视"; fi
+          if [ "$found_greptile" -eq 0 ]; then echo "::warning::未检测到 greptile（作者 greptile-apps[bot] 或已完成的 check-run app greptile-apps）对 PR #${PR_NUMBER} 的检视"; fi
 
           # 带隐藏标记的 PR 评论：已存在则更新（PATCH），否则新建（POST），避免每次 synchronize 重复刷屏
           comment_body="$(cat <<EOF
