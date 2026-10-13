@@ -277,7 +277,7 @@ static int sve512_stencil_axis_arm_cleanup(struct test *test)
 
 DECLARE_TEST(sve512_stencil_axis_arm,
              "SCF/stencil axis-kernel SDC trigger replicator (cn23154 "
-             "NUMA3 field recipe): 16-wide tile, RADIUS=6 dual-direction "
+             "NUMA3 field recipe): VL-scaled dual-vector tile (128-1024-bit), RADIUS=6 dual-direction "
              "svmla_x chain with svdup_f64 coefficients (ld1rd codegen), "
              "memory-resident loop counter and a per-iteration VA[63:48] "
              "accumulator-address canary; per-fragment randomized inputs "
