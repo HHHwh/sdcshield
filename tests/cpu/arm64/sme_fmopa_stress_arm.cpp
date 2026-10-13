@@ -22,7 +22,9 @@
  *  - access-pattern switching: fmopa burst (accumulate-only) ->
  *    st1w drain (streaming store) -> memcmp (streaming load);
  *  - bit-dense finite operands, |a|,|b| <= 0.5625 so 64-step sums stay
- *    below 21 - no Inf/NaN, every flipped bit is visible in the memcmp;
+ *    below 21 - no Inf/NaN; the byte-exact memcmp catches every
+ *    difference that survives the fmaf rounding chain to the final tile
+ *    (a flip below half a ULP of the accumulator can be rounded away);
  *  - all-core concurrency: 608 threads each in their own streaming
  *    window (per-thread ZA, no sharing).
  *
@@ -167,11 +169,14 @@ static int sme_fmopa_stress_arm_init(struct test *test)
 
         /* Bit-dense finite operands drawn from the framework RNG:
          * |a|, |b| < 0.5625, so the 64-step f32 sums stay below 21 - no
-         * overflow, no NaN, every single flipped bit survives to the
-         * memcmp. The RNG is re-seeded per fracture fragment, so every
-         * fragment stresses fresh operand combinations instead of
-         * replaying one fixed formula (PR #234 review, greptile
-         * 4254737399). */
+         * overflow, no NaN. The byte-exact memcmp detects any
+         * difference that survives to the final tile; an input-bit flip
+         * whose product differs by less than half a ULP of the
+         * accumulator can be rounded away by a later fmaf round (PR
+         * #237 review, coderabbit). The RNG is re-seeded per fracture
+         * fragment, so every fragment stresses fresh operand
+         * combinations instead of replaying one fixed formula (PR #234
+         * review, greptile 4254737399). */
         for (long k = 0; k < k_rounds; ++k)
             for (long i = 0; i < n; ++i) {
                 const size_t ki = static_cast<size_t>(k) * n + i;
