@@ -109,7 +109,7 @@
 
 | # | 发现 | 文件 | 修法 |
 |---|---|---|---|
-| A1 | B1-003 | tests/cpu/gather/gather_{i32,i64,f32,f64}.cpp、tests/cpu/gatherscatter/gatherscatter_{i32,i64,f32,f64}.cpp、gatherscatter{ps,pd}.cpp（10） | DUT 接真实 SVE gather/scatter（`ld1gather`/`st1scatter` 系，按所在 meson 库的 ISA）或 NEON 逐元素等价实现；golden 用独立实现（不同数据布局/标量路径），输入经框架 `memset_random` 每轮重掷 |
+| A1 | B1-003 | tests/cpu/gather/ 全部 10 文件：gather_{i32,i64,f32,f64}.cpp、gatherscatter_{i32,i64,f32,f64}.cpp、gatherscatter{ps,pd}.cpp（执行期勘误：无独立 gatherscatter/ 目录，10 文件均在 gather/ 下；套系移植新增于 9e06e31e，输入 RNG 已于 0445a218 换为框架 API） | 执行期勘误：10 文件编入 tests_set_base 双架构共享库（无 SVE/NEON 专属 flags），非 SVE 库，`ld1gather` 不可用 → 取 NEON 路线（方案原选项 b）：aarch64 DUT 接 NEON 逐 lane gather/scatter（`vld1q_lane_*`→`vmulq_n_*`/`vaddq_*` 向量计算→`vst1q_lane_*`，同库 load_port.cpp 先例），golden 独立标量实现；非 aarch64 按 load_port 先例诚实 skip（CpuNotSupported + "to be implemented (placeholder):"，消除 x86 侧 vacuous pass，铁律 #6）；输入生成保持现状（已为框架 RNG 每轮重掷，R0 合格）；同步更新 tests/cpu/meson.build L617-621 过时注释（"std::mt19937 / no arm_neon.h" 与修复后事实不符） |
 | A2 | B1-004 | tests/cpu/sve/kreg/kreg{2,3,5,6,8,9}.cpp（6） | golden 换独立计算路径（消除 `sw = hw` 与同表达式自比）；kreg2/9 的恒真断言改为真实交叉验证 |
 | A3 | B2-001 | tests/cpu/sve/zpclmul/zpclmul.cpp、zpclmul_rep.cpp（2） | hw 路径用 PMULL/PMULL2 实现 CRC-32 真多项式折叠；golden 保留 zlib `crc32`；NEON 中间结果参与折叠而非 (void) 丢弃 |
 | A4 | B3-005 | tests/cpu/arithmetic/adox.cpp、adcx_adox_interleaved.cpp（2） | golden 换独立实现（如分段累加/不同进位序），与 DUT `__int128` 链交叉验证；输入框架 RNG 重掷（与批次 C 联动，本提交内一并去 mt19937） |

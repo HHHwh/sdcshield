@@ -1,6 +1,9 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstring>
+#ifdef __aarch64__
+#include <arm_neon.h>          // NEON intrinsics (aarch64 only)
+#endif
 
 static constexpr int VECTOR_SIZE = 16;          // 16 个单精度浮点数
 static constexpr int DATA_SIZE = 1024;          // 源/目标数据大小
@@ -10,9 +13,10 @@ static int gatherscatterps_init(struct test *test) {
     return EXIT_SUCCESS;
 }
 
+#ifdef __aarch64__
 static int gatherscatterps_run(struct test *test, int cpu) {
     (void)cpu;
-    // 每个线程独立分配数据（栈上，16字节对齐即可）
+    // 每个线程独立分配数据
     alignas(16) float src[DATA_SIZE];
     alignas(16) float dst[DATA_SIZE];
     int32_t indices[VECTOR_SIZE];
@@ -22,11 +26,10 @@ static int gatherscatterps_run(struct test *test, int cpu) {
     auto mask_dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((0xFFFF) - (0) + 1))); };
 
     do {
-        // 生成随机源数据
+        // 生成随机源数据（框架 RNG，每轮重掷）
         for (int i = 0; i < DATA_SIZE; ++i) {
             src[i] = float_dist();
         }
-        // 清空目标数组
         memset(dst, 0, sizeof(dst));
         // 生成随机索引（16个）
         for (int i = 0; i < VECTOR_SIZE; ++i) {
@@ -35,35 +38,51 @@ static int gatherscatterps_run(struct test *test, int cpu) {
         // 生成随机掩码（16位）
         uint16_t mask = mask_dist();
 
-        // ---- 硬件执行（标量模拟带掩码的 gather + scatter） ----
-        float gathered[VECTOR_SIZE];
-        for (int i = 0; i < VECTOR_SIZE; ++i) {
-            if (mask & (1 << i)) {
-                gathered[i] = src[indices[i]];
-            } else {
-                gathered[i] = 0.0f; // 未选中的元素置零
-            }
-        }
-        // 乘以2并分散写入 dst（仅掩码选中的位置）
-        for (int i = 0; i < VECTOR_SIZE; ++i) {
-            int idx = indices[i];
-            if (mask & (1 << i)) {
-                dst[idx] = gathered[i] * 2.0f;
-            }
-            // 未选中的 dst 位置保持为零
+        // ---- DUT: NEON 逐 lane 掩码 gather + 向量乘 + 逐 lane 掩码 scatter ----
+        // ARM64 基线无 gather/scatter 指令；vld1q_lane/vst1q_lane 逐 lane
+        // 访存是 NEON 上的等价路径（数据流经向量寄存器）。lane 下标须为
+        // 编译期常量，故按 128-bit 向量寄存器展开（4 lane/寄存器，共 4 个）。
+        // 掩码语义沿用 x86 参考实现：未选中的 gather lane 置零（对应
+        // _mm512_maskz 系 zeroing），scatter 仅写入选中 lane。
+        // 乘 2 为精确操作（指数加一，无舍入），逐位比较安全。
+        // DUT 与 golden 的 scatter 写入顺序均为 lane/i 升序，重复索引时
+        // 最终写入者一致，结果可比。
+        constexpr int NVEC = VECTOR_SIZE / 4;
+        for (int v = 0; v < NVEC; ++v) {
+            const int base = v * 4;
+            float32x4_t acc = vdupq_n_f32(0.0f);
+            if (mask & (1 << (base + 0)))
+                acc = vld1q_lane_f32(&src[indices[base + 0]], acc, 0);
+            if (mask & (1 << (base + 1)))
+                acc = vld1q_lane_f32(&src[indices[base + 1]], acc, 1);
+            if (mask & (1 << (base + 2)))
+                acc = vld1q_lane_f32(&src[indices[base + 2]], acc, 2);
+            if (mask & (1 << (base + 3)))
+                acc = vld1q_lane_f32(&src[indices[base + 3]], acc, 3);
+            // 向量计算：乘以 2（未选中 lane 为 0*2=0，无影响）
+            acc = vmulq_n_f32(acc, 2.0f);
+            // 逐 lane 掩码 scatter 回内存
+            if (mask & (1 << (base + 0)))
+                vst1q_lane_f32(&dst[indices[base + 0]], acc, 0);
+            if (mask & (1 << (base + 1)))
+                vst1q_lane_f32(&dst[indices[base + 1]], acc, 1);
+            if (mask & (1 << (base + 2)))
+                vst1q_lane_f32(&dst[indices[base + 2]], acc, 2);
+            if (mask & (1 << (base + 3)))
+                vst1q_lane_f32(&dst[indices[base + 3]], acc, 3);
         }
 
-        // ---- 软件参考 ----
+        // ---- golden: 独立标量实现（与 DUT 不同的数据路径） ----
         float ref[DATA_SIZE];
         memset(ref, 0, sizeof(ref));
         for (int i = 0; i < VECTOR_SIZE; ++i) {
             if (mask & (1 << i)) {
-                int idx = indices[i];
+                const int idx = indices[i];
                 ref[idx] = src[idx] * 2.0f;
             }
         }
 
-        // ---- 验证：比较目标数组与参考 ----
+        // ---- 验证：比较目标数组与参考（逐位比较） ----
         bool data_ok = (memcmp(dst, ref, sizeof(dst)) == 0);
 
         // ---- 一致性测试：将 dst 中前 16 个元素加载两次，比较是否一致 ----
@@ -82,13 +101,22 @@ static int gatherscatterps_run(struct test *test, int cpu) {
 
     return EXIT_SUCCESS;
 }
+#else
+static int gatherscatterps_run(struct test *test, int cpu) {
+    (void)cpu;
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): ARM NEON required for gatherscatterps");
+    return EXIT_SKIP;
+}
+#endif
 
 static int gatherscatterps_finish(struct test *test) {
     (void)test;
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(gatherscatterps, "Masked gather-scatter single-precision (simulated on ARM64)")
+DECLARE_TEST(gatherscatterps, "Masked gather-scatter single-precision (NEON lane loads/stores, ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = gatherscatterps_init,
     .test_run = gatherscatterps_run,

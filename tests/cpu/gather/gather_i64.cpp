@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#ifdef __aarch64__
+#include <arm_neon.h>          // NEON intrinsics (aarch64 only)
+#endif
 
 static constexpr int VECTOR_SIZE = 4;          // 4 个 int64
 static constexpr int DATA_SIZE = 1024;         // 源数据大小
@@ -11,6 +14,7 @@ static int gather_i64_init(struct test *test) {
     return EXIT_SUCCESS;
 }
 
+#ifdef __aarch64__
 static int gather_i64_run(struct test *test, int cpu) {
     (void)cpu;
     // 每个线程独立分配数据
@@ -21,7 +25,7 @@ static int gather_i64_run(struct test *test, int cpu) {
     auto idx_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((DATA_SIZE - 1) - (0) + 1))); };
 
     do {
-        // 生成随机源数据
+        // 生成随机源数据（框架 RNG，每轮重掷）
         for (int i = 0; i < DATA_SIZE; ++i) {
             src[i] = int_dist();
         }
@@ -30,13 +34,24 @@ static int gather_i64_run(struct test *test, int cpu) {
             indices[i] = idx_dist();
         }
 
-        // ---- 硬件 Gather（标量模拟，逐个加载） ----
-        int64_t gathered[VECTOR_SIZE];
-        for (int i = 0; i < VECTOR_SIZE; ++i) {
-            gathered[i] = src[indices[i]];
+        // ---- DUT: NEON 逐 lane gather（vld1q_lane_s64） ----
+        // ARM64 基线无 gather 指令；vld1q_lane 逐 lane 加载是 NEON 上的
+        // gather 等价路径（数据流经向量寄存器）。lane 下标须为编译期常量，
+        // 故按 128-bit 向量寄存器展开（2 lane/寄存器，共 2 个）。
+        constexpr int NVEC = VECTOR_SIZE / 2;
+        int64x2_t vecs[NVEC];
+        for (int v = 0; v < NVEC; ++v) {
+            int64x2_t acc = vdupq_n_s64(0);
+            const int base = v * 2;
+            acc = vld1q_lane_s64(&src[indices[base + 0]], acc, 0);
+            acc = vld1q_lane_s64(&src[indices[base + 1]], acc, 1);
+            vecs[v] = acc;
         }
+        int64_t gathered[VECTOR_SIZE];
+        for (int v = 0; v < NVEC; ++v)
+            vst1q_s64(&gathered[v * 2], vecs[v]);
 
-        // ---- 软件参考：与硬件相同 ----
+        // ---- golden: 独立标量实现（与 DUT 不同的数据路径） ----
         int64_t ref[VECTOR_SIZE];
         for (int i = 0; i < VECTOR_SIZE; ++i) {
             ref[i] = src[indices[i]];
@@ -61,13 +76,22 @@ static int gather_i64_run(struct test *test, int cpu) {
 
     return EXIT_SUCCESS;
 }
+#else
+static int gather_i64_run(struct test *test, int cpu) {
+    (void)cpu;
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): ARM NEON required for gather_i64");
+    return EXIT_SKIP;
+}
+#endif
 
 static int gather_i64_finish(struct test *test) {
     (void)test;
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(gather_i64, "Gather 64-bit integers (simulated on ARM64)")
+DECLARE_TEST(gather_i64, "Gather 64-bit integers (NEON lane loads, ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = gather_i64_init,
     .test_run = gather_i64_run,

@@ -614,11 +614,13 @@ else
     message('pocketfft.h not found under third-party/pocketfft — extract pocketfft-master.tar.gz to enable the pocketfft_fft test.')
 endif
 
-# Gather/scatter tests. These are software-simulated gather/scatter using
-# plain double/int arrays and std::mt19937 — no x86 intrinsics, no arm_neon.h.
-# The x86 AVX-style names (gatherscatterpd/ps) are inherited from the
-# reference tree; the implementations are portable C++ that run identically
-# on both x86-64 and aarch64.
+# Gather/scatter tests, ported in 9e06e31e. The x86 AVX-style names
+# (gatherscatterpd/ps) are inherited from the reference tree. On aarch64 the
+# DUT drives real NEON vector lanes (vld1q_lane_*/vst1q_lane_* gathers and
+# scatters with an independent scalar golden — load_port.cpp precedent);
+# inputs come from the framework RNG and are re-rolled every round (0445a218).
+# Elsewhere the tests skip honestly with "to be implemented (placeholder)"
+# (no vacuous pass).
 tests_set_base.add(
     files(
         'gather/gather_f32.cpp',
