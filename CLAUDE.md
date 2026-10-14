@@ -17,6 +17,18 @@ routes you; consult it before guessing.
    (c) regression: `-e zstd19 -t 2000 -n 1` → `exit: pass`; (d) x86
    non-regression by inspection. No "should work" — fix and re-verify, never
    commit.
+   **gem5-fi rule when the host chip cannot run it**: if the affected
+   behavior is unrunnable on this machine because the chip lacks the
+   capability (missing HWCAP/HWCAP2 bit such as SME, an unsupported VL/SVL
+   tier, a newer ISA generation), then verifying only the SKIP path is NOT
+   sufficient — the change MUST be validated in gem5-fi
+   (`/home/sdc/wangxu/gem5-fi-fuzz`, CHAOS/SE, same-source dual kernel under
+   `workloads/sdcshield/`) at the affected VL/SVL tiers, quoting real run
+   output (tier, checksum, `SDCSHIELD_FAILS=0`); if gem5 validation is
+   genuinely impossible, state that verification boundary honestly instead.
+   Never pass off "SKIP reason unchanged" as the verification of a
+   functional change (PR #242 precedent: input-formula fix verified by
+   `sme_za_tileview_dual.c` at SVL 128/256/512/1024-bit).
 3. **DCO + auto-push** — `git commit -s` (last line `Signed-off-by: wangxu
    <wangxumarshall@qq.com>`, nothing after, no Co-Authored-By). Push each
    verified commit to the feature branch, never `main`; run
