@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #endif
@@ -54,14 +53,16 @@ static int vmovnt3_vex_run(struct test *test, int cpu) {
     alignas(16) int64_t store_i64[4];
     alignas(16) int64_t reload_i64[4];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> i32dist(-10000, 10000);
-    std::uniform_int_distribution<int64_t> i64dist(-1000000LL, 1000000LL);
+    /* randomization hardening (B3-007): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; ranges [-10000, 10000] and
+     * [-1000000, 1000000]. */
+    auto i32dist = []() { return (int32_t)((-10000) + (int64_t)(random64() % (uint64_t)((10000) - (-10000) + 1))); };
+    auto i64dist = []() { return (int64_t)((-1000000LL) + (int64_t)(random64() % (uint64_t)((1000000LL) - (-1000000LL) + 1))); };
 
     do {
         // 生成随机数据
-        for (int i = 0; i < 8; ++i) src_i32[i] = i32dist(rng);
-        for (int i = 0; i < 4; ++i) src_i64[i] = i64dist(rng);
+        for (int i = 0; i < 8; ++i) src_i32[i] = i32dist();
+        for (int i = 0; i < 4; ++i) src_i64[i] = i64dist();
 
         // ---- 测试 vmovntdqa (VEX, int32) ----
         // 模拟非临时加载：使用 NEON 加载 + 预取
