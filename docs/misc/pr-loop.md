@@ -66,7 +66,7 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   `[{number:1},{number:2}]`；`pulls/1` 详情正常（head SHA、committer date 等齐备）、
   `pulls/2` 恒 500；意见端点（reviews / comments / check-runs / events）全空；
   **未知路径一律 404**——selftest 场景调用未配置的 API 路径时会失败，暴露该场景中的
-  契约漂移（四场景只跑 `status`，`wait` / `collect` 独有的调用不在哨兵范围内），
+  契约漂移（四个场景只跑 `status`，`wait` / `collect` 独有的调用不在哨兵范围内），
   此时应同步补 fake 端点。脚本内临时路径一律 `shlex.quote`（TMPDIR 含空格安全）。
   维护要点：fake 的路径 case 须**先特异后宽泛**（如 `check-runs` 在 `commits/` 之前，
   否则前缀吞并导致 JSON 形状错配）。
