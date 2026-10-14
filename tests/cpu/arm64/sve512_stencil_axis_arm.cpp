@@ -151,7 +151,21 @@ static int sve512_stencil_axis_arm_init(struct test *test)
      * historical issue #182 mismatch was the stale RADIUS=4 analytic
      * expectation, since fixed — see the @parblock). svcntd() is >= 2 on
      * any legal SVE (VL >= 128-bit), so bt < 4 is a defensive dead branch
-     * kept as a stack-buffer guard, not a reachable skip. */
+     * kept as a stack-buffer guard, not a reachable skip.
+     *
+     * gem5-fi no-injection control, real run output (random seed=1, one
+     * run per VL tier, gem5.opt configs/se/arm_chaos.py --cpu O3
+     * --sve_vl N, kernel stencil_axis_dual):
+     *   vl=1 (128-bit)  SDCSHIELD_FAILS=0  checksum 6a6e2ba55a1f0240
+     *   vl=2 (256-bit)  SDCSHIELD_FAILS=0  checksum 8b7dcecd82a0e212
+     *   vl=4 (512-bit)  SDCSHIELD_FAILS=0  checksum 610e3ce5b02e1ace
+     *                   (bit-identical to the pre-parameterization
+     *                   512-bit kernel — regression anchor)
+     *   vl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 8ea5a0fb4dfb840c
+     * Honest boundary: gem5 validates the same-source dual kernel per
+     * tier; this host (Kunpeng 920, VL=256) can run the C++ test at its
+     * native VL only — the 512/1024-bit tiers are gem5-backed, real-SVE
+     * runs at those VLs remain future hardware validation. */
     const size_t bt = 2 * svcntd();
     if (bt < 4 || bt > kTileMax) {
         log_skip(CpuNotSupportedSkipCategory,

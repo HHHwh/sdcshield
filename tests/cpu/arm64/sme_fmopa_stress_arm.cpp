@@ -69,7 +69,22 @@
  * characterized at 512-bit on cn23154 (16x16); the parameterized asm has
  * been verified at SVL 128/256/512/1024 in gem5 (gem5-fi feat/sve-sme-all-vl,
  * kernel sme_fmopa_dual, 16-run all-green incl. the 512-bit regression
- * anchor). */
+ * anchor).
+ *
+ * gem5-fi no-injection control, real run output (random seed=1, one run
+ * per SVL tier, gem5.opt configs/se/arm_chaos.py --cpu O3 --sme_vl N):
+ *   svl=1 (128-bit)  SDCSHIELD_FAILS=0  checksum 226bb7c9de343799
+ *   svl=2 (256-bit)  SDCSHIELD_FAILS=0  checksum f9159f9ee5b58081
+ *   svl=4 (512-bit)  SDCSHIELD_FAILS=0  checksum 892e4ba85fa50c39
+ *                    (bit-identical to the pre-parameterization 512-bit
+ *                    kernel — regression anchor)
+ *   svl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 2856f882eb57bc99
+ * Honest boundary: gem5 validates the same-source dual kernel's asm
+ * semantics and numerical contract per tier; the host lacks SME, so the
+ * C++ test itself runs only its build and skip paths here. gem5 FMOPA
+ * is fplib mul+add double-rounded (F4 deviation, -ffp-contract=off in the
+ * dual kernel build), which the gem5-fi findings register; real-SME
+ * hardware runs remain future hardware validation. */
 static constexpr long kTileNMax = 32;   /* SVL=1024bit upper bound */
 /* Outer-product rounds per TEST_LOOP iteration (serial chain depth). */
 static constexpr long kFmopaRounds = 64;

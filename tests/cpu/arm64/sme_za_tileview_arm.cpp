@@ -75,7 +75,21 @@
  * verified at SVL 128/256/512/1024 in gem5 (gem5-fi feat/sve-sme-all-vl,
  * kernel sme_za_tileview_dual, 16-run all-green incl. the 512-bit
  * regression anchor; za0h/za0v/za0h.d[r,1] semantics measured
- * SVL-independent by the za_semantics probe). */
+ * SVL-independent by the za_semantics probe).
+ *
+ * gem5-fi no-injection control, real run output (random seed=1, one run
+ * per SVL tier, gem5.opt configs/se/arm_chaos.py --cpu O3 --sme_vl N):
+ *   svl=1 (128-bit)  SDCSHIELD_FAILS=0  checksum a2ff7aa26c8ed2a5
+ *   svl=2 (256-bit)  SDCSHIELD_FAILS=0  checksum 41cdf4dff40fca0d
+ *   svl=4 (512-bit)  SDCSHIELD_FAILS=0  checksum efa69a0f80ee4e6f
+ *                    (bit-identical to the pre-parameterization 512-bit
+ *                    kernel — regression anchor)
+ *   svl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 45645dab75f92507
+ * Honest boundary: gem5 validates the same-source dual kernel (which
+ * carries the injective input formula fixed in this PR) at each tier;
+ * the host lacks SME, so the C++ test itself runs only its build and
+ * skip paths here. Real-SME hardware runs remain future hardware
+ * validation. */
 static constexpr long kTileNMax = 16;   /* SVL=1024bit upper bound */
 
 struct SmeZaTileviewData {
@@ -223,14 +237,14 @@ static int sme_za_tileview_arm_init(struct test *test)
                  * kTileNMax = 16, so i*n + j reaches 255 > the old 64
                  * multiplier and (rand*64 + pos) was no longer injective
                  * (PR #242 review, greptile). 256 > 255 restores the
-                 * unique decomposition. The top 42 random bits (>> 21)
-                 * keep every value <= 2^50 + 255, exactly representable
+                 * unique decomposition. The top 43 random bits (>> 21)
+                 * keep every value <= 2^51 - 1, exactly representable
                  * as a double. b lives in a disjoint value range: a fixed
                  * +2^52 offset keeps b > a even under the Constant RNG
                  * engine, where two consecutive random64() draws return
                  * identical bits and the old per-element offset (nn) could
-                 * collide with a's random part — a's [0, 2^50) and b's
-                 * [2^52, 2^52 + 2^50) never intersect, so the za0/za1
+                 * collide with a's random part — a's [0, 2^51) and b's
+                 * [2^52, 2^52 + 2^51) never intersect, so the za0/za1
                  * isolation check stays blind-free (PR #237 review,
                  * greptile). The RNG is re-seeded per fracture fragment,
                  * so every fragment gets fresh values instead of one
