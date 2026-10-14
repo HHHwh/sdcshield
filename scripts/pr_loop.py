@@ -971,7 +971,7 @@ def _selftest_fake_gh(tmp: str, mode: str) -> str:
     calls, once = q(os.path.join(d, "calls")), q(os.path.join(d, "fail_once"))
     # PR #1 / #2 详情: head commit 数据 + 四类意见端点(全空——本测试只走
     # status 总览路径,意见计数为 0 不影响降级断言)
-    pr_detail = json.dumps({
+    pr_detail_1 = json.dumps({
         "number": 1, "title": "selftest PR", "state": "open", "draft": False,
         "merged": False, "created_at": "2026-10-14T00:00:00Z",
         "head": {"sha": "a" * 40, "ref": "feat/selftest",
@@ -979,6 +979,10 @@ def _selftest_fake_gh(tmp: str, mode: str) -> str:
         "base": {"ref": "main", "repo": {"full_name": "selftest/local"}},
         "user": {"login": "selftester"}, "html_url": "https://example.invalid/1",
     })
+    # PR #2 与 #1 同构但 head SHA 不同(两个 PR 都能被完整拉取;降级场景由
+    # pr1_ok_pr2_fail 模式的 case 拦截给 500)
+    pr_detail_2 = pr_detail_1.replace('"number": 1', '"number": 2').replace(
+        "example.invalid/1", "example.invalid/2")
     commit_detail = json.dumps({
         "commit": {"committer": {"date": "2026-10-14T00:00:00Z"},
                    "author": {"date": "2026-10-14T00:00:00Z"}},
@@ -1001,14 +1005,16 @@ def _selftest_fake_gh(tmp: str, mode: str) -> str:
           api_5xx_always)
             [ "$1" = api ] && {{ echo "gh: Server Error (HTTP 500)" >&2; exit 1; }} ;;
           pr1_ok_pr2_fail)
+            # 仅此模式 PR #2 恒 500(fail_once_once 须双 PR 全成功——coderabbit PR#245 R4:
+            # 旧版 pulls/2 无条件 exit 3,PR #2 被静默跳过而 ok1 仍 PASS,与注释不符)
             case "$path" in
               *"/pulls/2"*) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
             esac ;;
         esac
         case "$path" in
           "repos/selftest/local/pulls?state=open"*|"repos/selftest/local/pulls?per_page=100"*) echo '{pr_list}' ;;
-          "repos/selftest/local/pulls/1") echo '{pr_detail}' ;;
-          "repos/selftest/local/pulls/2") exit 3 ;;
+          "repos/selftest/local/pulls/1") echo '{pr_detail_1}' ;;
+          "repos/selftest/local/pulls/2") echo '{pr_detail_2}' ;;
           *"/check-runs?per_page=100&page=1") echo '{empty_checks}' ;;
           *"/reviews?per_page=100&page=1"|*"/comments?per_page=100&page=1") echo '{empty_list}' ;;
           "repos/selftest/local/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") echo '{commit_detail}' ;;
@@ -1032,12 +1038,16 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     print("== pr_loop selftest(离线 fake gh 故障注入)==")
 
     with tempfile.TemporaryDirectory(prefix="pr_loop_selftest_") as tmp:
-        # 1) 瞬态失败 → 重试恢复(status 总览 exit 0,2 个固定 PR 全展示)
+        # 1) 瞬态失败 → 重试恢复(status 总览 exit 0,2 个固定 PR 全展示、无跳过标注)
         d = _selftest_fake_gh(tmp, "fail_once_once")
         open(os.path.join(d, "fail_once"), "w").close()   # 首个 api 调用失败一次
         r = _selftest_run(["status"], env_dir=d)
-        ok1 = r.returncode == 0 and not os.path.exists(os.path.join(d, "fail_once"))
-        cases.append(("瞬态失败重试恢复(status exit 0)", ok1))
+        out = r.stdout + r.stderr
+        ok1 = (r.returncode == 0
+               and not os.path.exists(os.path.join(d, "fail_once"))
+               and "#1" in out and "selftest PR" in out
+               and "#2" in out and "数据拉取失败" not in out)
+        cases.append(("瞬态失败重试恢复(status exit 0,双 PR 全展示)", ok1))
 
         # 2) HTTP 404(确定性) → 快速失败: 仅 1 次调用即抛
         d = _selftest_fake_gh(tmp, "api_404_always")
