@@ -125,6 +125,8 @@ END_DECLARE_TEST
 - **CLI beyond this file**: `docs/research/usage.md` (all options).
 - **Build/deploy/multi-OS**: README (quick start, 15-version build);
   `docs/build-deploy-ci/` (design + usermanual + offline deps).
+- **Agent full-automation design** (PR-loop lifecycle, bots, CI sentinel,
+  auto-repair PRs, human merge gate): `docs/build-deploy-ci/agent-full-automation.md`.
 - **Session recovery** (machine may die anytime; persist conclusions to
   disk): `docs/research/progress-log.md`; fact card in
   `docs/research/README.md`.
