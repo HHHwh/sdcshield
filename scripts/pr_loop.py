@@ -48,6 +48,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -945,51 +946,76 @@ def cmd_collect(args: argparse.Namespace) -> int:
 # ============ 子命令: selftest ============
 
 def _selftest_run(argv: list, env_dir: Optional[str] = None) -> subprocess.CompletedProcess:
-    """在受控 PATH(可选注入 fake gh)下跑本脚本的 main(),捕获 stdout/exit code。
-    供 selftest 断言「重试次数 / 4xx 快速失败 / 单 PR 降级 / 全失败 exit 2」。"""
+    """在受控 PATH(注入离线 fake gh)下跑本脚本的 main(),捕获 stdout/exit code。
+    供 selftest 断言「重试次数 / 4xx 快速失败 / 双 PR 降级 / 退出码」。"""
     env = dict(os.environ)
     if env_dir:
         env["PATH"] = f"{env_dir}{os.pathsep}{env['PATH']}"
-        env["SELFTEST_REAL_GH"] = shutil.which("gh") or "/usr/bin/gh"
     return subprocess.run([sys.executable, __file__, *argv],
                           capture_output=True, text=True, timeout=300, env=env)
 
 
 def _selftest_fake_gh(tmp: str, mode: str) -> str:
-    """生成 fake gh 脚本目录并返回路径。mode:
+    """生成全离线 fake gh 脚本目录并返回路径(不转调真 gh——greptile/coderabbit
+    PR#245 R2: 「离线自检」承诺必须兑现,repo view / PR 列表 / PR 详情全部返回
+    固定数据)。模式(固定数据: 仓库 selftest/local,PR #1(正常) 与 #2(拉详情 500)):
     fail_once_once  首个 api 调用失败一次后放行(验证重试恢复)
     api_404_always   api 全 404(验证 4xx 快速失败: 只调 1 次)
     api_5xx_always   api 全 500(验证重试耗尽: 调满 3 次)
-    repo_ok_pr_fail repo view 成功、pulls 列表成功、逐 PR 详情失败(总览降级)
-    真 gh 路径由调用方通过 _selftest_real_gh 注入为环境变量 SELFTEST_REAL_GH
-    (fake 在受控 PATH 首位,自身不可作为 REAL——command -v 会解析回 fake)。"""
+    pr1_ok_pr2_fail  PR #1 详情正常、PR #2 详情 500(总览一成一败降级)
+    """
     d = os.path.join(tmp, f"gh-{mode}")
     os.makedirs(d, exist_ok=True)
-    # 计数行放头部(且只计 api 调用——repo view 等前置调用不计入重试契约):
-    # exit 1 的 case 分支会短路尾部追加行
+    # 路径一律 shlex.quote(greptile PR#245 R2: TMPDIR 含空格时未引用路径会分词)
+    q = shlex.quote
+    calls, once = q(os.path.join(d, "calls")), q(os.path.join(d, "fail_once"))
+    # PR #1 / #2 详情: head commit 数据 + 四类意见端点(全空——本测试只走
+    # status 总览路径,意见计数为 0 不影响降级断言)
+    pr_detail = json.dumps({
+        "number": 1, "title": "selftest PR", "state": "open", "draft": False,
+        "merged": False, "created_at": "2026-10-14T00:00:00Z",
+        "head": {"sha": "a" * 40, "ref": "feat/selftest",
+                 "repo": {"full_name": "selftest/local"}},
+        "base": {"ref": "main", "repo": {"full_name": "selftest/local"}},
+        "user": {"login": "selftester"}, "html_url": "https://example.invalid/1",
+    })
+    commit_detail = json.dumps({
+        "commit": {"committer": {"date": "2026-10-14T00:00:00Z"},
+                   "author": {"date": "2026-10-14T00:00:00Z"}},
+    })
+    empty_list, empty_checks = "[]", json.dumps({"total_count": 0, "check_runs": []})
+    # 总览列表: 两个 open PR(#1 可拉详情 / #2 拉详情必 500)
+    pr_list = json.dumps([{"number": 1}, {"number": 2}])
     script = textwrap.dedent(f"""\
         #!/bin/sh
-        [ "$1" = api ] && echo x >> {d}/calls 2>/dev/null
-        REAL="${{SELFTEST_REAL_GH:-/usr/bin/gh}}"
+        # 全离线 fake gh: 只认已知固定端点,未知调用一律 404(快失败暴露契约漂移)
+        if [ "$1" = repo ]; then echo "selftest/local"; exit 0; fi
+        [ "$1" = api ] && echo x >> {calls} 2>/dev/null
+        path="$2"
         case "{mode}" in
           fail_once_once)
-            [ "$1" = api ] && [ -f {d}/fail_once ] && {{ rm {d}/fail_once
-                echo "gh: Server Error (HTTP 500)" >&2; exit 1; }}
-            exec "$REAL" "$@" ;;
+            [ "$1" = api ] && [ -f {once} ] && {{ rm {once}
+                echo "gh: Server Error (HTTP 500)" >&2; exit 1; }} ;;
           api_404_always)
-            [ "$1" = api ] && {{ echo "gh: Not Found (HTTP 404)" >&2; exit 1; }}
-            exec "$REAL" "$@" ;;
+            [ "$1" = api ] && {{ echo "gh: Not Found (HTTP 404)" >&2; exit 1; }} ;;
           api_5xx_always)
-            [ "$1" = api ] && {{ echo "gh: Server Error (HTTP 500)" >&2; exit 1; }}
-            exec "$REAL" "$@" ;;
-          repo_ok_pr_fail)
-            # repo view / PR 列表放行; 逐 PR 数据一律 500 → status 总览走降级路径
-            case "$*" in
-              *"/pulls?state=open"*|repo*) exec "$REAL" "$@" ;;
-              *) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
+            [ "$1" = api ] && {{ echo "gh: Server Error (HTTP 500)" >&2; exit 1; }} ;;
+          pr1_ok_pr2_fail)
+            case "$path" in
+              *"/pulls/2"*) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
             esac ;;
         esac
-        exec "$REAL" "$@"
+        case "$path" in
+          "repos/selftest/local/pulls?state=open"*|"repos/selftest/local/pulls?per_page=100"*) echo '{pr_list}' ;;
+          "repos/selftest/local/pulls/1") echo '{pr_detail}' ;;
+          "repos/selftest/local/pulls/2") exit 3 ;;
+          *"/check-runs?per_page=100&page=1") echo '{empty_checks}' ;;
+          *"/reviews?per_page=100&page=1"|*"/comments?per_page=100&page=1") echo '{empty_list}' ;;
+          "repos/selftest/local/commits/"*) echo '{commit_detail}' ;;
+          "repos/selftest/local/events?per_page=100&page=1") echo '{empty_list}' ;;
+          *) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+        esac
+        exit 0
         """)
     path = os.path.join(d, "gh")
     with open(path, "w", encoding="utf-8") as fh:
@@ -999,16 +1025,14 @@ def _selftest_fake_gh(tmp: str, mode: str) -> str:
 
 
 def cmd_selftest(_args: argparse.Namespace) -> int:
-    """离线自检: 用 fake gh 注入故障,验证重试/快速失败/降级/退出码契约。
-    依赖: 系统有真 gh(auth 与否均可——repo view/api 的成功路径仅在
-    fail_once_once 场景被触达,其余场景全走 fake 失败分支)。
-    覆盖 greptile PR#245 三条意见: 4xx 不重试、重试次数含首次、单 PR 降级。"""
+    """离线自检: 用 fake gh(全固定数据,不触网)注入故障,验证重试/快速失败/
+    降级/退出码契约。无网络/未认证环境同样可跑(PR#245 R2 意见:离线承诺兑现)。"""
     import tempfile
     cases = []
-    print("== pr_loop selftest(fake gh 故障注入)==")
+    print("== pr_loop selftest(离线 fake gh 故障注入)==")
 
     with tempfile.TemporaryDirectory(prefix="pr_loop_selftest_") as tmp:
-        # 1) 瞬态失败 → 重试恢复(status 总览 exit 0)
+        # 1) 瞬态失败 → 重试恢复(status 总览 exit 0,2 个固定 PR 全展示)
         d = _selftest_fake_gh(tmp, "fail_once_once")
         open(os.path.join(d, "fail_once"), "w").close()   # 首个 api 调用失败一次
         r = _selftest_run(["status"], env_dir=d)
@@ -1037,13 +1061,17 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         ok3 = r.returncode == 2 and calls == 3
         cases.append((f"HTTP 500 重试耗尽(exit 2,3 次尝试,实际 {calls})", ok3))
 
-        # 4) 逐 PR 失败 → 总览降级(单 PR 标注跳过,exit 0;全失败 exit 2)
-        d = _selftest_fake_gh(tmp, "repo_ok_pr_fail")
+        # 4) 一成一败双 PR → 总览降级: 成功 PR 仍展示、失败 PR 标注跳过、exit 0
+        #    (coderabbit PR#245 R2: 「无 open PR」不算降级通过——须真走到
+        #    fetch_pr 与逐 PR 跳过分支)
+        d = _selftest_fake_gh(tmp, "pr1_ok_pr2_fail")
         r = _selftest_run(["status"], env_dir=d)
         out = r.stdout + r.stderr
-        degraded = ("数据拉取失败" in out) or ("无 open PR" in out) or ("均拉取失败" in out)
-        ok4 = (r.returncode in (0, 2)) and degraded
-        cases.append((f"单 PR 拉取失败降级(标注语义,实际 exit {r.returncode})", ok4))
+        ok4 = (r.returncode == 0
+               and "#1" in out and "selftest PR" in out
+               and "#2" in out and "数据拉取失败" in out
+               and "均拉取失败" not in out)
+        cases.append((f"双 PR 一成一败降级(#1 展示/#2 标注/exit 0,实际 exit {r.returncode})", ok4))
 
     print()
     failed = [name for name, ok in cases if not ok]
