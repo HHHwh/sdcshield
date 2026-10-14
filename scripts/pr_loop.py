@@ -1011,7 +1011,7 @@ def _selftest_fake_gh(tmp: str, mode: str) -> str:
           "repos/selftest/local/pulls/2") exit 3 ;;
           *"/check-runs?per_page=100&page=1") echo '{empty_checks}' ;;
           *"/reviews?per_page=100&page=1"|*"/comments?per_page=100&page=1") echo '{empty_list}' ;;
-          "repos/selftest/local/commits/"*) echo '{commit_detail}' ;;
+          "repos/selftest/local/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") echo '{commit_detail}' ;;
           "repos/selftest/local/events?per_page=100&page=1") echo '{empty_list}' ;;
           *) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
         esac
