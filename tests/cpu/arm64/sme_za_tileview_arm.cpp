@@ -215,22 +215,30 @@ static int sme_za_tileview_arm_init(struct test *test)
             for (long j = 0; j < n; ++j) {
                 const size_t ij = static_cast<size_t>(i) * n + j;
                 /* Exact doubles from the framework RNG: a random multiple
-                 * of 64 plus the injective (i*n + j) index keeps all n*n
+                 * of 256 plus the injective (i*n + j) index keeps all n*n
                  * elements distinct, so any flipped bit or mis-permutation
-                 * still shows up in the memcmp. The top 46 random bits
-                 * (>> 18) keep every value <= 2^52 + 63, exactly
-                 * representable as a double. b additionally offsets by one
-                 * tile (nn): under the Constant RNG engine two consecutive
-                 * random64() draws return identical bits, which would make
-                 * a[ij] == b[ij] everywhere and blind the za0/za1 isolation
-                 * check — the offset keeps b = a + 64 there (PR #237
-                 * review, greptile). The RNG is re-seeded per fracture
-                 * fragment, so every fragment gets fresh values instead of
-                 * one fixed formula (PR #234 review, greptile 4254737399). */
+                 * still shows up in the memcmp. The multiplier must exceed
+                 * the position-index range: full-VL support allows n up to
+                 * kTileNMax = 16, so i*n + j reaches 255 > the old 64
+                 * multiplier and (rand*64 + pos) was no longer injective
+                 * (PR #242 review, greptile). 256 > 255 restores the
+                 * unique decomposition. The top 42 random bits (>> 21)
+                 * keep every value <= 2^50 + 255, exactly representable
+                 * as a double. b lives in a disjoint value range: a fixed
+                 * +2^52 offset keeps b > a even under the Constant RNG
+                 * engine, where two consecutive random64() draws return
+                 * identical bits and the old per-element offset (nn) could
+                 * collide with a's random part — a's [0, 2^50) and b's
+                 * [2^52, 2^52 + 2^50) never intersect, so the za0/za1
+                 * isolation check stays blind-free (PR #237 review,
+                 * greptile). The RNG is re-seeded per fracture fragment,
+                 * so every fragment gets fresh values instead of one
+                 * fixed formula (PR #234 review, greptile 4254737399). */
                 data->a[ij] = static_cast<double>(
-                    (random64() >> 18) * 64 + (i * n + j));
+                    (random64() >> 21) * 256 + (i * n + j));
                 data->b[ij] = static_cast<double>(
-                    (random64() >> 18) * 64 + nn + (i * n + j));
+                    (random64() >> 21) * 256 + (i * n + j)) +
+                    4503599627370496.0; /* + 2^52 */
             }
 
         /* Goldens must be derived only after a/b are fully populated: the
