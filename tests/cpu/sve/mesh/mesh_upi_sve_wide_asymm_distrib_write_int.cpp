@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_sve.h>
 #include <sys/auxv.h>
@@ -68,8 +67,10 @@ static int mesh_upi_sve_wide_asymm_distrib_write_int_run(struct test *test, int 
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_reader = (id == 0);
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening (B1-002, aligned with 2731971d): framework
+     * RNG (per-thread stream, -s reproducible) replaces std::mt19937;
+     * range [-1000000, 1000000]. */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -86,7 +87,7 @@ static int mesh_upi_sve_wide_asymm_distrib_write_int_run(struct test *test, int 
                 int32_t vals[BLOCK_ELEMENTS];
                 uint64_t local_sum = 0;
                 for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
-                    vals[j] = dist(rng);
+                    vals[j] = dist();
                     local_sum += (uint64_t)vals[j];
                 }
                 for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
