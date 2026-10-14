@@ -75,6 +75,7 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>           # 导出�
 ```
 
 - 退出码：0 成功（含「无 open PR」诚实路径）；1 wait 超时 / draft、fork、非 open PR（含等待期间转入这些停止态）；2 gh 错误（未认证 / 网络 / PR 不存在）；130 Ctrl-C。
+- 瞬态容错：gh 调用瞬态失败（HTTP 5xx / 网络抖动）自动短退避重试 3 次；status 总览中单 PR 数据拉取失败仅标注「数据拉取失败，已跳过」并继续其余 PR（全部 PR 均失败才 exit 2；2026-10-14 PR#242 偶发 HTTP 500 实证）。
 - 状态机：DRAFT / FORK / CLOSED / WAITING_BOTS / QUIET_WINDOW / READY_TO_FIX / READY_TO_MERGE（annotations 拉取失败时数据不完整，不给 READY_TO_MERGE）。
 - 四 bot 判据与 `.github/workflows/bot-coverage.yml` 一致（codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]` 作者或 `CodeRabbit` check；pr-agent = `pr-agent` check，或 `github-actions[bot]` 作者 + 正文 `<!-- pr-agent:review:full -->` 标记的检视评论；greptile = `greptile-apps[bot]` 作者或 check-run app slug `greptile-apps`）。
 - head 锚定：时间锚（≥ 当前 head 的 push 时间——events 的 PushEvent `created_at`，commit→push 窗口内旧 head 意见不计入；不可得时回退 head committer date）+ commit 锚（review `commit_id` / 行级评论 `original_commit_id` / pr-agent 评论 `last_run.head_sha` 须匹配当前 head）；issue 评论仅时间锚（无 commit 绑定字段；timeline committed 事件无 `created_at`，PushEvent 是唯一可得的普通 push 边界，实证）。

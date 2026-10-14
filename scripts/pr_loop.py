@@ -52,7 +52,7 @@ import textwrap
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 # ============ 四 bot 判据(与 .github/workflows/bot-coverage.yml 同步维护) ============
 # bot-coverage.yml 用 `grep -Fxq`(固定字符串整行精确匹配)判定,此处用精确等值。
@@ -93,6 +93,8 @@ SUMMARY_MARKERS = (
 )
 
 GH_TIMEOUT = 45          # 单次 gh api 子进程超时(秒)
+GH_RETRIES = 3           # 瞬态失败(HTTP 5xx / 网络抖动)重试总次数
+GH_RETRY_BACKOFF = 1.0   # 每次重试前等待秒数(线性: 1s / 2s)
 MAX_PAGES = 20           # 分页上限(20 页 × 100 条 = 2000 条)
 DEFAULT_TIMEOUT = 7200   # wait 默认总超时(秒),覆盖「约 2 小时」检视预算
 DEFAULT_INTERVAL = 60    # wait 默认轮询间隔(秒)
@@ -125,22 +127,37 @@ class GhError(RuntimeError):
     """gh CLI 调用失败(未认证/网络/端点不存在等)。"""
 
 
-def gh_api(path: str) -> Any:
-    """gh api GET → 解析 JSON。失败抛 GhError。"""
+def _gh_once(argv: List[str]) -> Optional[subprocess.CompletedProcess]:
+    """跑一次 gh 子进程。gh 缺失抛 GhError(确定性错误,不重试);超时返回 None。"""
     try:
-        proc = subprocess.run(["gh", "api", path], capture_output=True,
-                              text=True, timeout=GH_TIMEOUT)
+        return subprocess.run(argv, capture_output=True, text=True, timeout=GH_TIMEOUT)
     except FileNotFoundError:
         raise GhError("找不到 gh CLI——请安装并认证: gh auth login")
     except subprocess.TimeoutExpired:
-        raise GhError(f"gh api {path} 超时({GH_TIMEOUT}s)")
-    if proc.returncode != 0:
-        err = " ".join(proc.stderr.strip().split())[:300]
-        raise GhError(f"gh api {path} 失败(exit {proc.returncode}): {err}")
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise GhError(f"gh api {path} 返回非 JSON: {exc}")
+        return None
+
+
+def gh_api(path: str) -> Any:
+    """gh api GET → 解析 JSON。瞬态失败(exit≠0 / 超时)短退避重试后仍失败抛 GhError;
+    gh 缺失与响应非 JSON 是确定性错误,不重试(2026-10-14 实证: pulls/N/reviews 偶发
+    HTTP 500 曾令 status 总览整体 exit 2)。"""
+    last: Optional[Exception] = None
+    for attempt in range(GH_RETRIES):
+        proc = _gh_once(["gh", "api", path])
+        if proc is None:
+            last = GhError(f"gh api {path} 超时({GH_TIMEOUT}s)")
+        elif proc.returncode == 0:
+            try:
+                return json.loads(proc.stdout)
+            except json.JSONDecodeError as exc:
+                raise GhError(f"gh api {path} 返回非 JSON: {exc}")
+        else:
+            err = " ".join(proc.stderr.strip().split())[:300]
+            last = GhError(f"gh api {path} 失败(exit {proc.returncode}): {err}")
+        if attempt < GH_RETRIES - 1:
+            time.sleep(GH_RETRY_BACKOFF * (attempt + 1))
+    assert last is not None
+    raise last
 
 
 def gh_api_paged(path: str, list_key: Optional[str] = None) -> list:
@@ -165,22 +182,22 @@ def gh_api_paged(path: str, list_key: Optional[str] = None) -> list:
 
 
 def resolve_slug(explicit: Optional[str]) -> str:
-    """目标仓库 owner/repo。--repo 显式覆盖,否则取 gh 上下文仓库。"""
+    """目标仓库 owner/repo。--repo 显式覆盖,否则取 gh 上下文仓库。
+    瞬态失败重试策略与 gh_api 一致(2026-10-14 实证: repo view 同样会吃到 HTTP 500)。"""
     if explicit:
         return explicit
-    try:
-        proc = subprocess.run(
-            ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-            capture_output=True, text=True, timeout=GH_TIMEOUT)
-    except FileNotFoundError:
-        raise GhError("找不到 gh CLI——请安装并认证: gh auth login")
-    except subprocess.TimeoutExpired:
-        raise GhError("gh repo view 超时")
-    if proc.returncode != 0 or not proc.stdout.strip():
-        err = " ".join(proc.stderr.strip().split())[:300]
-        raise GhError(f"解析当前仓库失败(gh repo view): {err or '空输出'}"
-                      "——不在 git 仓库内? 可用 --repo owner/repo 指定")
-    return proc.stdout.strip()
+    last_err = ""
+    for attempt in range(GH_RETRIES):
+        proc = _gh_once(["gh", "repo", "view", "--json", "nameWithOwner",
+                         "-q", ".nameWithOwner"])
+        if proc is not None and proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+        last_err = (f"gh repo view 超时({GH_TIMEOUT}s)" if proc is None
+                    else " ".join((proc.stderr or "空输出").strip().split())[:300])
+        if attempt < GH_RETRIES - 1:
+            time.sleep(GH_RETRY_BACKOFF * (attempt + 1))
+    raise GhError(f"解析当前仓库失败(gh repo view): {last_err}"
+                  "——不在 git 仓库内? 可用 --repo owner/repo 指定")
 
 
 # ============ 数据结构 ============
@@ -652,11 +669,23 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"== PR 总览({len(prs)} 个 open,仓库 {slug})==")
     print("   bots 四位顺序: codex / coderabbit / pr-agent / greptile")
     details = []
+    failed = 0
     for item in prs:
-        pr = fetch_pr(slug, item["number"])
+        try:
+            pr = fetch_pr(slug, item["number"])
+        except GhError as exc:
+            # 单 PR 数据拉取失败不炸掉整张总览(2026-10-14 实证: HTTP 500 曾令
+            # 总览 exit 2 且其它 PR 一概不展示);如实标注后继续其余 PR。
+            failed += 1
+            print(f"#{item['number']:<4} [数据拉取失败,已跳过] {exc}")
+            continue
         state = classify_state(pr, args.quiet, now_utc())
         print(overview_line(pr, state))
         details.append((pr, state))
+    if failed:
+        print(f"(注: {failed} 个 PR 数据不完整未计入总览——建议重跑 status 复查)")
+    if failed == len(prs):
+        raise GhError("所有 open PR 均拉取失败——检查 gh 认证/网络(GH_TOKEN)")
     print()
     print("== 整体下一步 ==")
     printed = False
