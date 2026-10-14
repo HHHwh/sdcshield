@@ -1,31 +1,22 @@
 #include <sandstone.h>
 #include <cstdio>
 #include <cstdint>
-#include <random>
 #include <atomic>
-#include <cstring>
-#include <ctime>
 
 #ifdef __aarch64__
 #include <arm_neon.h>
 
 static constexpr int LANES = 4;
 
-struct test_data {
-    float mem_buf[LANES];
-};
-
 // 初始化
 static int insert_extract_init(struct test *test) {
-    auto *data = new test_data;
-    test->data = data;
+    (void)test;
     return EXIT_SUCCESS;
 }
 
 // 运行测试
 static int insert_extract_run(struct test *test, int cpu) {
     (void)cpu;
-    auto *data = static_cast<test_data*>(test->data);
     /* randomization hardening H9'/P12: framework RNG (per-thread stream,
      * -s reproducible) replaces the shared std::mt19937 seeded from
      * time()+getpid(); range [-100, 100) preserved. */
@@ -78,9 +69,13 @@ static int insert_extract_run(struct test *test, int cpu) {
         // 4. 验证插入/提取一致性
         bool insert_extract_ok = (extracted == insert_val);
 
-        // 5. Store/Load 一致性测试
-        vst1q_f32(data->mem_buf, orig_vec);
-        float32x4_t loaded_vec = vld1q_f32(data->mem_buf);
+        // 5. Store/Load 一致性测试 — 函数局部栈缓冲, 线程私有, 消除多
+        //    写者竞态 (B1-010); asm 内存屏障阻断编译器消除真实 reload
+        //    (同 insert_extract_sve / movbe_dump_probe_c_sve 先例)
+        float sl_buf[LANES];
+        vst1q_f32(sl_buf, orig_vec);
+        __asm__ volatile("" ::: "memory");
+        float32x4_t loaded_vec = vld1q_f32(sl_buf);
         uint32x4_t cmp = vceqq_f32(orig_vec, loaded_vec);
         bool store_load_ok = (vgetq_lane_u32(cmp, 0) &&
                               vgetq_lane_u32(cmp, 1) &&
@@ -120,9 +115,7 @@ static int insert_extract_run(struct test *test, int cpu) {
 
 // 清理
 static int insert_extract_finish(struct test *test) {
-    auto *data = static_cast<test_data*>(test->data);
-    delete data;
-    test->data = nullptr;
+    (void)test;
     return EXIT_SUCCESS;
 }
 
