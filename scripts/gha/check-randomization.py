@@ -216,10 +216,19 @@ def changed_test_files(target, head):
     return [f for f in out.splitlines() if f.strip()]
 
 
+# 扫描过程中发生的 git diff 失败(PR #244 review, coderabbit)——原实现
+# 静默 return [],扫描照常"通过"。CI 门禁失败必须显式失败,不能漏检。
+SCAN_FAILURES = []
+
+
 def added_lines(target, head, path):
-    """该文件 diff 中新增的行,返回 (head 侧行号, 行内容) 列表(--unified=0 解析 @@)。"""
+    """该文件 diff 中新增的行,返回 (head 侧行号, 行内容) 列表(--unified=0 解析 @@)。
+
+    git diff 失败(如 head 侧文件已被改名/删除的竞态)时记录失败并由
+    main() 在输出后返回非零,而不是静默当作"无新增行"通过。"""
     rc, out = git("diff", f"{target}..{head}", "--unified=0", "--", path)
     if rc != 0:
+        SCAN_FAILURES.append(f"{path}: git diff --unified=0 failed (rc={rc}): {out.strip()[:200]}")
         return []
     adds = []
     lineno = 0
@@ -287,6 +296,12 @@ def main():
               "种子不受框架管理,失败不可重放。改用框架 RNG 后随机种子会随 -vvv "
               "落盘(random_generator_state)供复现。")
         return 1
+    if SCAN_FAILURES:
+        # 门禁自身失效必须显式失败(coderabbit):静默跳过 = 全部新增行漏检
+        for f in SCAN_FAILURES:
+            print(f"::error:: scan failure: {f}")
+        print("::error:: diff 扫描存在失败,无法确认新增行无自建 RNG;请检查仓库状态。")
+        return 3
     return 0
 
 
