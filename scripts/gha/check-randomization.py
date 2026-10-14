@@ -46,10 +46,23 @@ def strip_code_lines(src):
     当真实代码误报 CI 失败;反之 "*p = std::mt19937(seed)();"(行首 *
     是解引用,代码)会被当块注释续行整行漏检。改为逐字符扫描整个文件:
     跟踪块注释 / 行注释 / 字符串字面量 / 字符字面量 / 原始字符串
-    (C++ raw string R"(...)") 五种状态,行内状态切换正确处理(如
-    code /* comment */ code),产出每行剥除注释与字符串内容后的代码。
-    字符串内容替换为空格(保留长度),避免字符串字面量里的 "rand()"
-    命中 R1。"""
+    (C++ raw string R"(...)") / pp-number 六种状态,行内状态切换正确
+    处理(如 code /* comment */ code),产出每行剥除注释与字符串内容
+    后的代码。字符串内容替换为空格(保留长度),避免字符串字面量里的
+    "rand()" 命中 R1。
+
+    PR #244 review round 4 (greptile) 修正:
+    - 字符串/字符字面量的反斜杠行续接必须保留换行符("aaa\\<newline>
+      bbb" 的换行被替换为空格会让 code_lines 行号与原文件错位,后续
+      行全部检查错行)。
+    - C++ 数字分隔符 1'000 的 ' 不是字符字面量开头——pp-number 状态
+      连续消费数字记号,否则 constexpr int count = 1'000; 之后的 RNG
+      代码会被当字符内容整段删除,CI 漏报。
+    - 原始字符串在引号处回看 R/uR/u8R/UR/LR 前缀(前缀字符本身已按
+      代码追加,此处一并清空)——原实现 re.match(r'R"...', src[i:])
+      在引号位置永远不命中,raw string 分支是死分支,R"(...)" 内的
+      mt19937 会被当代码误报。
+    """
     n = len(src)
     code = []           # 与 src 等长的字符列表,注释/字符串位置换成空格
     i = 0
@@ -78,8 +91,17 @@ def strip_code_lines(src):
                 i += 1
         elif in_str:
             if c == "\\":
-                code.extend("  " if nxt else " ")
-                i += 2
+                if nxt == "\n":
+                    # 行续接:反斜杠清空,换行保留(行号对齐)
+                    code.append(" ")
+                    code.append("\n")
+                    i += 2
+                elif nxt:
+                    code.extend("  ")
+                    i += 2
+                else:
+                    code.append(" ")
+                    i += 1
             elif c == '"':
                 in_str = False
                 code.append(" ")
@@ -89,8 +111,16 @@ def strip_code_lines(src):
                 i += 1
         elif in_char:
             if c == "\\":
-                code.extend("  " if nxt else " ")
-                i += 2
+                if nxt == "\n":
+                    code.append(" ")
+                    code.append("\n")
+                    i += 2
+                elif nxt:
+                    code.extend("  ")
+                    i += 2
+                else:
+                    code.append(" ")
+                    i += 1
             elif c == "'":
                 in_char = False
                 code.append(" ")
@@ -118,12 +148,24 @@ def strip_code_lines(src):
                 i += 2
             elif c == '"':
                 # C++ 原始字符串:R"delim( ... )delim" — delim 可为空或
-                # ≤16 个非括号字符。先匹配前缀 R"...( 再找闭合 ")delim"
-                m = re.match(r'R"([^()\\\s]{0,16})\(', src[i:])
+                # ≤16 个非括号字符。greptile: 在引号处回看前缀字符
+                # (R 本身已被当代码追加,这里连同前缀一并清空),再匹配
+                # "delim( 开头;不匹配则按普通字符串处理。
+                prefix = None
+                if i > 0 and src[i - 1] == "R":
+                    ps = i - 1
+                    k = i - 2
+                    while k >= 0 and (src[k].isalnum() or src[k] == "_"):
+                        ps = k
+                        k -= 1
+                    if src[ps:i - 1] in ("", "u", "u8", "U", "L"):
+                        prefix = ps
+                m = re.match(r'"([^()\\\s]{0,16})\(', src[i:]) if prefix is not None else None
                 if m:
-                    d = m.group(1)
-                    raw_end = ")" + d + '"'
-                    for _ in m.group(0):
+                    for t in range(prefix, i):   # 清空前缀(含 R)
+                        code[t] = " "
+                    raw_end = ")" + m.group(1) + '"'
+                    for _ in m.group(0):        # "delim( 整段清空
                         code.append(" ")
                     i += len(m.group(0))
                 else:
@@ -134,6 +176,24 @@ def strip_code_lines(src):
                 in_char = True
                 code.append(" ")
                 i += 1
+            elif c.isdigit() and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_")) or \
+                    (c == "." and nxt.isdigit() and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_"))):
+                # pp-number: 数字(或 .数字)开头的记号连续消费
+                # [0-9A-Za-z_.'] 与 e/E/p/P 后紧跟的 +/-,使数字分隔符
+                # 1'000'000 / 0x1'F / 1e-5 中的 ' 不被误当字符字面量
+                # 开头(greptile: 否则其后的 RNG 代码被当字符内容删除)。
+                # 记号本身是代码,原样保留。
+                j = i + 1
+                while j < n:
+                    cj = src[j]
+                    if cj.isalnum() or cj in "._'":
+                        j += 1
+                    elif cj in "+-" and src[j - 1] in "eEpP":
+                        j += 1
+                    else:
+                        break
+                code.extend(src[i:j])
+                i = j
             else:
                 code.append(c)
                 i += 1

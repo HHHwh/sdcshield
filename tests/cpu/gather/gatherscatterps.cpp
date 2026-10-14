@@ -53,6 +53,30 @@ static int gatherscatterps_run(struct test *test, int cpu) {
             // 生成随机掩码（16位）
             mask = mask_dist();
 
+            // ---- 前置落点检查（第四轮 review 意见）：本轮 mask 选中 lane 的
+            // 落点在 DUT 执行前应全零（外层迭代整块 memset 一次，内层每轮
+            // 结束仅清零选中下标）。按位非零即说明更早某轮 scatter 写到了
+            // 当时的选中下标之外——该越界值一旦被后续轮次命中，会被正常
+            // 写入并清零抹掉，逃过外层整块检查，故须在落点被本轮覆盖前
+            // 拦截。memcmp 逐位比较而非 dst[idx]==0，-0.0 等按位非零但
+            // 数值为 0 的残留不会漏报 ----
+            const float zero = 0.0f;
+            for (int i = 0; i < VECTOR_SIZE; ++i) {
+                if (mask & (1 << i)) {
+                    const int idx = indices[i];
+                    if (memcmp(&dst[idx], &zero, sizeof(zero)) != 0) {
+                        uint32_t actual_bits, expected_bits;
+                        memcpy(&actual_bits, &dst[idx], sizeof(actual_bits));
+                        memcpy(&expected_bits, &zero, sizeof(expected_bits));
+                        report_fail_msg("gatherscatterps: Scatter wrote outside indices: dst[%d] non-zero before round %d, "
+                                        "mask=0x%04x, actual=%f (0x%08x), expected=%f (0x%08x), xor=0x%08x",
+                                        idx, round, mask, dst[idx], actual_bits, zero, expected_bits,
+                                        actual_bits ^ expected_bits);
+                        return EXIT_FAILURE;
+                    }
+                }
+            }
+
             // ---- DUT: NEON 逐 lane 掩码 gather + 向量乘 + 逐 lane 掩码 scatter ----
             // ARM64 基线无 gather/scatter 指令；vld1q_lane/vst1q_lane 逐 lane
             // 访存是 NEON 上的等价路径（数据流经向量寄存器）。lane 下标须为

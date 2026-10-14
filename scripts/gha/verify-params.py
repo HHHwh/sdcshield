@@ -284,7 +284,9 @@ def main():
         npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
         # 与 all-quality/smoke 一致(COMMON 带 -vvv):种子行缺失说明复现证据链断裂,
         # 同判 FAIL(零种子时日志已含 seeds=0 摘要,无需另附信息)
-        ok = nfail == 0 and ncrash == 0 and len(seeds) > 0
+        # 种子证据≠通过证据:若目标测试全部 skip(如 CI runner 不支持某特性),
+        # 无 pass 结果同样判 FAIL,防止验证任务错误通过
+        ok = nfail == 0 and ncrash == 0 and npass > 0 and len(seeds) > 0
         if not ok:
             fail_total += 1
         crash_total += crashes
@@ -335,7 +337,9 @@ def main():
             tests, crashes, seeds = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             # 同 all-PROD:此阶段也带 -vvv 跑,零种子即证据链缺失,同判 FAIL
-            ok = nfail == 0 and ncrash == 0 and len(seeds) > 0
+            # 种子证据≠通过证据:该档(如 openblas 缺某特性时)目标测试全部 skip,
+            # 无 pass 结果同样判 FAIL(逐测试×逐档位判定,每档都须有 pass)
+            ok = nfail == 0 and ncrash == 0 and npass > 0 and len(seeds) > 0
             if not ok:
                 fail_total += 1
             crash_total += crashes

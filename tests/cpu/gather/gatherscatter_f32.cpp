@@ -49,6 +49,27 @@ static int gatherscatter_f32_run(struct test *test, int cpu) {
                 indices[i] = idx_dist();
             }
 
+            // ---- 前置落点检查（第四轮 review 意见）：本轮落点在 DUT 执行前
+            // 应全零（外层迭代整块 memset 一次，内层每轮结束仅清零命中下标）。
+            // 按位非零即说明更早某轮 scatter 写到了当时的 indices 之外——该
+            // 越界值一旦被后续轮次命中，会被正常写入并清零抹掉，逃过外层
+            // 整块检查，故须在落点被本轮覆盖前拦截。memcmp 逐位比较而非
+            // dst[idx]==0，-0.0 等按位非零但数值为 0 的残留不会漏报 ----
+            const float zero = 0.0f;
+            for (int i = 0; i < VECTOR_SIZE; ++i) {
+                const int idx = indices[i];
+                if (memcmp(&dst[idx], &zero, sizeof(zero)) != 0) {
+                    uint32_t actual_bits, expected_bits;
+                    memcpy(&actual_bits, &dst[idx], sizeof(actual_bits));
+                    memcpy(&expected_bits, &zero, sizeof(expected_bits));
+                    report_fail_msg("gatherscatter_f32: Scatter wrote outside indices: dst[%d] non-zero before round %d, "
+                                    "actual=%f (0x%08x), expected=%f (0x%08x), xor=0x%08x",
+                                    idx, round, dst[idx], actual_bits, zero, expected_bits,
+                                    actual_bits ^ expected_bits);
+                    return EXIT_FAILURE;
+                }
+            }
+
             // ---- DUT: NEON 逐 lane gather + 向量乘 + 逐 lane scatter ----
             // ARM64 基线无 gather/scatter 指令；vld1q_lane/vst1q_lane 逐 lane
             // 访存是 NEON 上的等价路径（数据流经向量寄存器）。lane 下标须为
