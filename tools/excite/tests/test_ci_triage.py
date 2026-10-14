@@ -52,7 +52,37 @@
  17 test_agent_reported_escalation_routes_to_escalate: 日志含结束语契约
     `ci-triage: escalated <reason>` → 新判档 escalated_reported,直接升级
     (理由尾巴进 @ 评论、不重派、不计 attempts)。
+
+用例口径（Task 4,6 例: 车道 B bot 循环 + 单树自愈 + scan 编排。全部离线:
+  fake gh(FakeGh 补 issue close 分支)/fake run_background/fake pr_loop 函数
+  (monkeypatch ct.pr_loop.*)/fake _git——绝不触网、绝不真实派 claude):
+ 18 test_lane_b_dispatches_once_per_head（A6）: PR_OPEN 条目 + fake
+    fetch_pr/classify_state/render_collect + fake run_background,READY_TO_FIX
+    → 派 1 次 + rounds+1 + last_dispatched_head 记 head + status→BOT_FIX;
+    同 head 第二轮 lane_b_advance → run_background 仍恰 1 次(不重派);
+    head 变化 → 再派一次(共 2 次);
+ 19 test_lane_b_merge_ready_notifies_and_closes: READY_TO_MERGE → issue
+    评论含 @wangxumarshall、FakeGh 记录 issue close 调用(gh issue close
+    <n> 分支)、条目 DONE;
+ 20 test_scan_heals_dirty_tree_when_no_agent（Review Focus #4）:
+    monkeypatch ct._git → 克隆 HEAD 非 main 且 dirty → 断言完整恢复序列
+    (fetch --all --prune → checkout main → reset --hard origin/main →
+    clean -fd;无 agent 时才自愈,活 agent 在跑时零 git 恢复调用);
+ 21 test_paused_blocks_dispatch_not_observation（A5）: STATE_DIR/PAUSED
+    存在 → dispatch_agent 返回 None 且 run_background 零调用;观测路径
+    (triage 的 gh run list/issue 搜索)照常执行;
+ 22 test_state_loss_recovers_from_github_markers（Review Focus #3）:
+    空 state + open_search 携标记 issue → 复用不重建(issue 创建数 0、
+    条目恢复 issue_number==77);
+ 23 test_scan_lock_excludes_concurrent（A4）: 测试内先 flock 占住
+    scan.lock → cmd_scan(fake gh/git)立即返回且零 gh 调用;
+ 24 test_bot_fix_auth_fail_counts_toward_circuit_breaker(裁定 7 补强):
+    BOT_FIX 条目 auth_fail 同样计入 streak——未达阈值击杀清引用归还
+    PR_OPEN(清 head 锚允许同 head 重派,否则熔断永不触发);达阈值写
+    PAUSED + ESCALATED(跨车道统一熔断,只豁免车道 A 的 success 查 PR /
+    dead 重派推进)。
 """
+import argparse
 import os, shlex, signal, subprocess, sys, time
 from datetime import datetime, timedelta, timezone
 
@@ -185,6 +215,7 @@ class FakeGh:
         self.calls = []                            # 全部 gh_json 调用参数
         self.created_issues = []                   # (title, body)
         self.comments = []                         # (issue_number, body)
+        self.closed_issues = []                    # Task 4: issue_number 列表
 
     def gh_json(self, args, input_text=None):
         """模块级 gh_json 的替身: 按 gh 子命令分派。
@@ -209,6 +240,10 @@ class FakeGh:
             # gh issue comment <n> --repo <slug> --body <text>
             self.comments.append((int(args[2]), args[args.index("--body") + 1]))
             return "https://github.com/example/sdcshield/issues/77#comment"
+        if args[:2] == ["issue", "close"] and args[2].isdigit():
+            # gh issue close <n> --repo <slug>(Task 4: 车道 B 条目收尾)
+            self.closed_issues.append(int(args[2]))
+            return None
         if args[:2] == ["run", "view"] and "--log-failed" in args:
             # gh run view <id> --repo <slug> --log-failed(纯文本输出)
             return self.log_failed
@@ -746,3 +781,296 @@ def test_agent_reported_escalation_routes_to_escalate(monkeypatch, tmp_path):
     assert "wangxumarshall" in body              # @人工
     assert "无法在本机复现失败" in body          # 升级理由尾巴进了评论
     assert _wait_dead(proc) is not None          # 活 PID 被击杀,不留无主进程
+
+
+# ===========================================================================
+# Task 4: 车道 B bot 循环 + 单树自愈 + scan 编排
+# 测试口径: 全部离线——fake gh(FakeGh 含 issue close 分支)/fake
+# run_background/fake pr_loop 函数(monkeypatch ct.pr_loop.*——lane_b 经
+# ct 模块命名空间的 pr_loop 引用调用,零触网)/fake _git(heal_clone 的
+# git 子进程唯一出口)。绝不真实派 claude、绝不真实 git 恢复。
+# ===========================================================================
+
+def _fake_pr(number=88, head_sha="b" * 40, state="open"):
+    """pr_loop.PRData 的最小替身(lane_b 只用 state/draft/fork/head_sha/
+    head_ref/url/number/title/base_ref 等少量属性,SimpleNamespace 顶替)。"""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        number=number, title=f"fix #{number}", state=state, draft=False,
+        fork=False, head_sha=head_sha, head_ref="fix/ci-1",
+        base_ref="main", url=f"https://github.com/example/sdcshield/pull/{number}",
+    )
+
+
+def _fake_pr_loop(monkeypatch, pr, state="READY_TO_FIX"):
+    """三件套替换: fetch_pr / classify_state / render_collect 全走 fake。
+
+    classify_state 可由后续用例覆写;render_collect 返回固定导出文本。
+    """
+    monkeypatch.setattr(ct.pr_loop, "fetch_pr", lambda slug, num: pr)
+    monkeypatch.setattr(ct.pr_loop, "classify_state",
+                        lambda p, quiet, now: state)
+    monkeypatch.setattr(ct.pr_loop, "render_collect",
+                        lambda p, slug, quiet: "# collect 导出(fake)\n")
+
+
+# ---------------------------------------------------------------------------
+# 用例 18: 同 head 只派一次(A6)——READY_TO_FIX 派 bot agent;同 head 复扫
+#          不重派;head 变化才允许新一轮
+
+def test_lane_b_dispatches_once_per_head(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=21, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=1,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, last_dispatched_head=None,
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    # 第 1 轮: READY_TO_FIX → 派 bot 处置 agent(rounds+1、记 head、BOT_FIX)
+    pr1 = _fake_pr(head_sha="b" * 40)
+    _fake_pr_loop(monkeypatch, pr1, "READY_TO_FIX")
+    ct.lane_b_advance(state, dry_run=False)
+
+    assert len(bg.calls) == 1                       # 恰一次派发
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "BOT_FIX"
+    assert e.rounds == 2                            # rounds+1,不动 attempts
+    assert e.attempts == 1                          # 采样值未被 lane B 篡改
+    assert e.last_dispatched_head == "b" * 40
+    assert e.agent_pid == 424242
+    # collect 导出已落盘(供 bot agent 读取)
+    collect = tmp_path / "collect-pr88.md"
+    assert collect.exists()
+
+    # 第 2 轮: agent 已退场(伪 PID 已死)、同 head → 不重派
+    # (BOT_FIX 收敛闭环: 退场的 BOT_FIX 条目归还 PR_OPEN 后再走 classify;
+    #  同 head → 跳过,run_background 仍恰 1 次)
+    ct.lane_b_advance(state, dry_run=False)
+    assert len(bg.calls) == 1
+    e2 = ct.StateStore.entries(state)[0]
+    assert e2.status in ("PR_OPEN", "BOT_FIX")      # 未被错误终局化
+
+    # 第 3 轮: head 变化(新 push)→ 允许新一轮派发(共 2 次)
+    pr2 = _fake_pr(head_sha="c" * 40)
+    _fake_pr_loop(monkeypatch, pr2, "READY_TO_FIX")
+    ct.lane_b_advance(state, dry_run=False)
+    assert len(bg.calls) == 2
+    e3 = ct.StateStore.entries(state)[0]
+    assert e3.last_dispatched_head == "c" * 40
+    assert e3.rounds == 3
+
+
+# ---------------------------------------------------------------------------
+# 用例 19: READY_TO_MERGE → @wangxumarshall 请人工 merge + issue close + DONE
+
+def test_lane_b_merge_ready_notifies_and_closes(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=22, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=2,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    _fake_pr_loop(monkeypatch, _fake_pr(), "READY_TO_MERGE")
+    ct.lane_b_advance(state, dry_run=False)
+
+    # 评论 @人工请 merge;issue 关闭;条目 DONE;零派发
+    assert len(fake.comments) == 1
+    assert fake.comments[0][0] == 77
+    assert "wangxumarshall" in fake.comments[0][1]
+    assert "merge" in fake.comments[0][1].lower()
+    assert fake.closed_issues == [77]
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "DONE"
+    assert bg.calls == []
+
+
+# ---------------------------------------------------------------------------
+# 用例 20: 无 agent 时自愈脏克隆树(Review Focus #4)——完整恢复序列
+
+def test_scan_heals_dirty_tree_when_no_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh(runs=[])
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+
+    git_calls = []
+
+    def fake_git(args):
+        git_calls.append(list(args))
+        # rev-parse --abbrev-ref HEAD → 非 main;status --porcelain → 脏
+        if args[:3] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+            return "fix/ci-999"
+        if args[:2] == ["status", "--porcelain"]:
+            return " M scripts/ci_triage.py"
+        return ""
+
+    monkeypatch.setattr(ct, "_git", fake_git)
+
+    state = {"entries": [], "auth_failure_streak": 0}
+    ct.heal_clone(state, dry_run=False)
+
+    # 完整恢复序列: fetch --all --prune → 查 HEAD → 查 dirty →
+    # checkout main → reset --hard origin/main → clean -fd
+    assert git_calls[0][:3] == ["fetch", "--all", "--prune"]
+    assert git_calls[1][:3] == ["rev-parse", "--abbrev-ref", "HEAD"]
+    assert git_calls[2][:2] == ["status", "--porcelain"]
+    assert git_calls[3][:2] == ["checkout", "main"]
+    assert git_calls[4][:3] == ["reset", "--hard", "origin/main"]
+    assert git_calls[5][:2] == ["clean", "-fd"]
+    assert len(git_calls) == 6
+
+    # 活 agent 在跑时零 git 恢复调用(绝不踩正在干活的 agent 工作区)
+    git_calls.clear()
+    busy = _sample_entry(workflow="Sanitizer", run_id=23, status="DIAGNOSING",
+                         agent_pid=os.getpid(), extra_runs=[])
+    state2 = {"entries": [busy.to_dict()], "auth_failure_streak": 0}
+    ct.heal_clone(state2, dry_run=False)
+    assert git_calls == []
+
+    # dry-run: 零 git 调用,只打印意图
+    git_calls.clear()
+    state3 = {"entries": [], "auth_failure_streak": 0}
+    ct.heal_clone(state3, dry_run=True)
+    assert git_calls == []
+
+
+# ---------------------------------------------------------------------------
+# 用例 21: PAUSED 挡派发不挡观测(A5)——dispatch 拒绝,triage 观测照常
+
+def test_paused_blocks_dispatch_not_observation(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    # open_search 空且 closed_search 空 → triage 走 create_issue 分支,
+    # 观测(搜索)是否执行的证据在 fake.calls 里
+    fake = FakeGh(runs=[], search_result=[])
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    # PAUSED 文件存在 → dispatch 拒绝(车道 A/B 同受闸)
+    (tmp_path / "PAUSED").write_text("auth failure streak\n", encoding="utf-8")
+    entry = _sample_entry(workflow="Sanitizer", run_id=24, status="ISSUED",
+                          issue_number=None, agent_pid=None,
+                          agent_started_at=None, agent_log=None, attempts=0,
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 3}
+    assert ct.dispatch_agent(entry, state) is None
+    assert bg.calls == []                           # 零 spawn
+    assert entry.attempts == 0                      # 条目未被派发记账
+
+    # 观测不受影响: scan 的红 run 扫描 + triage 幂等搜索照常执行
+    run = _run(999, "Sanitizer", "schedule", "failure")
+    state_obs = {"entries": [], "auth_failure_streak": 0}
+    ct.triage_new_red_runs(state_obs, [run])
+    search_states = [a[a.index("--state") + 1]
+                     for a in fake.calls if a[:2] == ["search", "issues"]]
+    assert search_states == ["open", "closed"]      # 幂等搜索确实发生
+    assert len(fake.created_issues) == 1            # 观测/issue 建立照常
+
+
+# ---------------------------------------------------------------------------
+# 用例 22: state 丢失后按 GitHub 标记恢复(Review Focus #3)——复用不重建
+
+def test_state_loss_recovers_from_github_markers(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    # state 全丢,但 GitHub 上该 run 的标记 issue 仍 open → 复用
+    fake = FakeGh(runs=[], search_result=[
+        {"number": 77, "title": "[ci-triage] Sanitizer 红",
+         "body": "run 链接\n<!-- ci-triage:run:38482214201 -->\n更多"},
+    ])
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+
+    run = _run(38482214201, "Sanitizer", "schedule", "failure")
+    state = {"entries": [], "auth_failure_streak": 0}   # 空 state(丢失现场)
+    new = ct.triage_new_red_runs(state, [run])
+
+    # 复用不重建: issue 创建数 0;条目恢复 issue_number==77
+    assert fake.created_issues == []
+    assert len(new) == 1
+    assert new[0].issue_number == 77
+    assert new[0].status == "ISSUED"
+    assert any(d["issue_number"] == 77 for d in state["entries"])
+
+
+# ---------------------------------------------------------------------------
+# 用例 23: scan 互斥锁(A4)——锁被占时立即返回、零 gh 调用
+
+def test_scan_lock_excludes_concurrent(monkeypatch, tmp_path):
+    import fcntl
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh(runs=[])
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    monkeypatch.setattr(ct, "_git", lambda args: "")
+
+    # 测试内先占住 scan.lock(与 cmd_scan 相同的 LOCK_EX|LOCK_NB 语义)
+    lock_path = tmp_path / "scan.lock"
+    held = open(lock_path, "w")
+    fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        rc = ct.cmd_scan(argparse.Namespace(dry_run=False))
+        assert rc == 0                       # 拿不到锁: 打印并退出码 0
+        assert fake.calls == []              # 零 gh 调用(观测都没做)
+    finally:
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
+
+
+# ---------------------------------------------------------------------------
+# 用例 24: BOT_FIX 的 auth_fail 同样计入熔断(裁定 7: 跨车道统一)——
+#          controller 括注「现有逻辑已如此」与 Task 3 实码不符(BOT_FIX 分支
+#          在 streak 逻辑前即 continue),本用例把主条款钉进测试。
+
+def test_bot_fix_auth_fail_counts_toward_circuit_breaker(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    monkeypatch.setattr(ct, "check_agent_outcome", lambda e: "auth_fail")
+
+    # 场景 1: 未达阈值(第 2 次)——BOT_FIX 条目计入 streak、击杀清引用、
+    # 归还 PR_OPEN 且清 head 锚(同 head 重派不被单派规则拦死)
+    p1 = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    a = _sample_entry(workflow="Sanitizer", run_id=31, status="BOT_FIX",
+                      issue_number=111, pr_number=88, agent_pid=p1.pid,
+                      attempts=1, rounds=2,
+                      agent_log=str(tmp_path / "a.log"),
+                      last_dispatched_head="d" * 40, extra_runs=[])
+    state = {"entries": [a.to_dict()], "auth_failure_streak": 1}
+    ct.reap_or_advance(state)
+    ea = ct.StateStore.entries(state)[0]
+    assert state["auth_failure_streak"] == 2        # 跨车道计入
+    assert ea.status == "PR_OPEN"                   # 归还车道 B 重新判定
+    assert ea.agent_pid is None
+    assert ea.last_dispatched_head is None          # head 锚已清(可同 head 重派)
+    assert _wait_dead(p1) is not None               # 存活 agent 被击杀
+    assert not (tmp_path / "PAUSED").exists()       # 未达阈值不熔断
+
+    # 场景 2: 达阈值(第 3 次)——写 PAUSED + ESCALATED + @人工评论
+    p2 = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    b = _sample_entry(workflow="CodeQL", run_id=32, status="BOT_FIX",
+                      issue_number=112, pr_number=89, agent_pid=p2.pid,
+                      attempts=1, rounds=3, agent_log=str(tmp_path / "b.log"),
+                      extra_runs=[])
+    state2 = {"entries": [b.to_dict()], "auth_failure_streak": 2}
+    ct.reap_or_advance(state2)
+    eb = ct.StateStore.entries(state2)[0]
+    assert (tmp_path / "PAUSED").exists()           # 跨车道熔断
+    assert eb.status == "ESCALATED"
+    assert eb.agent_pid is None
+    assert _wait_dead(p2) is not None
+    assert any("认证" in body for _, body in fake.comments)
