@@ -56,8 +56,9 @@ run_in_pristine() {
 echo "=== $OS_TAG pristine (built/ only, no host libs) ===" >&2
 
 # 1) 加载测试: --list-tests
-LIST=$(run_in_pristine --list-tests 2>/dev/null | grep -v '^$' || true)
-TOTAL=$(echo "$LIST" | grep -c . || echo 0)
+LIST=$(run_in_pristine --list-tests 2>/dev/null | grep -v '^$')
+# grep -c 无匹配 rc=1 时已输出 "0"; "|| echo 0" 追加第二个 0 使 TOTAL 两行, 整数比较报错
+TOTAL=$(echo "$LIST" | grep -c . | tr -d '\n'); TOTAL=${TOTAL:-0}
 echo "total tests: $TOTAL" >&2
 if [ "${TOTAL:-0}" -lt 100 ]; then
     echo "RESULT: FAIL too-few-tests($TOTAL)" ; exit 1; fi
@@ -76,17 +77,26 @@ EIGEN_FAILS=""
 for t in $EIGEN; do
     echo "$LIST" | grep -qx "$t" || continue
     ey="$OUT_HOST/${t}.yaml"; rm -f "$ey"
-    run_in_pristine -e "$t" -t 1000 -n 1 --ignore-timeout -o "/out/${t}.yaml" >/dev/null 2>&1 || true
+    # O-1 修复: 不再 || true 吞错——rc!=0(崩溃/超时/容器错)或零执行(无任何 result 行)
+    # 一律记为该用例失败, 否则崩溃后 yaml 计数全 0 会静默通过
+    erc=0
+    run_in_pristine -e "$t" -t 1000 -n 1 --ignore-timeout -o "/out/${t}.yaml" >/dev/null 2>&1 || erc=$?
     f=$(grep -c 'result: fail' "$ey" 2>/dev/null | tr -d '\n'); f=${f:-0}
-    [ "${f:-0}" -gt 0 ] && EIGEN_FAILS="$EIGEN_FAILS $t"
-    echo "  $t: fail=$f" >&2
+    p=$(grep -c 'result: pass' "$ey" 2>/dev/null | tr -d '\n'); p=${p:-0}
+    s=$(grep -c 'result: skip' "$ey" 2>/dev/null | tr -d '\n'); s=${s:-0}
+    if [ "${f:-0}" -gt 0 ] || [ "$erc" -ne 0 ] || [ $((f + p + s)) -eq 0 ]; then
+        EIGEN_FAILS="$EIGEN_FAILS $t"
+    fi
+    echo "  $t: fail=$f pass=$p skip=$s rc=$erc" >&2
 done
 
 # 其余用例
 DISABLE=""
 for t in $EIGEN; do echo "$LIST" | grep -qx "$t" && DISABLE="$DISABLE --disable $t"; done
 FY="$OUT_HOST/fullsuite.yaml"; rm -f "$FY"
-FULL=$(run_in_pristine --ignore-timeout -t 1000 -n 8 $DISABLE -o "/out/fullsuite.yaml" 2>&1 || true)
+# O-1 修复: 不再 || true 吞错——记录真实 rc, 崩溃/超时/容器错不得静默变 PASS
+FULL_RC=0
+FULL=$(run_in_pristine --ignore-timeout -t 1000 -n 8 $DISABLE -o "/out/fullsuite.yaml" 2>&1) || FULL_RC=$?
 EXIT_LINE=$(echo "$FULL" | grep -iE 'exit:' | tail -1 || echo "exit: unknown")
 PASSES=$(grep -c 'result: pass' "$FY" 2>/dev/null | tr -d '\n'); PASSES=${PASSES:-0}
 SKIPS=$(grep -c 'result: skip' "$FY" 2>/dev/null | tr -d '\n'); SKIPS=${SKIPS:-0}
@@ -101,5 +111,9 @@ echo "$EXIT_LINE  crashes=$CRASH" >&2
 VERDICT=PASS
 { [ "${FAILS:-0}" -gt 0 ] || [ "${CRASH:-0}" -gt 0 ] || [ -n "$EIGEN_FAILS" ]; } && VERDICT=FAIL
 echo "$EXIT_LINE" | grep -qi 'exit: fail' && VERDICT=FAIL
-echo "RESULT: $VERDICT (full pass=$PASSES skip=$SKIPS fail=$FAILS, eigen_fails=[$EIGEN_FAILS], crashes=$CRASH)"
+# O-1: exit: unknown / 非零 rc / 零执行 同样是失败——原逻辑全 0 计数会误判 PASS
+echo "$EXIT_LINE" | grep -qi 'exit: unknown' && VERDICT=FAIL
+[ "${FULL_RC:-1}" -ne 0 ] && VERDICT=FAIL
+[ $(( ${PASSES:-0} + ${SKIPS:-0} + ${FAILS:-0} )) -eq 0 ] && VERDICT=FAIL
+echo "RESULT: $VERDICT (full pass=$PASSES skip=$SKIPS fail=$FAILS, eigen_fails=[$EIGEN_FAILS], crashes=$CRASH, rc=$FULL_RC)"
 [ "$VERDICT" = PASS ] && exit 0 || exit 1
