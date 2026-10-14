@@ -16,8 +16,8 @@ for core in {87..127}; do
     # 运行单核心测试
     ./builddir/sdcshield -t $TEST_TIME_PER_CORE -T $TOTAL_TIME --strict-runtime --cpuset=$core -o $LOG_FILE
     
-    # 检查测试结果
-    if grep -q "result: FAIL" $LOG_FILE; then
+    # 检查测试结果（框架输出为小写 "result: fail"，须大小写不敏感匹配）
+    if grep -Eqi 'result: *fail' $LOG_FILE; then
         echo "⚠️ 核心 $core 测试出现失败！请检查日志：$LOG_FILE"
         # 可选：将失败核心记录到文件中
         echo "core_$core" >> $OUTPUT_DIR/failed_cores.txt

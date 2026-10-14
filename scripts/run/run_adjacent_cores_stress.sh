@@ -57,12 +57,14 @@ for ((i=0; i<TOTAL_CORES-1; i++)); do
     wait $PID_OPENDCDIAG
     wait $PID_STRESS
 
-    # 检查并清理日志
-    if grep -qi "result: fail" "$LOG_FILE"; then
+    # 检查并清理日志（fail/crash 保留；仅明确含 result: pass 才删——零 result 行=异常，保留）
+    if grep -Eqi "result: *(fail|crash)" "$LOG_FILE"; then
         echo -e "\033[31m❌ FAIL\033[0m (日志已保留)"
-    else
+    elif grep -q "result: pass" "$LOG_FILE"; then
         echo -e "\033[32m✅ PASS\033[0m (日志已删除)"
         rm -f "$LOG_FILE"
+    else
+        echo -e "\033[31m⚠️ 无 result 行（崩溃/被杀/零执行？）——日志保留: $LOG_FILE\033[0m"
     fi
 done
 

@@ -33,8 +33,8 @@ for ((i=1; i<=TOTAL; i++)); do
         exit 1
     fi
 
-    # 检查结果（忽略大小写）
-    if grep -qi "result: fail" "$LOG_FILE"; then
+    # 检查结果（忽略大小写；fail/crash 保留；仅明确含 result: pass 才删——零 result 行=异常，保留）
+    if grep -Eqi "result: *(fail|crash)" "$LOG_FILE"; then
         echo -e "\033[31m❌ FAIL\033[0m"
         echo ""
         echo "========== 测试中止：第 $i 次运行出现失败 =========="
@@ -43,9 +43,12 @@ for ((i=1; i<=TOTAL; i++)); do
         grep -B 5 -A 5 -i "result: fail" "$LOG_FILE" | tail -20
         echo "=================================================="
         exit 1   # 退出脚本，保留日志
-    else
+    elif grep -q "result: pass" "$LOG_FILE"; then
         echo -e "\033[32m✅ PASS\033[0m"
-        rm -f "$LOG_FILE"   # 删除本次通过的日志
+        rm -f "$LOG_FILE"   # 删除本次确认通过（含 result: pass）的日志
+    else
+        echo -e "\033[31m⚠️ 无 result 行（崩溃/被杀/零执行？）——日志保留: $LOG_FILE\033[0m"
+        exit 1
     fi
 
     # 每 5 次输出一次进度

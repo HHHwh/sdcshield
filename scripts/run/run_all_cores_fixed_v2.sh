@@ -59,12 +59,15 @@ for ((core=3; core<TOTAL_CORES; core++)); do
             -o "$LOG_FILE" >> "$LOG_FILE" 2>&1
         # 注意：-o 已指定，再次重定向确保所有输出都进入日志
     done
-    if grep -qi "result: fail" "$LOG_FILE"; then
+    if grep -Eqi "result: *(fail|crash)" "$LOG_FILE"; then
         echo -e "\033[31m❌ FAIL\033[0m"
         # 保留失败日志，不删除
-    else
+    elif grep -q "result: pass" "$LOG_FILE"; then
         echo -e "\033[32m✅ PASS\033[0m"
         rm -f "$LOG_FILE"
+    else
+        # 无任何 result 行（崩溃/被杀/零执行）：一律保留，禁止误删
+        echo -e "\033[31m⚠️ 无 result 行（崩溃/被杀/零执行？）——日志保留: $LOG_FILE\033[0m"
     fi
 done
 

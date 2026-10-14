@@ -81,15 +81,17 @@ for group_range in "${groups[@]}"; do
         --strict-runtime \
         -o "$LOG_FILE" >> "$LOG_FILE" 2>&1
 
-    # 检查结果
-    if grep -qi "result: fail" "$LOG_FILE"; then
+    # 检查结果（fail/crash 均保留日志；只有明确含 result: pass 才删除——零 result 行=异常，一律保留）
+    if grep -Eqi "result: *(fail|crash)" "$LOG_FILE"; then
         echo -e "${RED}❌ FAIL${NC}"
         echo "  日志文件: $LOG_FILE"
         echo "  最后失败信息："
         grep -B 5 -A 5 "result: fail" "$LOG_FILE" | grep -E "data\[0..7\]|data_ok|consistent|crc[0-9]*=" | tail -10
-    else
+    elif grep -q "result: pass" "$LOG_FILE"; then
         echo -e "${GREEN}✅ PASS${NC}"
         rm -f "$LOG_FILE"
+    else
+        echo -e "${RED}⚠️ 无 result 行（崩溃/被杀/零执行？）——日志保留: $LOG_FILE${NC}"
     fi
     echo ""
 done
