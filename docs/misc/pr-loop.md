@@ -46,6 +46,7 @@ python3 scripts/pr_loop.py [--repo owner/repo] wait <PR>        # 阻塞等四 b
     [--timeout 7200] [--interval 60] [--quiet 900]
 python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>     # 导出意见为 Markdown
     [-o FILE] [--quiet 900]
+python3 scripts/pr_loop.py selftest                             # 离线自检(四场景故障注入)
 ```
 
 - `--repo` 默认从 `git remote` 解析，通常省略。
@@ -54,6 +55,20 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>     # 导出意见�
 - **瞬态容错**：gh 调用对超时 / HTTP 5xx / 网络抖动短退避重试——**总尝试 ≤ 3 次（含首次，即首次失败后最多再重试 2 次，退避 1s / 2s）**；HTTP 4xx（权限 / 不存在 / 参数）与响应非 JSON 是确定性错误，首次即抛不重试；
   `status` 总览中单 PR 数据拉取失败仅标注「数据拉取失败，已跳过」并继续其余 PR
   （全部 PR 均失败才 exit 2；2026-10-14 PR#242 偶发 HTTP 500 实证）。
+- **selftest（离线自检）**：`python3 scripts/pr_loop.py selftest` 无网络 / 未认证
+  环境可跑。做法：生成置于 PATH 首位的 **fake gh**（纯 shell，全固定数据端点，不转调
+  真 gh），四个场景注入故障并断言真实 exit code 与调用次数——
+  ① `fail_once_once`：首个 api 调用 500 一次后放行 → 重试恢复（status exit 0）；
+  ② `api_404_always`：全 404 → 快速失败（仅 1 次调用）；
+  ③ `api_5xx_always`：全 500 → 重试耗尽（3 次尝试）；
+  ④ `pr1_ok_pr2_fail`：固定双 PR 一成一败 → 总览降级（#1 完整展示、#2 标注跳过）。
+  fake gh 固定数据约定：仓库 `selftest/local`；`repo view` 回显 slug；PR 列表返回
+  `[{number:1},{number:2}]`；`pulls/1` 详情正常（head SHA、committer date 等齐备）、
+  `pulls/2` 恒 500；意见端点（reviews / comments / check-runs / events）全空；
+  **未知路径一律 404**——pr_loop 新增 API 调用时 selftest 会立即失败，暴露契约漂移，
+  此时应同步补 fake 端点。脚本内临时路径一律 `shlex.quote`（TMPDIR 含空格安全）。
+  维护要点：fake 的路径 case 须**先特异后宽泛**（如 `check-runs` 在 `commits/` 之前，
+  否则前缀吞并导致 JSON 形状错配）。
 - **四 bot 判据**（与 [bot-coverage.yml](../../.github/workflows/bot-coverage.yml) 一致，
   同步维护）：codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]`
   作者或 `CodeRabbit` check（精确等值）；pr-agent = `pr-agent` check（精确等值），或
