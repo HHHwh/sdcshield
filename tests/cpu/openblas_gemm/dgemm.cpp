@@ -176,12 +176,20 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
     /* B2-004 (R2b freeze blind spot): this thread's operands and golden
      * are re-rolled from the framework RNG every kRerollEvery iterations
      * instead of replaying init's frozen bytes forever; the shared
-     * d->a/d->b/d->golden are never read here (init's fill stays only as
-     * the init-time finiteness canary, like the 46141ed4 Eigen pattern).
+     * d->a/d->b/d->golden are never read by the reroll path (init's fill
+     * stays only as the init-time finiteness canary, like the 46141ed4
+     * Eigen pattern).
      * The golden is recomputed with the very same cblas call and knob set
      * the verified call below uses, on the same operand distribution, so
      * the finiteness bound argued in init carries over; -s replays stay
-     * reproducible since the framework RNG is seeded per test. */
+     * reproducible since the framework RNG is seeded per test.
+     * PR #244 review (coderabbit): the reroll golden is recomputed on the
+     * DUT core with the same cblas implementation, so a deterministic
+     * (mercurial-core) fault poisons golden and DUT identically and the
+     * memcmp passes. The shared init golden — computed on a different
+     * core before the workers start — is therefore replayed at the
+     * midpoint of every reroll period: cross-core byte-exact reference
+     * that a single-core deterministic fault cannot poison. */
     constexpr int kRerollEvery = 16;
     int since_reroll = kRerollEvery; /* force the first-iteration fill */
     TEST_LOOP(test, 1) {
@@ -197,12 +205,12 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
                 report_fail_msg("OOM allocating thread scratch (%zu bytes)", bytes * 6);
         }
 
-        /* re-roll (first iteration, then every kRerollEvery-th): fresh
-         * high-entropy operands for this thread; golden recomputed with
-         * the same cblas call, seeded with the same deterministic C
-         * pattern the per-iteration seeding below uses (beta semantics) */
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;
+            /* re-roll: fresh high-entropy operands for this thread;
+             * golden recomputed with the same cblas call, seeded with the
+             * same deterministic C pattern the per-iteration seeding
+             * below uses (beta semantics) */
             for (size_t i = 0; i < n2; ++i) {
                 l_a[i] = random_bounded();
                 l_b[i] = random_bounded();
@@ -215,6 +223,19 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
                         d->mdim, d->mdim, d->mdim,
                         1.0, l_a, d->mdim, l_b, d->mdim,
                         d->beta, l_golden, d->mdim);
+        } else if (since_reroll == kRerollEvery / 2) {
+            /* frozen replay (PR #244 review, coderabbit): restore init's
+             * shared operands and golden — the init thread computed the
+             * golden on a different core before the workers started, so
+             * this round's byte-exact memcmp is a CROSS-CORE reference.
+             * A deterministic (mercurial-core) fault would poison the
+             * reroll golden and the DUT identically (same core, same
+             * cblas call) — only the cross-core replay catches it.
+             * Exactly one hit per reroll period: since_reroll takes this
+             * value once between the reset at 0 and the next reroll. */
+            memcpy(l_a, d->a, bytes);
+            memcpy(l_b, d->b, bytes);
+            memcpy(l_golden, d->golden, bytes);
         }
 
         /* copy-in (dirties cache lines, then reloads them in the kernel) */

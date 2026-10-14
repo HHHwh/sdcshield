@@ -24,12 +24,21 @@ import sys
 # 框架 RNG 符号(sandstone.h random32/random64/memset_random 及模板重载、frandom*)
 FRAMEWORK_RNG_RE = re.compile(r"\brandom32\s*\(|\brandom64\s*\(|\bmemset_random\b|\bfrandom[a-z_]*\s*\(")
 # 自建不可重放 RNG(分级协议 R1)。行首或非标识符字符后的 rand(/srand( 才算裸调用,
-# 排除 myrand(/_srand( 等无关标识符;mt19937 同时覆盖 mt19937_64。
-SELF_RNG_RE = re.compile(r"mt19937|random_device|(?:\A|[^_a-zA-Z0-9])s?rand\s*\(")
+# 排除 myrand(/_srand( 等无关标识符;mt19937 同时覆盖 mt19937_64;minstd_rand 与
+# default_random_engine 同为不受框架管理的自建引擎(含 minstd_rand0/ranlux/knuth_b
+# 等别名前缀),一并拦截。
+SELF_RNG_RE = re.compile(
+    r"mt19937|random_device|minstd_rand|default_random_engine"
+    r"|(?:\A|[^_a-zA-Z0-9])s?rand\s*\(")
 # 固定 pattern 大表形态(R2/R3 提示对象):static const/constexpr 数组初始化
 STATIC_TABLE_RE = re.compile(r"\bstatic\s+(?:const|constexpr)\s+\w[^;=]*\[[^\]]*\]\s*=")
-# 注释行(说明文本里的 mt19937 等不算违规)
+# 注释行(说明文本里的 mt19937 等不算违规):行首 //、块注释开始 /*、块注释续行 *
 COMMENT_RE = re.compile(r"^\s*(//|/\*|\*)")
+# 行内注释剥离(R1 前置处理):整行 //、/* ... */ 块、块注释续行(* 开头,吃到
+# 闭合 */ 或行尾)、空白后跟 // 的行尾注释——剥完只对剩余代码部分执行 R1,
+# 否则 "/* note */ std::mt19937 rng;" 这类前缀注释行会被当纯注释整行跳过。
+# // 的空白保护与 TRAILING_COMMENT_RE 一致,避免误伤 "http://" 等字符串字面量。
+INLINE_COMMENT_RE = re.compile(r"^\s*//.*$|/\*.*?\*/|^\s*\*.*?(?:\*/|$)|\s//.*$")
 # 行尾注释剥离(仅"空白后跟 // 或 /*"才视为注释起,避免误伤 "http://" 等字符串字面量)
 TRAILING_COMMENT_RE = re.compile(r"\s(//|/\*).*$")
 
@@ -94,7 +103,13 @@ def main():
         # R1: 新增行引入自建 RNG → error(注释行除外;R3-justified 不豁免)
         for lineno, text in adds:
             if COMMENT_RE.match(text):
-                continue
+                # 前缀块注释(/* note */)后可能还有代码,先剥离行内注释再判一次,
+                # 防止 "/* note */ std::mt19937 rng;" 这类行被当纯注释整行跳过;
+                # // 行与块注释续行(* / *)剥离后无代码,维持原来的跳过行为
+                stripped = INLINE_COMMENT_RE.sub("", text)
+                if not stripped.strip():
+                    continue
+                text = stripped
             code = TRAILING_COMMENT_RE.sub("", text)
             if SELF_RNG_RE.search(code):
                 errors.append(

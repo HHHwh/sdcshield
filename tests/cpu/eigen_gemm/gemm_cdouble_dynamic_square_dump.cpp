@@ -18,7 +18,9 @@
  * Operand freshness (B2-007, R2b freeze blind spot): like the non-dump
  * gemm files (46141ed4), the run loop keeps per-thread lhs/rhs re-rolled
  * from the framework RNG every 16 iterations with the golden recomputed
- * the same batch — the init-time Mat::Random draw is no longer replayed.
+ * the same batch; each cycle's midpoint runs one frozen-replay round on
+ * init's shared Mat::Random draw, so the init-time golden is actually
+ * re-compared instead of never being replayed.
  *
  * @note This test requires at least 2 threads to run.
  * @endparblock
@@ -58,11 +60,14 @@ static int eigen_gemm_cdouble_dynamic_square_init(struct test *test) {
 }
 
 static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
+    auto d = CAST(test->data);
     /* Operand freshness (B2-007, R2b freeze blind spot): per-thread
      * operands re-rolled from the framework RNG every kRerollEvery
      * iterations, both components [-1, 1) bounded like Mat::Random, with
      * the golden recomputed the same batch (46141ed4 non-dump gemm
-     * pattern) — the init-time Mat::Random draw is never replayed. */
+     * pattern); each cycle's midpoint one frozen-replay round instead
+     * restores init's shared lhs/rhs/prod snapshot into the per-thread
+     * buffers, so the init-time golden is actually re-compared. */
     constexpr int kRerollEvery = 16;
     auto fill_rand = [](Mat &m) {
         for (int r = 0; r < m.rows(); ++r)
@@ -119,11 +124,22 @@ static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
                 report_fail_msg("eigen_gemm_cdouble_dump: product miscompare at [%d,%d].%s", row, col, comp);
             }
         }
+        /* At each cycle's midpoint one frozen-replay round instead
+         * restores init's shared lhs/rhs/prod (Mat operator=
+         * deep-copies) into the per-thread buffers: the reroll's golden
+         * recompute runs on this very same core, so a mercurial
+         * deterministic core defect would reproduce identically on both
+         * sides and never trip the compare — replaying init's frozen
+         * golden closes that blind spot. */
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;
             fill_rand(l_lhs);
             fill_rand(l_rhs);
             l_prod = l_lhs * l_rhs;
+        } else if (since_reroll == kRerollEvery / 2) {
+            l_lhs = d->lhs;
+            l_rhs = d->rhs;
+            l_prod = d->prod;
         }
     } while (test_time_condition(test));
     return EXIT_SUCCESS;

@@ -234,7 +234,10 @@ static int mesh_upi_sve_asymm_int_run(struct test *test, int cpu) {
         // （写者 + 全部读者）都已离开本轮流量的生产/消费，epoch 的
         // release 存储保证重置先于任何线程的下一轮访问可见 —— 这正是
         // 原协议想做而没做对的轮次隔离。writer 随 my_epoch 轮转。
-        // （自旋同样按 1024 次一档节流预算检查，理由同读者的等待。）
+        // （epoch 自旋按 131072 次一档节流预算检查，先例
+        //   mesh_upi_sve_asymm_distrib_int：屏障等待须覆盖线程孵化偏斜，
+        //   1024 一档在 40 次预算下覆盖不足。读者的 allocated_blocks
+        //   等待保持 1024 一档不变——那边只需覆盖写者的填充时长。）
         {
             uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
             if (done == total_threads) {
@@ -246,7 +249,7 @@ static int mesh_upi_sve_asymm_int_run(struct test *test, int cpu) {
             } else {
                 uint32_t spin = 0;
                 while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
-                    if ((++spin & 1023u) == 0) {
+                    if ((++spin & 131071u) == 0) {
                         if (!test_time_condition(test)) goto out_of_budget;
                     } else {
                         __asm__ volatile("yield");

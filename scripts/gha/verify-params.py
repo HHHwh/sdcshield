@@ -238,7 +238,9 @@ def main():
             stage_tests.append((label, tests, crashes, npass, nskip, nfail, ncrash, nsoft, len(seeds)))
 
     for label, tests, crashes, npass, nskip, nfail, ncrash, nsoft, nseeds in stage_tests:
-        ok = (nfail == 0 and ncrash == 0 and npass + nskip > 0)
+        # 运行了测试但未捕获到任何种子(state/seed 行缺失)同样判 FAIL:
+        # verbosity<3 或日志被裁时失败将无法按种子复现,证据链缺失不能算通过
+        ok = (nfail == 0 and ncrash == 0 and npass + nskip > 0 and nseeds > 0)
         if not ok:
             fail_total += 1
         crash_total += crashes
@@ -249,12 +251,13 @@ def main():
     if args.smoke:
         for n in [1]:
             y = os.path.join(out_dir, "smoke_zstd19.yaml")
-            cmd = [bin_path, "-n", "1", "-t", "3000", "--max-messages", "0",
+            # -vvv 与 COMMON 一致: YAML state 里的种子需要 verbosity>=3 才输出(F-009 复现链)
+            cmd = [bin_path, "-n", "1", "-t", "3000", "-vvv", "--max-messages", "0",
                    "-e", "zstd19", "-o", y]
             _rc, stdout = run(cmd)
             tests, crashes, seeds = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
-            ok = nfail == 0 and ncrash == 0 and npass >= 1
+            ok = nfail == 0 and ncrash == 0 and npass >= 1 and len(seeds) > 0
             if not ok:
                 fail_total += 1
             crash_total += crashes
@@ -322,9 +325,10 @@ def main():
             continue
         for m in mdim:
             y = os.path.join(out_dir, f"{t}_mdim{m}.yaml")
-            cmd = [bin_path, "-O", f"{t}.mdim={m}", "-n", "1", "--retest-on-failure=0",
-                   "--max-test-loop-count", "3", "-t", "5000", "--max-messages", "0",
-                   "--ignore-timeout", "-e", t, "-o", y]
+            # 与 COMMON 等效(含 -vvv 种子落盘 + ignore-timeout),mdim 阶段种子同样可复现
+            cmd = [bin_path, "-O", f"{t}.mdim={m}", "-n", "1", "-vvv",
+                   "--retest-on-failure=0", "--max-test-loop-count", "3", "-t", "5000",
+                   "--max-messages", "0", "--ignore-timeout", "-e", t, "-o", y]
             _rc, stdout = run(cmd)
             tests, crashes, seeds = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
@@ -339,11 +343,12 @@ def main():
     # echo 各节 + 末行 RESULT 供 workflow 解析
     print(f"enumerated: prod={total_enum} all-quality={len(all_ql)} selftests={len(selftests)} "
           f"threads={threads} nproc={nproc}")
-    # 种子报告(F-009):失败时按下列种子 + --seed 复现;零种子说明 verbosity<3 或日志被裁
+    # 种子报告(F-009):失败时按下列种子 + --rng-state 复现(框架实际选项是
+    # --rng-state / -s,不存在 --seed);零种子说明 verbosity<3 或日志被裁
     if allq_seeds:
         uniq = sorted(set(allq_seeds))
         print(f"seeds: captured={len(allq_seeds)} unique={len(uniq)} "
-              f"(reproduce with: {bin_path} --seed {uniq[0]} ...)")
+              f"(reproduce with: {bin_path} --rng-state {uniq[0]} ...)")
     else:
         print("seeds: captured=0 (verbosity<3 或无 state/seed 行——失败复现依据缺失)")
     for line in log:

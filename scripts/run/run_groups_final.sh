@@ -80,18 +80,30 @@ for group_range in "${groups[@]}"; do
         -T "$TOTAL_TIME" \
         --strict-runtime \
         -o "$LOG_FILE" >> "$LOG_FILE" 2>&1
+    RC=$?
 
-    # 检查结果（fail/crash 均保留日志；只有明确含 result: pass 才删除——零 result 行=异常，一律保留）
+    # 完整判定：命令退出码非 0 / fail/crash / timed out/interrupted/OS error 等异常结果
+    # / 预期用例未全部出结果，均不通过；仅整次运行明确通过且无异常时才删日志
+    # （fail 块内部含独立 "seed:" 行，只统计 "result:" 行，避免误计）
+    PASS_CNT=$(grep -c "result: pass" "$LOG_FILE")
+    RESULT_CNT=$(grep -Ec "result: *(pass|fail|crash|skip|timed out|interrupted|operating system error)" "$LOG_FILE")
+    EXPECTED=${#tests[@]}
     if grep -Eqi "result: *(fail|crash)" "$LOG_FILE"; then
         echo -e "${RED}❌ FAIL${NC}"
         echo "  日志文件: $LOG_FILE"
         echo "  最后失败信息："
         grep -B 5 -A 5 "result: fail" "$LOG_FILE" | grep -E "data\[0..7\]|data_ok|consistent|crc[0-9]*=" | tail -10
-    elif grep -q "result: pass" "$LOG_FILE"; then
+    elif [ $RC -ne 0 ]; then
+        echo -e "${RED}❌ FAIL（命令退出码 $RC）——日志保留: $LOG_FILE${NC}"
+    elif grep -Eqi "result: *(timed out|interrupted|operating system error)" "$LOG_FILE"; then
+        # 混合结果（如 pass + timeout 中断）同样是异常信号，不得当作通过删除日志
+        echo -e "${RED}❌ FAIL（存在 timed out/interrupted/OS error 结果）——日志保留: $LOG_FILE${NC}"
+    elif [ "$RESULT_CNT" -lt "$EXPECTED" ] || [ "$PASS_CNT" -lt "$EXPECTED" ]; then
+        # 组内预期 ${EXPECTED} 个用例未全部出结果或未全部 pass（未执行/被中断/零结果）
+        echo -e "${RED}⚠️ 结果不完整（pass=$PASS_CNT/结果数=$RESULT_CNT，预期 $EXPECTED）——日志保留: $LOG_FILE${NC}"
+    else
         echo -e "${GREEN}✅ PASS${NC}"
         rm -f "$LOG_FILE"
-    else
-        echo -e "${RED}⚠️ 无 result 行（崩溃/被杀/零执行？）——日志保留: $LOG_FILE${NC}"
     fi
     echo ""
 done

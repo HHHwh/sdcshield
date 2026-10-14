@@ -134,8 +134,8 @@
 | C2 | B1-005 | tests/cpu/sve/fma/ 10 文件 + fma2/fma_sve.cpp | 同上 |
 | C3 | B1-006 | tests/cpu/arithmetic_arm/ 4 文件 | `gmp_randseed_ui` 种子改 `random64()` 派生 |
 | C4 | B3-007 | tests/cpu/memory/ 8 文件（memcpy1、memcpy_shuffle_v2、vmovnt1{,_vex,2,2_vex,3,3_vex}） | mt19937 → 框架 API |
-| C5 | B3-008 | tests/cpu/load_port.cpp | 同上 |
-| C6 | B3-010 | tests/cpu/isal_crc32_gzip.cpp | 同上 |
+| C5 | B3-008 | tests/cpu/load_port/load_port.cpp | 同上 |
+| C6 | B3-010 | tests/cpu/crc/isal_crc32_gzip.cpp | 同上 |
 | C7 | B1-007 | tests/cpu/arm64/sve512_f32_chain_arm.cpp:173、sve512_f32_chain_svd.cpp:150 | `0x3FEU → 0x7EU` 一行 + 更正注释（f32 偏置） |
 | C8 | B1-010 | tests/cpu/vector/insert_extract.cpp | per-thread 数据副本（对齐 SVE 版栈缓冲做法），消除共享 mem_buf 竞态 |
 | C9 | A-001 | framework/device/cpu/sysdeps/linux/effective_cpu_freq.hpp:147 | `perf_event_open(&pe, pid, cpu, ...)` 参数序修正：按 CPU 采集应传 `(-1, cpu_number)`；当前 cpu_number 占 pid 位导致 fd 恒失败。位于双架构共享层，不触碰 x86 专属逻辑 |

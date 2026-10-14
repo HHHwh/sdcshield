@@ -14,7 +14,10 @@
  * messages that fill the remaining lanes — same computation family,
  * golden values precomputed for all 8. Ciphertext, MACs and decrypted
  * data are compared against golden values on every iteration to detect
- * silent data corruption.
+ * silent data corruption. Iterations alternate between a re-rolled input
+ * with a same-core recomputed golden and a frozen replay of the init-time
+ * inputs compared byte-exact against the init thread's cross-core golden,
+ * adding coverage for deterministic (mercurial-core) defects.
  * @endparblock
  */
 
@@ -128,35 +131,71 @@ static int aes192_ctr_hmac_sha384_sve_run(struct test *test, int cpu) {
      * this thread's stack). */
     struct aes192_ctr_hmac_sha384_sve_data local_d;
     memcpy(&local_d, d, sizeof(local_d));
+    long iter = 0;
     TEST_LOOP(test, 256) {
-        /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
-         * SVE HMAC recomputed for this thread's data) */
-        memset_random(local_d.plaintext, DATA_SIZE);
-        aes192_ctr_hmac_sha384_sve_compute_golden(&local_d);
-        aes_ctr_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "ciphertext mismatch (SVE)");
-        aes_ctr_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "decryption mismatch (SVE)");
+        if (iter & 1) {
+            /* frozen replay round (PR #244 review): init's shared
+             * cross-core golden — the reroll path recomputes golden
+             * with the same code on the same core, which cannot
+             * catch deterministic (mercurial-core) defects; every
+             * other round replays init's frozen inputs and compares
+             * byte-exact against init's golden computed on a
+             * different core. */
+            aes_ctr_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
+            memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "ciphertext mismatch (frozen replay)");
+            aes_ctr_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
+            memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "decryption mismatch (frozen replay)");
 
-        /* SVE 多流 HMAC (主消息 + 变体) */
-        {
-            const uint8_t *keys[NSTREAM], *msgs[NSTREAM];
-            uint8_t variant_keys[NSTREAM][48];
-            for (int s = 0; s < NSTREAM; ++s) {
-                memcpy(variant_keys[s], local_d.hmac_key, 48);
-                if (s > 0) variant_keys[s][0] ^= (uint8_t)s;
-                keys[s] = variant_keys[s];
+            /* SVE 多流 HMAC (主消息 + 变体) */
+            {
+                const uint8_t *keys[NSTREAM], *msgs[NSTREAM];
+                uint8_t variant_keys[NSTREAM][48];
+                for (int s = 0; s < NSTREAM; ++s) {
+                    memcpy(variant_keys[s], d->hmac_key, 48);
+                    if (s > 0) variant_keys[s][0] ^= (uint8_t)s;
+                    keys[s] = variant_keys[s];
+                }
+                msgs[0] = ciphertext;
+                for (int s = 1; s < NSTREAM; ++s) {
+                    for (size_t i = 0; i < DATA_SIZE; ++i)
+                        variant_msg[(s-1)*DATA_SIZE + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
+                    msgs[s] = variant_msg + (s-1)*DATA_SIZE;
+                }
+                hmac_sha384_x4(mac, keys, 48, msgs, DATA_SIZE);
             }
-            msgs[0] = ciphertext;
-            for (int s = 1; s < NSTREAM; ++s) {
-                for (size_t i = 0; i < DATA_SIZE; ++i)
-                    variant_msg[(s-1)*DATA_SIZE + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
-                msgs[s] = variant_msg + (s-1)*DATA_SIZE;
+            for (int s = 0; s < NSTREAM; ++s)
+                memcmp_or_fail(mac[s], d->golden_mac[s], 48, "HMAC-SHA384 digest mismatch (frozen replay)");
+        } else {
+            /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
+             * SVE HMAC recomputed for this thread's data) */
+            memset_random(local_d.plaintext, DATA_SIZE);
+            aes192_ctr_hmac_sha384_sve_compute_golden(&local_d);
+            aes_ctr_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
+            memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "ciphertext mismatch (SVE)");
+            aes_ctr_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
+            memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "decryption mismatch (SVE)");
+
+            /* SVE 多流 HMAC (主消息 + 变体) */
+            {
+                const uint8_t *keys[NSTREAM], *msgs[NSTREAM];
+                uint8_t variant_keys[NSTREAM][48];
+                for (int s = 0; s < NSTREAM; ++s) {
+                    memcpy(variant_keys[s], local_d.hmac_key, 48);
+                    if (s > 0) variant_keys[s][0] ^= (uint8_t)s;
+                    keys[s] = variant_keys[s];
+                }
+                msgs[0] = ciphertext;
+                for (int s = 1; s < NSTREAM; ++s) {
+                    for (size_t i = 0; i < DATA_SIZE; ++i)
+                        variant_msg[(s-1)*DATA_SIZE + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
+                    msgs[s] = variant_msg + (s-1)*DATA_SIZE;
+                }
+                hmac_sha384_x4(mac, keys, 48, msgs, DATA_SIZE);
             }
-            hmac_sha384_x4(mac, keys, 48, msgs, DATA_SIZE);
+            for (int s = 0; s < NSTREAM; ++s)
+                memcmp_or_fail(mac[s], local_d.golden_mac[s], 48, "HMAC-SHA384 digest mismatch (SVE)");
         }
-        for (int s = 0; s < NSTREAM; ++s)
-            memcmp_or_fail(mac[s], local_d.golden_mac[s], 48, "HMAC-SHA384 digest mismatch (SVE)");
+        ++iter;
     }
     free(ciphertext);
     free(decrypted);

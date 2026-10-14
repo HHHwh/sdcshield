@@ -95,8 +95,16 @@ DISABLE=""
 for t in $EIGEN; do echo "$LIST" | grep -qx "$t" && DISABLE="$DISABLE --disable $t"; done
 FY="$OUT_HOST/fullsuite.yaml"; rm -f "$FY"
 # O-1 修复: 不再 || true 吞错——记录真实 rc, 崩溃/超时/容器错不得静默变 PASS
+# 外层超时预算: 全量 ~577 用例 × -t 1000ms -n 8, 叠加框架 per-test 挂起看门狗
+# (单测试最长 300s)与收尾开销, run_in_pristine 默认 540s 会在跑到一半时被外层
+# timeout 掐死(rc=124, 结果不完整)——这里显式给 3600s, 足够覆盖最坏叠加场景,
+# 且仍能兜底真挂死。
 FULL_RC=0
-FULL=$(run_in_pristine --ignore-timeout -t 1000 -n 8 $DISABLE -o "/out/fullsuite.yaml" 2>&1) || FULL_RC=$?
+FULL=$(TIMEOUT=3600 run_in_pristine --ignore-timeout -t 1000 -n 8 $DISABLE -o "/out/fullsuite.yaml" 2>&1) || FULL_RC=$?
+if [ "$FULL_RC" -eq 124 ]; then
+    # 124 = 外层 timeout 命令专用退出码(非测试自身失败): 单独诊断, 区别于普通 FAIL
+    echo "TIMEOUT: 全量运行撞上外层 timeout 3600s 预算(疑似单测试挂起/整体过慢), fullsuite.yaml 结果不完整" >&2
+fi
 EXIT_LINE=$(echo "$FULL" | grep -iE 'exit:' | tail -1 || echo "exit: unknown")
 PASSES=$(grep -c 'result: pass' "$FY" 2>/dev/null | tr -d '\n'); PASSES=${PASSES:-0}
 SKIPS=$(grep -c 'result: skip' "$FY" 2>/dev/null | tr -d '\n'); SKIPS=${SKIPS:-0}

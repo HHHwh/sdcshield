@@ -11,6 +11,10 @@
  * the ciphertext and verifies that it matches the original plaintext. The 
  * ciphertext, MAC, and decrypted data are compared against pre-computed 
  * golden values on every iteration to detect silent data corruption.
+ * Iterations alternate between a re-rolled input with a same-core
+ * recomputed golden and a frozen replay of the init-time inputs compared
+ * byte-exact against the init thread's cross-core golden, adding coverage
+ * for deterministic (mercurial-core) defects.
  * @endparblock
  */
 
@@ -108,19 +112,39 @@ static int aes_cmac_avx_run(struct test *test, int cpu) {
      * thread's stack; keys/IV ride along as identical values). */
     struct aes_cmac_avx_data local_d;
     memcpy(&local_d, d, sizeof(local_d));
+    long iter = 0;
     TEST_LOOP(test, 256) {
-        /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
-         * CMAC-96 recomputed for this thread's data) */
-        memset_random(local_d.plaintext, DATA_SIZE);
-        aes_cmac_avx_compute_golden(&local_d);
-        aes_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "AES-128-CBC ciphertext mismatch (AVX)");
+        if (iter & 1) {
+            /* frozen replay round (PR #244 review): init's shared
+             * cross-core golden — the reroll path recomputes golden
+             * with the same code on the same core, which cannot
+             * catch deterministic (mercurial-core) defects; every
+             * other round replays init's frozen inputs and compares
+             * byte-exact against init's golden computed on a
+             * different core. */
+            aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
+            memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "AES-128-CBC ciphertext mismatch (frozen replay)");
 
-        aes_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "AES-128-CBC decryption mismatch (AVX)");
+            aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
+            memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "AES-128-CBC decryption mismatch (frozen replay)");
 
-        aes_cmac_96(local_d.cmac_key, ciphertext, DATA_SIZE, mac);
-        memcmp_or_fail(mac, local_d.golden_mac, CMAC_96_DIGEST_SIZE, "AES-CMAC-96 digest mismatch (AVX)");
+            aes_cmac_96(d->cmac_key, ciphertext, DATA_SIZE, mac);
+            memcmp_or_fail(mac, d->golden_mac, CMAC_96_DIGEST_SIZE, "AES-CMAC-96 digest mismatch (frozen replay)");
+        } else {
+            /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
+             * CMAC-96 recomputed for this thread's data) */
+            memset_random(local_d.plaintext, DATA_SIZE);
+            aes_cmac_avx_compute_golden(&local_d);
+            aes_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
+            memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "AES-128-CBC ciphertext mismatch (AVX)");
+
+            aes_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
+            memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "AES-128-CBC decryption mismatch (AVX)");
+
+            aes_cmac_96(local_d.cmac_key, ciphertext, DATA_SIZE, mac);
+            memcmp_or_fail(mac, local_d.golden_mac, CMAC_96_DIGEST_SIZE, "AES-CMAC-96 digest mismatch (AVX)");
+        }
+        ++iter;
     }
 
     free(ciphertext);

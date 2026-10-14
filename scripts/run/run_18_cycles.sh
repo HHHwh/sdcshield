@@ -24,16 +24,20 @@ for ((i=1; i<=TOTAL; i++)); do
 
     # 执行测试（使用正确的时间参数）
     taskset -c $CPU_LIST $OPENDCDIAG -T 10m --strict-runtime -o "$LOG_FILE" &> /dev/null
+    RUN_RC=$?
 
     # 检查执行是否成功（退出码非0则报错）
-    if [ $? -ne 0 ]; then
-        echo -e "\033[31m❌ 执行失败（退出码 $?）\033[0m"
+    if [ $RUN_RC -ne 0 ]; then
+        echo -e "\033[31m❌ 执行失败（退出码 $RUN_RC）\033[0m"
         echo "日志文件: $LOG_FILE"
         # 保留日志供检查，退出循环
         exit 1
     fi
 
-    # 检查结果（忽略大小写；fail/crash 保留；仅明确含 result: pass 才删——零 result 行=异常，保留）
+    # 完整判定（忽略大小写）：先看有无 fail/crash/中断类结果，再核对结果数非零且全 pass
+    # （fail 块内部含独立 "seed:" 行，只统计 "result:" 行，避免误计）
+    RESULT_CNT=$(grep -Eci "result: *(pass|fail|crash|skip|timed out|interrupted|operating system error)" "$LOG_FILE")
+    PASS_CNT=$(grep -c "result: pass" "$LOG_FILE")
     if grep -Eqi "result: *(fail|crash)" "$LOG_FILE"; then
         echo -e "\033[31m❌ FAIL\033[0m"
         echo ""
@@ -43,12 +47,13 @@ for ((i=1; i<=TOTAL; i++)); do
         grep -B 5 -A 5 -i "result: fail" "$LOG_FILE" | tail -20
         echo "=================================================="
         exit 1   # 退出脚本，保留日志
-    elif grep -q "result: pass" "$LOG_FILE"; then
-        echo -e "\033[32m✅ PASS\033[0m"
-        rm -f "$LOG_FILE"   # 删除本次确认通过（含 result: pass）的日志
-    else
-        echo -e "\033[31m⚠️ 无 result 行（崩溃/被杀/零执行？）——日志保留: $LOG_FILE\033[0m"
+    elif [ "$RESULT_CNT" -eq 0 ] || [ "$PASS_CNT" -ne "$RESULT_CNT" ]; then
+        # 零 result 行（崩溃/被杀/零执行）或存在 pass 之外的软失败结果——一律视为失败，保留日志
+        echo -e "\033[31m⚠️ 结果不完整或异常（pass=$PASS_CNT/结果数=$RESULT_CNT）——日志保留: $LOG_FILE\033[0m"
         exit 1
+    else
+        echo -e "\033[32m✅ PASS\033[0m"
+        rm -f "$LOG_FILE"   # 删除本次确认通过（结果齐全且全 pass）的日志
     fi
 
     # 每 5 次输出一次进度

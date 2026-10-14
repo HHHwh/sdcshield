@@ -117,10 +117,16 @@ fi
 PASS_FILES=0
 FAIL_FILES=0
 NO_RESULT=0
+# 框架的异常 result 值（logging.cpp）：一条 pass 不能覆盖 crash/timeout/中断
+ABNORMAL_RE="result: *(crash|timed out|interrupted|operating system error)"
 for f in "${LOGS[@]}"; do
-  if grep -q "result: fail" "$f" 2>/dev/null; then
+  if grep -Eqi "result: *(fail|crash)" "$f" 2>/dev/null; then
     FAIL_FILES=$((FAIL_FILES + 1))
     echo "FAIL: $f"
+  elif grep -Eqi "$ABNORMAL_RE" "$f" 2>/dev/null; then
+    # 混合结果（pass + timed out/interrupted/OS error）同样是异常信号，按失败处理
+    FAIL_FILES=$((FAIL_FILES + 1))
+    echo "FAIL: $f（含 timed out/interrupted/operating system error 结果）"
   elif grep -q "result: pass" "$f" 2>/dev/null; then
     PASS_FILES=$((PASS_FILES + 1))
   else

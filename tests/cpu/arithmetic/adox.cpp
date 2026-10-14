@@ -157,6 +157,23 @@ static int adox_run(struct test *test, int cpu) {
         bool consistent = (memcmp(store_buf.data(), result.data(), N * sizeof(uint64_t)) == 0);
 
         if (!(data_ok && consistent)) {
+            /* 首失配下标定位（CodeRabbit 意见） */
+            int bad_i = -1;
+            for (size_t i = 0; i < N; ++i) {
+                if (result[i] != gold[i]) {
+                    bad_i = (int)i;
+                    break;
+                }
+            }
+            if (bad_i >= 0) {
+                report_fail_msg("adox: first mismatch at i=%d, carry_in=%lu, "
+                                "lhs=0x%016lx, rhs=0x%016lx, result=0x%016lx, "
+                                "gold=0x%016lx, xor=0x%016lx",
+                                bad_i, (unsigned long)carry_in,
+                                (unsigned long)lhs[bad_i], (unsigned long)rhs[bad_i],
+                                (unsigned long)result[bad_i], (unsigned long)gold[bad_i],
+                                (unsigned long)(result[bad_i] ^ gold[bad_i]));
+            }
             print_colored_result("adox", false,
                                  lhs.data(), rhs.data(),
                                  result.data(), gold.data(),

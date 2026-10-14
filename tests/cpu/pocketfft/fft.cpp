@@ -17,7 +17,10 @@
  * spectrum against a golden computed from freshly re-rolled operands
  * every kRerollEvery iterations (per-thread, framework RNG — B2-005;
  * fixed input + fixed binary => bit-identical spectrum, and the
- * framework RNG keeps -s replays reproducible). The inverse cfft
+ * framework RNG keeps -s replays reproducible); each cycle's midpoint
+ * runs one frozen-replay round on init's shared inputs/goldens, so the
+ * init-time golden is actually re-compared instead of staying only the
+ * finiteness canary. The inverse cfft
  * (1/N scaling) is then
  * run as pure additional load: the forward->backward round trip is NOT
  * bit-exact under FFT rounding (measured max rel err ~3e-11 on this
@@ -75,10 +78,11 @@ namespace {
 struct fft_test_data {
     int n;                /* transform length, from the -O pocketfft_fft.n=N knob */
     double *input;        /* interleaved re,im — length 2*n; init fill stays only as
-                             the init-time finiteness canary, not read by test_run
-                             (B2-005: run keeps per-thread re-rolled l_input) */
+                             the init-time finiteness canary between the run loop's
+                             midpoint frozen-replay rounds (B2-005: run otherwise
+                             keeps per-thread re-rolled l_input) */
     double *golden_spec;  /* forward cfft spectrum of input, computed once in init;
-                             same canary role, not read by test_run */
+                             same canary/replay role as input above */
     cfft_plan plan;       /* shared, see the threading note below */
     double *rinput;       /* real FFT input — length n; canary role as above */
     double *rgolden;      /* forward rfft spectrum of rinput (halfcomplex packed,
@@ -113,9 +117,11 @@ struct fft_test_data {
  * B2-005 (R2b freeze blind spot): l_input/l_golden_spec (complex, 2*n
  * doubles) and l_rinput/l_rgolden (real, n doubles) are this thread's
  * re-rolled inputs and goldens — the shared d->input/golden_spec/
- * rinput/rgolden are never read by test_run; init's fills stay only as
- * the init-time finiteness canaries, matching the 46141ed4 Eigen
- * pattern where run owns its inputs outright. */
+ * rinput/rgolden are otherwise only the init-time finiteness canaries,
+ * so the run loop's midpoint frozen-replay round copies them into the
+ * per-thread buffers once per reroll cycle to actually re-verify the
+ * frozen goldens (the same-plan reroll alone cannot catch a mercurial
+ * core defect). */
 static thread_local double *work = nullptr;   /* complex, 2*n doubles */
 static thread_local double *rwork = nullptr;  /* real, n doubles */
 static thread_local double *l_input = nullptr;       /* complex, 2*n doubles */
@@ -248,14 +254,14 @@ static int pocketfft_fft_run(struct test *test, int cpu)
     auto d = CAST(test->data);
     /* B2-005 (R2b freeze blind spot): this thread's inputs and goldens
      * are re-rolled from the framework RNG every kRerollEvery iterations
-     * instead of replaying init's frozen bytes forever; the shared
-     * d->input/golden_spec/rinput/rgolden are never read here (init's
-     * fills stay only as the init-time finiteness canaries, like the
-     * 46141ed4 Eigen pattern). The goldens are recomputed with the very
-     * same plans the verified calls below use, on the same input
-     * distribution, so the finiteness bounds argued in init carry over;
-     * -s replays stay reproducible since the framework RNG is seeded
-     * per test. */
+     * instead of replaying init's frozen bytes forever; each cycle's
+     * midpoint one frozen-replay round instead restores init's shared
+     * d->input/golden_spec/rinput/rgolden into the per-thread buffers,
+     * so the frozen goldens are actually re-compared. The reroll goldens
+     * are recomputed with the very same plans the verified calls below
+     * use, on the same input distribution, so the finiteness bounds
+     * argued in init carry over; -s replays stay reproducible since the
+     * framework RNG is seeded per test. */
     constexpr int kRerollEvery = 16;
     int since_reroll = kRerollEvery; /* force the first-iteration fill */
     TEST_LOOP(test, 1) {
@@ -302,7 +308,14 @@ static int pocketfft_fft_run(struct test *test, int cpu)
 
         /* re-roll (first iteration, then every kRerollEvery-th): fresh
          * high-entropy inputs for this thread; goldens recomputed with
-         * the same plans and the same in-place forward calls init uses */
+         * the same plans and the same in-place forward calls init uses.
+         * At each cycle's midpoint one frozen-replay round instead
+         * restores init's shared inputs and goldens (both the complex
+         * and the real pair): the reroll's golden recompute uses the
+         * very same plans, so a mercurial deterministic core defect
+         * would reproduce identically on both sides and never trip the
+         * compare — replaying init's frozen goldens closes that blind
+         * spot. */
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;
             for (int i = 0; i < 2 * d->n; ++i)
@@ -315,6 +328,11 @@ static int pocketfft_fft_run(struct test *test, int cpu)
             memcpy(l_rgolden, l_rinput, d->n * sizeof(double));
             if (rfft_forward(d->rplan, l_rgolden, 1.0) != 0)
                 report_fail_msg("rfft_forward failed while re-rolling the golden spectrum");
+        } else if (since_reroll == kRerollEvery / 2) {
+            memcpy(l_input, d->input, 2 * d->n * sizeof(double));
+            memcpy(l_golden_spec, d->golden_spec, 2 * d->n * sizeof(double));
+            memcpy(l_rinput, d->rinput, d->n * sizeof(double));
+            memcpy(l_rgolden, d->rgolden, d->n * sizeof(double));
         }
 
         /* copy-in (dirties the cache lines, then the butterflies reload

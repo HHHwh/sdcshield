@@ -197,16 +197,25 @@ static int mesh_upi_sve_symm_int_run(struct test *test, int cpu) {
             td->arrived.store(0, std::memory_order_relaxed);
             td->epoch.store(my_epoch + 1, std::memory_order_release);
         } else {
-            while (td->epoch.load(std::memory_order_acquire) == my_epoch &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
+            /* 自旋按 131072 一档节流预算检查（CodeRabbit 意见，先例
+             * mesh_upi_sve_asymm_distrib_int）：每次自旋都调
+             * test_time_condition 会迅速耗尽 inner_loop_count 预算
+             * （默认 40 次），把屏障等待压成 vacuous 退出；等待条件
+             * 本身每自旋都查，响应不受影响。 */
+            uint32_t spin = 0;
+            while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
+                if ((++spin & 131071u) == 0) {
+                    if (!test_time_condition(test)) goto out_of_budget;
+                } else {
+                    __asm__ volatile("yield");
+                }
             }
-            if (!test_time_condition(test)) break;
         }
         ++my_epoch;
 
     } while (test_time_condition(test));
 
+out_of_budget:
     return EXIT_SUCCESS;
 
     #undef GREEN

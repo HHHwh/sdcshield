@@ -9,15 +9,20 @@
  * @parblock
  * Stress test for SVE data paths via SLEEF's SVE transcendental
  * functions: the original sin/cos/exp/log double families plus the
- * float32 tier (svfloat32_t, 4 lanes at fixed VL=128) and the u35
+ * float32 tier and the u35
  * second-accuracy chains (sin/cos/log/exp2 — u35 SVE has no exp, exp2
  * is its sibling with an independent polynomial chain). Long polynomial
  * FMA dependency chains; results only feed a byte-exact golden compare
  * (data-flow payload: faults surface as wrong values, not crashes —
  * From Gates to SDCs DATE'25). Pure functions => deterministic golden
  * values, recomputed from freshly re-rolled inputs every kRerollEvery
- * iterations with the same kernels (per-thread, framework RNG — B2-006;
- * init's pass stays only as the finiteness canary). u10 and u35 are
+ * iterations with the same kernels (per-thread, framework RNG — B2-006);
+ * each cycle's midpoint runs one frozen-replay round on init's shared
+ * inputs/goldens, so the init-time golden is actually re-compared
+ * instead of staying only the finiteness canary. Every SVE loop steps
+ * by svcntd()/svcntw() with svwhilelt tail truncation — runtime-VL safe
+ * at any vector length, not just the 128-bit one this TU is compiled
+ * for. u10 and u35 are
  * SLEEF's two INDEPENDENT implementations of the same mathematics
  * (different coefficients, different FMA-chain schedules), so the
  * second tier is a free second-phase sample of the same silicon for
@@ -45,20 +50,23 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Fixed 128-bit SVE vector length (-msve-vector-bits=128, matching the
- * tests_sve build block): svfloat64_t is exactly 2 lanes and svfloat32_t
- * exactly 4, so ELEMS (divisible by 4) processes in ELEMS/2 svld1_f64/
- * svst1_f64 pairs (svptrue_b64()) plus ELEMS/4 svld1_f32/svst1_f32
- * quadruples (svptrue_b32()) with fully-active predicates — each
- * predicate is correct because every load/store touches exactly the
- * lanes the fixed VL provides. */
-#define ELEMS 1024   /* elements per family: 512 svfloat64_t vectors (2 lanes) + 256 svfloat32_t vectors (4 lanes) */
+/* Elements per family. Every SVE loop in this TU steps by svcntd()/
+ * svcntw() and builds its load/store predicate with
+ * svwhilelt_b64/b32(i, ELEMS) inside the loop, so it is runtime-VL safe
+ * at ANY hardware vector length — a longer VL can never walk the tail
+ * past ELEMS, a shorter one only shortens the vectors. This TU is
+ * compiled for the fixed 128-bit VL (-msve-vector-bits=128, matching
+ * the tests_sve build block) where svcntd()==2, svcntw()==4 and every
+ * full iteration's svwhilelt is all-true, so the generality costs
+ * nothing on the compiled-for VL. */
+#define ELEMS 1024   /* elements per family (divisible by any sane lane count) */
 
 namespace {
 struct sleef_test_data {
     /* per-domain inputs; the run loop keeps its OWN per-thread re-rolled
      * copy (B2-006) — the shared arrays are filled and golden-checked
-     * once in init as the finiteness canary, then never read again */
+     * once in init as the finiteness canary, then replayed once per
+     * reroll cycle by the run loop's midpoint frozen-replay round */
     double *xd_trig, *xd_exp, *xd_log;
     float  *xf_trig, *xf_exp, *xf_log;
     /* golden outputs, u10 tier, double & float (same canary role) */
@@ -86,9 +94,10 @@ struct sleef_test_data {
  * B2-006 (R2b freeze blind spot): l is this thread's own sleef_test_data
  * — inputs re-rolled from the framework RNG and goldens recomputed with
  * the very same SLEEF kernels every kRerollEvery iterations; the shared
- * test->data inputs/goldens are never read by test_run (init's fill
- * stays only as the init-time finiteness canary, matching the 46141ed4
- * Eigen pattern where run owns its inputs outright). */
+ * test->data inputs/goldens are otherwise only the init-time finiteness
+ * canary, so the run loop's midpoint frozen-replay round copies them
+ * into l once per reroll cycle to actually re-verify the frozen golden
+ * (the same-kernel reroll alone cannot catch a mercurial core defect). */
 static thread_local double *od = nullptr;
 static thread_local float  *of = nullptr;
 static thread_local struct sleef_test_data *l = nullptr;
@@ -177,11 +186,13 @@ static void sleef_fill_inputs(struct sleef_test_data *p)
 
 /* Compute the golden outputs from p's inputs with the very same SVE
  * kernels the run loop verifies against — the shared-helper structure is
- * what keeps the byte-exact comparison valid across rerolls. */
+ * what keeps the byte-exact comparison valid across rerolls. Steps by
+ * svcntd()/svcntw() with svwhilelt tail-truncated predicates, so it is
+ * safe at any runtime VL (see the ELEMS comment above). */
 static void sleef_compute_goldens(struct sleef_test_data *p)
 {
-    const svbool_t pg = svptrue_b64();
-    for (int i = 0; i < ELEMS; i += 2) {
+    for (int i = 0; i < ELEMS; i += svcntd()) {
+        const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
         svfloat64_t x = svld1_f64(pg, &p->xd_trig[i]);
         svst1_f64(pg, &p->gd_sin[i], Sleef_sindx_u10sve(x));
         svst1_f64(pg, &p->gd_cos[i], Sleef_cosdx_u10sve(x));
@@ -196,8 +207,8 @@ static void sleef_compute_goldens(struct sleef_test_data *p)
         /* u35 has NO exp — exp2 is the independent-chain stand-in */
         svst1_f64(pg, &p->gd_exp2_35[i], Sleef_exp2dx_u35sve(svld1_f64(pg, &p->xd_exp[i])));
     }
-    const svbool_t pgf = svptrue_b32();
-    for (int i = 0; i < ELEMS; i += 4) {
+    for (int i = 0; i < ELEMS; i += svcntw()) {
+        const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
         svfloat32_t x = svld1_f32(pgf, &p->xf_trig[i]);
         svst1_f32(pgf, &p->gf_sin[i], Sleef_sinfx_u10sve(x));
         svst1_f32(pgf, &p->gf_cos[i], Sleef_cosfx_u10sve(x));
@@ -206,6 +217,33 @@ static void sleef_compute_goldens(struct sleef_test_data *p)
         x = svld1_f32(pgf, &p->xf_log[i]);
         svst1_f32(pgf, &p->gf_log[i], Sleef_logfx_u10sve(x));
     }
+}
+
+/* Copy the complete input+golden state of one sleef_test_data into
+ * another, array by array — used by the run loop's midpoint
+ * frozen-replay round to load init's shared snapshot into this thread's
+ * per-thread struct, after which the normal compute-out + byte-exact
+ * compare verifies the frozen golden against the DUT output. */
+static void sleef_copy_state(struct sleef_test_data *dst, struct sleef_test_data *src)
+{
+    memcpy(dst->xd_trig, src->xd_trig, ELEMS * sizeof(double));
+    memcpy(dst->xd_exp,  src->xd_exp,  ELEMS * sizeof(double));
+    memcpy(dst->xd_log,  src->xd_log,  ELEMS * sizeof(double));
+    memcpy(dst->xf_trig, src->xf_trig, ELEMS * sizeof(float));
+    memcpy(dst->xf_exp,  src->xf_exp,  ELEMS * sizeof(float));
+    memcpy(dst->xf_log,  src->xf_log,  ELEMS * sizeof(float));
+    memcpy(dst->gd_sin,  src->gd_sin,  ELEMS * sizeof(double));
+    memcpy(dst->gd_cos,  src->gd_cos,  ELEMS * sizeof(double));
+    memcpy(dst->gd_exp,  src->gd_exp,  ELEMS * sizeof(double));
+    memcpy(dst->gd_log,  src->gd_log,  ELEMS * sizeof(double));
+    memcpy(dst->gf_sin,  src->gf_sin,  ELEMS * sizeof(float));
+    memcpy(dst->gf_cos,  src->gf_cos,  ELEMS * sizeof(float));
+    memcpy(dst->gf_exp,  src->gf_exp,  ELEMS * sizeof(float));
+    memcpy(dst->gf_log,  src->gf_log,  ELEMS * sizeof(float));
+    memcpy(dst->gd_sin35,   src->gd_sin35,   ELEMS * sizeof(double));
+    memcpy(dst->gd_cos35,   src->gd_cos35,   ELEMS * sizeof(double));
+    memcpy(dst->gd_log35,   src->gd_log35,   ELEMS * sizeof(double));
+    memcpy(dst->gd_exp2_35, src->gd_exp2_35, ELEMS * sizeof(double));
 }
 
 static int sleef_sve_init(struct test *test)
@@ -306,9 +344,11 @@ static int sleef_sve_run(struct test *test, int cpu)
 {
     constexpr int kRerollEvery = 16;
     int since_reroll = kRerollEvery; /* force the first-iteration fill */
+    auto d = CAST(test->data);       /* read-only, for the midpoint frozen replay */
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch output buffers and its own
-         * sleef_test_data (B2-006: run never reads the shared test->data) */
+         * sleef_test_data (B2-006: run owns its re-rolled copy; the shared
+         * test->data is read only by the midpoint frozen-replay round) */
         if (__builtin_expect(!od || !of || !l, 0)) {
             od = (double *)calloc(1, ELEMS * sizeof(double));
             of = (float  *)calloc(1, ELEMS * sizeof(float));
@@ -351,86 +391,105 @@ static int sleef_sve_run(struct test *test, int cpu)
 
         /* B2-006 reroll: fresh framework-RNG inputs and goldens recomputed
          * with the very same kernels every kRerollEvery iterations (46141ed4
-         * Eigen pattern) — the init-frozen shared arrays are never replayed */
+         * Eigen pattern). At each cycle's midpoint one frozen-replay round
+         * instead loads init's shared snapshot into l (sleef_copy_state):
+         * the reroll's golden recompute uses the very same kernels, so a
+         * mercurial deterministic core defect would reproduce identically
+         * in both sides and never trip the compare — replaying init's
+         * frozen golden closes that blind spot. */
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;
             sleef_fill_inputs(l);
             sleef_compute_goldens(l);
+        } else if (since_reroll == kRerollEvery / 2) {
+            sleef_copy_state(l, d);
         }
 
-        /* compute-out: each family replays this thread's re-rolled domain
-         * inputs through the same SVE kernels and lands in the
-         * thread-private scratch */
-        const svbool_t pg = svptrue_b64();
-        for (int i = 0; i < ELEMS; i += 2) {
+        /* compute-out: each family replays this thread's current domain
+         * inputs (re-rolled or frozen-replay snapshot) through the same
+         * SVE kernels and lands in the thread-private scratch; the loops
+         * step by svcntd()/svcntw() with svwhilelt predicates (see the
+         * ELEMS comment), so the tail never walks past ELEMS at any VL */
+        for (int i = 0; i < ELEMS; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
             svfloat64_t x = svld1_f64(pg, &l->xd_trig[i]);
             svst1_f64(pg, &od[i], Sleef_sindx_u10sve(x));
         }
         memcmp_or_fail(od, l->gd_sin, ELEMS, "sin double sve");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < ELEMS; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
             svfloat64_t x = svld1_f64(pg, &l->xd_trig[i]);
             svst1_f64(pg, &od[i], Sleef_cosdx_u10sve(x));
         }
         memcmp_or_fail(od, l->gd_cos, ELEMS, "cos double sve");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < ELEMS; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
             svfloat64_t x = svld1_f64(pg, &l->xd_exp[i]);
             svst1_f64(pg, &od[i], Sleef_expdx_u10sve(x));
         }
         memcmp_or_fail(od, l->gd_exp, ELEMS, "exp double sve");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < ELEMS; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
             svfloat64_t x = svld1_f64(pg, &l->xd_log[i]);
             svst1_f64(pg, &od[i], Sleef_logdx_u10sve(x));
         }
         memcmp_or_fail(od, l->gd_log, ELEMS, "log double sve");
 
-        const svbool_t pgf = svptrue_b32();
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < ELEMS; i += svcntw()) {
+            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
             svfloat32_t x = svld1_f32(pgf, &l->xf_trig[i]);
             svst1_f32(pgf, &of[i], Sleef_sinfx_u10sve(x));
         }
         memcmp_or_fail(of, l->gf_sin, ELEMS, "sin float sve");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < ELEMS; i += svcntw()) {
+            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
             svfloat32_t x = svld1_f32(pgf, &l->xf_trig[i]);
             svst1_f32(pgf, &of[i], Sleef_cosfx_u10sve(x));
         }
         memcmp_or_fail(of, l->gf_cos, ELEMS, "cos float sve");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < ELEMS; i += svcntw()) {
+            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
             svfloat32_t x = svld1_f32(pgf, &l->xf_exp[i]);
             svst1_f32(pgf, &of[i], Sleef_expfx_u10sve(x));
         }
         memcmp_or_fail(of, l->gf_exp, ELEMS, "exp float sve");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < ELEMS; i += svcntw()) {
+            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
             svfloat32_t x = svld1_f32(pgf, &l->xf_log[i]);
             svst1_f32(pgf, &of[i], Sleef_logfx_u10sve(x));
         }
         memcmp_or_fail(of, l->gf_log, ELEMS, "log float sve");
 
         /* u35 second-accuracy tier: same inputs, other polynomial chain */
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < ELEMS; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
             svfloat64_t x = svld1_f64(pg, &l->xd_trig[i]);
             svst1_f64(pg, &od[i], Sleef_sindx_u35sve(x));
         }
         memcmp_or_fail(od, l->gd_sin35, ELEMS, "sin35 double sve");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < ELEMS; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
             svfloat64_t x = svld1_f64(pg, &l->xd_trig[i]);
             svst1_f64(pg, &od[i], Sleef_cosdx_u35sve(x));
         }
         memcmp_or_fail(od, l->gd_cos35, ELEMS, "cos35 double sve");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < ELEMS; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
             svfloat64_t x = svld1_f64(pg, &l->xd_log[i]);
             svst1_f64(pg, &od[i], Sleef_logdx_u35sve(x));
         }
         memcmp_or_fail(od, l->gd_log35, ELEMS, "log35 double sve");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < ELEMS; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
             svfloat64_t x = svld1_f64(pg, &l->xd_exp[i]);
             svst1_f64(pg, &od[i], Sleef_exp2dx_u35sve(x));
         }

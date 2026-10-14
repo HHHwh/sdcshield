@@ -10,7 +10,11 @@
  * using the AVX-512 optimized code path. It also decrypts the ciphertext 
  * and verifies that it matches the original plaintext. Both the ciphertext, 
  * MAC, and decrypted data are compared against pre-computed golden values 
- * on every iteration to detect silent data corruption.
+ * on every iteration to detect silent data corruption. Iterations alternate
+ * between a re-rolled input with a same-core recomputed golden and a frozen
+ * replay of the init-time inputs compared byte-exact against the init
+ * thread's cross-core golden, adding coverage for deterministic
+ * (mercurial-core) defects.
  * @endparblock
  */
 
@@ -105,19 +109,39 @@ static int cmac_avx512_run(struct test *test, int cpu) {
      * thread's stack; keys/IV ride along as identical values). */
     struct cmac_avx512_data local_d;
     memcpy(&local_d, d, sizeof(local_d));
+    long iter = 0;
     TEST_LOOP(test, 256) {
-        /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
-         * CMAC recomputed for this thread's data) */
-        memset_random(local_d.plaintext, DATA_SIZE);
-        cmac_avx512_compute_golden(&local_d);
-        des3_encrypt(local_d.des3_key, local_d.des3_iv, local_d.plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "3DES-DOCSIS ciphertext mismatch (AVX-512)");
+        if (iter & 1) {
+            /* frozen replay round (PR #244 review): init's shared
+             * cross-core golden — the reroll path recomputes golden
+             * with the same code on the same core, which cannot
+             * catch deterministic (mercurial-core) defects; every
+             * other round replays init's frozen inputs and compares
+             * byte-exact against init's golden computed on a
+             * different core. */
+            des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, ciphertext, DATA_SIZE);
+            memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "3DES-DOCSIS ciphertext mismatch (frozen replay)");
 
-        des3_decrypt(local_d.des3_key, local_d.des3_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "3DES-DOCSIS decryption mismatch (AVX-512)");
+            des3_decrypt(d->des3_key, d->des3_iv, ciphertext, decrypted, DATA_SIZE);
+            memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "3DES-DOCSIS decryption mismatch (frozen replay)");
 
-        aes_cmac(local_d.aes_key, ciphertext, DATA_SIZE, mac);
-        memcmp_or_fail(mac, local_d.golden_mac, CMAC_DIGEST_SIZE, "AES-CMAC digest mismatch (AVX-512)");
+            aes_cmac(d->aes_key, ciphertext, DATA_SIZE, mac);
+            memcmp_or_fail(mac, d->golden_mac, CMAC_DIGEST_SIZE, "AES-CMAC digest mismatch (frozen replay)");
+        } else {
+            /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
+             * CMAC recomputed for this thread's data) */
+            memset_random(local_d.plaintext, DATA_SIZE);
+            cmac_avx512_compute_golden(&local_d);
+            des3_encrypt(local_d.des3_key, local_d.des3_iv, local_d.plaintext, ciphertext, DATA_SIZE);
+            memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "3DES-DOCSIS ciphertext mismatch (AVX-512)");
+
+            des3_decrypt(local_d.des3_key, local_d.des3_iv, ciphertext, decrypted, DATA_SIZE);
+            memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "3DES-DOCSIS decryption mismatch (AVX-512)");
+
+            aes_cmac(local_d.aes_key, ciphertext, DATA_SIZE, mac);
+            memcmp_or_fail(mac, local_d.golden_mac, CMAC_DIGEST_SIZE, "AES-CMAC digest mismatch (AVX-512)");
+        }
+        ++iter;
     }
 
     free(ciphertext);

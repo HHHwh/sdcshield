@@ -31,6 +31,9 @@ static int kreg9_run(struct test *test, int cpu) {
                  * orig 后自比, 结构上恒 pass —— B1-004)。 */
                 uint8_t buf[16] __attribute__((aligned(16)));
                 vst1q_u8(buf, vdupq_n_u8(orig));
+                /* 编译器屏障：阻断 store-to-load forwarding 把检查化简为
+                 * 恒真（Greptile 意见，先例：vector/insert_extract.cpp） */
+                __asm__ volatile("" ::: "memory");
                 uint8x16_t v = vld1q_u8(buf);
                 passed = (vmaxvq_u8(v) == orig) && (vminvq_u8(v) == orig);
                 strcpy(type_name, "KMOVB");
@@ -45,6 +48,8 @@ static int kreg9_run(struct test *test, int cpu) {
                 uint16_t orig = static_cast<uint16_t>(random32() & 0xFFFF);
                 uint16_t buf[8] __attribute__((aligned(16)));
                 vst1q_u16(buf, vdupq_n_u16(orig));
+                /* 编译器屏障：阻断 store-to-load forwarding（同 KMOVB case） */
+                __asm__ volatile("" ::: "memory");
                 uint16x8_t v = vld1q_u16(buf);
                 passed = (vmaxvq_u16(v) == orig) && (vminvq_u16(v) == orig);
                 strcpy(type_name, "KMOVW");
@@ -59,6 +64,8 @@ static int kreg9_run(struct test *test, int cpu) {
                 uint32_t orig = random32();
                 uint32_t buf[4] __attribute__((aligned(16)));
                 vst1q_u32(buf, vdupq_n_u32(orig));
+                /* 编译器屏障：阻断 store-to-load forwarding（同 KMOVB case） */
+                __asm__ volatile("" ::: "memory");
                 uint32x4_t v = vld1q_u32(buf);
                 passed = (vmaxvq_u32(v) == orig) && (vminvq_u32(v) == orig);
                 strcpy(type_name, "KMOVD");
@@ -73,6 +80,8 @@ static int kreg9_run(struct test *test, int cpu) {
                 uint64_t orig = ((uint64_t)random32() << 32) | random32();
                 uint64_t buf[2] __attribute__((aligned(16)));
                 vst1q_u64(buf, vdupq_n_u64(orig));
+                /* 编译器屏障：阻断 store-to-load forwarding（同 KMOVB case） */
+                __asm__ volatile("" ::: "memory");
                 uint64x2_t v = vld1q_u64(buf);
                 /* u64 无横向 max/min 归约指令: vceqq 等于比较后以
                  * u32 位视图归约 (全 lane 相等 -> 全 0xFFFFFFFF ->
