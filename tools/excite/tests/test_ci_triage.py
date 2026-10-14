@@ -36,8 +36,24 @@
     真活)占位 → dispatch_agent 返回 None,run_background 不被调用;
  13 test_check_agent_outcome_classes: 五份伪造条目(活 PID+新时间/成功尾行/
     认证失效日志/死 PID/超时起点)→ 分类 running/success/auth_fail/dead/timeout。
+
+用例口径（Task 3 检视修复,4 例;检视主证: 旧实现 run_background 返回
+  wrapper shell 的 PID,整条生命周期判档跟着错——cron 每轮新进程会把健康
+  agent 误判 dead → 重复派发 → 单飞失效 → 误升级 @人工）:
+ 14 test_run_background_returns_job_pid_not_wrapper_pid: 真实 spawn 合成
+    命令 `nohup bash -c 'echo $$ > pidfile; sleep 30' >> log 2>&1 & echo $!`
+    (零 claude/零触网)——返回值必须是后台任务自身 PID(任务自报 $$ 与
+    返回值相等,wrapper shell 与任务是两个进程不可能同 PID);
+ 15 test_auth_fail_kills_live_agent_before_clearing_pid: auth_fail 清
+    agent_pid 前必须击杀仍存活的 agent(真实 sleep 30 子进程)——未达阈值
+    与达阈值(经 _escalate)两路都: 引用清空且进程死亡,单飞不漏无主活进程;
+ 16 test_lying_done_increments_attempts_before_requeue: 日志称 done 但
+    查无 open PR(谎报)→ 与 dead/timeout 同口径 attempts+1 后重派;
+ 17 test_agent_reported_escalation_routes_to_escalate: 日志含结束语契约
+    `ci-triage: escalated <reason>` → 新判档 escalated_reported,直接升级
+    (理由尾巴进 @ 评论、不重派、不计 attempts)。
 """
-import os, sys
+import os, shlex, signal, subprocess, sys, time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -160,11 +176,12 @@ class FakeGh:
     """
 
     def __init__(self, runs=None, search_result=None, closed_search=None,
-                 log_failed="job x failed"):
+                 log_failed="job x failed", prs=None):
         self.runs = runs or []
         self.open_search = search_result or []   # gh search issues --state open
         self.closed_search = closed_search or [] # gh search issues --state closed
         self.log_failed = log_failed
+        self.prs = prs or []                     # gh pr list(success 结局核实)
         self.calls = []                            # 全部 gh_json 调用参数
         self.created_issues = []                   # (title, body)
         self.comments = []                         # (issue_number, body)
@@ -177,6 +194,8 @@ class FakeGh:
         self.calls.append(list(args))
         if args[:2] == ["run", "list"]:
             return self.runs
+        if args[:2] == ["pr", "list"]:
+            return self.prs
         if args[:2] == ["search", "issues"]:
             # gh search issues --repo <slug> --state <open|closed> …
             state = args[args.index("--state") + 1]
@@ -389,10 +408,12 @@ def test_empty_workflows_env_falls_back_to_default(monkeypatch):
 
 # ===========================================================================
 # Task 3: agent 派发与生命周期
-# 测试口径: dispatch 经 monkeypatch run_background(绝不真实 spawn);
+# 测试口径: dispatch 经 monkeypatch run_background(绝不真实派 claude);
 #           check_agent_outcome 走真实 os.kill/文件读(死/活 PID 皆真实可控);
 #           reap_or_advance 经 fake gh(gh pr list / 评论)与 monkeypatch
 #           check_agent_outcome——绝不触网、绝不真实派发。
+#           例外(用例 14): run_background 本体的 PID 契约用真实 spawn 验证
+#           ——合成 sleep 命令,零 claude/零触网,finally 里 SIGKILL 清场。
 # ===========================================================================
 
 def _fake_run_detail(run_id=123456):
@@ -481,8 +502,10 @@ def test_auth_failure_circuit_breaker_counts_across_entries(monkeypatch, tmp_pat
     fake = FakeGh()
     monkeypatch.setattr(ct, "gh_json", fake.gh_json)
 
+    # 伪 PID 用必死值(>pid_max): reap 清引用前会探活击杀,低段伪 PID 有
+    # 撞上真进程被 SIGKILL 的风险(检视修复 2 的联动约束)
     entries = [_sample_entry(workflow="Sanitizer", run_id=i, status="DIAGNOSING",
-                             issue_number=100 + i, agent_pid=11111 + i,
+                             issue_number=100 + i, agent_pid=999999901 + i,
                              agent_log=str(tmp_path / f"run-{i}.log"))
                for i in range(3)]
     state = {"entries": [e.to_dict() for e in entries], "auth_failure_streak": 0}
@@ -571,3 +594,155 @@ def test_check_agent_outcome_classes(monkeypatch, tmp_path):
     assert ct.check_agent_outcome(auth_fail) == "auth_fail"
     assert ct.check_agent_outcome(dead) == "dead"
     assert ct.check_agent_outcome(timeout) == "timeout"
+
+
+# ===========================================================================
+# Task 3 检视修复: run_background PID 契约 / auth_fail 击杀 / 谎报计数 /
+#                 自报升级判档
+# ===========================================================================
+
+def _wait_dead(proc, timeout=5.0):
+    """轮询直至子进程退出(SIGKILL 送达异步,裸 poll 瞬时可能仍 None)。"""
+    for _ in range(int(timeout / 0.02)):
+        if proc.poll() is not None:
+            return proc.returncode
+        time.sleep(0.02)
+    return proc.poll()
+
+
+# ---------------------------------------------------------------------------
+# 用例 14: run_background 真实 spawn——返回任务自身 PID,不是 wrapper shell PID
+
+def test_run_background_returns_job_pid_not_wrapper_pid(tmp_path):
+    log = tmp_path / "bg.log"
+    pidfile = tmp_path / "job.pid"
+    # 与 dispatch_agent 同构的命令形态: 任务自身输出重定向进 log,wrapper 的
+    # stdout 只承载 `echo $!` 一行;任务首步自报 $$ 落盘,作身份铁证。
+    inner = f"echo $$ > {shlex.quote(str(pidfile))}; sleep 30"
+    cmd = (f"nohup bash -c {shlex.quote(inner)} "
+           f">> {shlex.quote(str(log))} 2>&1 & echo $!")
+    pid = ct.run_background(cmd, cwd=str(tmp_path), log=str(log))
+    try:
+        # (a) 返回的 PID 探活为活
+        assert ct.agent_alive(pid)
+        # 等后台任务 exec 后的 bash 完成自报 PID 落盘(≤4s,消除 fork/exec 竞态)
+        for _ in range(200):
+            if pidfile.exists():
+                break
+            time.sleep(0.02)
+        assert pidfile.exists(), "后台任务未在期限内自报 PID(未启动?)"
+        # (b)+(c) 身份证明: 任务自身 $$ == 返回值。wrapper shell 与后台任务
+        # 是 fork 出的两个进程,不可能同 PID——旧实现返回 wrapper PID 必败于此
+        assert int(pidfile.read_text().strip()) == pid
+        # 佐证: 该 PID 的 cmdline 是后台任务本身,不是 `sh -c <整条命令>` 的
+        # wrapper(wrapper 的 argv 含 "echo $!" 字样)
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            argv = f.read().decode("utf-8", errors="replace")
+        assert "sleep 30" in argv.replace("\0", " ")
+        assert "echo $!" not in argv
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# 用例 15: auth_fail 清 agent_pid 前必须击杀仍存活的 agent(单飞不漏无主活进程)
+
+def test_auth_fail_kills_live_agent_before_clearing_pid(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    monkeypatch.setattr(ct, "check_agent_outcome", lambda e: "auth_fail")
+
+    # 场景 1: 未达熔断阈值——被误判/竞态下仍存活的 agent,清引用前先击杀
+    p1 = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    a = _sample_entry(workflow="Sanitizer", run_id=11, status="DIAGNOSING",
+                      issue_number=101, agent_pid=p1.pid, attempts=1,
+                      agent_log=str(tmp_path / "a.log"), extra_runs=[])
+    state = {"entries": [a.to_dict()], "auth_failure_streak": 0}
+    ct.reap_or_advance(state)
+    ea = ct.StateStore.entries(state)[0]
+    assert state["auth_failure_streak"] == 1     # 该结局只计一次
+    assert ea.agent_pid is None                  # 引用已清
+    assert _wait_dead(p1) is not None            # 且进程已死(清引用前被击杀)
+    assert ea.status == "DIAGNOSING"             # 未达阈值不升级
+
+    # 场景 2: 达阈值走 _escalate 路径——同样先击杀再清引用
+    p2 = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    b = _sample_entry(workflow="CodeQL", run_id=12, status="DIAGNOSING",
+                      issue_number=102, agent_pid=p2.pid, attempts=1,
+                      agent_log=str(tmp_path / "b.log"), extra_runs=[])
+    state2 = {"entries": [b.to_dict()], "auth_failure_streak": 2}
+    ct.reap_or_advance(state2)
+    eb = ct.StateStore.entries(state2)[0]
+    assert (tmp_path / "PAUSED").exists()        # 熔断
+    assert eb.status == "ESCALATED"
+    assert eb.agent_pid is None
+    assert _wait_dead(p2) is not None            # 升级路径也不留活 agent
+    assert any("认证" in body for _, body in fake.comments)
+
+
+# ---------------------------------------------------------------------------
+# 用例 16: 谎报 done(日志有 done、查无 open PR)→ attempts+1 后走重派路径
+
+def test_lying_done_increments_attempts_before_requeue(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh(prs=[])          # gh pr list 无命中——日志称 done 但无 PR
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    monkeypatch.setattr(ct, "check_agent_outcome", lambda e: "success")
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=13, status="DIAGNOSING",
+                          issue_number=103, agent_pid=999999999, attempts=1,
+                          agent_log=str(tmp_path / "c.log"), extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+    ct.reap_or_advance(state)
+
+    e = ct.StateStore.entries(state)[0]
+    # 与 dead/timeout 同口径计数(1→2): 缺 +1 时反复谎报的 agent 会比死亡
+    # 路径多白嫖一次派发(3 次才升级 vs 2 次)
+    assert e.attempts == 2
+    assert e.status == "DIAGNOSING"              # ≤MAX_AGENT_ATTEMPTS 待重派
+    assert e.agent_pid is None
+    assert fake.comments == []                   # 未超限,不升级评论
+
+
+# ---------------------------------------------------------------------------
+# 用例 17: agent 自报升级(结束语契约 `ci-triage: escalated <reason>`)
+#          → 新判档 escalated_reported,直接升级、不重派、不计 attempts
+
+def test_agent_reported_escalation_routes_to_escalate(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+
+    log = tmp_path / "agent.log"
+    log.write_text("工作 3590s 仍未复现\n"
+                   "ci-triage: escalated 无法在本机复现失败(仅日志级诊断)\n",
+                   encoding="utf-8")
+    # agent 输出结束语后可能仍短暂存活——诚实升级不能被当成还在跑/dead
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry = _sample_entry(workflow="Sanitizer", run_id=14, status="DIAGNOSING",
+                          issue_number=104, agent_pid=proc.pid, attempts=1,
+                          agent_started_at=now_iso, agent_log=str(log),
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    # 判档: 日志含升级行、PID 仍活 → escalated_reported(非 running/dead)
+    assert ct.check_agent_outcome(entry) == "escalated_reported"
+
+    ct.reap_or_advance(state)
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "ESCALATED"               # 直接升级,不重派
+    assert e.attempts == 1                       # 诚实上报不是失败重试,不计数
+    assert e.agent_pid is None
+    assert len(fake.comments) == 1
+    body = fake.comments[0][1]
+    assert "wangxumarshall" in body              # @人工
+    assert "无法在本机复现失败" in body          # 升级理由尾巴进了评论
+    assert _wait_dead(proc) is not None          # 活 PID 被击杀,不留无主进程

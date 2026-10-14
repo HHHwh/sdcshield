@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -641,15 +642,35 @@ def build_agent_prompt(entry: Entry, run_detail: dict) -> str:
 def run_background(cmd: str, cwd: str, log: str) -> int:
     """后台派生子进程的薄封装(模块级,测试 monkeypatch 的唯一子进程出口)。
 
-    Popen + shell=True + start_new_session(脱离 cron 会话,工具退出后
-    agent 继续跑)+ stdout/stderr 追加重定向到 log。返回子进程 PID。
+    返回 **后台任务自身的 PID**,不是 wrapper shell 的 PID(Task 3 检视
+    Critical: 旧实现返回 proc.pid,而 wrapper 在 `echo $!` 后即退——cron
+    每轮都是新进程,旧 PID 无人认领被 init 收走,下一轮 agent_alive 必为
+    False,健康 agent 被误判 dead → 重复派发 → 单飞失效 → 误升级)。
+
+    命令契约(调用方保证,dispatch_agent 即此形态):
+      `nohup <任务> >> <log> 2>&1 & echo $!`
+    任务自身输出经命令内重定向进 log,wrapper shell 的 stdout 管道上只有
+    `echo $!` 一行 PID 回显——读这一行、解析为 int 即任务 PID(只此一行,
+    无死锁;读完即关,wrapper 回显后即退)。若未回显出整数 PID(命令形态
+    不符/启动即败),如实抛 RuntimeError,绝不拿 proc.pid 顶替。
     """
     os.makedirs(os.path.dirname(log), exist_ok=True)
-    with open(log, "ab") as lf:
-        proc = subprocess.Popen(
-            cmd, shell=True, cwd=cwd, stdout=lf, stderr=lf,
-            stdin=subprocess.DEVNULL, start_new_session=True)
-    return proc.pid
+    proc = subprocess.Popen(
+        cmd, shell=True, cwd=cwd, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+        start_new_session=True)
+    try:
+        line = proc.stdout.readline()
+    finally:
+        proc.stdout.close()
+    proc.wait()          # wrapper 回显后即退: 回收,不留僵尸
+    text = line.decode("utf-8", errors="replace").strip()
+    try:
+        return int(text)
+    except ValueError:
+        raise RuntimeError(
+            f"run_background: cmd stdout 未回显后台任务 PID(期望 `echo $!`"
+            f"的整数,实际 {text!r};日志 {log})")
 
 
 def agent_alive(pid: Optional[int]) -> bool:
@@ -672,6 +693,27 @@ def has_running_agent(state: dict) -> bool:
         if e.status in AGENT_STATES and agent_alive(e.agent_pid):
             return True
     return False
+
+
+def _kill_agent_if_alive(entry: Entry) -> None:
+    """清 agent_pid 前先击杀仍存活的 agent(单飞不漏无主活进程)。
+
+    auth_fail 误判/判档与收割之间的竞态下,agent 可能实际还活着;若只清
+    引用不击杀,单飞判定立即失明——下一个 cron tick 会对同一克隆再派一
+    个 agent,两个 agent 互相踩工作区。此处 agent 已被判档为终局(auth_fail/
+    escalate),宁可补一刀 SIGKILL 也不留无主活进程。
+    """
+    pid = entry.agent_pid
+    if pid is not None and agent_alive(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass          # 探活与击杀之间退出: 已死,无需补刀
+        except PermissionError:
+            # PID 撞上他人进程(非本组): 杀不动,如实说明后仍清引用
+            print(f"[reap] run {entry.run_id}: agent PID {pid} 无权限击杀,"
+                  f"按已退出处理并清引用")
+    entry.agent_pid = None
 
 
 def dispatch_agent(entry: Entry, state: dict,
@@ -717,14 +759,19 @@ def dispatch_agent(entry: Entry, state: dict,
 
 
 def check_agent_outcome(entry: Entry) -> str:
-    """判定 agent 结局: "running"|"success"|"auth_fail"|"dead"|"timeout"。
+    """判定 agent 结局:
+      "running"|"success"|"escalated_reported"|"auth_fail"|"dead"|"timeout"。
 
     判定顺序(先具体后兜底):
-      timeout   — started_at + AGENT_TIMEOUT_SEC 已过(超时强杀优先判);
-      auth_fail — 日志尾部 4000 字符匹配 API Error|403|Not logged in;
-      success   — 日志含结束语契约 `ci-triage: done`;
-      dead      — PID 已死且无上述特征;
-      running   — 其余(PID 活着、尚无结论特征)。
+      timeout            — started_at + AGENT_TIMEOUT_SEC 已过(超时强杀优先判);
+      auth_fail          — 日志尾部 4000 字符匹配 API Error|403|Not logged in;
+      success            — 日志含结束语契约 `ci-triage: done`;
+      escalated_reported — 日志含结束语契约 `ci-triage: escalated`(agent 按
+                           契约自报升级;须在 PID 判死之前——诚实升级的
+                           agent 输出结束语后可能仍短暂存活,不能当成
+                           dead/running 重派);
+      dead               — PID 已死且无上述特征;
+      running            — 其余(PID 活着、尚无结论特征)。
     """
     started = _parse_created_at(entry.agent_started_at or "")
     if started is not None and \
@@ -745,6 +792,8 @@ def check_agent_outcome(entry: Entry) -> str:
         return "auth_fail"
     if AGENT_DONE_MARK in tail:
         return "success"
+    if AGENT_ESCALATED_MARK in tail:
+        return "escalated_reported"
     if not agent_alive(entry.agent_pid):
         return "dead"
     return "running"
@@ -761,11 +810,36 @@ def _log_tail(path: Optional[str], limit: int = 800) -> str:
         return "(日志读取失败)"
 
 
+def _escalated_reason_from_log(path: Optional[str],
+                               limit: int = 4000) -> str:
+    """提取 agent 自报升级的理由尾巴: 日志尾部最后一行
+    `ci-triage: escalated <reason>` 中 mark 之后的部分(与
+    check_agent_outcome 同一 4000 字符窗口,取最后一处——最末状态即
+    最终结论)。"""
+    tail = ""
+    if path:
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - limit))
+                tail = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            tail = ""
+    for line in reversed(tail.splitlines()):
+        if AGENT_ESCALATED_MARK in line:
+            reason = line.split(AGENT_ESCALATED_MARK, 1)[1].strip()
+            return reason or "(未给出原因)"
+    return "(日志中未找到升级理由)"
+
+
 def _escalate(entry: Entry, state: dict, reason: str,
               next_step: str, dry_run: bool) -> None:
     """条目升级人工: 状态 ESCALATED + 一条 @wangxumarshall 评论。"""
     entry.status = "ESCALATED"
-    entry.agent_pid = None           # 归还单飞配额(无活 agent 了)
+    # 升级即终局: 清引用前先击杀仍存活的 agent(误判/竞态下单飞不漏
+    # 无主活进程——见 _kill_agent_if_alive)
+    _kill_agent_if_alive(entry)
     entry.updated_at = _now_iso()
     body = (f"@wangxumarshall ci-triage 升级：{reason}。"
             f"证据：{_log_tail(entry.agent_log)}。"
@@ -783,10 +857,15 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
 
     - DIAGNOSING 条目按 check_agent_outcome 推进:
         success → gh pr list 查 fix 分支 PR → 命中: pr_number + PR_OPEN
-                  (auth_failure_streak 归零——证明凭据活着);未命中: 走
-                  attempts 路径(可能 agent 谎报,重派或升级);
+                  (auth_failure_streak 归零——证明凭据活着);未命中(谎报
+                  done): attempts+1 后走重派/升级(与 dead 同口径计数,
+                  否则反复谎报的 agent 会比死亡路径多白嫖一次派发);
+        escalated_reported → agent 按契约自报升级: 直接 ESCALATED + @ 评论
+                  (理由取日志结束语行尾巴),不重派、不计 attempts(诚实
+                  上报不是失败重试);
         auth_fail → streak+1;达 3 → 写 PAUSED 文件 + 升级评论(全局熔断,
-                    连续认证失效说明凭据过期,继续派发只会空转);
+                  连续认证失效说明凭据过期,继续派发只会空转);清引用前
+                  先击杀仍存活的 agent(单飞不漏无主活进程);
         dead/timeout → attempts+1;≤2 重派(回到 DIAGNOSING 由调用方
                   dispatch);>2 升级人工。
     - BOT_FIX 条目: 结局只记录在条目上,状态不变(pr_loop 已接管)。
@@ -821,11 +900,23 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                 print(f"[reap] run {entry.run_id}: agent 成功 → PR "
                       f"#{entry.pr_number}({entry.fix_branch})")
             else:
-                # 日志称 done 但查无 PR——按失败重走 attempts 路径
+                # 日志称 done 但查无 PR——按失败重走 attempts 路径;与
+                # dead/timeout 同口径 +1,否则反复谎报的 agent 3 次派发
+                # 才升级(比死亡路径多一次)
+                entry.attempts += 1
                 print(f"[reap] run {entry.run_id}: 日志称 done 但无 open PR,"
                       f"按失败处理")
                 _requeue_or_escalate(entry, state, "agent 报 done 但无 PR",
                                      "核对 agent 日志与远端分支", dry_run)
+        elif outcome == "escalated_reported":
+            # agent 按契约自报升级: 采信,直接 ESCALATED——不重派、不计
+            # attempts(诚实上报不是失败重试),升级理由取日志结束语行的
+            # 尾巴随 @ 评论带给人工
+            reason = _escalated_reason_from_log(entry.agent_log)
+            print(f"[reap] run {entry.run_id}: agent 自报升级({reason})")
+            _escalate(entry, state, f"agent 自报升级：{reason}",
+                      "查看 agent 日志与其贴在 issue 下的报告,决定后续处置",
+                      dry_run)
         elif outcome == "auth_fail":
             state["auth_failure_streak"] = \
                 state.get("auth_failure_streak", 0) + 1
@@ -837,10 +928,11 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                           "更新 agent.env 凭据后删除 PAUSED 文件恢复自动派发",
                           dry_run)
             else:
-                # 未达阈值: 清 PID 结束本轮收割(该结局只计一次),
-                # 条目保持 DIAGNOSING——但 agent.env 未修好前重派必再
+                # 未达阈值: 先击杀仍存活的 agent 再清引用(误判/竞态下单飞
+                # 不漏无主活进程),该结局只计一次;条目保持
+                # DIAGNOSING——但 agent.env 未修好前重派必再
                 # auth_fail,继续烧凭据配额,故不立即重派,等下一轮/熔断
-                entry.agent_pid = None
+                _kill_agent_if_alive(entry)
                 print(f"[reap] run {entry.run_id}: agent 认证失效"
                       f"(streak {state['auth_failure_streak']}"
                       f"/{AUTH_FAILURE_STREAK_LIMIT}),不重派等下一轮")
