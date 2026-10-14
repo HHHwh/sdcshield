@@ -24,10 +24,12 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 # 兼容两种启动方式: 仓库根 `python3 scripts/ci_triage.py` 与 scripts/ 目录
@@ -62,6 +64,35 @@ LOOKBACK_DAYS = 3
 STATE_DIR = os.path.expanduser(
     os.environ.get("CITRIAGE_STATE_DIR", "~/.local/state/sdcshield-ci-triage"))
 STATE_FILE_NAME = "state.json"
+
+# agent 专用 CI 克隆目录(cron 里派发的修复 agent 只在此目录干活,绝不
+# 触碰用户工作区)。env CITRIAGE_CLONE_DIR 可重定向(测试用)。
+DEFAULT_CLONE_DIR = "/home/sdc/wangxu/operator/sdcshield-autoci"
+
+# agent 认证环境文件名(位于 STATE_DIR 下,含 ANTHROPIC_* 等 export;
+# agent.env 属于凭据文件,内容绝不进日志/issue/state)
+AGENT_ENV_NAME = "agent.env"
+
+# agent 结束语契约(build_agent_prompt 内嵌,reap 侧逐字匹配):
+#   成功: ci-triage: done <fix_branch>
+#   失败: ci-triage: escalated <reason>
+AGENT_DONE_MARK = "ci-triage: done"
+AGENT_ESCALATED_MARK = "ci-triage: escalated"
+
+# 认证失效日志特征(claude CLI 未登录/API 拒绝的典型输出;只匹配日志
+# 尾部 4000 字符,避免远古噪音)
+AUTH_FAIL_PATTERN = re.compile(r"API Error|403|Not logged in")
+
+# 认证熔断阈值: 连续 N 次 auth_fail → 全局暂停(PAUSED 文件)
+AUTH_FAILURE_STREAK_LIMIT = 3
+
+# 条目状态机中需要「收割」agent 结局的两个状态:
+#   DIAGNOSING = 已派 agent、正在修(本工具的派发目标态)
+#   BOT_FIX    = 修复 PR 已开、pr_loop 接管(agent 结局只记录不推进)
+AGENT_STATES = {"DIAGNOSING", "BOT_FIX"}
+
+# 重派上限: 同一条目 agent 尝试超过 2 次(即第 3 次)→ 升级人工
+MAX_AGENT_ATTEMPTS = 2
 
 # state 顶层结构: {"entries": [...], "auth_failure_streak": 0}
 # auth_failure_streak 是 gh 认证失败的熔断计数,跨条目累计(spec §7)
@@ -533,6 +564,307 @@ def _merge_into_active(state: dict, entries: list[Entry], active: Entry,
     state["entries"] = [e.to_dict() for e in entries]
     print(f"[merge] {run['workflowName']} run {run_id} → 条目 run "
           f"{active.run_id}.extra_runs,评论 issue #{active.issue_number}")
+
+
+# ============ agent 派发与生命周期(Task 3) ============
+
+def _resolve_state_dir() -> str:
+    """当前生效的状态目录(调用时读 env——测试 monkeypatch.setenv 生效)。"""
+    return os.path.expanduser(
+        os.environ.get("CITRIAGE_STATE_DIR", STATE_DIR))
+
+
+def _agent_log_path(run_id: int) -> str:
+    """agent 日志文件路径: <STATE_DIR>/agent-<runid>-<时间戳>.log。
+
+    每次派发独立文件(含秒级时间戳),重派不覆盖上一轮的失败现场。
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return os.path.join(_resolve_state_dir(), f"agent-{run_id}-{ts}.log")
+
+
+def build_agent_prompt(entry: Entry, run_detail: dict) -> str:
+    """构造派发给修复 agent 的中文 prompt。
+
+    内嵌常量任务契约(复现→诊断→修复→验证→commit -s→push→贴报告)、
+    5 条红线、不可信数据横幅、分层复现口径提示、git 单树纪律与结束语
+    契约——全部逐字内嵌,不依赖运行时状态。
+    """
+    fix_branch = entry.fix_branch or f"fix/ci-{entry.run_id}"
+    return f"""你是 SDCShield 仓库的 CI 修复 agent,工作目录是仓库的 CI 专用克隆(不是任何用户的工作区)。
+
+## 红线(违反任何一条即整体失败)
+1. 绝不推 main——修复只进 {fix_branch} 分支,main 只读。
+2. 绝不 merge——不合并任何分支/PR,合并是人的职责。
+3. 绝不 resolve——不把 issue/PR 标记 resolved/closed,只回帖报告。
+4. 绝不碰用户工作区——你的 cwd 之外(尤其 /home/sdc/wangxu/operator/sdcshield 主工作区)一律只读、最好不进。
+5. 未复现不修——复现是修复的前提;复现不出就如实报告 escalated,绝不猜测式修改。
+
+## 任务(修复 CI 红 run {entry.run_id})
+- Workflow: {run_detail.get('workflowName', entry.workflow)}
+- Run: {run_detail.get('url', f'(run {entry.run_id})')}
+- Head SHA: {run_detail.get('headSha', '?')}
+- 跟踪 issue: #{entry.issue_number}(最终报告贴在该 issue 下)
+- 拉失败日志: gh run view {entry.run_id} --log-failed
+
+## 工作契约(严格按序)
+1. 复现: 先读仓库规则(CLAUDE.md、AGENTS.md),按下述分层口径复现失败。
+2. 诊断: 定位根因——是代码缺陷、构建环境、还是测试假设过期。
+3. 修复: 最小修复,一个补丁一个单元,遵循仓库代码风格。
+4. 验证(CLAUDE.md 规则 2): 修复后必须真实自证——构建零新警告、受影响
+   行为跑通并引用真实输出、回归 `-e <受影响测试> -t 2000 -n 1` exit: pass;
+   不得以「应该能过」替代验证。
+5. 提交: git commit -s(DCO: Signed-off-by 最后一行);绝不捆绑多个单元。
+6. 推送: push 到 {fix_branch} 分支(绝不推 main)。
+7. 报告: 把修复报告(根因、修法、验证证据)贴到 issue #{entry.issue_number}。
+
+## 分层复现口径
+- Sanitizer 红: 在本机克隆里按同 sanitizer 配置重跑(能直接复现)。
+- Multi-OS Verify 红: 优先在本机容器/同环境复现;确实不可行时基于
+  失败日志与代码路径做日志级诊断,并在报告里如实声明验证边界。
+- CodeQL / Security 告警: 无需运行复现——按告警定位到具体代码行,
+  判定真/误报,真报走修复,误报给出依据。
+
+## git 单树纪律
+从 origin/main 起: `git checkout -B {fix_branch} origin/main`,全程只在此
+分支提交;结束时工作区回到干净的 main(`git checkout main && git status`
+须 clean),不留任何游离改动。
+
+{UNTRUSTED_BANNER}
+
+## 结束语契约(最后一行,逐字)
+- 成功推分支并贴完报告后,输出一行: `ci-triage: done {fix_branch}`
+- 未能完成(复现不出/超预算/无法修复)时,输出一行: `ci-triage: escalated <原因>`
+"""
+
+
+def run_background(cmd: str, cwd: str, log: str) -> int:
+    """后台派生子进程的薄封装(模块级,测试 monkeypatch 的唯一子进程出口)。
+
+    Popen + shell=True + start_new_session(脱离 cron 会话,工具退出后
+    agent 继续跑)+ stdout/stderr 追加重定向到 log。返回子进程 PID。
+    """
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "ab") as lf:
+        proc = subprocess.Popen(
+            cmd, shell=True, cwd=cwd, stdout=lf, stderr=lf,
+            stdin=subprocess.DEVNULL, start_new_session=True)
+    return proc.pid
+
+
+def agent_alive(pid: Optional[int]) -> bool:
+    """PID 探活: os.kill(pid, 0)。进程不存在 → False;无权限(非本组
+    进程,如别的用户的进程)→ 视为活着(True)——宁可多判活也不误杀。"""
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def has_running_agent(state: dict) -> bool:
+    """单飞判定: 任一条目持有活 PID 且状态 ∈ {DIAGNOSING, BOT_FIX}。"""
+    for e in StateStore.entries(state):
+        if e.status in AGENT_STATES and agent_alive(e.agent_pid):
+            return True
+    return False
+
+
+def dispatch_agent(entry: Entry, state: dict,
+                   dry_run: bool = False) -> Optional[int]:
+    """派修复 agent(nohup 后台)→ 返回 PID;单飞冲突返回 None。
+
+    命令形态:
+      nohup bash -c 'source <STATE_DIR>/agent.env && timeout <T> claude
+      -p <shlex 引用的 prompt> --dangerously-skip-permissions'
+      >> <log> 2>&1 & echo $!
+    - cwd = agent 专用克隆目录(CITRIAGE_CLONE_DIR,默认 autoci 目录),
+      绝不在用户工作区执行;
+    - 单飞: has_running_agent(state) 为真时拒绝派发(返回 None);
+    - dry_run: 只打印意图,零 spawn,返回 None。
+    """
+    if has_running_agent(state):
+        print(f"[single-flight] 已有 agent 在跑,拒绝为 run {entry.run_id} 派发")
+        return None
+    fix_branch = entry.fix_branch or f"fix/ci-{entry.run_id}"
+    prompt = build_agent_prompt(entry, {"workflowName": entry.workflow})
+    log = _agent_log_path(entry.run_id)
+    clone_dir = os.environ.get("CITRIAGE_CLONE_DIR", DEFAULT_CLONE_DIR)
+    env_file = os.path.join(_resolve_state_dir(), AGENT_ENV_NAME)
+    inner = (f"source {shlex.quote(env_file)} && "
+             f"timeout {AGENT_TIMEOUT_SEC} claude -p {shlex.quote(prompt)} "
+             f"--dangerously-skip-permissions")
+    cmd = (f"nohup bash -c {shlex.quote(inner)} >> {shlex.quote(log)} 2>&1 "
+           f"& echo $!")
+    if dry_run:
+        print(f"[dry-run] 将派 agent 修 run {entry.run_id} → {fix_branch},"
+              f"日志 {log},工作目录 {clone_dir}")
+        return None
+    pid = run_background(cmd, cwd=clone_dir, log=log)
+    entry.agent_pid = pid
+    entry.agent_log = log
+    entry.agent_started_at = _now_iso()
+    entry.fix_branch = fix_branch
+    entry.attempts += 1
+    entry.updated_at = _now_iso()
+    print(f"[dispatch] run {entry.run_id} → agent PID {pid},分支 "
+          f"{fix_branch},日志 {log}")
+    return pid
+
+
+def check_agent_outcome(entry: Entry) -> str:
+    """判定 agent 结局: "running"|"success"|"auth_fail"|"dead"|"timeout"。
+
+    判定顺序(先具体后兜底):
+      timeout   — started_at + AGENT_TIMEOUT_SEC 已过(超时强杀优先判);
+      auth_fail — 日志尾部 4000 字符匹配 API Error|403|Not logged in;
+      success   — 日志含结束语契约 `ci-triage: done`;
+      dead      — PID 已死且无上述特征;
+      running   — 其余(PID 活着、尚无结论特征)。
+    """
+    started = _parse_created_at(entry.agent_started_at or "")
+    if started is not None and \
+            datetime.now(timezone.utc) - started > timedelta(
+                seconds=AGENT_TIMEOUT_SEC):
+        return "timeout"
+    tail = ""
+    if entry.agent_log:
+        try:
+            with open(entry.agent_log, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - 4000))
+                tail = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            tail = ""    # 日志缺失/不可读: 视为无特征,交给后续判档
+    if AUTH_FAIL_PATTERN.search(tail):
+        return "auth_fail"
+    if AGENT_DONE_MARK in tail:
+        return "success"
+    if not agent_alive(entry.agent_pid):
+        return "dead"
+    return "running"
+
+
+def _log_tail(path: Optional[str], limit: int = 800) -> str:
+    """升级评论用的日志尾部摘录(失败现场留存;读不到给占位说明)。"""
+    if not path or not os.path.exists(path):
+        return "(日志缺失)"
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()[-limit:].strip() or "(日志为空)"
+    except OSError:
+        return "(日志读取失败)"
+
+
+def _escalate(entry: Entry, state: dict, reason: str,
+              next_step: str, dry_run: bool) -> None:
+    """条目升级人工: 状态 ESCALATED + 一条 @wangxumarshall 评论。"""
+    entry.status = "ESCALATED"
+    entry.agent_pid = None           # 归还单飞配额(无活 agent 了)
+    entry.updated_at = _now_iso()
+    body = (f"@wangxumarshall ci-triage 升级：{reason}。"
+            f"证据：{_log_tail(entry.agent_log)}。"
+            f"建议人工介入：{next_step}。")
+    if dry_run:
+        print(f"[dry-run] 将评论 issue #{entry.issue_number}: {body[:120]}…")
+        return
+    if entry.issue_number is not None:
+        comment_on_issue(entry.issue_number, body)
+    print(f"[escalate] run {entry.run_id} → ESCALATED({reason})")
+
+
+def reap_or_advance(state: dict, dry_run: bool = False) -> None:
+    """收割 agent 结局并推进状态机(就地更新 state dict)。
+
+    - DIAGNOSING 条目按 check_agent_outcome 推进:
+        success → gh pr list 查 fix 分支 PR → 命中: pr_number + PR_OPEN
+                  (auth_failure_streak 归零——证明凭据活着);未命中: 走
+                  attempts 路径(可能 agent 谎报,重派或升级);
+        auth_fail → streak+1;达 3 → 写 PAUSED 文件 + 升级评论(全局熔断,
+                    连续认证失效说明凭据过期,继续派发只会空转);
+        dead/timeout → attempts+1;≤2 重派(回到 DIAGNOSING 由调用方
+                  dispatch);>2 升级人工。
+    - BOT_FIX 条目: 结局只记录在条目上,状态不变(pr_loop 已接管)。
+    - 单飞语义: 处理中的 agent 未退场(PID 活)不影响本函数——只收割
+      已结束的结局。
+    """
+    entries = StateStore.entries(state)
+    for entry in entries:
+        if entry.status not in AGENT_STATES:
+            continue
+        if entry.agent_pid is None and entry.status == "DIAGNOSING":
+            continue          # 尚未派发,无结局可收割
+        outcome = check_agent_outcome(entry)
+        if outcome == "running":
+            continue
+        entry.updated_at = _now_iso()
+        if entry.status == "BOT_FIX":
+            # pr_loop 接管期: 结局只记录,不推进状态机
+            print(f"[reap] run {entry.run_id}(BOT_FIX) agent 结局: {outcome}")
+            continue
+
+        if outcome == "success":
+            prs = gh_json(["pr", "list", "--repo", repo_slug(),
+                           "--head", entry.fix_branch, "--state", "open",
+                           "--json", "number,headRefName,url"])
+            if isinstance(prs, list) and prs:
+                pr = prs[0]
+                entry.pr_number = int(pr["number"])
+                entry.status = "PR_OPEN"
+                entry.agent_pid = None    # 归还单飞配额
+                state["auth_failure_streak"] = 0    # gh 凭据活着,归零
+                print(f"[reap] run {entry.run_id}: agent 成功 → PR "
+                      f"#{entry.pr_number}({entry.fix_branch})")
+            else:
+                # 日志称 done 但查无 PR——按失败重走 attempts 路径
+                print(f"[reap] run {entry.run_id}: 日志称 done 但无 open PR,"
+                      f"按失败处理")
+                _requeue_or_escalate(entry, state, "agent 报 done 但无 PR",
+                                     "核对 agent 日志与远端分支", dry_run)
+        elif outcome == "auth_fail":
+            state["auth_failure_streak"] = \
+                state.get("auth_failure_streak", 0) + 1
+            if state["auth_failure_streak"] >= AUTH_FAILURE_STREAK_LIMIT:
+                if not dry_run:
+                    Path(_resolve_state_dir(), "PAUSED").touch()
+                _escalate(entry, state, "agent 认证失效，请更新 agent.env"
+                          " 后删除 PAUSED",
+                          "更新 agent.env 凭据后删除 PAUSED 文件恢复自动派发",
+                          dry_run)
+            else:
+                # 未达阈值: 清 PID 结束本轮收割(该结局只计一次),
+                # 条目保持 DIAGNOSING——但 agent.env 未修好前重派必再
+                # auth_fail,继续烧凭据配额,故不立即重派,等下一轮/熔断
+                entry.agent_pid = None
+                print(f"[reap] run {entry.run_id}: agent 认证失效"
+                      f"(streak {state['auth_failure_streak']}"
+                      f"/{AUTH_FAILURE_STREAK_LIMIT}),不重派等下一轮")
+        else:   # dead / timeout
+            entry.attempts += 1
+            _requeue_or_escalate(entry, state,
+                                 "agent " + ("超时" if outcome == "timeout"
+                                             else "进程死亡"),
+                                 "人工查看 agent 日志定位卡点", dry_run)
+    # 序列化回 state: 必须用本轮持有的同一批 Entry 对象——重新从
+    # state["entries"] 解析会拿到未修改的旧 dict,丢掉全部推进
+    state["entries"] = [e.to_dict() for e in entries]
+
+
+def _requeue_or_escalate(entry: Entry, state: dict, reason: str,
+                         next_step: str, dry_run: bool) -> None:
+    """attempts 路径: ≤MAX_AGENT_ATTEMPTS 保持 DIAGNOSING 待重派;
+    超限升级人工。"""
+    if entry.attempts <= MAX_AGENT_ATTEMPTS:
+        entry.agent_pid = None
+        print(f"[requeue] run {entry.run_id}: attempts {entry.attempts}"
+              f"/{MAX_AGENT_ATTEMPTS},待下一轮重派({reason})")
+    else:
+        _escalate(entry, state, reason, next_step, dry_run)
 
 
 # ============ 子命令(Task 2/3/4 实现,本任务仅占位) ============

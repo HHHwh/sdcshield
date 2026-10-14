@@ -24,9 +24,21 @@
     无命中)→ 人工接管信号——不建 issue、不评论、不写入 state,整体跳过;
   8 test_empty_workflows_env_falls_back_to_default: CITRIAGE_WORKFLOWS=""
     (及全空白项)→ 回落默认 4 个名单,显式覆盖仍生效(空名单失明修复)。
+
+用例口径（Task 3,5 例: agent 派发与生命周期）:
+  9 test_dispatch_sources_agent_env: monkeypatch run_background,捕获命令串
+    含 source agent.env、--dangerously-skip-permissions、timeout 3600,
+    cwd=CITRIAGE_CLONE_DIR(monkeypatch.setenv 重定向 tmp 克隆目录);
+ 10 test_prompt_contains_redlines: prompt 含 5 条红线 + issue 号 + fix 分支名;
+ 11 test_auth_failure_circuit_breaker_counts_across_entries: 3 条目各 auth_fail
+    → 熔断(PAUSED 文件写入 tmp STATE_DIR、≥1 条升级评论、streak==3);
+ 12 test_single_flight_blocks_second_dispatch: 活 agent(os.getpid() 顶替 PID,
+    真活)占位 → dispatch_agent 返回 None,run_background 不被调用;
+ 13 test_check_agent_outcome_classes: 五份伪造条目(活 PID+新时间/成功尾行/
+    认证失效日志/死 PID/超时起点)→ 分类 running/success/auth_fail/dead/timeout。
 """
 import os, sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -373,3 +385,189 @@ def test_empty_workflows_env_falls_back_to_default(monkeypatch):
     # 显式覆盖仍然生效(不因修复破坏覆盖语义)
     monkeypatch.setenv("CITRIAGE_WORKFLOWS", "Multi-OS Verify, My Extra WF")
     assert ct.monitored_workflows() == ["Multi-OS Verify", "My Extra WF"]
+
+
+# ===========================================================================
+# Task 3: agent 派发与生命周期
+# 测试口径: dispatch 经 monkeypatch run_background(绝不真实 spawn);
+#           check_agent_outcome 走真实 os.kill/文件读(死/活 PID 皆真实可控);
+#           reap_or_advance 经 fake gh(gh pr list / 评论)与 monkeypatch
+#           check_agent_outcome——绝不触网、绝不真实派发。
+# ===========================================================================
+
+def _fake_run_detail(run_id=123456):
+    """build_agent_prompt 的 run_detail 参数样例(gh run view --json 形态)。"""
+    return {
+        "databaseId": run_id,
+        "workflowName": "Sanitizer",
+        "url": f"https://github.com/example/sdcshield/actions/runs/{run_id}",
+        "headSha": "a" * 40,
+        "createdAt": "2026-10-13T08:00:00Z",
+    }
+
+
+class FakeBg:
+    """run_background 的替身: 记录 (cmd, cwd, log),不真实 spawn。"""
+
+    def __init__(self):
+        self.calls = []   # (cmd, cwd, log)
+
+    def __call__(self, cmd, cwd, log):
+        self.calls.append((cmd, cwd, log))
+        return 424242    # 伪 PID
+
+
+# ---------------------------------------------------------------------------
+# 用例 9: dispatch 命令形态——source agent.env + 危险许可旁路 + timeout,
+#          且在克隆目录(CITRIAGE_CLONE_DIR)执行,entry 记 PID/日志/起点
+
+def test_dispatch_sources_agent_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    clone_dir = tmp_path / "clone"
+    clone_dir.mkdir()
+    monkeypatch.setenv("CITRIAGE_CLONE_DIR", str(clone_dir))
+
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    entry = _sample_entry(status="ISSUED", agent_pid=None,
+                          agent_started_at=None, agent_log=None, attempts=0)
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    pid = ct.dispatch_agent(entry, state)
+
+    assert pid == 424242
+    assert len(bg.calls) == 1
+    cmd, cwd, log = bg.calls[0]
+    assert cwd == str(clone_dir)             # 在克隆目录执行(绝不在用户工作区)
+    assert "source" in cmd
+    assert "agent.env" in cmd                # 认证环境经 STATE_DIR/agent.env 注入
+    assert "--dangerously-skip-permissions" in cmd
+    assert "timeout 3600" in cmd             # agent 最长运行 1 小时
+    assert "claude -p" in cmd                # prompt 经 -p 传入
+    # entry 已记录派发现场: PID/日志路径/起点 + attempts+1
+    assert entry.agent_pid == 424242
+    assert entry.agent_log is not None and "agent.env" not in entry.agent_log
+    assert entry.agent_started_at is not None
+    assert entry.attempts == 1
+
+
+# ---------------------------------------------------------------------------
+# 用例 10: prompt 红线与任务契约——5 红线 + issue 号 + fix 分支名
+
+def test_prompt_contains_redlines():
+    entry = _sample_entry(issue_number=77, run_id=123456,
+                          fix_branch="fix/ci-123456")
+    prompt = ct.build_agent_prompt(entry, _fake_run_detail())
+
+    # 5 条红线逐字命中
+    for redline in ("绝不推 main", "绝不 merge", "绝不 resolve",
+                    "绝不碰用户工作区", "未复现"):
+        assert redline in prompt, f"prompt 缺红线: {redline}"
+    # 任务契约锚点: issue 号 + fix 分支名 + 结束语约定
+    assert "77" in prompt
+    assert "fix/ci-123456" in prompt
+    assert "ci-triage: done" in prompt
+    assert "ci-triage: escalated" in prompt
+    assert ct.UNTRUSTED_BANNER in prompt      # 不可信数据横幅(pr_loop 同源)
+
+
+# ---------------------------------------------------------------------------
+# 用例 11: 认证熔断跨条目累计——3 次 auth_fail → PAUSED + 升级评论 + streak==3
+
+def test_auth_failure_circuit_breaker_counts_across_entries(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+
+    entries = [_sample_entry(workflow="Sanitizer", run_id=i, status="DIAGNOSING",
+                             issue_number=100 + i, agent_pid=11111 + i,
+                             agent_log=str(tmp_path / f"run-{i}.log"))
+               for i in range(3)]
+    state = {"entries": [e.to_dict() for e in entries], "auth_failure_streak": 0}
+    # 三个条目全部判为 auth_fail(日志尾部含认证失效特征)
+    monkeypatch.setattr(ct, "check_agent_outcome", lambda e: "auth_fail")
+
+    ct.reap_or_advance(state)
+
+    # 熔断: PAUSED 文件已写入 state 目录(停止继续派发)
+    assert (tmp_path / "PAUSED").exists()
+    # 跨条目累计计数 = 3
+    assert state["auth_failure_streak"] == 3
+    # 至少一条升级评论提及认证失效与恢复动作
+    assert len(fake.comments) >= 1
+    assert any("认证" in body for _, body in fake.comments)
+    # 触达熔断阈值(第 3 次)的条目升级;前两次未达阈值,保持待重派
+    statuses = [e.status for e in ct.StateStore.entries(state)]
+    assert statuses == ["DIAGNOSING", "DIAGNOSING", "ESCALATED"]
+
+
+# ---------------------------------------------------------------------------
+# 用例 12: 单飞——活 agent 占位时拒绝第二次派发
+
+def test_single_flight_blocks_second_dispatch(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    # 条目 A 持有真实活 PID(本测试进程),状态 DIAGNOSING → has_running_agent
+    a = _sample_entry(workflow="Sanitizer", run_id=1, status="DIAGNOSING",
+                      agent_pid=os.getpid(), extra_runs=[])
+    b = _sample_entry(workflow="CodeQL", run_id=2, status="ISSUED",
+                      agent_pid=None, attempts=0, extra_runs=[])
+    state = {"entries": [a.to_dict(), b.to_dict()], "auth_failure_streak": 0}
+
+    assert ct.has_running_agent(state) is True
+    pid = ct.dispatch_agent(b, state)
+
+    # 拒绝派发: 返回 None,零 spawn,b 不变
+    assert pid is None
+    assert bg.calls == []
+    assert b.agent_pid is None and b.attempts == 0
+
+
+# ---------------------------------------------------------------------------
+# 用例 13: 结局五分类——timeout → auth_fail → success → dead → running
+
+def test_check_agent_outcome_classes(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    now = datetime.now(timezone.utc)
+
+    def _iso(dt):
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _log(name, text):
+        p = tmp_path / name
+        p.write_text(text, encoding="utf-8")
+        return str(p)
+
+    # running: 活 PID(本测试进程)+ 刚启动 + 空日志
+    running = _sample_entry(
+        status="DIAGNOSING", agent_pid=os.getpid(),
+        agent_started_at=_iso(now), agent_log=_log("a.log", "…工作中…"))
+    # success: 日志含结束语(优先于 dead——agent 输出 done 后可能短暂存活)
+    success = _sample_entry(
+        status="DIAGNOSING", agent_pid=os.getpid(),
+        agent_started_at=_iso(now), agent_log=_log("b.log", "修复完成\nci-triage: done fix/ci-9\n"))
+    # auth_fail: 日志尾部含认证失效特征(优先于 success 判定)
+    auth_fail = _sample_entry(
+        status="DIAGNOSING", agent_pid=os.getpid(),
+        agent_started_at=_iso(now),
+        agent_log=_log("c.log", "API Error: 403 Not logged in\n"))
+    # dead: 死 PID + 无特征日志
+    dead = _sample_entry(
+        status="DIAGNOSING", agent_pid=999999999,
+        agent_started_at=_iso(now), agent_log=_log("d.log", "…中途暴毙…"))
+    # timeout: 起点早于 AGENT_TIMEOUT_SEC(即使 PID 仍活也判超时)
+    timeout = _sample_entry(
+        status="DIAGNOSING", agent_pid=os.getpid(),
+        agent_started_at=_iso(now - timedelta(
+            seconds=ct.AGENT_TIMEOUT_SEC + 60)),
+        agent_log=_log("e.log", "…卡死…"))
+
+    assert ct.check_agent_outcome(running) == "running"
+    assert ct.check_agent_outcome(success) == "success"
+    assert ct.check_agent_outcome(auth_fail) == "auth_fail"
+    assert ct.check_agent_outcome(dead) == "dead"
+    assert ct.check_agent_outcome(timeout) == "timeout"
