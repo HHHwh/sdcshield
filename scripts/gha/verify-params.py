@@ -25,6 +25,11 @@ import sys
 RESULT_RE = re.compile(r"^- test:\s*(\S+)")
 RESULT_VAL = re.compile(r"^  result:\s*(\S+)")
 RUNTIME_RE = re.compile(r"^  test-runtime:\s*(\S+)")
+# 种子字段(F-009:此前被丢弃,失败后无法按种子复现):
+#   - 正常路径: verbosity>=3 时 logging.cpp 输出 "  state: { seed: '...', ... }"
+#   - 失败路径: fail 块独立 "  seed: '...'" 行
+SEED_STATE_RE = re.compile(r"^  state: \{ seed: '([^']*)'")
+SEED_LINE_RE = re.compile(r"^\s+seed:\s*'([^']*)'")
 CRASH_RE = re.compile(
     r"crash-context|exited with signal|backtrace|SIGSEGV when|SIGABRT when|SIGILL when|SIGBUS when|SIGFPE when",
     re.IGNORECASE,
@@ -95,10 +100,11 @@ def list_tests(bin_path, extra=None):
 
 
 def parse_result_yaml(text):
-    """从 sdcshield YAML 输出里摘 per-test 的 (test, result, runtime),以及崩溃计数。
+    """从 sdcshield YAML 输出里摘 per-test 的 (test, result, runtime)、崩溃计数与种子。
     text 可以是字符串(小文件)或文件路径(大文件流式读,避免 400MB YAML 全量入内存 OOM)。"""
     tests = []          # list of (name, result, runtime)
     crashes = 0
+    seeds = []          # 种子值列表(state 行 + fail 块 seed 行,供失败复现)
     cur = None
 
     def _feed(line):
@@ -109,6 +115,13 @@ def parse_result_yaml(text):
                 tests.append(cur)
             cur = [m.group(1), "unknown", 0.0]
             return
+        ms = SEED_STATE_RE.match(line)
+        if ms:
+            seeds.append(ms.group(1))
+        else:
+            ml = SEED_LINE_RE.match(line)
+            if ml:
+                seeds.append(ml.group(1))
         if cur is None:
             if CRASH_RE.search(line):
                 crashes += 1
@@ -135,13 +148,13 @@ def parse_result_yaml(text):
                 _feed(line.rstrip("\n"))
     if cur is not None:
         tests.append(cur)
-    return tests, crashes
+    return tests, crashes, seeds
 
 
 def parse_result_file(path):
-    """流式解析 YAML 文件(不整读入内存),返回 (tests, crashes)。文件不存在返回 ([], 0)。"""
+    """流式解析 YAML 文件(不整读入内存),返回 (tests, crashes, seeds)。文件不存在返回 ([], 0, [])。"""
     if not os.path.exists(path) or os.path.getsize(path) == 0:
-        return [], 0
+        return [], 0, []
     return parse_result_yaml(path)
 
 
@@ -194,12 +207,13 @@ def main():
     crash_total = 0
 
     # 通用兜底参数:
+    #   -vvv: 种子(random_generator_state)落盘,供 verify-params 按 seed 复现失败(F-009);
     #   --max-test-loop-count 3:固定每测试 3 次 main loop(禁用 test fracturing),
     #      否则框架对每测试多 seed 分片跑,生成数百 MB YAML + 数十分钟,2-CPU runner 会 OOM。
     #   --timeout=60s:每测试超时防互联类挂死 300s;
     #   --max-messages 0:关掉 per-thread 日志冗余;
     #   --ignore-timeout:把超时当非致命继续,而非整体 exit: invalid。
-    COMMON = ["--retest-on-failure=0", "--max-test-loop-count", "3", "--timeout=60s",
+    COMMON = ["-vvv", "--retest-on-failure=0", "--max-test-loop-count", "3", "--timeout=60s",
               "--max-messages", "0", "--ignore-timeout"]
     # 云 runner 拓扑缺失:mesh_upi_*/memcpy_rewr 需多 NUMA 真实硅,单 socket VM 挂死 → 排除
     CLOUD_DIS = []
@@ -210,6 +224,7 @@ def main():
     #   --quality=-1 覆盖 PROD+BETA+SKIP;-n 1 规避 192 核 eigen ULP flakiness;
     #   -t 5000 只是安全上限(loop 数已由 --max-test-loop-count 限定)。
     stage_tests = []
+    allq_seeds = []     # allquality 阶段全部种子(失败复现依据,汇总时打印)
     if not args.smoke:
         for extra, label in [
             (["--quality=-1", "-n", "1", "-t", "5000"] + COMMON + CLOUD_DIS, "all-quality(-n1)"),
@@ -217,17 +232,18 @@ def main():
             y = os.path.join(out_dir, "allquality.yaml")
             cmd = [bin_path] + extra + ["-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_file(y)
+            tests, crashes, seeds = parse_result_file(y)
+            allq_seeds = seeds
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
-            stage_tests.append((label, tests, crashes, npass, nskip, nfail, ncrash, nsoft))
+            stage_tests.append((label, tests, crashes, npass, nskip, nfail, ncrash, nsoft, len(seeds)))
 
-    for label, tests, crashes, npass, nskip, nfail, ncrash, nsoft in stage_tests:
+    for label, tests, crashes, npass, nskip, nfail, ncrash, nsoft, nseeds in stage_tests:
         ok = (nfail == 0 and ncrash == 0 and npass + nskip > 0)
         if not ok:
             fail_total += 1
         crash_total += crashes
         log.append(f"[{label}] tests={len(tests)} pass={npass} skip={nskip} soft={nsoft} "
-                   f"fail={nfail} crash={ncrash} ({ 'OK' if ok else 'FAIL'})")
+                   f"fail={nfail} crash={ncrash} seeds={nseeds} ({ 'OK' if ok else 'FAIL'})")
 
     # ---- 3) 多线程并发档(-n 1/4/8)对全 PROD 各跑一轮(内存/锁/cache 压力面) ----
     if args.smoke:
@@ -236,14 +252,14 @@ def main():
             cmd = [bin_path, "-n", "1", "-t", "3000", "--max-messages", "0",
                    "-e", "zstd19", "-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_file(y)
+            tests, crashes, seeds = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             ok = nfail == 0 and ncrash == 0 and npass >= 1
             if not ok:
                 fail_total += 1
             crash_total += crashes
             log.append(f"[smoke zstd19 -n 1] pass={npass} skip={nskip} fail={nfail} crash={ncrash} "
-                       f"({'OK' if ok else 'FAIL'})")
+                       f"seeds={len(seeds)} ({'OK' if ok else 'FAIL'})")
         print(f"enumerated: prod={total_enum} all-quality={len(all_ql)} selftests={len(selftests)} "
               f"threads={threads} nproc={nproc} (smoke)")
         for line in log:
@@ -261,14 +277,14 @@ def main():
         disable_args += CLOUD_DIS
         cmd = [bin_path, "-n", str(n), "-t", "1000"] + COMMON + disable_args + ["-o", y]
         _rc, stdout = run(cmd)
-        tests, crashes = parse_result_file(y)
+        tests, crashes, seeds = parse_result_file(y)
         npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
         ok = nfail == 0 and ncrash == 0
         if not ok:
             fail_total += 1
         crash_total += crashes
         log.append(f"[all-PROD -n {n}] pass={npass} skip={nskip} soft={nsoft} "
-                   f"fail={nfail} crash={ncrash} ({'OK' if ok else 'FAIL'})")
+                   f"fail={nfail} crash={ncrash} seeds={len(seeds)} ({'OK' if ok else 'FAIL'})")
 
     # ---- 4) selftests 正向集(@positive) ----
     #   @positive 只带 --selftests 前缀生效。
@@ -310,19 +326,26 @@ def main():
                    "--max-test-loop-count", "3", "-t", "5000", "--max-messages", "0",
                    "--ignore-timeout", "-e", t, "-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_file(y)
+            tests, crashes, seeds = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             ok = nfail == 0 and ncrash == 0
             if not ok:
                 fail_total += 1
             crash_total += crashes
             log.append(f"[{t} mdim={m}] pass={npass} skip={nskip} fail={nfail} crash={ncrash} "
-                       f"({'OK' if ok else 'FAIL'})")
+                       f"seeds={len(seeds)} ({'OK' if ok else 'FAIL'})")
 
     # ---- 汇总 ----
     # echo 各节 + 末行 RESULT 供 workflow 解析
     print(f"enumerated: prod={total_enum} all-quality={len(all_ql)} selftests={len(selftests)} "
           f"threads={threads} nproc={nproc}")
+    # 种子报告(F-009):失败时按下列种子 + --seed 复现;零种子说明 verbosity<3 或日志被裁
+    if allq_seeds:
+        uniq = sorted(set(allq_seeds))
+        print(f"seeds: captured={len(allq_seeds)} unique={len(uniq)} "
+              f"(reproduce with: {bin_path} --seed {uniq[0]} ...)")
+    else:
+        print("seeds: captured=0 (verbosity<3 或无 state/seed 行——失败复现依据缺失)")
     for line in log:
         print(line)
 
