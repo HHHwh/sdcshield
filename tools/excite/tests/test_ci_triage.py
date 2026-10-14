@@ -18,6 +18,12 @@
     (status 非 DONE/ESCALATED)存在 → 新 run 只挂 extra_runs、追加评论 1 次,
     issue 创建调用数为 0(同根因收敛);
   6 test_find_issue_by_run_uses_marker: 标记匹配 body → 返回 issue 号。
+
+用例口径（Task 2 检视修复,2 例覆盖 Important#1/#2 + Minor#3）:
+  7 test_closed_marker_issue_not_recreated: CLOSED issue 携带标记(open 搜索
+    无命中)→ 人工接管信号——不建 issue、不评论、不写入 state,整体跳过;
+  8 test_empty_workflows_env_falls_back_to_default: CITRIAGE_WORKFLOWS=""
+    (及全空白项)→ 回落默认 4 个名单,显式覆盖仍生效(空名单失明修复)。
 """
 import os, sys
 from datetime import datetime, timezone
@@ -27,6 +33,9 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "scripts"))
 import ci_triage as ct
+
+# 测试统一锚定的目标仓库 slug(经 CITRIAGE_REPO 固定,杜绝依赖环境 git remote)
+REPO = "test/repo"
 
 
 def _sample_entry(**overrides):
@@ -131,11 +140,18 @@ def _run(database_id, workflow, event, conclusion, branch="main",
 
 
 class FakeGh:
-    """记录 gh 调用的 fake: run_list(读) / issue_create(写) / comment(写)。"""
+    """记录 gh 调用的 fake: run_list(读) / issue_create(写) / comment(写)。
 
-    def __init__(self, runs=None, search_result=None, log_failed="job x failed"):
+    search_result 按 --state 分桶: open 搜索(open_search)与 closed 搜索
+    (closed_search)各自返回独立结果——覆盖「open 无命中但 closed 携标记」
+    的人工接管场景。
+    """
+
+    def __init__(self, runs=None, search_result=None, closed_search=None,
+                 log_failed="job x failed"):
         self.runs = runs or []
-        self.search_result = search_result or []   # gh search issues --json 返回
+        self.open_search = search_result or []   # gh search issues --state open
+        self.closed_search = closed_search or [] # gh search issues --state closed
         self.log_failed = log_failed
         self.calls = []                            # 全部 gh_json 调用参数
         self.created_issues = []                   # (title, body)
@@ -150,7 +166,9 @@ class FakeGh:
         if args[:2] == ["run", "list"]:
             return self.runs
         if args[:2] == ["search", "issues"]:
-            return self.search_result
+            # gh search issues --repo <slug> --state <open|closed> …
+            state = args[args.index("--state") + 1]
+            return self.open_search if state == "open" else self.closed_search
         if args[:3] == ["issue", "create", "--repo"]:
             # gh issue create --body-file -: 正文经 stdin(input_text)传入
             self.created_issues.append((args[args.index("--title") + 1],
@@ -171,6 +189,7 @@ class FakeGh:
 
 def test_scan_filters_by_workflow_event_branch(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
     # 混合列表: 只有 run#2 (Sanitizer/schedule/failure/main) 应被保留
     runs = [
         _run(101, "Multi-OS Verify", "schedule", "success"),      # 绿: 排除
@@ -189,8 +208,8 @@ def test_scan_filters_by_workflow_event_branch(monkeypatch, tmp_path):
 
     ids = [r["databaseId"] for r in red]
     assert ids == [102, 107, 108]
-    # gh run list 调用必须锚定 main 分支
-    assert any(a[:2] == ["run", "list"] and ct.repo_slug() in a
+    # gh run list 调用必须锚定 main 分支与测试 slug(不依赖环境 git remote)
+    assert any(a[:2] == ["run", "list"] and REPO in a
                and "--branch" in a and a[a.index("--branch") + 1] == "main"
                for a in fake.calls)
 
@@ -200,6 +219,7 @@ def test_scan_filters_by_workflow_event_branch(monkeypatch, tmp_path):
 
 def test_first_red_run_creates_issue(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
     fake = FakeGh(runs=[], search_result=[], log_failed="E: assert 1 == 2")
     monkeypatch.setattr(ct, "gh_json", fake.gh_json)
 
@@ -232,6 +252,7 @@ def test_first_red_run_creates_issue(monkeypatch, tmp_path):
 
 def test_second_red_run_merges_into_active_entry(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
     fake = FakeGh(runs=[], search_result=[], log_failed="E: boom")
     monkeypatch.setattr(ct, "gh_json", fake.gh_json)
 
@@ -267,6 +288,7 @@ def test_second_red_run_merges_into_active_entry(monkeypatch, tmp_path):
 
 def test_find_issue_by_run_uses_marker(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
     search_result = [
         {"number": 12, "title": "unrelated", "body": "no marker here"},
         {"number": 77, "title": "[ci-triage] Sanitizer 红",
@@ -277,10 +299,77 @@ def test_find_issue_by_run_uses_marker(monkeypatch, tmp_path):
 
     assert ct.find_issue_by_run(38482214201) == 77
     # 无匹配 → None(调用方据此决定创建)
-    fake.search_result = []
+    fake.open_search = []
     monkeypatch.setattr(ct, "gh_json", fake.gh_json)
     assert ct.find_issue_by_run(12345) is None
-    # 调用形态: gh search issues --state open,限定 "ci-triage:run" 文本
+    # 调用形态: gh search issues --state open(限定测试 slug),文本 "ci-triage:run"
     assert any(a[0] == "search" and a[1] == "issues" and "--state" in a
-               and a[a.index("--state") + 1] == "open"
+               and a[a.index("--state") + 1] == "open" and REPO in a
                for a in fake.calls)
+
+
+# ---------------------------------------------------------------------------
+# 用例 7: CLOSED issue 携带标记 → 人工接管信号,不重建、不评论、不入 state
+
+def test_closed_marker_issue_not_recreated(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    # open 搜索无命中;closed 搜索返回携标记的已关闭 issue #55
+    fake = FakeGh(runs=[], search_result=[], closed_search=[
+        {"number": 55, "title": "[ci-triage] Sanitizer 红(人工关闭)",
+         "body": "<!-- ci-triage:run:38482214201 -->\n人工接管处理"},
+    ])
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+
+    run = _run(38482214201, "Sanitizer", "schedule", "failure")
+    state = {"entries": [], "auth_failure_streak": 0}
+    new = ct.triage_new_red_runs(state, [run])
+
+    # 不建 issue、不评论、不写入 state,整体跳过该 run
+    assert new == []
+    assert fake.created_issues == []
+    assert fake.comments == []
+    assert state["entries"] == []
+    # 调用顺序: 先搜 open(无命中)再搜 closed(命中 #55)——closed 搜索确实发生
+    search_states = [a[a.index("--state") + 1]
+                     for a in fake.calls if a[:2] == ["search", "issues"]]
+    assert search_states == ["open", "closed"]
+    assert ct.find_closed_marker_issue(38482214201) == 55
+    # open 搜索本身有命中时,走复用路径、不触发 closed 搜索
+    fake2 = FakeGh(runs=[], search_result=[
+        {"number": 66, "title": "[ci-triage] open",
+         "body": "<!-- ci-triage:run:38482214201 -->"},
+    ], closed_search=[
+        {"number": 55, "title": "also closed",
+         "body": "<!-- ci-triage:run:38482214201 -->"},
+    ])
+    monkeypatch.setattr(ct, "gh_json", fake2.gh_json)
+    state2 = {"entries": [], "auth_failure_streak": 0}
+    new2 = ct.triage_new_red_runs(state2, [run])
+    assert len(new2) == 1 and new2[0].issue_number == 66
+    assert fake2.created_issues == []
+    assert fake2.comments == []
+    search_states2 = [a[a.index("--state") + 1]
+                      for a in fake2.calls if a[:2] == ["search", "issues"]]
+    assert search_states2 == ["open"]    # open 命中即止,不查 closed
+
+
+# ---------------------------------------------------------------------------
+# 用例 8: CITRIAGE_WORKFLOWS 空串 → 回落默认名单(空名单失明修复)
+
+def test_empty_workflows_env_falls_back_to_default(monkeypatch):
+    # env 存在但为空串 → 默认 4 个(不是空名单)
+    monkeypatch.setenv("CITRIAGE_WORKFLOWS", "")
+    assert ct.monitored_workflows() == ["Multi-OS Verify", "Sanitizer",
+                                        "CodeQL", "Security"]
+    # 全空白项同理 → 默认 4 个
+    monkeypatch.setenv("CITRIAGE_WORKFLOWS", " , , ")
+    assert ct.monitored_workflows() == ["Multi-OS Verify", "Sanitizer",
+                                        "CodeQL", "Security"]
+    # 未设置 → 默认 4 个
+    monkeypatch.delenv("CITRIAGE_WORKFLOWS", raising=False)
+    assert ct.monitored_workflows() == ["Multi-OS Verify", "Sanitizer",
+                                        "CodeQL", "Security"]
+    # 显式覆盖仍然生效(不因修复破坏覆盖语义)
+    monkeypatch.setenv("CITRIAGE_WORKFLOWS", "Multi-OS Verify, My Extra WF")
+    assert ct.monitored_workflows() == ["Multi-OS Verify", "My Extra WF"]

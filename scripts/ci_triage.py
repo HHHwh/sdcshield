@@ -81,10 +81,15 @@ RUN_MARKER_FMT = "<!-- ci-triage:run:{run_id} -->"
 
 
 def monitored_workflows() -> list[str]:
-    """受监控 workflow 名单——调用时读 env(测试可 monkeypatch.setenv)。"""
-    raw = os.environ.get("CITRIAGE_WORKFLOWS",
-                         "Multi-OS Verify,Sanitizer,CodeQL,Security")
-    return [w.strip() for w in raw.split(",") if w.strip()]
+    """受监控 workflow 名单——调用时读 env(测试可 monkeypatch.setenv)。
+
+    env 存在但为空串(或全空白项,过滤后为空)视同未设置 → 回落默认 4 个
+    ——否则空名单会让扫描静默返回零红 run,无人值守失明(检视 Important#2)。
+    """
+    raw = os.environ.get("CITRIAGE_WORKFLOWS") or \
+        "Multi-OS Verify,Sanitizer,CodeQL,Security"
+    workflows = [w.strip() for w in raw.split(",") if w.strip()]
+    return workflows or ["Multi-OS Verify", "Sanitizer", "CodeQL", "Security"]
 
 
 # ============ 状态条目 ============
@@ -315,18 +320,11 @@ def scan_red_runs(lookback_days: int = LOOKBACK_DAYS) -> list[dict]:
 
 # ============ issue 幂等查找 / 创建 / 收敛评论 ============
 
-def find_issue_by_run(run_id: int) -> Optional[int]:
-    """按幂等标记搜既有 open issue → issue 号;无匹配返回 None。
-
-    `gh search issues --state open "ci-triage:run" --limit 50`(只搜 open:
-    CLOSED 的标记 issue 意味着人工已接管/关闭,不重建——调用方自行决定跳过
-    语义)。命中判据是 body 内含完整标记 `<!-- ci-triage:run:<id> -->`,
-    而非标题匹配——标题会被人工改写,body 标记是稳定锚。
-    """
-    slug = repo_slug()
+def _search_marker_issues(state: str, run_id: int) -> Optional[list]:
+    """`gh search issues --state <state> "ci-triage:run"` → 结果列表。"""
     res = gh_json([
-        "search", "issues", "--repo", slug,
-        "--state", "open",
+        "search", "issues", "--repo", repo_slug(),
+        "--state", state,
         "--json", "number,title,body",
         "--limit", "50",
         "ci-triage:run",
@@ -334,9 +332,30 @@ def find_issue_by_run(run_id: int) -> Optional[int]:
     if not isinstance(res, list):
         raise GhError("gh search issues 返回非 list")
     marker = RUN_MARKER_FMT.format(run_id=run_id)
-    for it in res:
-        if marker in (it.get("body") or ""):
-            return int(it["number"])
+    return [it for it in res if marker in (it.get("body") or "")]
+
+
+def find_issue_by_run(run_id: int) -> Optional[int]:
+    """按幂等标记搜既有 open issue → issue 号;无匹配返回 None。
+
+    只搜 open: 命中判据是 body 内含完整标记
+    `<!-- ci-triage:run:<id> -->`,而非标题匹配——标题会被人工改写,
+    body 标记是稳定锚。CLOSED 的标记 issue(人工接管信号)不在此返回,
+    调用方经 find_closed_marker_issue 另行判定。
+    """
+    for it in _search_marker_issues("open", run_id):
+        return int(it["number"])
+    return None
+
+
+def find_closed_marker_issue(run_id: int) -> Optional[int]:
+    """搜 CLOSED issue 中的幂等标记 → issue 号;无匹配返回 None。
+
+    CLOSED 且携带标记 = 人工已显式接管并关闭该 run 的跟踪(spec §8
+    人工接管信号)——分诊必须跳过该 run,绝不重建人工关闭的 issue。
+    """
+    for it in _search_marker_issues("closed", run_id):
+        return int(it["number"])
     return None
 
 
@@ -352,9 +371,10 @@ def _failed_jobs_and_log(run: dict) -> str:
     except GhError as exc:
         return f"(拉取失败日志出错: {exc})"
     lines = out.splitlines() if isinstance(out, str) else [str(out)]
-    if len(lines) > LOG_EXCERPT_MAX_LINES:
+    total = len(lines)
+    if total > LOG_EXCERPT_MAX_LINES:
         lines = lines[:LOG_EXCERPT_MAX_LINES]
-        lines.append(f"…(已截断,原 {len(lines)}+ 行)")
+        lines.append(f"…(已截断,原 {total} 行)")
     return "\n".join(lines)
 
 
@@ -422,8 +442,9 @@ def triage_new_red_runs(state: dict, runs: list[dict],
       - run 已有条目(run_id 主键) → 跳过(幂等);
       - 同 workflow 已有活跃条目(status 非 DONE/ESCALATED) → 同根因收敛:
         挂 extra_runs + 在既有 issue 上追加一条评论,不开新 issue、不派发;
-      - 否则: 找既有 issue(标记匹配,含 state 外人工已开的)→ 复用;无则建
-        → DETECTED → ISSUED。
+      - 否则: 找既有 open issue(标记匹配,含 state 外人工已开的)→ 复用;
+        open 无命中但 CLOSED issue 携带标记 → 人工接管信号,跳过不重建;
+        全无 → 建 issue → DETECTED → ISSUED。
 
     dry_run=True: 只打印将执行的动作,零 gh 写、零 state 变更。
     """
@@ -467,9 +488,16 @@ def triage_new_red_runs(state: dict, runs: list[dict],
             state["entries"] = [e.to_dict() for e in entries]
             new_entries.append(entry)
             continue
-        # 幂等创建: 先搜标记(含 state.json 之外的既有 issue——双源对账)
+        # 幂等创建: 先搜 open 标记(含 state.json 之外的既有 issue——双源
+        # 对账);open 无命中再查 CLOSED 标记——命中 = 人工已接管关闭该 run
+        # (spec §8 人工接管信号),跳过不重建(检视 Important#1)。
         issue_no = find_issue_by_run(run_id)
         if issue_no is None:
+            closed_no = find_closed_marker_issue(run_id)
+            if closed_no is not None:
+                print(f"[skip] run {run_id} 的标记 issue #{closed_no} 已被"
+                      f"人工关闭(接管信号)——不重建,跳过该 run")
+                continue
             issue_no = create_issue(run)
         else:
             print(f"[reuse] run {run_id} 复用既有 issue #{issue_no}")
