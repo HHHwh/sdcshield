@@ -53,6 +53,7 @@
 
 #include <sandstone.h>
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -278,6 +279,11 @@ static int sme_za_tileview_arm_run(struct test *test, int cpu)
 #else
     auto *d = static_cast<SmeZaTileviewData *>(test->data);
     const long n = d->n;
+    /* init and run are separate functions: the five stack buffers below
+     * are sized kTileNMax*kTileNMax and the kernel writes n*n into each,
+     * so pin init's invariant (n within [2, kTileNMax]) before any buffer
+     * math (PR #242 review, coderabbit). */
+    assert(n >= 2 && n <= kTileNMax);
     const size_t count = static_cast<size_t>(n) * n;
     const size_t bytes = count * sizeof(double);
 

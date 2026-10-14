@@ -52,6 +52,7 @@
  */
 
 #include <sandstone.h>
+#include <cassert>
 #include <cinttypes>
 #include <cstdint>
 #include <cstddef>
@@ -148,13 +149,16 @@ static int sve512_stencil_axis_arm_init(struct test *test)
      * The 512-bit geometry was characterized on HiSilicon 0xd22; the
      * parameterized geometry is verified at all four VLs in gem5 (the
      * historical issue #182 mismatch was the stale RADIUS=4 analytic
-     * expectation, since fixed — see the @parblock). */
+     * expectation, since fixed — see the @parblock). svcntd() is >= 2 on
+     * any legal SVE (VL >= 128-bit), so bt < 4 is a defensive dead branch
+     * kept as a stack-buffer guard, not a reachable skip. */
     const size_t bt = 2 * svcntd();
     if (bt < 4 || bt > kTileMax) {
         log_skip(CpuNotSupportedSkipCategory,
-                 "sve512_stencil_axis_arm: SVE vector length %zu bytes is "
-                 "outside the supported 128..1024-bit range",
-                 static_cast<size_t>(svcntb()));
+                 "sve512_stencil_axis_arm: SVE vector length %zu bytes "
+                 "(bt=%zu f64 tile lanes) is outside the supported "
+                 "128..1024-bit range",
+                 static_cast<size_t>(svcntb()), bt);
         return EXIT_SKIP;
     }
 
@@ -196,6 +200,11 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
 
     const double* s_base = d->s_base;
     const size_t bt = d->bt;
+    /* init and run are separate functions: the expected/result stack
+     * arrays below are sized kTileMax, so pin init's invariant (bt within
+     * [4, kTileMax]) before any buffer math (PR #242 review, coderabbit
+     * Learnings). */
+    assert(bt >= 4 && bt <= kTileMax);
     const size_t lanes = bt / 2;
     const svbool_t ptrue = svptrue_b64();
 

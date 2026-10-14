@@ -48,6 +48,7 @@
 
 #include <sandstone.h>
 
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -225,6 +226,11 @@ static int sme_fmopa_stress_arm_run(struct test *test, int cpu)
 #else
     auto *d = static_cast<SmeFmopaData *>(test->data);
     const long n = d->n;
+    /* init and run are separate functions: the stack drain buffer below
+     * is sized kTileNMax*kTileNMax and the kernel writes n*n into it, so
+     * pin init's invariant (n within [4, kTileNMax]) before any buffer
+     * math (PR #242 review, coderabbit). */
+    assert(n >= 4 && n <= kTileNMax);
     const size_t count = static_cast<size_t>(n) * n;
     const size_t bytes = count * sizeof(float);
 
