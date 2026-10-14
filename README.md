@@ -512,6 +512,7 @@ bash  scripts/sdc-excite-reproduce/excite.sh --smoke / --status / --stop    # �
 
 ## 延伸
 
+- [PR 检视-修复闭环手册](docs/misc/pr-loop.md) — 会话内 agent 自动化：push 自动开 PR → 四 bot 检视 → subagent 批判性处置修复 → 循环闭环 → 人工 merge（引擎 `scripts/pr_loop.py`，双端入口 `/pr-loop` 与 `.trae/rules/pr-loop.md`）
 - [编写测试指南](docs/misc/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
 - [离线构建依赖与排坑](docs/build-deploy/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
 - [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据
