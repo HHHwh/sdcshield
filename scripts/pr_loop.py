@@ -46,6 +46,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -93,8 +96,12 @@ SUMMARY_MARKERS = (
 )
 
 GH_TIMEOUT = 45          # 单次 gh api 子进程超时(秒)
-GH_RETRIES = 3           # 瞬态失败(HTTP 5xx / 网络抖动)重试总次数
+GH_RETRIES = 3           # 每个请求的总尝试次数(含首次;首次失败后再重试 2 次)
 GH_RETRY_BACKOFF = 1.0   # 每次重试前等待秒数(线性: 1s / 2s)
+# gh CLI 把 API HTTP 状态回显在 stderr(如 "gh: Not Found (HTTP 404)")。
+# 4xx 是确定性错误(权限/不存在/参数),重试只会白等退避时间(greptile PR#245);
+# 5xx/网络抖动/超时才可能自愈。不在 git 仓库内等 gh 侧错误同理走此路径。
+GH_FATAL_HTTP = re.compile(r"HTTP 4\d\d")
 MAX_PAGES = 20           # 分页上限(20 页 × 100 条 = 2000 条)
 DEFAULT_TIMEOUT = 7200   # wait 默认总超时(秒),覆盖「约 2 小时」检视预算
 DEFAULT_INTERVAL = 60    # wait 默认轮询间隔(秒)
@@ -138,9 +145,10 @@ def _gh_once(argv: List[str]) -> Optional[subprocess.CompletedProcess]:
 
 
 def gh_api(path: str) -> Any:
-    """gh api GET → 解析 JSON。瞬态失败(exit≠0 / 超时)短退避重试后仍失败抛 GhError;
-    gh 缺失与响应非 JSON 是确定性错误,不重试(2026-10-14 实证: pulls/N/reviews 偶发
-    HTTP 500 曾令 status 总览整体 exit 2)。"""
+    """gh api GET → 解析 JSON。瞬态失败(超时 / HTTP 5xx / 网络抖动)短退避重试
+    (总尝试 ≤ GH_RETRIES 次,含首次)后仍失败抛 GhError;HTTP 4xx 与响应非 JSON 是
+    确定性错误,首次即抛不重试(2026-10-14 实证: pulls/N/reviews 偶发 HTTP 500 曾令
+    status 总览整体 exit 2;greptile PR#245: 4xx 重试只白等退避时间)。"""
     last: Optional[Exception] = None
     for attempt in range(GH_RETRIES):
         proc = _gh_once(["gh", "api", path])
@@ -154,6 +162,8 @@ def gh_api(path: str) -> Any:
         else:
             err = " ".join(proc.stderr.strip().split())[:300]
             last = GhError(f"gh api {path} 失败(exit {proc.returncode}): {err}")
+            if GH_FATAL_HTTP.search(proc.stderr):
+                raise last          # 4xx 确定性错误,快速失败
         if attempt < GH_RETRIES - 1:
             time.sleep(GH_RETRY_BACKOFF * (attempt + 1))
     assert last is not None
@@ -183,7 +193,8 @@ def gh_api_paged(path: str, list_key: Optional[str] = None) -> list:
 
 def resolve_slug(explicit: Optional[str]) -> str:
     """目标仓库 owner/repo。--repo 显式覆盖,否则取 gh 上下文仓库。
-    瞬态失败重试策略与 gh_api 一致(2026-10-14 实证: repo view 同样会吃到 HTTP 500)。"""
+    瞬态失败重试策略与 gh_api 一致(2026-10-14 实证: repo view 同样会吃到 HTTP 500);
+    不在 git 仓库内等确定性错误快速失败(greptile PR#245)。"""
     if explicit:
         return explicit
     last_err = ""
@@ -194,6 +205,8 @@ def resolve_slug(explicit: Optional[str]) -> str:
             return proc.stdout.strip()
         last_err = (f"gh repo view 超时({GH_TIMEOUT}s)" if proc is None
                     else " ".join((proc.stderr or "空输出").strip().split())[:300])
+        if proc is not None and proc.returncode != 0 and GH_FATAL_HTTP.search(proc.stderr or ""):
+            break       # 确定性错误(不在 git 仓库/未认证),不再重试
         if attempt < GH_RETRIES - 1:
             time.sleep(GH_RETRY_BACKOFF * (attempt + 1))
     raise GhError(f"解析当前仓库失败(gh repo view): {last_err}"
@@ -929,7 +942,120 @@ def cmd_collect(args: argparse.Namespace) -> int:
     return 0
 
 
-# ============ 入口 ============
+# ============ 子命令: selftest ============
+
+def _selftest_run(argv: list, env_dir: Optional[str] = None) -> subprocess.CompletedProcess:
+    """在受控 PATH(可选注入 fake gh)下跑本脚本的 main(),捕获 stdout/exit code。
+    供 selftest 断言「重试次数 / 4xx 快速失败 / 单 PR 降级 / 全失败 exit 2」。"""
+    env = dict(os.environ)
+    if env_dir:
+        env["PATH"] = f"{env_dir}{os.pathsep}{env['PATH']}"
+        env["SELFTEST_REAL_GH"] = shutil.which("gh") or "/usr/bin/gh"
+    return subprocess.run([sys.executable, __file__, *argv],
+                          capture_output=True, text=True, timeout=300, env=env)
+
+
+def _selftest_fake_gh(tmp: str, mode: str) -> str:
+    """生成 fake gh 脚本目录并返回路径。mode:
+    fail_once_once  首个 api 调用失败一次后放行(验证重试恢复)
+    api_404_always   api 全 404(验证 4xx 快速失败: 只调 1 次)
+    api_5xx_always   api 全 500(验证重试耗尽: 调满 3 次)
+    repo_ok_pr_fail repo view 成功、pulls 列表成功、逐 PR 详情失败(总览降级)
+    真 gh 路径由调用方通过 _selftest_real_gh 注入为环境变量 SELFTEST_REAL_GH
+    (fake 在受控 PATH 首位,自身不可作为 REAL——command -v 会解析回 fake)。"""
+    d = os.path.join(tmp, f"gh-{mode}")
+    os.makedirs(d, exist_ok=True)
+    # 计数行放头部(且只计 api 调用——repo view 等前置调用不计入重试契约):
+    # exit 1 的 case 分支会短路尾部追加行
+    script = textwrap.dedent(f"""\
+        #!/bin/sh
+        [ "$1" = api ] && echo x >> {d}/calls 2>/dev/null
+        REAL="${{SELFTEST_REAL_GH:-/usr/bin/gh}}"
+        case "{mode}" in
+          fail_once_once)
+            [ "$1" = api ] && [ -f {d}/fail_once ] && {{ rm {d}/fail_once
+                echo "gh: Server Error (HTTP 500)" >&2; exit 1; }}
+            exec "$REAL" "$@" ;;
+          api_404_always)
+            [ "$1" = api ] && {{ echo "gh: Not Found (HTTP 404)" >&2; exit 1; }}
+            exec "$REAL" "$@" ;;
+          api_5xx_always)
+            [ "$1" = api ] && {{ echo "gh: Server Error (HTTP 500)" >&2; exit 1; }}
+            exec "$REAL" "$@" ;;
+          repo_ok_pr_fail)
+            # repo view / PR 列表放行; 逐 PR 数据一律 500 → status 总览走降级路径
+            case "$*" in
+              *"/pulls?state=open"*|repo*) exec "$REAL" "$@" ;;
+              *) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
+            esac ;;
+        esac
+        exec "$REAL" "$@"
+        """)
+    path = os.path.join(d, "gh")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(script)
+    os.chmod(path, 0o755)
+    return d
+
+
+def cmd_selftest(_args: argparse.Namespace) -> int:
+    """离线自检: 用 fake gh 注入故障,验证重试/快速失败/降级/退出码契约。
+    依赖: 系统有真 gh(auth 与否均可——repo view/api 的成功路径仅在
+    fail_once_once 场景被触达,其余场景全走 fake 失败分支)。
+    覆盖 greptile PR#245 三条意见: 4xx 不重试、重试次数含首次、单 PR 降级。"""
+    import tempfile
+    cases = []
+    print("== pr_loop selftest(fake gh 故障注入)==")
+
+    with tempfile.TemporaryDirectory(prefix="pr_loop_selftest_") as tmp:
+        # 1) 瞬态失败 → 重试恢复(status 总览 exit 0)
+        d = _selftest_fake_gh(tmp, "fail_once_once")
+        open(os.path.join(d, "fail_once"), "w").close()   # 首个 api 调用失败一次
+        r = _selftest_run(["status"], env_dir=d)
+        ok1 = r.returncode == 0 and not os.path.exists(os.path.join(d, "fail_once"))
+        cases.append(("瞬态失败重试恢复(status exit 0)", ok1))
+
+        # 2) HTTP 404(确定性) → 快速失败: 仅 1 次调用即抛
+        d = _selftest_fake_gh(tmp, "api_404_always")
+        marker = os.path.join(d, "calls")
+        r = _selftest_run(["status"], env_dir=d)
+        calls = 0
+        if os.path.exists(marker):
+            with open(marker, encoding="utf-8") as fh:
+                calls = len(fh.read().splitlines())
+        ok2 = r.returncode == 2 and calls == 1
+        cases.append((f"HTTP 404 快速失败(exit 2,仅 1 次调用,实际 {calls})", ok2))
+
+        # 3) HTTP 500(瞬态) → 重试耗尽: 3 次尝试
+        d = _selftest_fake_gh(tmp, "api_5xx_always")
+        marker = os.path.join(d, "calls")
+        r = _selftest_run(["status"], env_dir=d)
+        calls = 0
+        if os.path.exists(marker):
+            with open(marker, encoding="utf-8") as fh:
+                calls = len(fh.read().splitlines())
+        ok3 = r.returncode == 2 and calls == 3
+        cases.append((f"HTTP 500 重试耗尽(exit 2,3 次尝试,实际 {calls})", ok3))
+
+        # 4) 逐 PR 失败 → 总览降级(单 PR 标注跳过,exit 0;全失败 exit 2)
+        d = _selftest_fake_gh(tmp, "repo_ok_pr_fail")
+        r = _selftest_run(["status"], env_dir=d)
+        out = r.stdout + r.stderr
+        degraded = ("数据拉取失败" in out) or ("无 open PR" in out) or ("均拉取失败" in out)
+        ok4 = (r.returncode in (0, 2)) and degraded
+        cases.append((f"单 PR 拉取失败降级(标注语义,实际 exit {r.returncode})", ok4))
+
+    print()
+    failed = [name for name, ok in cases if not ok]
+    for name, ok in cases:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+    if failed:
+        print(f"\n{len(failed)} 项失败——见上方明细。")
+        return 1
+    print("\n全部通过。")
+    return 0
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -972,6 +1098,10 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--quiet", type=int, default=DEFAULT_QUIET,
                     help=f"静默窗秒数(默认 {DEFAULT_QUIET})")
     pc.set_defaults(func=cmd_collect)
+
+    pst = sub.add_parser("selftest",
+                         help="离线自检: fake gh 注入故障,验证重试/快速失败/降级契约")
+    pst.set_defaults(func=cmd_selftest)
     return p
 
 

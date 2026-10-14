@@ -51,7 +51,7 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>     # 导出意见�
 - `--repo` 默认从 `git remote` 解析，通常省略。
 - **退出码**：0 成功（含「无 open PR」诚实路径）；1 wait 超时 / draft、fork、非 open PR
   （含等待期间转入这些停止态）；2 gh 错误（未认证 / 网络 / PR 不存在）；130 Ctrl-C。
-- **瞬态容错**：gh 调用瞬态失败（HTTP 5xx / 网络抖动）自动短退避重试 3 次；
+- **瞬态容错**：gh 调用对超时 / HTTP 5xx / 网络抖动短退避重试——**总尝试 ≤ 3 次（含首次，即首次失败后最多再重试 2 次，退避 1s / 2s）**；HTTP 4xx（权限 / 不存在 / 参数）与响应非 JSON 是确定性错误，首次即抛不重试；
   `status` 总览中单 PR 数据拉取失败仅标注「数据拉取失败，已跳过」并继续其余 PR
   （全部 PR 均失败才 exit 2；2026-10-14 PR#242 偶发 HTTP 500 实证）。
 - **四 bot 判据**（与 [bot-coverage.yml](../../.github/workflows/bot-coverage.yml) 一致，
