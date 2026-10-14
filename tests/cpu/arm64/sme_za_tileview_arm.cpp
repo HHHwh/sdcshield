@@ -71,25 +71,29 @@
 
 /* Full-SVL support (128..1024-bit): n = SVL/8 f64 per ZA slice is read
  * at runtime (rdsvl); each ZAd view is an n x n f64 tile. Originally
- * measured at 512-bit on cn23154 (8x8); the parameterized asm has been
- * verified at SVL 128/256/512/1024 in gem5 (gem5-fi feat/sve-sme-all-vl,
- * kernel sme_za_tileview_dual, 16-run all-green incl. the 512-bit
- * regression anchor; za0h/za0v/za0h.d[r,1] semantics measured
- * SVL-independent by the za_semantics probe).
+ * measured at 512-bit on cn23154 (8x8); the parameterized addressing
+ * shape was first verified at SVL 128/256/512/1024 in gem5 by the
+ * pre-#242 dual kernel (16 runs, 3-phase form; za0h/za0v/za0h.d[r,1]
+ * semantics measured SVL-independent by the za_semantics probe); the
+ * full five-phase same-source mirror (incl. za1h isolation) is covered
+ * by the PR #242 record below.
  *
  * gem5-fi no-injection control, real run output (random seed=1, one run
  * per SVL tier, gem5.opt configs/se/arm_chaos.py --cpu O3 --sme_vl N):
- *   svl=1 (128-bit)  SDCSHIELD_FAILS=0  checksum a2ff7aa26c8ed2a5
- *   svl=2 (256-bit)  SDCSHIELD_FAILS=0  checksum 41cdf4dff40fca0d
- *   svl=4 (512-bit)  SDCSHIELD_FAILS=0  checksum efa69a0f80ee4e6f
- *                    (bit-identical to the pre-parameterization 512-bit
- *                    kernel — regression anchor)
- *   svl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 45645dab75f92507
- * Honest boundary: gem5 validates the same-source dual kernel (which
- * carries the injective input formula fixed in this PR) at each tier;
- * the host lacks SME, so the C++ test itself runs only its build and
- * skip paths here. Real-SME hardware runs remain future hardware
- * validation. */
+ *   svl=1 (128-bit)  SDCSHIELD_FAILS=0  checksum 3a8aa4cc9676e16d
+ *   svl=2 (256-bit)  SDCSHIELD_FAILS=0  checksum 598385ee31f52fd9
+ *   svl=4 (512-bit)  SDCSHIELD_FAILS=0  checksum e9e2be2a9b3a6160
+ *   svl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 8eafe9a9bc959ee2
+ * Checksums differ from the pre-formula-fix runs (a2ff7aa2… era) by
+ * design: the PR #242 injective input formula (x64 -> x256 multiplier)
+ * and the five-tile output set (za1h isolation + za0h re-read) both
+ * change the hashed stream, so the old 512-bit anchor efa69a0f… no
+ * longer applies; the anchor for this form is e9e2be2a… at svl=4.
+ * Honest boundary: gem5 validates the same-source dual kernel (naked
+ * struct-param mirror of this test's kernel, carrying the injective
+ * input formula fixed in this PR) at each tier; the host lacks SME, so
+ * the C++ test itself runs only its build and skip paths here.
+ * Real-SME hardware runs remain future hardware validation. */
 static constexpr long kTileNMax = 16;   /* SVL=1024bit upper bound */
 
 struct SmeZaTileviewData {
