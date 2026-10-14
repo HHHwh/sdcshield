@@ -24,11 +24,14 @@ static int gatherscatter_f32_run(struct test *test, int cpu) {
     auto float_dist = []() { return frandomf_scale((float)(1000.0f) - (float)(-1000.0f)) + (float)(-1000.0f); };
     auto idx_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((DATA_SIZE - 1) - (0) + 1))); };
 
-    // 内层压载轮数（CodeRabbit 意见）：重掷 src 一次是 1024 次 RNG 调用，
-    // 原单轮结构只做 4 个向量、32 次 lane 访存，时间几乎全花在 RNG 上，
-    // gather/scatter 访存通路压力太小；改为每次刷新 src 后内层跑 M 轮
-    // （每轮重掷 indices + gather/scatter + 比较），把时间比例倒转为
-    // DUT 压载为主。scatter 目标缓冲每轮重置，避免上一轮写入污染。
+    // 压载结构（CodeRabbit 意见）：每轮 DUT 只有 gather/scatter 共
+    // 2*VECTOR_SIZE 次 lane 访存，若内层每轮仍整块 memset dst/ref 并
+    // 全数组逐元素比较（各 1024 元素），memset/比较开销依旧远大于 DUT
+    // 访存。改为：内层每轮仅重掷 indices、执行 DUT、对命中下标做期望
+    // 值比较并清零（为下一轮 scatter 备好落点）；整块 memset 与整块
+    // 检查移到外层迭代各一次——内层各轮结束时命中下标均已清零，外层
+    // 整块检查发现非零即说明 scatter 写到了 indices 之外的位置（越界
+    // 写入/污染）。
     constexpr int kInnerRounds = 64;
 
     do {
@@ -37,8 +40,10 @@ static int gatherscatter_f32_run(struct test *test, int cpu) {
             src[i] = float_dist();
         }
 
+        // 整块清零仅此一次（建立全零基准；内层不再整块 memset）
+        memset(dst, 0, sizeof(dst));
+
         for (int round = 0; round < kInnerRounds; ++round) {
-            memset(dst, 0, sizeof(dst));
             // 生成随机索引（16个）
             for (int i = 0; i < VECTOR_SIZE; ++i) {
                 indices[i] = idx_dist();
@@ -68,19 +73,15 @@ static int gatherscatter_f32_run(struct test *test, int cpu) {
                 vst1q_lane_f32(&dst[indices[base + 3]], acc, 3);
             }
 
-            // ---- golden: 独立标量实现（与 DUT 不同的数据路径） ----
-            float ref[DATA_SIZE];
-            memset(ref, 0, sizeof(ref));
+            // ---- golden + 验证：独立标量期望值，仅比较本轮命中下标 ----
+            // （标量乘与 DUT 的向量乘是不同数据路径；乘 2 为精确操作，
+            // 逐位比较安全。重复索引时各 lane 期望值相同，可比。）
+            int bad_idx = -1;
             for (int i = 0; i < VECTOR_SIZE; ++i) {
                 const int idx = indices[i];
-                ref[idx] = src[idx] * 2.0f;
-            }
-
-            // ---- 验证：比较目标数组与参考（逐位比较，定位首个失配下标） ----
-            int bad_idx = -1;
-            for (int i = 0; i < DATA_SIZE; ++i) {
-                if (memcmp(&dst[i], &ref[i], sizeof(dst[0])) != 0) {
-                    bad_idx = i;
+                const float expected = src[idx] * 2.0f;
+                if (memcmp(&dst[idx], &expected, sizeof(expected)) != 0) {
+                    bad_idx = idx;
                     break;
                 }
             }
@@ -103,17 +104,49 @@ static int gatherscatter_f32_run(struct test *test, int cpu) {
                             break;
                         }
                     }
+                    const float expected = src[bad_idx] * 2.0f;
                     uint32_t actual_bits, expected_bits;
                     memcpy(&actual_bits, &dst[bad_idx], sizeof(actual_bits));
-                    memcpy(&expected_bits, &ref[bad_idx], sizeof(expected_bits));
+                    memcpy(&expected_bits, &expected, sizeof(expected_bits));
                     report_fail_msg("gatherscatter_f32: Gather-scatter mismatch: first bad index %d (lane %d), "
                                     "src[%d]=%f, actual=%f (0x%08x), expected=%f (0x%08x), xor=0x%08x",
                                     bad_idx, lane, bad_idx, src[bad_idx],
-                                    dst[bad_idx], actual_bits, ref[bad_idx], expected_bits,
+                                    dst[bad_idx], actual_bits, expected, expected_bits,
                                     actual_bits ^ expected_bits);
                 } else {
                     report_fail_msg("gatherscatter_f32: Gather-scatter mismatch or consistency failure");
                 }
+                return EXIT_FAILURE;
+            }
+
+            // ---- 仅清零本轮命中下标（VECTOR_SIZE 次写）：为下一轮 scatter
+            // 提供干净落点，并使外层整块检查时 dst 恢复全零 ----
+            for (int i = 0; i < VECTOR_SIZE; ++i) {
+                dst[indices[i]] = 0.0f;
+            }
+        }
+
+        // ---- 外层整块检查（每外层迭代一次）：命中下标在内层各轮结束时
+        // 已被清零，全数组应仍为全零；发现非零即 scatter 写到了 indices
+        // 之外的位置，报 fail ----
+        const float zero = 0.0f;
+        for (int i = 0; i < DATA_SIZE; ++i) {
+            if (memcmp(&dst[i], &zero, sizeof(zero)) != 0) {
+                int lane = -1;
+                for (int j = 0; j < VECTOR_SIZE; ++j) {
+                    if (indices[j] == i) {
+                        lane = j;
+                        break;
+                    }
+                }
+                uint32_t actual_bits, expected_bits;
+                memcpy(&actual_bits, &dst[i], sizeof(actual_bits));
+                memcpy(&expected_bits, &zero, sizeof(expected_bits));
+                report_fail_msg("gatherscatter_f32: Scatter wrote outside indices: first bad index %d (lane %d), "
+                                "src[%d]=%f, actual=%f (0x%08x), expected=%f (0x%08x), xor=0x%08x",
+                                i, lane, i, src[i],
+                                dst[i], actual_bits, zero, expected_bits,
+                                actual_bits ^ expected_bits);
                 return EXIT_FAILURE;
             }
         }

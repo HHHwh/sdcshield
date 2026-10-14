@@ -168,11 +168,23 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
             td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
         }
 
-        while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
-               test_time_condition(test)) {
-            __asm__ volatile("yield");
+        /* 等待所有线程完成写入：与阶段 3 屏障等待同款 131072 一档节流
+         * 预算检查（CodeRabbit 意见，先例 mesh_upi_sve_asymm_distrib_int
+         * 的 epoch 等待）：每次自旋都调 test_time_condition 会迅速耗尽
+         * inner_loop_count 预算（默认 40 次），把等待压成提前退出、
+         * 跳过阶段 2 校验及屏障；预算耗尽走 out_of_budget 干净退出，
+         * 不再在循环外重复消耗一次预算。等待条件本身每自旋都查，
+         * 响应不受影响。 */
+        {
+            uint32_t spin = 0;
+            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
+                if ((++spin & 131071u) == 0) {
+                    if (!test_time_condition(test)) goto out_of_budget;
+                } else {
+                    __asm__ volatile("yield");
+                }
+            }
         }
-        if (!test_time_condition(test)) break;
 
         __sync_synchronize();
 

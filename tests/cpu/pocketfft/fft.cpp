@@ -17,10 +17,10 @@
  * spectrum against a golden computed from freshly re-rolled operands
  * every kRerollEvery iterations (per-thread, framework RNG — B2-005;
  * fixed input + fixed binary => bit-identical spectrum, and the
- * framework RNG keeps -s replays reproducible); each cycle's midpoint
- * runs one frozen-replay round on init's shared inputs/goldens, so the
- * init-time golden is actually re-compared instead of staying only the
- * finiteness canary. The inverse cfft
+ * framework RNG keeps -s replays reproducible); once per fracture
+ * (round 3 of every 4) a frozen-replay round runs on init's shared
+ * inputs/goldens, so the init-time golden is actually re-compared
+ * instead of staying only the finiteness canary. The inverse cfft
  * (1/N scaling) is then
  * run as pure additional load: the forward->backward round trip is NOT
  * bit-exact under FFT rounding (measured max rel err ~3e-11 on this
@@ -79,8 +79,8 @@ struct fft_test_data {
     int n;                /* transform length, from the -O pocketfft_fft.n=N knob */
     double *input;        /* interleaved re,im — length 2*n; init fill stays only as
                              the init-time finiteness canary between the run loop's
-                             midpoint frozen-replay rounds (B2-005: run otherwise
-                             keeps per-thread re-rolled l_input) */
+                             once-per-fracture frozen-replay rounds (B2-005: run
+                             otherwise keeps per-thread re-rolled l_input) */
     double *golden_spec;  /* forward cfft spectrum of input, computed once in init;
                              same canary/replay role as input above */
     cfft_plan plan;       /* shared, see the threading note below */
@@ -118,10 +118,10 @@ struct fft_test_data {
  * doubles) and l_rinput/l_rgolden (real, n doubles) are this thread's
  * re-rolled inputs and goldens — the shared d->input/golden_spec/
  * rinput/rgolden are otherwise only the init-time finiteness canaries,
- * so the run loop's midpoint frozen-replay round copies them into the
- * per-thread buffers once per reroll cycle to actually re-verify the
- * frozen goldens (the same-plan reroll alone cannot catch a mercurial
- * core defect). */
+ * so the run loop's once-per-fracture frozen-replay round copies the
+ * frozen inputs into the per-thread work buffers to actually re-verify
+ * the frozen goldens (the same-plan reroll alone cannot catch a
+ * mercurial core defect). */
 static thread_local double *work = nullptr;   /* complex, 2*n doubles */
 static thread_local double *rwork = nullptr;  /* real, n doubles */
 static thread_local double *l_input = nullptr;       /* complex, 2*n doubles */
@@ -254,16 +254,18 @@ static int pocketfft_fft_run(struct test *test, int cpu)
     auto d = CAST(test->data);
     /* B2-005 (R2b freeze blind spot): this thread's inputs and goldens
      * are re-rolled from the framework RNG every kRerollEvery iterations
-     * instead of replaying init's frozen bytes forever; each cycle's
-     * midpoint one frozen-replay round instead restores init's shared
-     * d->input/golden_spec/rinput/rgolden into the per-thread buffers,
-     * so the frozen goldens are actually re-compared. The reroll goldens
-     * are recomputed with the very same plans the verified calls below
-     * use, on the same input distribution, so the finiteness bounds
-     * argued in init carry over; -s replays stay reproducible since the
-     * framework RNG is seeded per test. */
+     * instead of replaying init's frozen bytes forever; once per
+     * fracture (round 3 of every 4) a frozen-replay round instead runs
+     * init's shared d->input/d->rinput through the same plans and
+     * compares against d->golden_spec/d->rgolden, so the frozen goldens
+     * are actually re-compared. The reroll goldens are recomputed with
+     * the very same plans the verified calls below use, on the same
+     * input distribution, so the finiteness bounds argued in init carry
+     * over; -s replays stay reproducible since the framework RNG is
+     * seeded per test. */
     constexpr int kRerollEvery = 16;
     int since_reroll = kRerollEvery; /* force the first-iteration fill */
+    long iter = 0;
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
         if (__builtin_expect(!work || !rwork || !l_input || !l_golden_spec ||
@@ -306,17 +308,24 @@ static int pocketfft_fft_run(struct test *test, int cpu)
             }
         }
 
-        /* re-roll (first iteration, then every kRerollEvery-th): fresh
-         * high-entropy inputs for this thread; goldens recomputed with
-         * the same plans and the same in-place forward calls init uses.
-         * At each cycle's midpoint one frozen-replay round instead
-         * restores init's shared inputs and goldens (both the complex
-         * and the real pair): the reroll's golden recompute uses the
-         * very same plans, so a mercurial deterministic core defect
-         * would reproduce identically on both sides and never trip the
-         * compare — replaying init's frozen goldens closes that blind
-         * spot. */
-        if (++since_reroll >= kRerollEvery) {
+        /* PR #244 review round 2 (greptile): `since_reroll` is a run()
+         * local, but this test sets fracture_loop_count=4 — the framework
+         * re-enters test_run in a FRESH child process every 4 TEST_LOOP
+         * iterations, resetting all locals, so a "midpoint == 8" replay
+         * could never fire. The frozen replay now triggers on an
+         * in-fracture round position (round 3 of every 4) and reads the
+         * frozen inputs straight into the copy-in work buffers —
+         * l_input/l_rinput/l_golden_spec/l_rgolden are NOT touched, so
+         * the reroll state survives intact across the replay round
+         * (which also does not advance the reroll counter).
+         * PR #244 review (coderabbit): the reroll's golden recompute
+         * uses the very same plans, so a mercurial deterministic core
+         * defect would reproduce identically on both sides and never
+         * trip the compare — replaying init's frozen golden (computed
+         * on a different core before the workers started) closes that
+         * blind spot. */
+        const bool frozen_replay = (iter & 3) == 2;
+        if (!frozen_replay && ++since_reroll >= kRerollEvery) {
             since_reroll = 0;
             for (int i = 0; i < 2 * d->n; ++i)
                 l_input[i] = random_bounded();
@@ -328,22 +337,23 @@ static int pocketfft_fft_run(struct test *test, int cpu)
             memcpy(l_rgolden, l_rinput, d->n * sizeof(double));
             if (rfft_forward(d->rplan, l_rgolden, 1.0) != 0)
                 report_fail_msg("rfft_forward failed while re-rolling the golden spectrum");
-        } else if (since_reroll == kRerollEvery / 2) {
-            memcpy(l_input, d->input, 2 * d->n * sizeof(double));
-            memcpy(l_golden_spec, d->golden_spec, 2 * d->n * sizeof(double));
-            memcpy(l_rinput, d->rinput, d->n * sizeof(double));
-            memcpy(l_rgolden, d->rgolden, d->n * sizeof(double));
         }
+        /* the DUT input/golden pair of this round: the frozen shared
+         * pair on a replay round, this thread's re-rolled pair otherwise */
+        const double *cur_input = frozen_replay ? d->input : l_input;
+        const double *cur_golden_spec = frozen_replay ? d->golden_spec : l_golden_spec;
+        const double *cur_rinput = frozen_replay ? d->rinput : l_rinput;
+        const double *cur_rgolden = frozen_replay ? d->rgolden : l_rgolden;
 
         /* copy-in (dirties the cache lines, then the butterflies reload
          * them through the decimated access pattern) */
-        memcpy(work, l_input, 2 * d->n * sizeof(double));
+        memcpy(work, cur_input, 2 * d->n * sizeof(double));
 
         /* forward: the SDC verdict — spectrum must be byte-identical to
-         * this thread's just-re-rolled golden spectrum */
+         * this round's golden spectrum */
         if (cfft_forward(d->plan, work, 1.0) != 0)
             report_fail_msg("cfft_forward failed on cpu %d", cpu);
-        memcmp_or_fail(work, l_golden_spec, 2 * d->n, "golden spectrum");
+        memcmp_or_fail(work, cur_golden_spec, 2 * d->n, "golden spectrum");
 
         /* inverse with 1/N scaling. The round trip is not bit-exact under
          * FFT rounding (measured max rel err ~3e-11 on this payload), so it
@@ -358,7 +368,7 @@ static int pocketfft_fft_run(struct test *test, int cpu)
         if (cfft_backward(d->plan, work, 1.0 / d->n) != 0)
             report_fail_msg("cfft_backward failed on cpu %d", cpu);
         for (int i = 0; i < 2 * d->n; ++i) {
-            double x = l_input[i];
+            double x = cur_input[i];
             double diff = fabs(work[i] - x);
             double tol = 1e-6 * fmax(fabs(x), 1e-9);
             if (diff > tol) {
@@ -370,17 +380,17 @@ static int pocketfft_fft_run(struct test *test, int cpu)
 
         /* real-FFT segment: same copy->forward->byte-compare structure
          * on the rfft plan (halfcomplex packed spectrum, n doubles). */
-        memcpy(rwork, l_rinput, d->n * sizeof(double));
+        memcpy(rwork, cur_rinput, d->n * sizeof(double));
         if (rfft_forward(d->rplan, rwork, 1.0) != 0)
             report_fail_msg("rfft_forward failed on cpu %d", cpu);
-        memcmp_or_fail(rwork, l_rgolden, d->n, "rfft golden spectrum");
+        memcmp_or_fail(rwork, cur_rgolden, d->n, "rfft golden spectrum");
 
         /* rfft_backward mirrors cfft_backward above: checked against a
          * tolerance (same calibration rationale) instead of being dead load. */
         if (rfft_backward(d->rplan, rwork, 1.0 / d->n) != 0)
             report_fail_msg("rfft_backward failed on cpu %d", cpu);
         for (int i = 0; i < d->n; ++i) {
-            double x = l_rinput[i];
+            double x = cur_rinput[i];
             double diff = fabs(rwork[i] - x);
             double tol = 1e-6 * fmax(fabs(x), 1e-9);
             if (diff > tol) {
@@ -389,6 +399,7 @@ static int pocketfft_fft_run(struct test *test, int cpu)
                                 diff, tol);
             }
         }
+        ++iter;
     }
     return EXIT_SUCCESS;
 }

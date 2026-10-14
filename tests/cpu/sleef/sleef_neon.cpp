@@ -17,10 +17,11 @@
  * faults surface as wrong values, not crashes — From Gates to SDCs
  * DATE'25). Pure functions => deterministic golden values, recomputed
  * from freshly re-rolled inputs every kRerollEvery iterations with the
- * same kernels (per-thread, framework RNG — B2-006); each cycle's
- * midpoint runs one frozen-replay round on init's shared inputs/goldens,
- * so the init-time golden is actually re-compared instead of staying
- * only the finiteness canary. u10 and u35 are SLEEF's two INDEPENDENT
+ * same kernels (per-thread, framework RNG — B2-006); once per fracture
+ * (round 3 of every 4) a frozen-replay round runs on init's shared
+ * inputs/goldens, so the init-time golden is actually re-compared
+ * instead of staying only the finiteness canary. u10 and u35 are
+ * SLEEF's two INDEPENDENT
  * implementations of the same mathematics (different coefficients,
  * different FMA-chain schedules), so the second tier is a free
  * second-phase sample of the same silicon for the same math.
@@ -86,7 +87,7 @@ struct sleef_test_data {
     /* per-domain inputs; the run loop keeps its OWN per-thread re-rolled
      * copy (B2-006) — the shared arrays are filled and golden-checked
      * once in init as the finiteness canary, then replayed once per
-     * reroll cycle by the run loop's midpoint frozen-replay round */
+     * fracture by the run loop's frozen-replay round */
     double *xd_trig, *xd_exp, *xd_log;
     float  *xf_trig, *xf_exp, *xf_log;
     /* golden outputs (filled in init as the finiteness canary; the run
@@ -128,9 +129,13 @@ struct sleef_test_data {
  * — inputs re-rolled from the framework RNG and goldens recomputed with
  * the very same SLEEF kernels every kRerollEvery iterations; the shared
  * test->data inputs/goldens are otherwise only the init-time finiteness
- * canary, so the run loop's midpoint frozen-replay round copies them
- * into l once per reroll cycle to actually re-verify the frozen golden
- * (the same-kernel reroll alone cannot catch a mercurial core defect). */
+ * canary, so the run loop's once-per-fracture frozen-replay round
+ * switches the kernel input/golden source to them (the SLEEF kernels
+ * only READ their inputs and write the per-thread od/of scratch, so the
+ * shared snapshot can be replayed without copying it into l — the
+ * reroll state is never touched) to actually re-verify the frozen
+ * golden (the same-kernel reroll alone cannot catch a mercurial core
+ * defect). */
 static thread_local double *od = nullptr;
 static thread_local float  *of = nullptr;
 static thread_local struct sleef_test_data *l = nullptr;
@@ -347,67 +352,6 @@ static void sleef_compute_goldens(struct sleef_test_data *p)
     }
 }
 
-/* Copy the complete input+golden state of one sleef_test_data into
- * another, array by array (every array is nelems-sized; dst and src
- * share the knob value) — used by the run loop's midpoint frozen-replay
- * round to load init's shared snapshot into this thread's per-thread
- * struct, after which the normal compute-out + byte-exact compare
- * verifies the frozen golden against the DUT output. */
-static void sleef_copy_state(struct sleef_test_data *dst, struct sleef_test_data *src)
-{
-    const int n = src->nelems;
-    /* double inputs */
-    memcpy(dst->xd_trig, src->xd_trig, n * sizeof(double));
-    memcpy(dst->xd_exp,  src->xd_exp,  n * sizeof(double));
-    memcpy(dst->xd_log,  src->xd_log,  n * sizeof(double));
-    /* float inputs */
-    memcpy(dst->xf_trig, src->xf_trig, n * sizeof(float));
-    memcpy(dst->xf_exp,  src->xf_exp,  n * sizeof(float));
-    memcpy(dst->xf_log,  src->xf_log,  n * sizeof(float));
-    /* golden outputs, u10 tier, double & float */
-    memcpy(dst->gd_sin, src->gd_sin, n * sizeof(double));
-    memcpy(dst->gd_cos, src->gd_cos, n * sizeof(double));
-    memcpy(dst->gd_exp, src->gd_exp, n * sizeof(double));
-    memcpy(dst->gd_log, src->gd_log, n * sizeof(double));
-    memcpy(dst->gf_sin, src->gf_sin, n * sizeof(float));
-    memcpy(dst->gf_cos, src->gf_cos, n * sizeof(float));
-    memcpy(dst->gf_exp, src->gf_exp, n * sizeof(float));
-    memcpy(dst->gf_log, src->gf_log, n * sizeof(float));
-    /* u35 tier golden outputs, double & float */
-    memcpy(dst->gd_sin35,   src->gd_sin35,   n * sizeof(double));
-    memcpy(dst->gd_cos35,   src->gd_cos35,   n * sizeof(double));
-    memcpy(dst->gd_log35,   src->gd_log35,   n * sizeof(double));
-    memcpy(dst->gd_exp2_35, src->gd_exp2_35, n * sizeof(double));
-    memcpy(dst->gf_sin35,   src->gf_sin35,   n * sizeof(float));
-    memcpy(dst->gf_cos35,   src->gf_cos35,   n * sizeof(float));
-    memcpy(dst->gf_log35,   src->gf_log35,   n * sizeof(float));
-    memcpy(dst->gf_exp2_35, src->gf_exp2_35, n * sizeof(float));
-    /* new families: inputs */
-    memcpy(dst->xd_inv,  src->xd_inv,  n * sizeof(double));
-    memcpy(dst->xd_cbrt, src->xd_cbrt, n * sizeof(double));
-    memcpy(dst->xd_pow2, src->xd_pow2, n * sizeof(double));
-    memcpy(dst->xd_pexp, src->xd_pexp, n * sizeof(double));
-    memcpy(dst->xf_inv,  src->xf_inv,  n * sizeof(float));
-    memcpy(dst->xf_cbrt, src->xf_cbrt, n * sizeof(float));
-    memcpy(dst->xf_pow2, src->xf_pow2, n * sizeof(float));
-    memcpy(dst->xf_pexp, src->xf_pexp, n * sizeof(float));
-    /* new families: golden outputs */
-    memcpy(dst->gd_asin,  src->gd_asin,  n * sizeof(double));
-    memcpy(dst->gd_atan,  src->gd_atan,  n * sizeof(double));
-    memcpy(dst->gd_cbrt,  src->gd_cbrt,  n * sizeof(double));
-    memcpy(dst->gd_log10, src->gd_log10, n * sizeof(double));
-    memcpy(dst->gd_sinh,  src->gd_sinh,  n * sizeof(double));
-    memcpy(dst->gd_tanh,  src->gd_tanh,  n * sizeof(double));
-    memcpy(dst->gd_pow,   src->gd_pow,   n * sizeof(double));
-    memcpy(dst->gf_asin,  src->gf_asin,  n * sizeof(float));
-    memcpy(dst->gf_atan,  src->gf_atan,  n * sizeof(float));
-    memcpy(dst->gf_cbrt,  src->gf_cbrt,  n * sizeof(float));
-    memcpy(dst->gf_log10, src->gf_log10, n * sizeof(float));
-    memcpy(dst->gf_sinh,  src->gf_sinh,  n * sizeof(float));
-    memcpy(dst->gf_tanh,  src->gf_tanh,  n * sizeof(float));
-    memcpy(dst->gf_pow,   src->gf_pow,   n * sizeof(float));
-}
-
 static int sleef_neon_init(struct test *test)
 {
     auto d = new(sleef_test_data);
@@ -587,10 +531,11 @@ static int sleef_neon_run(struct test *test, int cpu)
     auto d = CAST(test->data);
     constexpr int kRerollEvery = 16;
     int since_reroll = kRerollEvery; /* force the first-iteration fill */
+    long iter = 0;
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch output buffers and its own
          * sleef_test_data (B2-006: run owns its re-rolled copy — the
-         * shared test->data arrays are read only by the midpoint
+         * shared test->data arrays are read only by the once-per-fracture
          * frozen-replay round, and the nelems knob scalar alone is
          * copied once up front, mdim/beta precedent) */
         if (__builtin_expect(!od || !of || !l, 0)) {
@@ -670,205 +615,222 @@ static int sleef_neon_run(struct test *test, int cpu)
 
         /* B2-006 reroll: fresh framework-RNG inputs and goldens recomputed
          * with the very same kernels every kRerollEvery iterations
-         * (46141ed4 Eigen pattern). At each cycle's midpoint one
-         * frozen-replay round instead loads init's shared snapshot into l
-         * (sleef_copy_state): the reroll's golden recompute uses the very
-         * same kernels, so a mercurial deterministic core defect would
-         * reproduce identically in both sides and never trip the compare
-         * — replaying init's frozen golden closes that blind spot. */
-        if (++since_reroll >= kRerollEvery) {
+         * (46141ed4 Eigen pattern). PR #244 review round 2
+         * (greptile+coderabbit): the old "midpoint == 8" replay never
+         * fired — `since_reroll` is a run() local and this test sets
+         * fracture_loop_count=4, so the framework re-enters test_run in
+         * a FRESH child process every 4 TEST_LOOP iterations, resetting
+         * all locals. The frozen replay now triggers on an in-fracture
+         * round position (round 3 of every 4) and does NOT touch l at
+         * all: the SLEEF kernels only READ their inputs (vld1q loads)
+         * and write the per-thread od/of scratch, so the replay round
+         * simply switches the input/golden source to init's shared
+         * snapshot — the reroll state survives the replay round intact,
+         * and replay rounds do not advance the reroll counter either.
+         * The replay verifies init's frozen goldens, which init computed
+         * on a different core before the workers started: the same-kernel
+         * reroll recompute runs on this very core, so a mercurial
+         * deterministic core defect would reproduce identically on both
+         * sides and never trip the compare — the cross-core frozen
+         * replay closes that blind spot. */
+        const bool frozen_replay = (iter & 3) == 2;
+        if (!frozen_replay && ++since_reroll >= kRerollEvery) {
             since_reroll = 0;
             sleef_fill_inputs(l);
             sleef_compute_goldens(l);
-        } else if (since_reroll == kRerollEvery / 2) {
-            sleef_copy_state(l, d);
         }
+        /* the kernel input/golden source of this round: init's frozen
+         * shared snapshot on a replay round, this thread's re-rolled
+         * struct otherwise (both carry the same nelems) */
+        const struct sleef_test_data *src = frozen_replay ? d : l;
 
-        /* compute-out: each family replays its own domain inputs through
-         * the same kernels and lands in the thread-private scratch */
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_trig[i]);
+        /* compute-out: each family replays this round's domain inputs
+         * through the same kernels and lands in the thread-private
+         * scratch */
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_trig[i]);
             vst1q_f64(&od[i], Sleef_sind2_u10advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_sin, l->nelems, "sin double");
+        memcmp_or_fail(od, src->gd_sin, src->nelems, "sin double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_trig[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_trig[i]);
             vst1q_f64(&od[i], Sleef_cosd2_u10advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_cos, l->nelems, "cos double");
+        memcmp_or_fail(od, src->gd_cos, src->nelems, "cos double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_exp[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_exp[i]);
             vst1q_f64(&od[i], Sleef_expd2_u10advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_exp, l->nelems, "exp double");
+        memcmp_or_fail(od, src->gd_exp, src->nelems, "exp double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_log[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_log[i]);
             vst1q_f64(&od[i], Sleef_logd2_u10advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_log, l->nelems, "log double");
+        memcmp_or_fail(od, src->gd_log, src->nelems, "log double");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_trig[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_trig[i]);
             vst1q_f32(&of[i], Sleef_sinf4_u10advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_sin, l->nelems, "sin float");
+        memcmp_or_fail(of, src->gf_sin, src->nelems, "sin float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_trig[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_trig[i]);
             vst1q_f32(&of[i], Sleef_cosf4_u10advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_cos, l->nelems, "cos float");
+        memcmp_or_fail(of, src->gf_cos, src->nelems, "cos float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_exp[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_exp[i]);
             vst1q_f32(&of[i], Sleef_expf4_u10advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_exp, l->nelems, "exp float");
+        memcmp_or_fail(of, src->gf_exp, src->nelems, "exp float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_log[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_log[i]);
             vst1q_f32(&of[i], Sleef_logf4_u10advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_log, l->nelems, "log float");
+        memcmp_or_fail(of, src->gf_log, src->nelems, "log float");
 
         /* u35 second-accuracy tier: same inputs, other polynomial chain */
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_trig[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_trig[i]);
             vst1q_f64(&od[i], Sleef_sind2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_sin35, l->nelems, "sin35 double");
+        memcmp_or_fail(od, src->gd_sin35, src->nelems, "sin35 double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_trig[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_trig[i]);
             vst1q_f64(&od[i], Sleef_cosd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_cos35, l->nelems, "cos35 double");
+        memcmp_or_fail(od, src->gd_cos35, src->nelems, "cos35 double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_log[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_log[i]);
             vst1q_f64(&od[i], Sleef_logd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_log35, l->nelems, "log35 double");
+        memcmp_or_fail(od, src->gd_log35, src->nelems, "log35 double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_exp[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_exp[i]);
             vst1q_f64(&od[i], Sleef_exp2d2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_exp2_35, l->nelems, "exp2_35 double");
+        memcmp_or_fail(od, src->gd_exp2_35, src->nelems, "exp2_35 double");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_trig[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_trig[i]);
             vst1q_f32(&of[i], Sleef_sinf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_sin35, l->nelems, "sin35 float");
+        memcmp_or_fail(of, src->gf_sin35, src->nelems, "sin35 float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_trig[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_trig[i]);
             vst1q_f32(&of[i], Sleef_cosf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_cos35, l->nelems, "cos35 float");
+        memcmp_or_fail(of, src->gf_cos35, src->nelems, "cos35 float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_log[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_log[i]);
             vst1q_f32(&of[i], Sleef_logf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_log35, l->nelems, "log35 float");
+        memcmp_or_fail(of, src->gf_log35, src->nelems, "log35 float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_exp[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_exp[i]);
             vst1q_f32(&of[i], Sleef_exp2f4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_exp2_35, l->nelems, "exp2_35 float");
+        memcmp_or_fail(of, src->gf_exp2_35, src->nelems, "exp2_35 float");
 
         /* new families: asin/atan/cbrt/log10/sinh/tanh/pow */
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_inv[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_inv[i]);
             vst1q_f64(&od[i], Sleef_asind2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_asin, l->nelems, "asin double");
+        memcmp_or_fail(od, src->gd_asin, src->nelems, "asin double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_inv[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_inv[i]);
             vst1q_f64(&od[i], Sleef_atand2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_atan, l->nelems, "atan double");
+        memcmp_or_fail(od, src->gd_atan, src->nelems, "atan double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_cbrt[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_cbrt[i]);
             vst1q_f64(&od[i], Sleef_cbrtd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_cbrt, l->nelems, "cbrt double");
+        memcmp_or_fail(od, src->gd_cbrt, src->nelems, "cbrt double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_log[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_log[i]);
             vst1q_f64(&od[i], Sleef_log10d2_u10advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_log10, l->nelems, "log10 double");
+        memcmp_or_fail(od, src->gd_log10, src->nelems, "log10 double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_exp[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_exp[i]);
             vst1q_f64(&od[i], Sleef_sinhd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_sinh, l->nelems, "sinh double");
+        memcmp_or_fail(od, src->gd_sinh, src->nelems, "sinh double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t x = vld1q_f64(&l->xd_exp[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t x = vld1q_f64(&src->xd_exp[i]);
             vst1q_f64(&od[i], Sleef_tanhd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, l->gd_tanh, l->nelems, "tanh double");
+        memcmp_or_fail(od, src->gd_tanh, src->nelems, "tanh double");
 
-        for (int i = 0; i < l->nelems; i += 2) {
-            float64x2_t b = vld1q_f64(&l->xd_pow2[i]);
-            float64x2_t e = vld1q_f64(&l->xd_pexp[i]);
+        for (int i = 0; i < src->nelems; i += 2) {
+            float64x2_t b = vld1q_f64(&src->xd_pow2[i]);
+            float64x2_t e = vld1q_f64(&src->xd_pexp[i]);
             vst1q_f64(&od[i], Sleef_powd2_u10advsimd(b, e));
         }
-        memcmp_or_fail(od, l->gd_pow, l->nelems, "pow double");
+        memcmp_or_fail(od, src->gd_pow, src->nelems, "pow double");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_inv[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_inv[i]);
             vst1q_f32(&of[i], Sleef_asinf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_asin, l->nelems, "asin float");
+        memcmp_or_fail(of, src->gf_asin, src->nelems, "asin float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_inv[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_inv[i]);
             vst1q_f32(&of[i], Sleef_atanf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_atan, l->nelems, "atan float");
+        memcmp_or_fail(of, src->gf_atan, src->nelems, "atan float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_cbrt[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_cbrt[i]);
             vst1q_f32(&of[i], Sleef_cbrtf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_cbrt, l->nelems, "cbrt float");
+        memcmp_or_fail(of, src->gf_cbrt, src->nelems, "cbrt float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_log[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_log[i]);
             vst1q_f32(&of[i], Sleef_log10f4_u10advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_log10, l->nelems, "log10 float");
+        memcmp_or_fail(of, src->gf_log10, src->nelems, "log10 float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_exp[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_exp[i]);
             vst1q_f32(&of[i], Sleef_sinhf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_sinh, l->nelems, "sinh float");
+        memcmp_or_fail(of, src->gf_sinh, src->nelems, "sinh float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t x = vld1q_f32(&l->xf_exp[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t x = vld1q_f32(&src->xf_exp[i]);
             vst1q_f32(&of[i], Sleef_tanhf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, l->gf_tanh, l->nelems, "tanh float");
+        memcmp_or_fail(of, src->gf_tanh, src->nelems, "tanh float");
 
-        for (int i = 0; i < l->nelems; i += 4) {
-            float32x4_t b = vld1q_f32(&l->xf_pow2[i]);
-            float32x4_t e = vld1q_f32(&l->xf_pexp[i]);
+        for (int i = 0; i < src->nelems; i += 4) {
+            float32x4_t b = vld1q_f32(&src->xf_pow2[i]);
+            float32x4_t e = vld1q_f32(&src->xf_pexp[i]);
             vst1q_f32(&of[i], Sleef_powf4_u10advsimd(b, e));
         }
-        memcmp_or_fail(of, l->gf_pow, l->nelems, "pow float");
+        memcmp_or_fail(of, src->gf_pow, src->nelems, "pow float");
+        ++iter;
     }
     return EXIT_SUCCESS;
 }

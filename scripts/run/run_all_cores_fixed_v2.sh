@@ -60,7 +60,8 @@ for ((core=3; core<TOTAL_CORES; core++)); do
             -o "$LOG_FILE" >> "$LOG_FILE" 2>&1
         # 记录每条命令的真实退出码（非 0 = 被杀/超时/崩溃，禁止报通过）
         rc=$?
-        [ $rc -ne 0 ] && RC_ALL=$rc
+        # 仅保留首个非零退出码：后面的 rc=1 不覆盖前面的 rc=124（timeout），超时信息不丢失
+        [ $rc -ne 0 ] && [ $RC_ALL -eq 0 ] && RC_ALL=$rc
         # 注意：-o 已指定，再次重定向确保所有输出都进入日志
     done
     # 完整判定：先核对 15 个预期用例是否都有 result 行，再看有无 fail/crash/软失败

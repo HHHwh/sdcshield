@@ -187,9 +187,9 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
      * DUT core with the same cblas implementation, so a deterministic
      * (mercurial-core) fault poisons golden and DUT identically and the
      * memcmp passes. The shared init golden — computed on a different
-     * core before the workers start — is therefore replayed at the
-     * midpoint of every reroll period: cross-core byte-exact reference
-     * that a single-core deterministic fault cannot poison. */
+     * core before the workers start — is therefore replayed once per
+     * reroll period: cross-core byte-exact reference that a single-core
+     * deterministic fault cannot poison. */
     constexpr int kRerollEvery = 16;
     int since_reroll = kRerollEvery; /* force the first-iteration fill */
     TEST_LOOP(test, 1) {
@@ -205,47 +205,59 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
                 report_fail_msg("OOM allocating thread scratch (%zu bytes)", bytes * 6);
         }
 
-        if (++since_reroll >= kRerollEvery) {
-            since_reroll = 0;
-            /* re-roll: fresh high-entropy operands for this thread;
-             * golden recomputed with the same cblas call, seeded with the
-             * same deterministic C pattern the per-iteration seeding
-             * below uses (beta semantics) */
-            for (size_t i = 0; i < n2; ++i) {
-                l_a[i] = random_bounded();
-                l_b[i] = random_bounded();
+        /* PR #244 review round 2 (greptile): `since_reroll` is a run()
+         * local, but this test sets fracture_loop_count=4 — the framework
+         * re-enters test_run in a FRESH child process every 4 TEST_LOOP
+         * iterations, resetting all locals, so a "midpoint == 8" replay
+         * could never fire. The frozen replay now triggers on an
+         * in-fracture round position (round 3 of every 4) and reads the
+         * frozen operands straight into the copy-in buffers — l_a/l_b/
+         * l_golden are NOT touched, so the reroll state survives intact
+         * across the replay round. */
+        const bool frozen_replay = (iter & 3) == 2;
+        if (frozen_replay) {
+            /* frozen replay (PR #244 review, coderabbit): run init's
+             * shared operands and compare byte-exact against init's
+             * golden — the init thread computed it on a different core
+             * before the workers started, so this round's memcmp is a
+             * CROSS-CORE reference. A deterministic (mercurial-core)
+             * fault would poison the reroll golden and the DUT
+             * identically (same core, same cblas call) — only the
+             * cross-core replay catches it. */
+            memcpy(a_copy, d->a, bytes);
+            memcpy(b_copy, d->b, bytes);
+        } else {
+            if (++since_reroll >= kRerollEvery) {
+                since_reroll = 0;
+                /* re-roll: fresh high-entropy operands for this thread;
+                 * golden recomputed with the same cblas call, seeded with
+                 * the same deterministic C pattern the per-iteration
+                 * seeding below uses (beta semantics) */
+                for (size_t i = 0; i < n2; ++i) {
+                    l_a[i] = random_bounded();
+                    l_b[i] = random_bounded();
+                }
+                for (size_t i = 0; i < n2; ++i)
+                    l_golden[i] = 0.5 * (double)(i & 63) / 64.0;
+                cblas_dgemm(CblasRowMajor,
+                            (d->transab & 2) ? CblasTrans : CblasNoTrans,
+                            (d->transab & 1) ? CblasTrans : CblasNoTrans,
+                            d->mdim, d->mdim, d->mdim,
+                            1.0, l_a, d->mdim, l_b, d->mdim,
+                            d->beta, l_golden, d->mdim);
             }
-            for (size_t i = 0; i < n2; ++i)
-                l_golden[i] = 0.5 * (double)(i & 63) / 64.0;
-            cblas_dgemm(CblasRowMajor,
-                        (d->transab & 2) ? CblasTrans : CblasNoTrans,
-                        (d->transab & 1) ? CblasTrans : CblasNoTrans,
-                        d->mdim, d->mdim, d->mdim,
-                        1.0, l_a, d->mdim, l_b, d->mdim,
-                        d->beta, l_golden, d->mdim);
-        } else if (since_reroll == kRerollEvery / 2) {
-            /* frozen replay (PR #244 review, coderabbit): restore init's
-             * shared operands and golden — the init thread computed the
-             * golden on a different core before the workers started, so
-             * this round's byte-exact memcmp is a CROSS-CORE reference.
-             * A deterministic (mercurial-core) fault would poison the
-             * reroll golden and the DUT identically (same core, same
-             * cblas call) — only the cross-core replay catches it.
-             * Exactly one hit per reroll period: since_reroll takes this
-             * value once between the reset at 0 and the next reroll. */
-            memcpy(l_a, d->a, bytes);
-            memcpy(l_b, d->b, bytes);
-            memcpy(l_golden, d->golden, bytes);
-        }
 
-        /* copy-in (dirties cache lines, then reloads them in the kernel) */
-        memcpy(a_copy, l_a, bytes);
-        memcpy(b_copy, l_b, bytes);
+            /* copy-in (dirties cache lines, then reloads them in the kernel) */
+            memcpy(a_copy, l_a, bytes);
+            memcpy(b_copy, l_b, bytes);
+        }
 
         /* re-seed C's initial content every iteration: with beta != 0 the
          * kernel reads C (read-modify-write), so each iteration must start
          * from the same deterministic pattern the golden product was seeded
-         * with at the reroll (recomputed inline — no extra shared array) */
+         * with at the reroll (recomputed inline — no extra shared array);
+         * the frozen-replay golden (init's) was seeded with the identical
+         * pattern in init, so the same re-seed applies. */
         for (size_t i = 0; i < n2; ++i)
             c[i] = 0.5 * (double)(i & 63) / 64.0;
 
@@ -258,13 +270,14 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
 
         ++iter;
         /* verify-out: byte-exact golden compare of inputs and product */
-        if (memcmp(a_copy, l_a, bytes) != 0) {
+        if (memcmp(a_copy, frozen_replay ? d->a : l_a, bytes) != 0) {
             report_fail_msg("input A corrupted after GEMM (iteration %ld)", iter);
         }
-        if (memcmp(b_copy, l_b, bytes) != 0) {
+        if (memcmp(b_copy, frozen_replay ? d->b : l_b, bytes) != 0) {
             report_fail_msg("input B corrupted after GEMM (iteration %ld)", iter);
         }
-        memcmp_or_fail(c, l_golden, (size_t)d->mdim * d->mdim);
+        memcmp_or_fail(c, frozen_replay ? d->golden : l_golden,
+                       (size_t)d->mdim * d->mdim);
     }
     return EXIT_SUCCESS;
 }

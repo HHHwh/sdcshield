@@ -282,7 +282,9 @@ def main():
         _rc, stdout = run(cmd)
         tests, crashes, seeds = parse_result_file(y)
         npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
-        ok = nfail == 0 and ncrash == 0
+        # 与 all-quality/smoke 一致(COMMON 带 -vvv):种子行缺失说明复现证据链断裂,
+        # 同判 FAIL(零种子时日志已含 seeds=0 摘要,无需另附信息)
+        ok = nfail == 0 and ncrash == 0 and len(seeds) > 0
         if not ok:
             fail_total += 1
         crash_total += crashes
@@ -332,7 +334,8 @@ def main():
             _rc, stdout = run(cmd)
             tests, crashes, seeds = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
-            ok = nfail == 0 and ncrash == 0
+            # 同 all-PROD:此阶段也带 -vvv 跑,零种子即证据链缺失,同判 FAIL
+            ok = nfail == 0 and ncrash == 0 and len(seeds) > 0
             if not ok:
                 fail_total += 1
             crash_total += crashes

@@ -400,12 +400,18 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
      * 重掷 (线程安全: 框架 RNG per-thread 状态), golden 用独立标量
      * 参考同步重算 —— 每次比较都是"新鲜输入 x 独立实现"。
      * golden 重算 ~1ms/16 轮, 分摊开销 ~10% (DUT 单次 ~0.92ms)。
-     * PR #244 review (coderabbit): 重掷周期的中点为冻结回放轮 ——
-     * 回放 init 共享的 orig/golden (跨核参考), mercurial 型缺陷
-     * 无法同轮污染两个核。 */
+     * PR #244 review (coderabbit): 奇数轮为冻结回放轮 —— 回放 init
+     * 共享的 orig/golden (跨核参考), mercurial 型缺陷无法同轮污染
+     * 两个核。
+     * PR #244 review round 2 (greptile+coderabbit): 回放轮不再改写
+     * l_orig (原实现 memcpy(l_orig, d->orig) 会让下一非回放轮拿冻结
+     * 输入去比随机输入的 golden, 健康硬件必误报) —— 直接 d->orig →
+     * work;且回放按 (iter & 1) 交替触发, 不依赖 since_reroll (该测试
+     * fracture_loop_count=5, run 每 5 轮在新子进程重入, 局部计数会
+     * 归零, 任何依赖跨 5 轮阈值的触发点都可能永不命中)。交替下实际
+     * 重掷周期为 2*kRerollEvery (回放轮不递增 since_reroll)。 */
     constexpr int kRerollEvery = 16;
     int since_reroll = kRerollEvery; /* 首轮强制重掷 */
-    bool replay = false;
 
     TEST_LOOP(test, 1) {
         if (__builtin_expect(!l_orig || !l_golden || !work || !work2 || !l_gofs, 0)) {
@@ -425,11 +431,11 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
                 l_gofs[l] = l * (uint64_t)M_DIM * sizeof(double);
         }
 
-        if (replay) {
-            /* 冻结回放轮: 恢复 init 共享的冻结输入, DUT 输出与 init 线
-             * 程 (另一核) 算好的 golden 比对 —— 跨核 byte-tolerant 参考 */
-            memcpy(l_orig, d->orig, bytes);
-            memcpy(work, l_orig, bytes);
+        if (iter & 1) {
+            /* 冻结回放轮: init 共享的冻结输入直拷 work (不碰 l_orig,
+             * 重掷状态原样保留), DUT 输出与 init 线程 (另一核) 算好的
+             * golden 比对 —— 跨核 byte-tolerant 参考 */
+            memcpy(work, d->orig, bytes);
             bidiagonalize_sve(work, M_DIM);
             ++iter;
             bidiag_compare_or_fail(work, d->golden, M_DIM, iter);
@@ -466,7 +472,6 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
                 }
             }
         }
-        replay = !replay;
     }
 
     return EXIT_SUCCESS;
