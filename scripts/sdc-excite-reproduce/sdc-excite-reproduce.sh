@@ -78,6 +78,10 @@ flag_ok --ignore-os-errors     && FLAGS+=(--ignore-os-errors)
 flag_ok --retest-on-failure=3  && FLAGS+=(--retest-on-failure=3)
 # 本板为 no-op（thermal_monitor.hpp 已知热区类型表不含 acpitz）；保留给未来单板
 flag_ok --temperature-threshold=95000 && FLAGS+=(--temperature-threshold="$THERMAL_PAUSE_MILLI")
+# -vvv 固定追加（不走 flag_ok 探测——短参重复计数，恒存在）：
+#   种子（random_generator_state）与 per-thread loop-count 仅 verbosity>=3 时落盘
+#   （logging.cpp random_generator_state 行与 loop-count 行）——生产路径必须可复现。
+FLAGS+=(-vvv)
 log "旗标集: ${FLAGS[*]:-无}"
 
 # ---------------- 用例名解析（--list-tests 实测名单，防硬编码）----------------
