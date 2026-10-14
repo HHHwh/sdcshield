@@ -55,7 +55,7 @@
 
 **Files:** Modify `~/wangxu/operator/sdcshield/tests/cpu/arm64/sme_fmopa_stress_arm.cpp`
 
-- [ ] Step 1: skip 条件 `svl_bytes != kTileN*4` → 删除（任意 2 的幂 SVL 运行）；`kTileN` 常量 → `n = svl_bytes/4` 运行时；asm 同 Task 1 模式寄存器化（`x15=n`、`mul+ lsl #2`、`cmp x9, x15`）；init 的 golden 三重循环与 vec_count 按 n 动态（上限 32 lanes）
+- [ ] Step 1: skip 条件 `svl_bytes != kTileN*4` → 改为支持范围检查：`n = svl_bytes/4`，`n < 4 || n > kTileNMax(32)` 时 skip（缓冲区上限对应 SVL=1024-bit，超出范围的 SVL 不得进入 run——实施修正，PR #242 review coderabbit）；`kTileN` 常量 → `n = svl_bytes/4` 运行时；asm 同 Task 1 模式寄存器化（`x15=n`、`mul+ lsl #2`、`cmp x9, x15`）；init 的 golden 三重循环与 vec_count 按 n 动态（上限 32 lanes）
 - [ ] Step 2: 本机验证：`ninja -C builddir` 零警告；`-e sme_fmopa_stress_arm -t 2000 -n 1` → skip（本机无 SME，`ARM64 SME not available`——路径不变）
 - [ ] Step 3: commit -s（注明 asm 模式与 Task 1 gem5 实证同源）+ push
 
@@ -63,14 +63,14 @@
 
 **Files:** Modify `~/wangxu/operator/sdcshield/tests/cpu/arm64/sme_za_tileview_arm.cpp`
 
-- [ ] Step 1: skip `svl_bytes != kTileN*8` → 删除；`kTileN` → `n = svl_bytes/8`；asm `cmp x9, #8` → `cmp x9, x8`、`mov x8, #8` → 参数化（同 Task 2）；golden 排列 n 化；数组上限 16
+- [ ] Step 1: skip `svl_bytes != kTileN*8` → 改为支持范围检查：`n = svl_bytes/8`，`n < 2 || n > kTileNMax(16)` 时 skip（实施修正，PR #242 review coderabbit）；asm `cmp x9, #8` → `cmp x9, x8`、`mov x8, #8` → 参数化（同 Task 2）；golden 排列 n 化；数组上限 16
 - [ ] Step 2-3: 同 Task 4（构建 + skip 验证 + commit + push）
 
 ### Task 6: sdcshield `sve512_stencil_axis_arm` 全 VL 化
 
 **Files:** Modify `~/wangxu/operator/sdcshield/tests/cpu/arm64/sve512_stencil_axis_arm.cpp`
 
-- [ ] Step 1: 删除 `svcntb() != 64` / `svcntd() != 8` 两个 skip；`B_TILE` → `bt = 2*svcntd()`；`sve512_stencil_axis_data` 的 src 上限 32/lane；run 的 `result+8` → `result+svcntd()`；expected/golden 循环 bt 化（同 Task 3 模式）；注释更新（512-bit 设计历史 + 全 VL 支持 + gem5 四档实证引用）
+- [ ] Step 1: `svcntb() != 64` / `svcntd() != 8` 两个固定宽度 skip → 改为支持范围检查：`bt = 2*svcntd()`，`bt < 4 || bt > kTileMax(32)` 时 skip（缓冲区上限对应 VL=1024-bit，实施修正，PR #242 review coderabbit）；`B_TILE` → `bt = 2*svcntd()`；`sve512_stencil_axis_data` 的 src 上限 32/lane；run 的 `result+8` → `result+svcntd()`；expected/golden 循环 bt 化（同 Task 3 模式）；注释更新（512-bit 设计历史 + 全 VL 支持 + gem5 四档实证引用）
 - [ ] Step 2-3: 本机构建 + skip 验证（`test compiled with sve` 路径不变）+ commit -s + push
 
 ### Task 7: 文档同步 + 汇总
