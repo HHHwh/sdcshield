@@ -16,6 +16,7 @@
 - sdcshield DCO：`git commit -s` 尾行 `Signed-off-by: wangxu <wangxumarshall@qq.com>`；push feature 分支（`feat/sdc-seed-randomization`），绝不 push main。
 - gem5-fi 分支 `feat/sve-sme-fi`，其 verify 纪律同前。
 - **asm 参数化不变式**：元素大小立即数保留（f32 `lsl #2`、f64 `lsl #3`——与 VL 无关）；**几何立即数寄存器化**（循环边界/行距的 lane 数）；谓词 `ptrue` 任意 SVL 全真无需改。
+- **golden 比对不变式**（PR #242 review coderabbit）：Task 4-6 的动态范围只改变参与比较的 lane/元素数量；每个 lane/元素必须与对应 golden/expected 使用 `memcmp` 或 `memcmp_or_fail` 做字节级独立比较，禁止 `sum`、`xor`、`reduce` 等跨 lane 聚合（单 lane SDC 不得被合并结果掩盖——AGENTS.md 检视重点 3）。
 - **诚实边界**：sdcshield 测试的运行时（非 skip）行为本机不可验证（无 SVE/SME）；gem5 验证对象是**同源逻辑的 dual kernel**（asm 模式与测试完全一致），此等价性写入提交信息与文档。
 - gem5 环境固定：`source ~/gem5-deps/env.sh`；`first_clock` 单位是 Cycles。
 - 数值契约不因规格化改变：fmopa |a|,|b|<0.5625（64 步和 <21）；stencil 1/8 网格 <2^53；za 单射精确整数（PR #237 已论证，全规格下 n 变化不破坏证明——单射性 `(i*n+j)` 对任意 n≥2 成立、和上界按 n 缩放仍 <21/<2^53）。
