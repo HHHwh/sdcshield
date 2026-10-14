@@ -56,14 +56,17 @@
 用例口径（Task 4,6 例: 车道 B bot 循环 + 单树自愈 + scan 编排。全部离线:
   fake gh(FakeGh 补 issue close 分支)/fake run_background/fake pr_loop 函数
   (monkeypatch ct.pr_loop.*)/fake _git——绝不触网、绝不真实派 claude):
- 18 test_lane_b_dispatches_once_per_head（A6）: PR_OPEN 条目 + fake
-    fetch_pr/classify_state/render_collect + fake run_background,READY_TO_FIX
-    → 派 1 次 + rounds+1 + last_dispatched_head 记 head + status→BOT_FIX;
-    同 head 第二轮 lane_b_advance → run_background 仍恰 1 次(不重派);
-    head 变化 → 再派一次(共 2 次);
+ 18 test_lane_b_dispatches_once_per_head（A6,fix round 1 修订）: PR_OPEN
+    条目 + fake fetch_pr/classify_state/render_collect + fake
+    run_background,READY_TO_FIX → 派 1 次 + rounds+1 + last_dispatched_head
+    记 head + status→BOT_FIX;agent 在跑(活 PID)第二轮 → 跳过不重派;
+    agent 退场 + 同 head → 清 head 锚后允许重派(Critical#1 裁定——原
+    「退场后同 head 不重派」即死锁本身,该断言迁移至用例 25);head 变化
+    → 再派(共 3 次);
  19 test_lane_b_merge_ready_notifies_and_closes: READY_TO_MERGE → issue
     评论含 @wangxumarshall、FakeGh 记录 issue close 调用(gh issue close
-    <n> 分支)、条目 DONE;
+    <n> 分支)、条目 DONE;评论措辞「本跟踪 issue 现已关闭」与当场 close
+    动作一致(Minor#7,不再虚报「将自动关闭」);
  20 test_scan_heals_dirty_tree_when_no_agent（Review Focus #4）:
     monkeypatch ct._git → 克隆 HEAD 非 main 且 dirty → 断言完整恢复序列
     (fetch --all --prune → checkout main → reset --hard origin/main →
@@ -81,6 +84,25 @@
     PR_OPEN(清 head 锚允许同 head 重派,否则熔断永不触发);达阈值写
     PAUSED + ESCALATED(跨车道统一熔断,只豁免车道 A 的 success 查 PR /
     dead 重派推进)。
+
+用例口径（Task 4 fix round 1,4 例: 检视修复 Critical#1/Important#2/
+  Important#3/Important#4。全部离线,口径同 Task 4 主批）:
+ 25 test_bot_fix_dead_agent_returns_pr_open_and_re_dispatches
+    (Critical#1): bot agent dead/timeout 退场(非 auth_fail)→ lane_b
+    归还 PR_OPEN 且清 head 锚 → 同 head 允许重派(rounds+1);rounds
+    达 4(MAX_ROUNDS)后再跑 → 不再派发而是 ESCALATED——钉死「死/超时
+    退场不再永久停滞、重派由轮数上限兜底」;
+ 26 test_cmd_scan_toplevel_gherror_returns_1_and_saves_state
+    (Important#2): lane_b 阶段 fake gh 抛 GhError → cmd_scan 返回 1、
+    stderr 有错误信息、GhError 前已推进的 state(reap 记账)落盘——顶层
+    捕获不裸 traceback,推进成果不因崩溃丢失;
+ 27 test_lane_b_rounds_cap_is_inclusive(Important#3): rounds=4 ==
+    MAX_ROUNDS → lane_b 不派发、ESCALATED(rounds 上限 ≤4 轮,旧
+    `rounds > MAX_ROUNDS` 是 off-by-one 派第 5 轮);
+ 28 test_bot_fix_success_resets_auth_streak(Important#4): streak=2 的
+    BOT_FIX 条目 outcome=success → reap 只记录结局,但 streak 同样归零
+    (成功即证明凭据活着;不清零会把「连续 ≥3」退化成「累计 ≥3」,跨周期
+    间歇 auth_fail 过早全局 PAUSED)。
 """
 import argparse
 import os, shlex, signal, subprocess, sys, time
@@ -815,8 +837,10 @@ def _fake_pr_loop(monkeypatch, pr, state="READY_TO_FIX"):
 
 
 # ---------------------------------------------------------------------------
-# 用例 18: 同 head 只派一次(A6)——READY_TO_FIX 派 bot agent;同 head 复扫
-#          不重派;head 变化才允许新一轮
+# 用例 18: 同 head 单派的边界(A6,fix round 1 修订)——READY_TO_FIX 派 bot
+#          agent;agent 在跑(活 PID)不重派;agent 退场后同 head 的重派
+#          裁定归用例 25(原「退场后同 head 不重派」断言即 Critical#1 的
+#          死锁本身);head 变化才无条件允许新一轮
 
 def test_lane_b_dispatches_once_per_head(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
@@ -848,15 +872,20 @@ def test_lane_b_dispatches_once_per_head(monkeypatch, tmp_path):
     collect = tmp_path / "collect-pr88.md"
     assert collect.exists()
 
-    # 第 2 轮: agent 已退场(伪 PID 已死)、同 head → 不重派
-    # (BOT_FIX 收敛闭环: 退场的 BOT_FIX 条目归还 PR_OPEN 后再走 classify;
-    #  同 head → 跳过,run_background 仍恰 1 次)
+    # 第 2 轮: agent 仍在跑(真实活 PID 顶替,本测试进程)→ 跳过不重派
+    e1 = ct.StateStore.entries(state)[0]
+    e1.agent_pid = os.getpid()
+    state["entries"] = [e1.to_dict()]
     ct.lane_b_advance(state, dry_run=False)
     assert len(bg.calls) == 1
     e2 = ct.StateStore.entries(state)[0]
-    assert e2.status in ("PR_OPEN", "BOT_FIX")      # 未被错误终局化
+    assert e2.status == "BOT_FIX"                   # 活 agent 在跑,条目不动
+    assert e2.last_dispatched_head == "b" * 40
 
-    # 第 3 轮: head 变化(新 push)→ 允许新一轮派发(共 2 次)
+    # 第 3 轮: agent 退场(死伪 PID)且 head 变化(新 push)→ 归还 PR_OPEN 后
+    # 允许新一轮派发(共 2 次;head 变化的重派不受同 head 单派规则约束)
+    e2.agent_pid = 999999901
+    state["entries"] = [e2.to_dict()]
     pr2 = _fake_pr(head_sha="c" * 40)
     _fake_pr_loop(monkeypatch, pr2, "READY_TO_FIX")
     ct.lane_b_advance(state, dry_run=False)
@@ -891,6 +920,10 @@ def test_lane_b_merge_ready_notifies_and_closes(monkeypatch, tmp_path):
     assert fake.comments[0][0] == 77
     assert "wangxumarshall" in fake.comments[0][1]
     assert "merge" in fake.comments[0][1].lower()
+    # Minor#7: 措辞与动作一致——代码当场 gh issue close,评论不得虚报
+    # 「merge 后将自动关闭」
+    assert "现已关闭" in fake.comments[0][1]
+    assert "自动关闭" not in fake.comments[0][1]
     assert fake.closed_issues == [77]
     e = ct.StateStore.entries(state)[0]
     assert e.status == "DONE"
@@ -1074,3 +1107,215 @@ def test_bot_fix_auth_fail_counts_toward_circuit_breaker(monkeypatch, tmp_path):
     assert eb.agent_pid is None
     assert _wait_dead(p2) is not None
     assert any("认证" in body for _, body in fake.comments)
+
+
+# ===========================================================================
+# Task 4 fix round 1: 检视修复测试(Critical#1 死锁 / Important#2 顶层
+# GhError / Important#3 轮数 off-by-one / Important#4 streak 归零)。
+# 口径同 Task 4 主批: 全部离线——fake gh / fake run_background / fake
+# pr_loop 函数 / fake _git,绝不触网、绝不真实派 claude。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 用例 25(Critical#1): bot agent dead/timeout 退场 → 归还 PR_OPEN 且清
+# head 锚 → 同 head 允许重派(rounds+1);rounds 达 MAX_ROUNDS(4)后再跑
+# → 不再派发而是 ESCALATED——死/超时退场不再永久停滞,重派由轮数上限
+# 有界兜底。对称参照: auth_fail 归还路径的清锚(用例 24 场景 1)。
+
+def test_bot_fix_dead_agent_returns_pr_open_and_re_dispatches(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    pr = _fake_pr(head_sha="b" * 40)
+    _fake_pr_loop(monkeypatch, pr, "READY_TO_FIX")
+
+    # 场景 1a: dead/timeout 退场(非 auth_fail)——BOT_FIX + 死 PID + head 锚
+    # 已记。先用 WAITING_BOTS 隔离观察「归还」语义: 归还 PR_OPEN 且清
+    # head 锚(旧实现不清锚——归还后锚仍指向 "b"*40,即 Critical#1 死锁)。
+    entry = _sample_entry(workflow="Sanitizer", run_id=41, status="BOT_FIX",
+                          issue_number=77, pr_number=88,
+                          agent_pid=999999901,   # 必死伪 PID(>pid_max)
+                          agent_started_at=datetime.now(
+                              timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          agent_log=str(tmp_path / "agent-41.log"),
+                          last_dispatched_head="b" * 40, rounds=2,
+                          extra_runs=[])
+    (tmp_path / "agent-41.log").write_text("…中途暴毙…\n", encoding="utf-8")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    _fake_pr_loop(monkeypatch, pr, "WAITING_BOTS")
+    ct.lane_b_advance(state, dry_run=False)
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "PR_OPEN"                # 归还车道 B 重新判定
+    assert e.agent_pid is None                  # 单飞配额已归还
+    assert e.last_dispatched_head is None       # head 锚已清(Critical#1 修复)
+    assert len(bg.calls) == 0                   # WAITING_BOTS 不派发
+
+    # 场景 1b: 同 head(锚已清)→ READY_TO_FIX 允许重派(rounds+1,记新锚)
+    _fake_pr_loop(monkeypatch, pr, "READY_TO_FIX")
+    ct.lane_b_advance(state, dry_run=False)
+    e2 = ct.StateStore.entries(state)[0]
+    assert e2.status == "BOT_FIX"               # 重派记账
+    assert e2.rounds == 3                       # 同 head 重派消耗一轮(rounds+1)
+    assert len(bg.calls) == 1                   # 同 head 允许重派(死锁已除)
+    assert e2.last_dispatched_head == "b" * 40  # 重派记新锚
+
+    # 场景 2: rounds 已达 MAX_ROUNDS(4)的 BOT_FIX 第三次退场 → 归还清锚
+    # 后不再重派而是升级人工(轮数上限有界兜底;旧 `>` 是 off-by-one——
+    # rounds=4 时还会派第 5 轮)。锚同 head,排除「同 head 单派拦截」对
+    # 「上限拦截」的假阳性掩护——不派发只能因轮数已达上限。
+    third = _sample_entry(workflow="Sanitizer", run_id=41, status="BOT_FIX",
+                          issue_number=77, pr_number=88,
+                          agent_pid=999999903,   # 又死了
+                          agent_started_at=datetime.now(
+                              timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          agent_log=str(tmp_path / "agent-41.log"),
+                          last_dispatched_head="b" * 40, rounds=4,
+                          extra_runs=[])
+    state["entries"] = [third.to_dict()]
+    ct.lane_b_advance(state, dry_run=False)
+    e3 = ct.StateStore.entries(state)[0]
+    assert e3.status == "ESCALATED"             # 不再派发,升级人工
+    assert e3.agent_pid is None
+    assert e3.rounds == 4                       # 轮数不再增长(未派第 5 轮)
+    assert len(bg.calls) == 1                   # 达上限后零新派发
+
+
+# ---------------------------------------------------------------------------
+# 用例 26(Important#2): 顶层 GhError 捕获覆盖全部推进主体——lane_b 阶段
+# gh 抛 GhError → cmd_scan 返回 1、stderr 有错误信息、GhError 发生前已
+# 推进的 state(reap 记账)落盘。旧实现 try 只包 scan_red_runs,lane_b 的
+# 裸 GhError 会崩掉整个 scan: cron 日志不可读、state 不落盘,已发生的
+# 升级评论下轮可能重复。
+
+def test_cmd_scan_toplevel_gherror_returns_1_and_saves_state(
+        monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+
+    # lane_b 阶段: classify=READY_TO_MERGE,单条目级 try 内的 fetch_pr 走
+    # fake 不抛;抛点选该分支的 gh issue close(lane_b 的真实 gh 写路径,
+    # 无单条目 except 包裹)——正是检视所述「lane_b 的 gh 写任一抛 GhError
+    # 都会裸 traceback」的场景。
+    pr = _fake_pr()
+    _fake_pr_loop(monkeypatch, pr, "READY_TO_MERGE")
+
+    fake = FakeGh(runs=[])
+    # READY_TO_MERGE 分支的 gh issue close 抛 GhError(非 fetch 路径——
+    # 那条已被单条目 except 消化,构不成顶层验证)
+    def gh_boom(args, input_text=None):
+        fake.calls.append(list(args))
+        if args[:2] == ["issue", "close"]:
+            raise ct.GhError("模拟 gh issue close 失败")
+        return fake.gh_json(args, input_text)
+    monkeypatch.setattr(ct, "gh_json", gh_boom)
+
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+    monkeypatch.setattr(ct, "_git", lambda args: "")
+
+    # 预置: 一个 reap 待收割条目(dead → attempts 1→2 记账)+ 一个 lane_b
+    # 待收尾条目(READY_TO_MERGE → issue close 抛 GhError)
+    reaped = _sample_entry(
+        workflow="Sanitizer", run_id=51, status="DIAGNOSING", issue_number=151,
+        agent_pid=999999901, attempts=1,
+        agent_started_at=datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+        agent_log=str(tmp_path / "agent-51.log"), extra_runs=[])
+    (tmp_path / "agent-51.log").write_text("…暴毙…\n", encoding="utf-8")
+    laneb = _sample_entry(
+        workflow="CodeQL", run_id=52, status="PR_OPEN", issue_number=152,
+        pr_number=88, rounds=1, agent_pid=None, agent_started_at=None,
+        agent_log=None, last_dispatched_head=None, extra_runs=[])
+
+    store = ct.StateStore()
+    state = {"entries": [reaped.to_dict(), laneb.to_dict()],
+             "auth_failure_streak": 0}
+    store.save(state)                            # 预置 state 落盘
+
+    rc = ct.cmd_scan(argparse.Namespace(dry_run=False))
+    captured = capsys.readouterr()
+
+    assert rc == 1                               # 顶层捕获 → 返回 1
+    assert "GhError" in captured.err             # stderr 有错误信息
+    # GhError 发生前已推进的 state 落盘: reap 记账 attempts 1→2 + 派发扫
+    # 重派 2→3(顺带确认派发记账也未丢)
+    saved = ct.StateStore().load()
+    saved_entries = {e["run_id"]: e for e in saved["entries"]}
+    assert saved_entries[51]["attempts"] == 3    # reap+派发扫推进均未丢
+    assert saved_entries[51]["status"] == "DIAGNOSING"
+
+
+# ---------------------------------------------------------------------------
+# 用例 27(Important#3): 轮数上限 ≤4 轮(inclusive)——rounds=4 ==
+# MAX_ROUNDS → 不派发、ESCALATED。旧 `rounds > MAX_ROUNDS` 允许 rounds=4
+# 时派第 5 轮(off-by-one,违反全局约束「车道 B ≤4 rounds」)。
+
+def test_lane_b_rounds_cap_is_inclusive(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+    assert ct.MAX_ROUNDS == 4                    # 全局约束锚
+
+    _fake_pr_loop(monkeypatch, _fake_pr(head_sha="e" * 40), "READY_TO_FIX")
+    entry = _sample_entry(workflow="Sanitizer", run_id=53, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=4,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, last_dispatched_head="d" * 40,
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    ct.lane_b_advance(state, dry_run=False)
+
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "ESCALATED"               # rounds 已达 4 → 升级
+    assert e.rounds == 4                         # 不再消耗第 5 轮
+    assert len(bg.calls) == 0                    # 零派发
+
+
+# ---------------------------------------------------------------------------
+# 用例 28(Important#4): BOT_FIX success → auth_failure_streak 归零。
+# 车道 A 的 success 归零已存在(reap :950);BOT_FIX 落「只记录」分支不清
+# → 「连续 ≥3」退化成「累计 ≥3」,跨周期间歇 auth_fail 会过早全局 PAUSED。
+
+def test_bot_fix_success_resets_auth_streak(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    monkeypatch.setattr(ct, "check_agent_outcome", lambda e: "success")
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=54, status="BOT_FIX",
+                          issue_number=77, pr_number=88, agent_pid=999999901,
+                          attempts=1, rounds=2,
+                          agent_log=str(tmp_path / "agent-54.log"),
+                          last_dispatched_head="b" * 40, extra_runs=[])
+    (tmp_path / "agent-54.log").write_text(
+        "处置完成\nci-triage: done fix/ci-54\n", encoding="utf-8")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 2}
+
+    ct.reap_or_advance(state)
+
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "BOT_FIX"                 # pr_loop 接管期只记录
+    assert e.agent_pid == 999999901              # 引用不动(条目推进归 lane_b)
+    assert state["auth_failure_streak"] == 0     # 成功即证明凭据活着,归零
+    # 对照: 归零后单次 auth_fail(条目 A)未达阈值;若未归零,2+1=3 会熔断
+    other = _sample_entry(workflow="CodeQL", run_id=55, status="DIAGNOSING",
+                          issue_number=78, agent_pid=999999902, attempts=1,
+                          agent_log=str(tmp_path / "agent-55.log"),
+                          extra_runs=[])
+    (tmp_path / "agent-55.log").write_text("API Error: 403\n",
+                                           encoding="utf-8")
+    state["entries"].append(other.to_dict())
+    monkeypatch.setattr(ct, "check_agent_outcome",
+                        lambda e: "auth_fail" if e.run_id == 55 else "success")
+    ct.reap_or_advance(state)
+    assert state["auth_failure_streak"] == 1     # 从零重新累计(未熔断)
+    assert not (tmp_path / "PAUSED").exists()

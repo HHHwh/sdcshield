@@ -895,7 +895,9 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                   先击杀仍存活的 agent(单飞不漏无主活进程);
         dead/timeout → attempts+1;≤2 重派(回到 DIAGNOSING 由调用方
                   dispatch);>2 升级人工。
-    - BOT_FIX 条目: 结局只记录在条目上,状态不变(pr_loop 已接管)。
+    - BOT_FIX 条目: 结局只记录在条目上,状态不变(pr_loop 已接管);
+      例外1 auth_fail 计入熔断(裁定 7);例外2 success 把
+      auth_failure_streak 归零(成功即证明凭据活着)。
     - 单飞语义: 处理中的 agent 未退场(PID 活)不影响本函数——只收割
       已结束的结局。
     """
@@ -937,6 +939,11 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                           f"/{AUTH_FAILURE_STREAK_LIMIT}),归还 PR_OPEN")
                 continue
             # pr_loop 接管期: 其余结局只记录,不推进状态机
+            if outcome == "success":
+                # 成功即证明 gh 凭据活着,streak 同样归零(检视 Important#4,
+                # 与车道 A 的 success 路径同口径)——不清零会把「连续 ≥3」
+                # 退化成「累计 ≥3」,跨周期间歇 auth_fail 过早全局 PAUSED
+                state["auth_failure_streak"] = 0
             print(f"[reap] run {entry.run_id}(BOT_FIX) agent 结局: {outcome}")
             continue
 
@@ -1103,12 +1110,18 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
                       f"{entry.agent_pid})仍在跑,本轮跳过")
                 continue
             if entry.agent_pid is not None:
-                # agent 已退场: 归还单飞配额,回到 PR_OPEN 重新判定
+                # agent 已退场: 归还单飞配额,回到 PR_OPEN 重新判定。
+                # 一并清 head 锚(与 reap 的 auth_fail 归还路径对称,检视
+                # Critical#1): bot agent 以 dead/timeout 退场时锚若不清,
+                # 同 head 单派规则会拦住重派——条目永不重派、rounds 停住、
+                # 升级阀失效,静默死锁。清锚后同 head 允许重派,失控由
+                # rounds 轮数上限(≤MAX_ROUNDS → ESCALATED)有界兜底。
                 _kill_agent_if_alive(entry)
                 entry.status = "PR_OPEN"
+                entry.last_dispatched_head = None
                 entry.updated_at = _now_iso()
                 print(f"[lane-b] run {entry.run_id}: bot 处置 agent 已退场,"
-                      f"条目归还 PR_OPEN")
+                      f"条目归还 PR_OPEN(清 head 锚)")
         if entry.status != "PR_OPEN" or entry.pr_number is None:
             continue
         try:
@@ -1149,7 +1162,7 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         if pr_state == "READY_TO_MERGE":
             body = (f"@wangxumarshall 修复 PR #{entry.pr_number}({pr.url})"
                     f"四 bot 检视通过、当前 head 无待处置意见——请人工 merge。"
-                    f"merge 后本跟踪 issue 将自动关闭。")
+                    f"本跟踪 issue 现已关闭。")
             if dry_run:
                 print(f"[dry-run] 将评论 issue #{entry.issue_number}: "
                       f"{body[:120]}…")
@@ -1167,9 +1180,12 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             continue
 
         # READY_TO_FIX: 轮数上限 → 升级;同 head 已派 → 不重派;否则派 bot agent
-        if entry.rounds > MAX_ROUNDS:
+        # rounds >= MAX_ROUNDS(4)(检视 Important#3,旧 `>` 是 off-by-one:
+        # rounds=4 时还会派第 5 轮,违反「车道 B ≤4 rounds」全局约束)
+        if entry.rounds >= MAX_ROUNDS:
             _escalate(entry, state,
-                      f"bot 意见处置已 {entry.rounds} 轮(> {MAX_ROUNDS})仍未收敛",
+                      f"bot 意见处置已 {entry.rounds} 轮"
+                      f"(≥ {MAX_ROUNDS})仍未收敛",
                       "人工接手处置剩余 bot 意见并 merge", dry_run)
             continue
         if entry.last_dispatched_head == pr.head_sha:
@@ -1294,7 +1310,12 @@ def _run_scan_orchestration(dry_run: bool) -> int:
     → heal_clone → 车道 A: scan_red_runs + triage_new_red_runs +
     reap_or_advance + 派发扫 → 车道 B: lane_b_advance → store.save。
     dry_run=True: 同一编排但全程零写(零 gh 写、零 git 变更、state 不落盘)。
-    GhError 顶层捕获打印返回 1(单条目级 GhError 已在 lane_b 内部消化)。
+
+    GhError 顶层捕获(检视 Important#2): 覆盖 scan_red_runs 起至 lane_b
+    的全部推进主体——triage/reap/lane_b 的 gh 写任一抛 GhError 都会在此
+    捕获,打印到 stderr 并返回 1(不裸 traceback 崩掉 cron);单条目级
+    GhError 仍在 lane_b 内部逐条消化。异常发生前已推进的 state(收割
+    记账等)是真实成果,经 finally 落盘,不因本轮崩溃丢失。
     """
     state_dir = _resolve_state_dir()
     os.makedirs(state_dir, exist_ok=True)
@@ -1312,40 +1333,50 @@ def _run_scan_orchestration(dry_run: bool) -> int:
                   "(派发请求将由 dispatch_agent 的 PAUSED 闸门逐条拒绝)")
         store = StateStore()
         state = store.load()
-        # ---- 车道 A: 观测 + 分诊 + 收割 ----
+        exit_code = 0
         try:
+            # ---- 车道 A: 观测 + 分诊 + 收割 ----
+            # 顶层 GhError 覆盖从 scan_red_runs 起的全部推进(检视
+            # Important#2: 旧 try 只包 scan_red_runs,triage/reap/lane_b
+            # 的 gh 写抛 GhError 会裸 traceback——cron 日志不可读、state
+            # 不落盘,已发生的升级评论下轮可能重复)。
             runs = scan_red_runs()
+            print(f"扫描到 {len(runs)} 个红 run(监控 {MONITORED_BRANCH} 分支,"
+                  f"回看 {LOOKBACK_DAYS} 天)")
+            triage_new_red_runs(state, runs, dry_run=dry_run)
+            reap_or_advance(state, dry_run=dry_run)
+            # ---- 克隆自愈(派发前恢复单树基线——新 agent 须启动在干净 main 上) ----
+            heal_clone(state, dry_run=dry_run)
+            # ---- 车道 A 派发扫: ISSUED/DIAGNOSING 且无 agent 的条目 ----
+            # PAUSED 时编排照常跑(观测不受影响),派发请求由 dispatch_agent
+            # 内的 PAUSED 闸门逐条拒绝(车道 A/B 同闸)。
+            # 单飞正确性: dispatch_agent 的记账落在 Entry 对象上,而
+            # has_running_agent 从 state["entries"] 的 dict 重新解析——故每次
+            # 派发后立即回写 dict,同轮下一个条目的单飞判定才能看到刚派的
+            # agent(否则同轮两个条目各派一个,单飞失效)。
+            if paused:
+                print("[paused] 车道 A 派发被 PAUSED 闸门拦下")
+            sweep = StateStore.entries(state)
+            for entry in sweep:
+                if entry.status in ("ISSUED", "DIAGNOSING") \
+                        and entry.agent_pid is None:
+                    dispatch_agent(entry, state, dry_run=dry_run)
+                    state["entries"] = [e.to_dict() for e in sweep]
+            # ---- 车道 B: bot 意见处置循环(观测照常,派发同受 PAUSED 闸) ----
+            lane_b_advance(state, dry_run=dry_run)
         except GhError as exc:
-            print(f"扫描失败: {exc}", file=sys.stderr)
-            return 1
-        print(f"扫描到 {len(runs)} 个红 run(监控 {MONITORED_BRANCH} 分支,"
-              f"回看 {LOOKBACK_DAYS} 天)")
-        triage_new_red_runs(state, runs, dry_run=dry_run)
-        reap_or_advance(state, dry_run=dry_run)
-        # ---- 克隆自愈(派发前恢复单树基线——新 agent 须启动在干净 main 上) ----
-        heal_clone(state, dry_run=dry_run)
-        # ---- 车道 A 派发扫: ISSUED/DIAGNOSING 且无 agent 的条目 ----
-        # PAUSED 时编排照常跑(观测不受影响),派发请求由 dispatch_agent
-        # 内的 PAUSED 闸门逐条拒绝(车道 A/B 同闸)。
-        # 单飞正确性: dispatch_agent 的记账落在 Entry 对象上,而
-        # has_running_agent 从 state["entries"] 的 dict 重新解析——故每次
-        # 派发后立即回写 dict,同轮下一个条目的单飞判定才能看到刚派的
-        # agent(否则同轮两个条目各派一个,单飞失效)。
-        if paused:
-            print("[paused] 车道 A 派发被 PAUSED 闸门拦下")
-        sweep = StateStore.entries(state)
-        for entry in sweep:
-            if entry.status in ("ISSUED", "DIAGNOSING") \
-                    and entry.agent_pid is None:
-                dispatch_agent(entry, state, dry_run=dry_run)
-                state["entries"] = [e.to_dict() for e in sweep]
-        # ---- 车道 B: bot 意见处置循环(观测照常,派发同受 PAUSED 闸) ----
-        lane_b_advance(state, dry_run=dry_run)
-        if not dry_run:
-            store.save(state)
-        else:
-            print("[dry-run] state 不落盘,复跑无痕")
-        return 0
+            print(f"scan 失败(GhError,已推进的 state 仍会落盘): {exc}",
+                  file=sys.stderr)
+            exit_code = 1
+        finally:
+            # GhError 中途崩溃也要落盘: 异常发生前的推进(收割记账、状态
+            # 变更)是真实成果,不落盘则本轮收割全部丢失,下轮重复动作
+            # (如已发出的升级评论)。dry_run 除外(复跑无痕契约)。
+            if not dry_run:
+                store.save(state)
+            else:
+                print("[dry-run] state 不落盘,复跑无痕")
+        return exit_code
     finally:
         os.close(lock_fd)
 
