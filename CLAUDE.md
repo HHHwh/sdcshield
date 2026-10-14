@@ -124,7 +124,7 @@ END_DECLARE_TEST
   `docs/research/adding-tests.md`, `docs/misc/coding_style_guide.md`.
 - **CLI beyond this file**: `docs/research/usage.md` (all options).
 - **Build/deploy/multi-OS**: README (quick start, 15-version build);
-  `docs/build-deploy/` (design + usermanual + offline deps).
+  `docs/build-deploy-ci/` (design + usermanual + offline deps).
 - **Session recovery** (machine may die anytime; persist conclusions to
   disk): `docs/research/progress-log.md`; fact card in
   `docs/research/README.md`.
