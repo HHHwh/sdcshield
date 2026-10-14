@@ -103,6 +103,19 @@ static int ipsec_3des_docsis_hmac_sha224_sve_wide_init(struct test *test) {
                      "to be implemented (placeholder): ARM SVE required for ipsec_3des_docsis_hmac_sha224_sve_wide");
             return EXIT_SKIP;
         }
+        /* The multi-stream SVE HMAC kernels give one stream per SVE
+         * lane: 8x32-bit (sha1/224/256) needs svcntw()>=8 and
+         * 4x64-bit (384/512) needs svcntd()>=4 -- both mean VL>=256
+         * bit. On shorter-VL SVE hardware (e.g. Neoverse N2, VL=128)
+         * lanes beyond VL are never written, so skip cleanly instead
+         * of comparing unwritten memory (target silicon: VL=256, see
+         * tests/cpu/sve/meson.build). */
+        if (svcntw() < 8 || svcntd() < 4) {
+            log_skip(CpuNotSupportedSkipCategory,
+                     "ARM SVE vector length %zu bytes < 32 required by the multi-stream HMAC kernels (svcntw=%zu svcntd=%zu)",
+                     svcntb(), (size_t)svcntw(), (size_t)svcntd());
+            return EXIT_SKIP;
+        }
         struct ipsec_3des_docsis_hmac_sha224_sve_wide_data *d = (struct ipsec_3des_docsis_hmac_sha224_sve_wide_data *)malloc(sizeof(*d));
         if (!d) return EXIT_SKIP;
         memset_random(d->aes_key, AES_KEY_SIZE_V);
