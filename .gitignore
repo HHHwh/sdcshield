@@ -33,3 +33,5 @@ __pycache__/
 /scripts/sdc-excite-reproduce/drills/out/
 # oversized raw field logs kept on disk, never for git (245 MB):
 /docs/cases/hpc/Linsheng 10.39.0.1_2026-09-11_6_42_28.log
+.worktrees/
+.superpowers/

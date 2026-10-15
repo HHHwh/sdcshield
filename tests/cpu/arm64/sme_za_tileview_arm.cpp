@@ -53,6 +53,7 @@
 
 #include <sandstone.h>
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -68,12 +69,37 @@
 #define HWCAP2_SME (1UL << 23)
 #endif
 
-/* Measured geometry on cn23154: SME SVL = 512-bit -> 8 f64 per ZA slice
- * and an 8x8 f64 tile per ZAd view. Other SVLs are skipped, not guessed. */
-static constexpr long kTileN = 8;
+/* Full-SVL support (128..1024-bit): n = SVL/8 f64 per ZA slice is read
+ * at runtime (rdsvl); each ZAd view is an n x n f64 tile. Originally
+ * measured at 512-bit on cn23154 (8x8); the parameterized addressing
+ * shape was first verified at SVL 128/256/512/1024 in gem5 by the
+ * pre-#242 dual kernel (16 runs, 3-phase form; za0h/za0v/za0h.d[r,1]
+ * semantics measured SVL-independent by the za_semantics probe); the
+ * full five-phase same-source mirror (incl. za1h isolation) is covered
+ * by the PR #242 record below.
+ *
+ * gem5-fi no-injection control, real run output (random seed=1, one run
+ * per SVL tier, gem5.opt configs/se/arm_chaos.py --cpu O3 --sme_vl N):
+ *   svl=1 (128-bit)  SDCSHIELD_FAILS=0  checksum 3a8aa4cc9676e16d
+ *   svl=2 (256-bit)  SDCSHIELD_FAILS=0  checksum 598385ee31f52fd9
+ *   svl=4 (512-bit)  SDCSHIELD_FAILS=0  checksum e9e2be2a9b3a6160
+ *   svl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 8eafe9a9bc959ee2
+ * Checksums differ from the pre-formula-fix runs (a2ff7aa2… era) by
+ * design: the PR #242 injective input formula (x64 -> x256 multiplier)
+ * and the five-tile output set (za1h isolation + za0h re-read) both
+ * change the hashed stream, so the old 512-bit anchor efa69a0f… no
+ * longer applies; the anchor for this form is e9e2be2a… at svl=4.
+ * Honest boundary: gem5 validates the same-source dual kernel (naked
+ * struct-param mirror of this test's kernel, carrying the injective
+ * input formula fixed in this PR) at each tier; the host lacks SME, so
+ * the C++ test itself runs only its build and skip paths here.
+ * Real-SME hardware runs remain future hardware validation. */
+static constexpr long kTileNMax = 16;   /* SVL=1024bit upper bound */
 
 struct SmeZaTileviewData {
-    /* Shared read-only inputs and byte-exact goldens, each kTileN*kTileN. */
+    /* f64 per ZA slice at the runtime SVL (2..16). */
+    long n;
+    /* Shared read-only inputs and byte-exact goldens, each n*n. */
     std::vector<double> a, b;
     std::vector<double> golden_id_a, golden_tr_a, golden_rot_a;
     std::vector<double> golden_id_b;
@@ -89,6 +115,7 @@ struct SmeZaParams {
     double *rot_a;  /* za0h.d[r, 1] read              */
     double *id_b;   /* za1h round trip of b           */
     double *id_a2;  /* za0h re-read after za1h writes */
+    long n;         /* f64 per slice (runtime SVL)    */
 };
 
 /* One smstart/smstop window, five store phases, all against the
@@ -105,14 +132,14 @@ static void za_tileview_kernel(const SmeZaParams *p)
         "ldr x5, [x0, #32]\n\t"
         "ldr x6, [x0, #40]\n\t"
         "ldr x7, [x0, #48]\n\t"
+        "ldr x8, [x0, #56]\n\t"     /* n (runtime)   */
         "smstart sm\n\t"
         "smstart za\n\t"
         "zero {za}\n\t"
         "ptrue p0.d\n\t"
-        "mov x8, #8\n\t"
         "mov x9, #0\n"
         "1:\n\t"
-        "cmp x9, #8\n\t"
+        "cmp x9, x8\n\t"
         "b.ge 2f\n\t"
         "mov w12, w9\n\t"
         "mul x10, x9, x8\n\t"
@@ -122,7 +149,7 @@ static void za_tileview_kernel(const SmeZaParams *p)
         "2:\n\t"
         "mov x9, #0\n"
         "3:\n\t"
-        "cmp x9, #8\n\t"
+        "cmp x9, x8\n\t"
         "b.ge 4f\n\t"
         "mov w12, w9\n\t"
         "mul x10, x9, x8\n\t"
@@ -134,7 +161,7 @@ static void za_tileview_kernel(const SmeZaParams *p)
         "4:\n\t"
         "mov x9, #0\n"
         "5:\n\t"
-        "cmp x9, #8\n\t"
+        "cmp x9, x8\n\t"
         "b.ge 6f\n\t"
         "mov w12, w9\n\t"
         "mul x10, x9, x8\n\t"
@@ -144,7 +171,7 @@ static void za_tileview_kernel(const SmeZaParams *p)
         "6:\n\t"
         "mov x9, #0\n"
         "7:\n\t"
-        "cmp x9, #8\n\t"
+        "cmp x9, x8\n\t"
         "b.ge 8f\n\t"
         "mov w12, w9\n\t"
         "mul x10, x9, x8\n\t"
@@ -182,20 +209,20 @@ static int sme_za_tileview_arm_init(struct test *test)
      * length in bytes. SME implies SVE, so rdsvl cannot SIGILL here. */
     long svl_bytes;
     asm volatile("rdsvl %0, #1" : "=r"(svl_bytes));
-    if (svl_bytes != kTileN * 8) {
+    const long n = svl_bytes / 8;
+    if (n < 2 || n > kTileNMax) {
         log_skip(CpuNotSupportedSkipCategory,
                  "sme_za_tileview_arm: SME streaming vector length %ld "
-                 "bytes is not the characterized 64-byte (512-bit) "
-                 "geometry; tile-view semantics at other SVLs are "
-                 "unmeasured", svl_bytes);
+                 "bytes is outside the supported 128..1024-bit range",
+                 svl_bytes);
         return EXIT_SKIP;
     }
 
     try {
         auto data = std::make_unique<SmeZaTileviewData>();
-        constexpr long n = kTileN;
-        constexpr size_t nn = static_cast<size_t>(n) * n;
+        const size_t nn = static_cast<size_t>(n) * n;
 
+        data->n = n;
         data->a.resize(nn);
         data->b.resize(nn);
         data->golden_id_a.resize(nn);
@@ -207,22 +234,30 @@ static int sme_za_tileview_arm_init(struct test *test)
             for (long j = 0; j < n; ++j) {
                 const size_t ij = static_cast<size_t>(i) * n + j;
                 /* Exact doubles from the framework RNG: a random multiple
-                 * of 64 plus the injective (i*n + j) index keeps all n*n
+                 * of 256 plus the injective (i*n + j) index keeps all n*n
                  * elements distinct, so any flipped bit or mis-permutation
-                 * still shows up in the memcmp. The top 46 random bits
-                 * (>> 18) keep every value <= 2^52 + 63, exactly
-                 * representable as a double. b additionally offsets by one
-                 * tile (nn): under the Constant RNG engine two consecutive
-                 * random64() draws return identical bits, which would make
-                 * a[ij] == b[ij] everywhere and blind the za0/za1 isolation
-                 * check — the offset keeps b = a + 64 there (PR #237
-                 * review, greptile). The RNG is re-seeded per fracture
-                 * fragment, so every fragment gets fresh values instead of
-                 * one fixed formula (PR #234 review, greptile 4254737399). */
+                 * still shows up in the memcmp. The multiplier must exceed
+                 * the position-index range: full-VL support allows n up to
+                 * kTileNMax = 16, so i*n + j reaches 255 > the old 64
+                 * multiplier and (rand*64 + pos) was no longer injective
+                 * (PR #242 review, greptile). 256 > 255 restores the
+                 * unique decomposition. The top 43 random bits (>> 21)
+                 * keep every value <= 2^51 - 1, exactly representable
+                 * as a double. b lives in a disjoint value range: a fixed
+                 * +2^52 offset keeps b > a even under the Constant RNG
+                 * engine, where two consecutive random64() draws return
+                 * identical bits and the old per-element offset (nn) could
+                 * collide with a's random part — a's [0, 2^51) and b's
+                 * [2^52, 2^52 + 2^51) never intersect, so the za0/za1
+                 * isolation check stays blind-free (PR #237 review,
+                 * greptile). The RNG is re-seeded per fracture fragment,
+                 * so every fragment gets fresh values instead of one
+                 * fixed formula (PR #234 review, greptile 4254737399). */
                 data->a[ij] = static_cast<double>(
-                    (random64() >> 18) * 64 + (i * n + j));
+                    (random64() >> 21) * 256 + (i * n + j));
                 data->b[ij] = static_cast<double>(
-                    (random64() >> 18) * 64 + nn + (i * n + j));
+                    (random64() >> 21) * 256 + (i * n + j)) +
+                    4503599627370496.0; /* + 2^52 */
             }
 
         /* Goldens must be derived only after a/b are fully populated: the
@@ -261,22 +296,27 @@ static int sme_za_tileview_arm_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 #else
     auto *d = static_cast<SmeZaTileviewData *>(test->data);
-    constexpr long n = kTileN;
-    constexpr size_t count = static_cast<size_t>(n) * n;
-    constexpr size_t bytes = count * sizeof(double);
+    const long n = d->n;
+    /* init and run are separate functions: the five stack buffers below
+     * are sized kTileNMax*kTileNMax and the kernel writes n*n into each,
+     * so pin init's invariant (n within [2, kTileNMax]) before any buffer
+     * math (PR #242 review, coderabbit). */
+    assert(n >= 2 && n <= kTileNMax);
+    const size_t count = static_cast<size_t>(n) * n;
+    const size_t bytes = count * sizeof(double);
 
     /* Per-thread output buffers: 608 CPUs run this concurrently and a
      * shared dst would be a cross-thread race. Every byte of each
      * buffer is rewritten by the kernel on every pass, so no memset. */
-    double id_a[kTileN * kTileN];
-    double tr_a[kTileN * kTileN];
-    double rot_a[kTileN * kTileN];
-    double id_b[kTileN * kTileN];
-    double id_a2[kTileN * kTileN];
+    double id_a[kTileNMax * kTileNMax];
+    double tr_a[kTileNMax * kTileNMax];
+    double rot_a[kTileNMax * kTileNMax];
+    double id_b[kTileNMax * kTileNMax];
+    double id_a2[kTileNMax * kTileNMax];
 
     SmeZaParams params = {
         d->a.data(), d->b.data(),
-        id_a, tr_a, rot_a, id_b, id_a2,
+        id_a, tr_a, rot_a, id_b, id_a2, n,
     };
 
     do {

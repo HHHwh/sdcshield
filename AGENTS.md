@@ -23,6 +23,13 @@ Corruption）**——即计算不崩溃、但产生错误比特。其检测原�
 3. **诚实性——禁止假通过**：ARM64 上尚未实现的功能，必须从 `test_init` 返回 `EXIT_SKIP`，
    且跳过理由为 `"to be implemented (placeholder): <缺失内容>"`；**禁止**用 `EXIT_SUCCESS`
    伪装通过（no-op 测试报 pass 是 bug）。`mce_check` 在 ARM64 是真实的 EDAC 后端测试，**必须通过**。
+   **本机能力不支持时的 gem5-fi 强制验证**：受影响行为若因当前机器芯片能力缺失（缺
+   HWCAP/HWCAP2 位如 SME、VL/SVL 档位不支持、新指令代际）而无法真机运行，仅验证 SKIP
+   路径**不构成完整验证**——必须用 gem5-fi（`/home/sdc/wangxu/gem5-fi-fuzz`，CHAOS/SE，
+   `workloads/sdcshield/` 下同源 dual kernel）在受影响的 VL/SVL 档位仿真验证并引用真实
+   run 输出（档位、checksum、`SDCSHIELD_FAILS=0`）；确实无法 gem5 验证时须如实声明验证
+   边界。**禁止把「SKIP 理由不变」单独充当功能性修改的验证结论**（PR #242 先例：
+   输入公式修复由 `sme_za_tileview_dual.c` 在 SVL 128/256/512/1024-bit 四档实证）。
 4. **一个补丁一个单元**：每个特性 / 修复 / 移植点单独提交，**不得捆绑**多个单元。提交遵循 DCO：
    `git commit -s`，`Signed-off-by` 为最后一行，其后不得再有内容。
 5. **文档同步**：大颗粒度修改必须同步更新 `README.md` 与 `docs/` 下对应文档，确保内容 100% 准确。
@@ -60,6 +67,7 @@ SDC 检视的独特之处在于——不仅看代码「对不对」，更看它*
 5. **诚实性**
    - ARM64 未实现项是否返回 `EXIT_SKIP` 且理由为 `"to be implemented (placeholder): ..."`？
    - 是否存在以 `EXIT_SUCCESS` 假通过的 no-op 测试？
+   - **gem5-fi 验证完备性**：若修改的受影响行为在本机因芯片能力缺失（SME、VL/SVL 档位等）无法真机运行，验证是否包含 gem5-fi 同源 dual kernel 的 VL/SVL 档位实证（真实 run 输出）？「SKIP 理由不变」被单独充当功能性验证 = 验证不完备（详见关键规则 3）。
 
 6. **架构相关缺陷（SVE/NEON VL）**
    - 是否存在与向量长度（VL）相关的越界读写或误报？

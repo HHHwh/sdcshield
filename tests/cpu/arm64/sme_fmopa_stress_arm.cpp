@@ -28,10 +28,12 @@
  *  - all-core concurrency: 608 threads each in their own streaming
  *    window (per-thread ZA, no sharing).
  *
- * Gates: HWCAP2 SME bit, then a runtime rdsvl check pinning the
- * characterized geometry (SVL = 512-bit = 16 f32 per slice, the
- * cn23154-measured SVL). Non-aarch64 hosts, non-clang compilers, and
- * uncharacterized SVLs skip with an honest reason. x86-64 untouched.
+ * Gates: HWCAP2 SME bit, then a runtime rdsvl check bounding SVL to the
+ * supported 128..1024-bit range (n = SVL/4 f32 lanes per slice; the
+ * geometry was characterized at 512-bit on cn23154 and the parameterized
+ * asm verified at all four SVLs in gem5). Non-aarch64 hosts, non-clang
+ * compilers, and out-of-range SVLs skip with an honest reason. x86-64
+ * untouched.
  * @endparblock
  */
 
@@ -46,6 +48,7 @@
 
 #include <sandstone.h>
 
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -61,16 +64,37 @@
 #define HWCAP2_SME (1UL << 23)
 #endif
 
-/* Characterized geometry on cn23154: SME SVL = 512-bit -> 16 f32 lanes
- * per slice, ZA0.s tile is 16x16. */
-static constexpr long kTileN = 16;
+/* Full-SVL support (128..1024-bit): n = SVL/4 f32 lanes per slice is
+ * read at runtime (rdsvl); the ZA0.s tile is n x n. Originally
+ * characterized at 512-bit on cn23154 (16x16); the parameterized asm has
+ * been verified at SVL 128/256/512/1024 in gem5 (gem5-fi feat/sve-sme-all-vl,
+ * kernel sme_fmopa_dual, 16-run all-green incl. the 512-bit regression
+ * anchor).
+ *
+ * gem5-fi no-injection control, real run output (random seed=1, one run
+ * per SVL tier, gem5.opt configs/se/arm_chaos.py --cpu O3 --sme_vl N):
+ *   svl=1 (128-bit)  SDCSHIELD_FAILS=0  checksum 226bb7c9de343799
+ *   svl=2 (256-bit)  SDCSHIELD_FAILS=0  checksum f9159f9ee5b58081
+ *   svl=4 (512-bit)  SDCSHIELD_FAILS=0  checksum 892e4ba85fa50c39
+ *                    (bit-identical to the pre-parameterization 512-bit
+ *                    kernel — regression anchor)
+ *   svl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 2856f882eb57bc99
+ * Honest boundary: gem5 validates the same-source dual kernel's asm
+ * semantics and numerical contract per tier; the host lacks SME, so the
+ * C++ test itself runs only its build and skip paths here. gem5 FMOPA
+ * is fplib mul+add double-rounded (F4 deviation, -ffp-contract=off in the
+ * dual kernel build), which the gem5-fi findings register; real-SME
+ * hardware runs remain future hardware validation. */
+static constexpr long kTileNMax = 32;   /* SVL=1024bit upper bound */
 /* Outer-product rounds per TEST_LOOP iteration (serial chain depth). */
 static constexpr long kFmopaRounds = 64;
 
 struct SmeFmopaData {
-    /* Shared read-only operand streams, layout [k * kTileN + lane]. */
+    /* f32 lanes per slice at the runtime SVL (4..32). */
+    long n;
+    /* Shared read-only operand streams, layout [k * n + lane]. */
     std::vector<float> a, b;
-    /* Shared byte-exact golden tile, layout [row * kTileN + col]. */
+    /* Shared byte-exact golden tile, layout [row * n + col]. */
     std::vector<float> golden;
 };
 
@@ -78,7 +102,8 @@ struct SmeFmopaData {
 struct SmeFmopaParams {
     const float *a;
     const float *b;
-    float *out;     /* 16x16 f32, rewritten every pass */
+    float *out;     /* n*n f32, rewritten every pass */
+    long n;         /* f32 lanes per slice (runtime SVL) */
 };
 
 /* One smstart/smstop window: zero ZA, K_FMOPA outer-product rounds,
@@ -92,6 +117,7 @@ static void sme_fmopa_kernel(const SmeFmopaParams *p)
         "ldr x1, [x0, #0]\n\t"       /* a          */
         "ldr x2, [x0, #8]\n\t"       /* b          */
         "ldr x3, [x0, #16]\n\t"      /* out        */
+        "ldr x15, [x0, #24]\n\t"     /* n lanes    */
         "smstart sm\n\t"
         "smstart za\n\t"
         "zero {za}\n\t"
@@ -101,8 +127,9 @@ static void sme_fmopa_kernel(const SmeFmopaParams *p)
         "1:\n\t"
         "cmp x9, #64\n\t"
         "b.ge 2f\n\t"
-        "add x10, x1, x9, lsl #6\n\t"    /* &a[k*16]   */
-        "add x11, x2, x9, lsl #6\n\t"    /* &b[k*16]   */
+        "mul x14, x9, x15\n\t"           /* k*n        */
+        "add x10, x1, x14, lsl #2\n\t"   /* &a[k*n]    */
+        "add x11, x2, x14, lsl #2\n\t"   /* &b[k*n]    */
         "ld1w {z0.s}, p0/z, [x10]\n\t"
         "ld1w {z1.s}, p0/z, [x11]\n\t"
         "fmopa za0.s, p0/m, p1/m, z0.s, z1.s\n\t"
@@ -111,10 +138,11 @@ static void sme_fmopa_kernel(const SmeFmopaParams *p)
         "2:\n\t"
         "mov x9, #0\n"               /* row = 0    */
         "3:\n\t"
-        "cmp x9, #16\n\t"
+        "cmp x9, x15\n\t"
         "b.ge 4f\n\t"
         "mov w12, w9\n\t"
-        "add x13, x3, x9, lsl #6\n\t"    /* &out[r*16] */
+        "mul x14, x9, x15\n\t"
+        "add x13, x3, x14, lsl #2\n\t"   /* &out[r*n]  */
         "st1w {za0h.s[w12, 0]}, p0, [x13]\n\t"
         "add x9, x9, #1\n\t"
         "b 3b\n"
@@ -147,22 +175,22 @@ static int sme_fmopa_stress_arm_init(struct test *test)
      * length in bytes. SME implies SVE, so rdsvl cannot SIGILL here. */
     long svl_bytes;
     asm volatile("rdsvl %0, #1" : "=r"(svl_bytes));
-    if (svl_bytes != kTileN * 4) {
+    const long n = svl_bytes / 4;
+    if (n < 4 || n > kTileNMax) {
         log_skip(CpuNotSupportedSkipCategory,
                  "sme_fmopa_stress_arm: SME streaming vector length %ld "
-                 "bytes is not the characterized 64-byte (512-bit) "
-                 "geometry; FMOPA tile semantics at other SVLs are "
-                 "unmeasured", svl_bytes);
+                 "bytes is outside the supported 128..1024-bit range",
+                 svl_bytes);
         return EXIT_SKIP;
     }
 
     try {
         auto data = std::make_unique<SmeFmopaData>();
-        constexpr long n = kTileN;
-        constexpr long k_rounds = kFmopaRounds;
-        constexpr size_t vec_count = static_cast<size_t>(k_rounds) * n;
-        constexpr size_t nn = static_cast<size_t>(n) * n;
+        const long k_rounds = kFmopaRounds;
+        const size_t vec_count = static_cast<size_t>(k_rounds) * n;
+        const size_t nn = static_cast<size_t>(n) * n;
 
+        data->n = n;
         data->a.resize(vec_count);
         data->b.resize(vec_count);
         data->golden.assign(nn, 0.0f);
@@ -212,16 +240,21 @@ static int sme_fmopa_stress_arm_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 #else
     auto *d = static_cast<SmeFmopaData *>(test->data);
-    constexpr long n = kTileN;
-    constexpr size_t count = static_cast<size_t>(n) * n;
-    constexpr size_t bytes = count * sizeof(float);
+    const long n = d->n;
+    /* init and run are separate functions: the stack drain buffer below
+     * is sized kTileNMax*kTileNMax and the kernel writes n*n into it, so
+     * pin init's invariant (n within [4, kTileNMax]) before any buffer
+     * math (PR #242 review, coderabbit). */
+    assert(n >= 4 && n <= kTileNMax);
+    const size_t count = static_cast<size_t>(n) * n;
+    const size_t bytes = count * sizeof(float);
 
     /* Per-thread drain buffer: 608 CPUs run concurrently, a shared out
      * would be a cross-thread race. Rewritten every pass, no memset. */
-    float out[kTileN * kTileN];
+    float out[kTileNMax * kTileNMax];
 
     SmeFmopaParams params = {
-        d->a.data(), d->b.data(), out,
+        d->a.data(), d->b.data(), out, n,
     };
 
     do {
