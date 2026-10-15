@@ -250,7 +250,7 @@ def _fetch_pr_diff(pr_number: int, head_sha: str) -> str:
                 raise GhError(f"git {' '.join(argv[:2])}… 失败: {err}")
             return proc.stdout
 
-        _git(["fetch", "origin", base])
+        _git(["fetch", "origin", base, head_sha])
         mb = _git(["merge-base", f"origin/{base}", head_sha]).strip()
         if not mb:
             raise GhError(f"git merge-base 无共同祖先: origin/{base} {head_sha[:12]}")
