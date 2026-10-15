@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "scripts"))
 import pr_loop
+import pr_local_review
 
 
 def test_bot_order_has_five():
@@ -117,18 +118,31 @@ def test_ensure_local_review_idempotent_same_head(monkeypatch):
 
 
 def test_wait_ensure_local_review_failure_degrades(monkeypatch):
-    """第 5 bot 触发失败(GhError)仅告警降级,wait 仍继续四 bot 轮询(不 exit 2)。"""
+    """第 5 bot 触发失败(真实 pr_local_review.GhError)仅告警降级,wait 仍继续
+    四 bot 轮询(不 exit 2)。
+
+    走真实 ensure_local_review 代码路径:already_reviewed 返回 False →
+    run_review 抛 pr_local_review.GhError——断言 cmd_wait 的 except GhError
+    捕获的正是这个异常类(全仓唯一 GhError)。此前 pr_loop 自定义同名 GhError、
+    cmd_wait 只捕获它,导致真实失败穿透为 traceback(本用例旧版 monkeypatch 抛
+    pr_loop.GhError 恰好被捕获,是假阳性)。
+    """
+    # 全仓唯一异常类:pr_loop.GhError 与 pr_local_review.GhError 必须是同一类
+    assert pr_loop.GhError is pr_local_review.GhError
+
     pr = _open_pr()
     monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
     monkeypatch.setattr(pr_loop, "fetch_pr", lambda slug, num: pr)
     # 首轮即完成 → wait 立即返回,不 sleep
     monkeypatch.setattr(pr_loop, "classify_state",
                         lambda p, quiet, now: "READY_TO_MERGE")
+    # 未审 → 进入 run_review,由其抛真实 pr_local_review.GhError
+    monkeypatch.setattr(pr_loop, "already_reviewed", lambda num, sha: False)
 
     def boom(num, sha):
-        raise pr_loop.GhError("gh pr view --json reviews 失败(exit 1): 未认证")
+        raise pr_local_review.GhError("gh pr view --json reviews 失败(exit 1): 未认证")
 
-    monkeypatch.setattr(pr_loop, "ensure_local_review", boom)
+    monkeypatch.setattr(pr_loop, "run_review", boom)
 
     args = pr_loop.build_parser().parse_args(
         ["wait", "9", "--interval", "0", "--timeout", "1"])

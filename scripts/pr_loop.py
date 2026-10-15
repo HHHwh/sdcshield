@@ -68,6 +68,11 @@ from typing import Any, List, Optional
 # pr_local_review 可被顶层 import(与 ci_triage.py / pr_local_review.py 同策略)。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pr_local_review import (  # noqa: E402
+    # GhError 亦从 pr_local_review 导入——全仓唯一异常类。避免本文件再定义
+    # 同名类,否则 ensure_local_review 内部 already_reviewed/run_review/
+    # publish_review 抛出的 pr_local_review.GhError 不会被 cmd_wait/main 的
+    # except GhError 捕获,降级容错形同虚设。
+    GhError,
     LOCAL_CLAUDE_MARKER,
     already_reviewed,
     publish_review,
@@ -149,10 +154,6 @@ SUGGEST_ORDER = ["READY_TO_FIX", "READY_TO_MERGE", "QUIET_WINDOW",
 
 
 # ============ gh CLI 封装(凭据交给 gh) ============
-
-class GhError(RuntimeError):
-    """gh CLI 调用失败(未认证/网络/端点不存在等)。"""
-
 
 def _gh_once(argv: List[str]) -> Optional[subprocess.CompletedProcess]:
     """跑一次 gh 子进程。gh 缺失抛 GhError(确定性错误,不重试);超时返回 None。"""
