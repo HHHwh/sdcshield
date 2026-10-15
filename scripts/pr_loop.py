@@ -780,7 +780,14 @@ def cmd_wait(args: argparse.Namespace) -> int:
     # 事件线主动触发(设计文档 §6.1): 进入阻塞轮询前,先确保第 5 bot(本地
     # claude)已对该 head 发过检视信号——未审则同步跑一次并发布,再与四 bot
     # 同等待遇计入完成判定。同 head 幂等(already_reviewed 门禁)。
-    ensure_local_review(args.pr, pr.head_sha)
+    # 第 5 bot 是辅助触发线,不是 wait 的硬前置: 触发失败(gh 失败/claude 未装/
+    # agent.env 缺失/head 未 fetch/claude 输出非 JSON)仅告警降级,继续四 bot
+    # 轮询(绝不能因此 exit 2 而让四 bot 轮询无法进入)。
+    try:
+        ensure_local_review(args.pr, pr.head_sha)
+    except GhError as exc:
+        print(f"警告: 第 5 bot(本地 claude)触发失败,跳过主动审查,"
+              f"继续四 bot 轮询: {exc}", file=sys.stderr)
     start = time.monotonic()
     deadline = start + args.timeout
     while True:

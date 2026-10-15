@@ -114,3 +114,23 @@ def test_ensure_local_review_idempotent_same_head(monkeypatch):
 
     # 同 head 二次调用不触发(幂等去重——事件线 + 时间线撞车只审一次)
     assert calls == {"run": 1, "publish": 1}
+
+
+def test_wait_ensure_local_review_failure_degrades(monkeypatch):
+    """第 5 bot 触发失败(GhError)仅告警降级,wait 仍继续四 bot 轮询(不 exit 2)。"""
+    pr = _open_pr()
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "fetch_pr", lambda slug, num: pr)
+    # 首轮即完成 → wait 立即返回,不 sleep
+    monkeypatch.setattr(pr_loop, "classify_state",
+                        lambda p, quiet, now: "READY_TO_MERGE")
+
+    def boom(num, sha):
+        raise pr_loop.GhError("gh pr view --json reviews 失败(exit 1): 未认证")
+
+    monkeypatch.setattr(pr_loop, "ensure_local_review", boom)
+
+    args = pr_loop.build_parser().parse_args(
+        ["wait", "9", "--interval", "0", "--timeout", "1"])
+    # 第 5 bot 触发失败不硬中止 wait——四 bot 轮询照常进入并完成,exit 0
+    assert pr_loop.cmd_wait(args) == 0

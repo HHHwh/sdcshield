@@ -206,7 +206,7 @@ def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path)
     assert "source" in captured["cmd"]
     assert "agent.env" in captured["cmd"]
     assert "--dangerously-skip-permissions" in captured["cmd"]
-    # claude 的 cwd 指向独立只读 worktree(读完整源码,不碰用户工作区)
+    # claude 的 cwd 指向隔离临时 worktree(读完整源码,不碰用户工作区)
     assert captured["cwd"] == str(wt)
     # 审查结束 worktree 已清理
     assert removed == [str(wt)]
@@ -240,3 +240,24 @@ def test_already_reviewed_true_when_marker_present(monkeypatch):
         {"body": f"{marker}\n旧 head 检视", "commit_id": "c" * 40},
     ]))
     assert plr.already_reviewed(7, head_sha) is False
+
+
+def test_parse_findings_skips_malformed():
+    # 错误 schema 的 dict(无 message / message 为空)→ 跳过不计入,不发无意义
+    # 意见;非 dict 项(如字符串)照旧过滤。只保留含 message 的有效 finding。
+    out = json.dumps([
+        {"path": "tests/sve/fma_sve.c", "line": 42,
+         "severity": "Critical", "category": "正确性",
+         "message": "近似比对是 SDC 盲区",
+         "evidence": "第 42 行用容差而非 memcmp"},
+        # 无 message 字段 → 6 个全 None/缺失字段的畸形 dict,必须跳过
+        {"path": "tests/sve/fma_sve.c", "line": 43,
+         "severity": "Minor", "category": "性能"},
+        # message 为空串 → 同样跳过
+        {"path": "tests/sve/fma_sve.c", "line": 44,
+         "severity": "Minor", "category": "性能", "message": ""},
+        "not-a-dict",
+    ])
+    findings = plr._parse_findings(out)
+    assert len(findings) == 1
+    assert findings[0]["message"] == "近似比对是 SDC 盲区"

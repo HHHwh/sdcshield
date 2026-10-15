@@ -170,8 +170,8 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
       1. 幂等门禁: 未 force 且 already_reviewed → 直接返回 [](同 head 去重)。
       2. `gh pr diff <pr>` 拉 diff + `gh pr view <pr> --json title,body` 拉
          PR 元数据组装 pr_context(标题/描述作意图镜对照)。
-      3. 独立只读 worktree 读完整源码(`_worktree_add`,结束 `_worktree_remove`),
-         不碰用户主工作区、不抢 autoci clone(设计文档 §9)。
+      3. 隔离的临时 worktree(即用即弃)读完整源码(`_worktree_add`,结束
+         `_worktree_remove`),不碰用户主工作区、不抢 autoci clone(设计文档 §9)。
       4. build_adversarial_prompt(diff, pr_context) 组对抗性 prompt。
       5. `source agent.env && claude -p <prompt> --dangerously-skip-permissions`
          跑 claude(cwd = worktree),解析输出为 findings。
@@ -224,10 +224,13 @@ def _gh(argv: list) -> str:
 
 
 def _worktree_add(head_sha: str) -> str:
-    """在临时目录 checkout head_sha 的独立只读 worktree,返回其路径。
+    """在临时目录 checkout head_sha 的隔离临时 worktree(即用即弃),返回其路径。
 
-    审查需读完整文件上下文(不只 diff 片段)——独立 worktree 既不碰用户主
+    审查需读完整文件上下文(不只 diff 片段)——隔离 worktree 既不碰用户主
     工作区,也不抢 ci_triage 修复 agent 的 autoci clone(设计文档 §9)。
+    注意: `git worktree add --detach` 产出的是普通可写 checkout(非只读),
+    claude 以 `--dangerously-skip-permissions` 在其内运行可写文件——核心安全
+    目标(不碰主工作区/autoci)因隔离即弃已达成,写文件本身无害且即弃。
     """
     tmp = tempfile.mkdtemp(prefix="local-claude-review-")
     path = os.path.join(tmp, "wt")
@@ -237,11 +240,13 @@ def _worktree_add(head_sha: str) -> str:
                        check=True)
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         shutil.rmtree(tmp, ignore_errors=True)
-        raise GhError(f"git worktree add 失败: {exc}")
+        raise GhError(f"git worktree add 失败: {exc}"
+                      "——请先 git fetch 该 head(本地可能尚未拉取此提交)")
     except subprocess.CalledProcessError as exc:
         shutil.rmtree(tmp, ignore_errors=True)
         err = " ".join((exc.stderr or "").strip().split())[:300]
-        raise GhError(f"git worktree add 失败: {err}")
+        raise GhError(f"git worktree add 失败: {err}"
+                      "——请先 git fetch 该 head(本地可能尚未拉取此提交)")
     return path
 
 
@@ -264,7 +269,7 @@ def build_claude_command(prompt: str) -> str:
 
 
 def _run_claude(cmd: str, cwd: str) -> str:
-    """跑 claude 子进程(bash -c cmd,cwd=只读 worktree),返回 stdout。
+    """跑 claude 子进程(bash -c cmd,cwd=隔离 worktree),返回 stdout。
 
     模块级子进程出口(测试 monkeypatch 的 claude 缝,离线 fake claude 不真跑)。
     """
@@ -301,18 +306,23 @@ def _parse_findings(output: str) -> list[dict]:
                 data = None
     if not isinstance(data, list):
         raise GhError("claude 检视输出非 JSON 数组——无法解析 findings")
-    return [
-        {
+    findings = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        # 缺少关键字段(message 为空/None)的畸形 dict 跳过不计入——避免把 6 个
+        # 全 None 字段的无意义 finding 发上 GitHub(claude 输出 schema 错误的兜底)。
+        if not (item.get("message") or "").strip():
+            continue
+        findings.append({
             "path": item.get("path"),
             "line": item.get("line"),
             "severity": item.get("severity"),
             "category": item.get("category"),
             "message": item.get("message"),
             "evidence": item.get("evidence"),
-        }
-        for item in data
-        if isinstance(item, dict)
-    ]
+        })
+    return findings
 
 
 # ============ 意见发布(第 5 bot 身份 = wangxumarshall + 唯一标记) ============
