@@ -1219,7 +1219,12 @@ void debug_crashed_child(std::span<const pid_t> children)
         return;
 
     // receive the context
-    alignas(16) uint8_t xsave_area[xsave_size];     // Variable Length Array, a.k.a. alloca
+    // xsave_size is 0 on non-x86-64 (get_xsave_size() has no XSAVE state to
+    // report there and CrashContext::send transfers none), but a zero-length
+    // VLA is undefined behavior — UBSan flags it on every child crash. Clamp
+    // the bound to at least 1 byte; the receive span below still uses
+    // xsave_size, so nothing is ever read into the extra byte.
+    alignas(16) uint8_t xsave_area[xsave_size ? xsave_size : 1];     // Variable Length Array, a.k.a. alloca
     for (;;) {
         CrashContext ctx = CrashContext::receive(sApp->shmem->server_debug_socket,
                                                  { xsave_area, size_t(xsave_size) });
