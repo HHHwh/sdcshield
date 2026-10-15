@@ -419,6 +419,7 @@ def _open_pr_heads() -> list:
     sha 的条目(数据异常)跳过,不审查——无 head 锚定谈不上「同 head 幂等」。
     """
     raw = _gh(["pr", "list", "--state", "open",
+               "--limit", "1000",
                "--json", "number,headRefOid"])
     try:
         data = json.loads(raw)
@@ -432,8 +433,13 @@ def _open_pr_heads() -> list:
             continue
         number = it.get("number")
         sha = it.get("headRefOid") or ""
-        if number is not None and sha:
+        if number is None or not sha:
+            continue
+        try:
             out.append((int(number), sha))
+        except (TypeError, ValueError):
+            # 畸形 number(非整数/非数字串)不得裸抛——按「失败抛 GhError」契约转译。
+            raise GhError(f"gh pr list --json 返回畸形 number: {number!r}")
     return out
 
 
@@ -450,8 +456,11 @@ def _pr_head_sha(pr_number: int) -> str:
 
 
 def review_one_pr(pr_number: int) -> None:
-    """单 PR 审查: run_review + publish_review(run_review 内已做同 head 幂等门禁)。"""
+    """单 PR 审查: 已审 head 直接返回(不发仅含 marker 的空 review 噪音);
+    否则 run_review + publish_review(run_review 内再做同 head 幂等门禁)。"""
     head_sha = _pr_head_sha(pr_number)
+    if already_reviewed(pr_number, head_sha):
+        return
     findings = run_review(pr_number, head_sha)
     publish_review(pr_number, head_sha, findings)
 

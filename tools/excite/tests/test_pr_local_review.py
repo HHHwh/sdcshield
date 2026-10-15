@@ -20,6 +20,8 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "scripts"))
 import pr_local_review as plr
@@ -291,3 +293,63 @@ def test_cli_all_open_reviews_unreviewed_prs(monkeypatch):
 
     assert reviewed == [(1, "a" * 40), (3, "c" * 40)]
     assert [(n, s) for n, s, _ in published] == [(1, "a" * 40), (3, "c" * 40)]
+
+
+def test_cli_all_open_no_truncation_over_30(monkeypatch):
+    # gh pr list 默认 --limit 30 且不再分页——>30 个 open PR 时后段静默漏掉,
+    # 第 5 bot 时间触发安全网形成永久盲区。修复后必须显式传 --limit 1000
+    # 且 >30 条全部处理,无截断。
+    prs = [{"number": i, "headRefOid": f"{i:040d}"} for i in range(1, 36)]
+    seen_argv = {}
+
+    def fake_gh(argv):
+        seen_argv["argv"] = list(argv)
+        return json.dumps(prs)
+
+    monkeypatch.setattr(plr, "_gh", fake_gh)
+    monkeypatch.setattr(plr, "already_reviewed", lambda n, s: False)
+    reviewed = []
+    monkeypatch.setattr(plr, "run_review",
+                        lambda n, s: (reviewed.append((n, s)) or []))
+    published = []
+    monkeypatch.setattr(plr, "publish_review",
+                        lambda n, s, f: published.append((n, s, f)))
+
+    plr.review_all_open()
+
+    # --limit 显式传参(避免 gh 默认 30 条截断)
+    assert "--limit" in seen_argv["argv"]
+    assert seen_argv["argv"][seen_argv["argv"].index("--limit") + 1] == "1000"
+    # 35 条全部处理,无截断
+    assert reviewed == [(i, f"{i:040d}") for i in range(1, 36)]
+    assert len(published) == 35
+
+
+def test_review_one_pr_skips_publish_when_already_reviewed(monkeypatch):
+    # head 已审时 run_review 幂等返回 [],若仍调 publish_review 会发一条仅含
+    # marker 的空 review(噪音)。修复: review_one_pr 前置 already_reviewed
+    # 门禁,已审即返回,既不重跑审查也不重发。
+    head_sha = "e" * 40
+    monkeypatch.setattr(plr, "_pr_head_sha", lambda n: head_sha)
+    monkeypatch.setattr(plr, "already_reviewed", lambda n, s: True)
+    ran = []
+    monkeypatch.setattr(plr, "run_review",
+                        lambda n, s: ran.append((n, s)) or [])
+    published = []
+    monkeypatch.setattr(plr, "publish_review",
+                        lambda n, s, f: published.append((n, s, f)))
+
+    plr.review_one_pr(7)
+
+    assert ran == []          # 已审 head: 不再跑 run_review
+    assert published == []    # 且不发仅含 marker 的空 review
+
+
+def test_open_pr_heads_malformed_number_raises_gherror(monkeypatch):
+    # gh 返回畸形 number(非数字串/非整数)→ int() 裸 ValueError/TypeError。
+    # 修复: 转 GhError(「失败抛 GhError」契约),不裸抛。
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps([
+        {"number": "not-a-number", "headRefOid": "a" * 40},
+    ]))
+    with pytest.raises(plr.GhError):
+        plr._open_pr_heads()
