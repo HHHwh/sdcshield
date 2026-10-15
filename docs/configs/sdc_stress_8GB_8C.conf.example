@@ -1,0 +1,52 @@
+# SDCShield 分规格推荐配置 —— 8GB 内存 / 8 核
+# ============================================================================
+# 用法:
+#   SDC_STRESS_CONFIG=<本文件绝对路径> ./builddir/sdcshield -e <testid> -t <秒> -n <核数> -v
+#
+# 要点:
+#   * 未在本文件列出的用例/旋钮自动走「内存自适应默认」——不写即可按本机规格打满,
+#     本文件的作用是给出代表性用例的显式基线, 便于复核与覆盖。
+#   * 命令行 -O 优先级高于本文件; 环境变量 SDC_<TESTID>_<KNOB> 兜底。
+#   * 运行加 -v: 每个 init 阶段输出 [压力映射]/[欠压力]/[内存越界] 行,
+#     "预期合计 ~X GiB" 即该用例的预期总内存, 与 top 的 RES 对比即可确认打满;
+#     越界配置会被 clamp 并输出「越界」告警, 不会静默。
+#   * 若核数与 8 不同: count/nelems/arena/data_size 类按 线性 ∝ 1/线程数 调整;
+#     mdim 类按 √(1/线程数) 调整; 或者干脆删掉本文件条目交回自适应。
+#   * core179 诊断探针 (mrn_*/neon_rot_*/movbe_*) 按设计几何运行, 不追求打满,
+#     不建议配置 (留空=设计默认值)。
+# ============================================================================
+
+# ---- 线性缓冲族 (60% 内存预算 = 4.8GiB, 8 线程均摊) ----
+# sleef: 8B/元素 × 32(sleef_neon)/20(sleef_sve) 个缓冲/线程, 4 的倍数
+sleef_neon.nelems = 2516580
+sleef_sve.nelems = 4026528
+
+# fisttp: 8B × 5 缓冲/线程 (上限 16M)
+fisttp_arm.num_elements = 16000000
+fisttp_sve.num_elements = 16000000
+
+# gather: 每线程缓冲字节数 (上限 16MB, 该用例安全上限即推荐值)
+gather_f64.data_size = 16777216
+gather_f32.data_size = 16777216
+gather_i64.data_size = 16777216
+gather_i32.data_size = 16777216
+
+# ---- 方阵族 (85% 预算 = 6.8GiB, rss 6.0 模型, 值向下取整到计算友好维度) ----
+openblas_dgemm.mdim = 1536
+openblas_cgemm.mdim = 1536
+openblas_sgemm.mdim = 2048
+openblas_zgemm.mdim = 1024
+openblas_lu.n = 2048
+eigen_gemm_double_dynamic_square.mdim = 2048
+eigen_gemm_float_dynamic_square.mdim = 2048
+eigen_gemm_cdouble_dynamic_square.mdim = 2048
+
+# ---- 大内存工作集族 ----
+# mesh SVE 族: 90%÷2 = 3.6GiB (mesh_upi_sve_* 各用例同名 knob 同值)
+mesh_upi_sve_read_only_int.buffer_bytes = 3865470566
+
+# openssl: 每线程 arena = 60%÷8 线程 = 600MiB
+openssl_sha.arena_bytes = 629145600
+
+# ---- CPU 密集族 (内存占用极小, 维度按白名单/算法谱系) ----
+pocketfft_fft.n = 8192

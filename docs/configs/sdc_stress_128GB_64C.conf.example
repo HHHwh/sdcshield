@@ -1,0 +1,34 @@
+# SDCShield 分规格推荐配置 —— 128GB 内存 / 64 核
+# 用法与调整规则同 sdc_stress_8GB_8C.conf.example (见其头部说明)
+# 预算: 线性 60% = 76.8GiB; 方阵 85% = 108.8GiB; 工作集 90%÷2 = 57.6GiB
+
+# ---- 线性缓冲族 (64 线程均摊) ----
+# 注意: fisttp/gather 的安全上限 (16M/16MB) 已封顶, 大内存机器上由
+# [欠压力] 日志提示——如需更高压力需要联系用例维护者抬高上限。
+sleef_neon.nelems = 5033160
+sleef_sve.nelems = 8053060
+fisttp_arm.num_elements = 16000000
+fisttp_sve.num_elements = 16000000
+gather_f64.data_size = 16777216
+gather_f32.data_size = 16777216
+gather_i64.data_size = 16777216
+gather_i32.data_size = 16777216
+
+# ---- 方阵族 (rss 6.0, 取整到计算友好维度) ----
+openblas_dgemm.mdim = 2048
+openblas_cgemm.mdim = 2048
+openblas_sgemm.mdim = 3072
+openblas_zgemm.mdim = 1536
+openblas_lu.n = 3072
+eigen_gemm_double_dynamic_square.mdim = 3072
+eigen_gemm_float_dynamic_square.mdim = 3072
+eigen_gemm_cdouble_dynamic_square.mdim = 3072
+
+# ---- 大内存工作集族 ----
+mesh_upi_sve_read_only_int.buffer_bytes = 61847529062
+
+# openssl: 每线程 arena = 60%÷64 = 1.2GiB
+openssl_sha.arena_bytes = 1288490188
+
+# ---- CPU 密集族 ----
+pocketfft_fft.n = 8192

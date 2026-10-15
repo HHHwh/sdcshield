@@ -1,0 +1,32 @@
+# SDCShield 分规格推荐配置 —— 32GB 内存 / 32 核
+# 用法与调整规则同 sdc_stress_8GB_8C.conf.example (见其头部说明)
+# 预算: 线性 60% = 19.2GiB; 方阵 85% = 27.2GiB; 工作集 90%÷2 = 14.4GiB
+
+# ---- 线性缓冲族 (32 线程均摊; 与 8GB/8C 相同——内存/线程比一致) ----
+sleef_neon.nelems = 2516580
+sleef_sve.nelems = 4026528
+fisttp_arm.num_elements = 16000000
+fisttp_sve.num_elements = 16000000
+gather_f64.data_size = 16777216
+gather_f32.data_size = 16777216
+gather_i64.data_size = 16777216
+gather_i32.data_size = 16777216
+
+# ---- 方阵族 (rss 6.0, 取整到计算友好维度) ----
+openblas_dgemm.mdim = 1536
+openblas_cgemm.mdim = 1536
+openblas_sgemm.mdim = 2048
+openblas_zgemm.mdim = 1024
+openblas_lu.n = 2048
+eigen_gemm_double_dynamic_square.mdim = 2048
+eigen_gemm_float_dynamic_square.mdim = 2048
+eigen_gemm_cdouble_dynamic_square.mdim = 2048
+
+# ---- 大内存工作集族 ----
+mesh_upi_sve_read_only_int.buffer_bytes = 15461882265
+
+# openssl: 每线程 arena = 60%÷32 = 600MiB
+openssl_sha.arena_bytes = 629145600
+
+# ---- CPU 密集族 ----
+pocketfft_fft.n = 8192
