@@ -4,7 +4,7 @@
 # 在 trae / claude code 会话内完成「实现 push → 等四 bot 检视 → 导出意见 →
 # subagent 批判性处置修复 → 循环 → 提醒人工 merge」,全程不切换工具。
 # 六阶段流程定义见 .claude/commands/pr-loop.md 与 .trae/rules/pr-loop.md,
-# 端到端手册见 docs/misc/pr-loop.md。
+# 端到端手册见 docs/build-deploy-pr-ci/pr-loop.md。
 #
 # 子命令:
 #   status [<pr>]  open PR 的四 bot 完成度总览 / 单 PR 详情 + 下一步行动建议
@@ -1100,7 +1100,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="pr_loop.py",
         description="Agent 驱动的 PR 检视闭环工具(仓库自闭环)。"
                     "流程定义见 .claude/commands/pr-loop.md 与 .trae/rules/pr-loop.md,"
-                    "手册见 docs/misc/pr-loop.md。",
+                    "手册见 docs/build-deploy-pr-ci/pr-loop.md。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             示例:

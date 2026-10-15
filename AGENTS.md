@@ -88,7 +88,7 @@ SDC 检视的独特之处在于——不仅看代码「对不对」，更看它*
 
 - [`CLAUDE.md`](CLAUDE.md) — 仓库协作与工程规则总纲。
 - [`docs/architecture.md`](docs/architecture.md) — 框架内部（fork 生命周期、质量门、特性探测、sysdeps、RAS、RNG）。
-- [`docs/misc/writing_tests.md`](docs/misc/writing_tests.md) — 测试编写指南。
-- [`docs/misc/coding_style_guide.md`](docs/misc/coding_style_guide.md) — 代码风格（C++20/C17，无警告）。
+- [`docs/coding/writing_tests.md`](docs/coding/writing_tests.md) — 测试编写指南。
+- [`docs/coding/coding_style_guide.md`](docs/coding/coding_style_guide.md) — 代码风格（C++20/C17，无警告）。
 - [`README.md`](README.md) — 快速上手、构建与部署。
-- [`docs/misc/pr-loop.md`](docs/misc/pr-loop.md) — PR 检视-修复闭环手册（四 bot 检视 → subagent 批判性处置 → 修复 → 循环 → 人工 merge，绝不自动 merge）；引擎 [`scripts/pr_loop.py`](scripts/pr_loop.py)，入口 Claude Code `/pr-loop` 命令（`.claude/commands/pr-loop.md`）与 Trae 规则（`.trae/rules/pr-loop.md`，双份同源）。
+- [`docs/build-deploy-pr-ci/pr-loop.md`](docs/build-deploy-pr-ci/pr-loop.md) — PR 检视-修复闭环手册（四 bot 检视 → subagent 批判性处置 → 修复 → 循环 → 人工 merge，绝不自动 merge）；引擎 [`scripts/pr_loop.py`](scripts/pr_loop.py)，入口 Claude Code `/pr-loop` 命令（`.claude/commands/pr-loop.md`）与 Trae 规则（`.trae/rules/pr-loop.md`，双份同源）。
