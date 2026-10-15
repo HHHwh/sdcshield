@@ -10,22 +10,39 @@
 #include <sys/sysinfo.h>
 
 #define NEON_VECTOR_SIZE 4                // NEON 一次处理 4 个 float
-#define BLOCK_SIZE 16                     // 逻辑块大小（由 4 个 NEON 向量组成）
-#define VECTORS_PER_BLOCK (BLOCK_SIZE / NEON_VECTOR_SIZE)  // = 4
-#define NUM_BLOCKS 64                     // 块数量
-#define TOTAL_ELEMENTS (BLOCK_SIZE * NUM_BLOCKS)  // = 1024
-#define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(float))
+#define BLOCK_SIZE 8192                   // 每块元素数(加大块以降低原子争用)
+#define VECTORS_PER_BLOCK (BLOCK_SIZE / NEON_VECTOR_SIZE)  // = 2048
+// 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
 struct TestData {
     alignas(16) float *data;            // 共享数据数组（16 字节对齐）
+    size_t num_blocks;                  // 运行时块数(按目标内存计算)
+    size_t total_elements;              // 运行时总元素数
     std::atomic<uint32_t> next_block;
     std::atomic<uint64_t> global_sum;   // 未使用，但保留
     std::atomic<uint32_t> write_done;
     std::atomic<uint32_t> read_done;
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
-    uint32_t total_threads;
 };
+
+// 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
+// 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(FP 用例是唯一大内存消费者)。
+static size_t mesh_target_bytes() {
+    const char *e = getenv("SDC_MESH_BUFFER_BYTES");
+    if (e) {
+        char *end = nullptr;
+        unsigned long long v = strtoull(e, &end, 10);
+        if (end && *end == '\0' && v > 0)
+            return (size_t)v;
+    }
+    struct sysinfo si;
+    if (sysinfo(&si) == 0 && si.totalram > 0) {
+        size_t total = (size_t)si.totalram * si.mem_unit;
+        return total / 10 * 9 / 2;
+    }
+    return (size_t)1 << 30;   // 1 GiB 兜底
+}
 
 static int mesh_upi_avx512_sym_init(struct test *test) {
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2) {
@@ -35,12 +52,21 @@ static int mesh_upi_avx512_sym_init(struct test *test) {
     auto *td = new TestData;
     if (!td) return EXIT_FAILURE;
 
-    td->data = (float*)aligned_alloc(16, TOTAL_BYTES);
+    const size_t elem_bytes = sizeof(float);
+    const size_t block_bytes = BLOCK_SIZE * elem_bytes;
+    size_t target = mesh_target_bytes();
+    td->num_blocks = target / block_bytes;
+    if (td->num_blocks < 1) td->num_blocks = 1;
+    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    td->total_elements = td->num_blocks * BLOCK_SIZE;
+    size_t total_bytes = td->total_elements * elem_bytes;
+
+    td->data = (float*)aligned_alloc(16, total_bytes);
     if (!td->data) {
         delete td;
         return EXIT_FAILURE;
     }
-    memset(td->data, 0, TOTAL_BYTES);
+    memset(td->data, 0, total_bytes);
 
     td->next_block.store(0, std::memory_order_relaxed);
     td->global_sum.store(0, std::memory_order_relaxed);
@@ -48,7 +74,6 @@ static int mesh_upi_avx512_sym_init(struct test *test) {
     td->read_done.store(0, std::memory_order_relaxed);
     td->reset_lock.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->total_threads = sysconf(_SC_NPROCESSORS_ONLN);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -59,7 +84,7 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
     auto *td = static_cast<TestData*>(test->data);
 
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
-    uint32_t total = td->total_threads;
+    uint32_t total = thread_count();
 
     /* randomization hardening H14' (P17): framework RNG */
     /* randomization hardening H14' (P17): framework RNG, [-1000, 1000) */
@@ -73,7 +98,7 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
         // ---------- 写阶段：分配块并写入随机浮点数 ----------
         while (true) {
             uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
-            if (block >= NUM_BLOCKS) break;
+            if (block >= td->num_blocks) break;
 
             size_t offset = block * BLOCK_SIZE;
             float vals[BLOCK_SIZE];
@@ -122,7 +147,7 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
         }
 
         // 等待所有块写完成
-        while (td->write_done.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
+        while (td->write_done.load(std::memory_order_seq_cst) < td->num_blocks &&
                test_time_condition(test)) {
             __asm__ volatile("yield");
         }
@@ -132,7 +157,7 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
         bool consistent = true;
         alignas(16) float store_buf[BLOCK_SIZE];
 
-        for (size_t i = 0; i < TOTAL_ELEMENTS; i += BLOCK_SIZE) {
+        for (size_t i = 0; i < td->total_elements; i += BLOCK_SIZE) {
             // 加载 16 个元素到临时数组
             float vals[BLOCK_SIZE];
             for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {

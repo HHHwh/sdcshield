@@ -95,7 +95,6 @@ static int vmovnt1_run(struct test *test, int cpu) {
             report_fail_msg("vmovntps (256-bit) mismatch or consistency failure");
             return EXIT_FAILURE;
         }
-        fprintf(stderr, "\033[32mvmovntps (256-bit) PASS\033[0m\n");
 
         // ---- 测试 256-bit 双精度 ----
         float64x2_t vd0 = vld1q_f64(src_f64);
@@ -121,7 +120,6 @@ static int vmovnt1_run(struct test *test, int cpu) {
             report_fail_msg("vmovntpd (256-bit) mismatch or consistency failure");
             return EXIT_FAILURE;
         }
-        fprintf(stderr, "\033[32mvmovntpd (256-bit) PASS\033[0m\n");
 
         // ---- 测试 512-bit 版本（4 个 128 位向量） ----
         // 生成 512 位数据
@@ -154,7 +152,6 @@ static int vmovnt1_run(struct test *test, int cpu) {
             report_fail_msg("vmovntps (512-bit) mismatch or consistency failure");
             return EXIT_FAILURE;
         }
-        fprintf(stderr, "\033[32mvmovntps (512-bit) PASS\033[0m\n");
 
         // 双精度 512-bit
         float64x2_t vd512[4];
@@ -182,7 +179,6 @@ static int vmovnt1_run(struct test *test, int cpu) {
             report_fail_msg("vmovntpd (512-bit) mismatch or consistency failure");
             return EXIT_FAILURE;
         }
-        fprintf(stderr, "\033[32mvmovntpd (512-bit) PASS\033[0m\n");
 
     } while (test_time_condition(test));
 

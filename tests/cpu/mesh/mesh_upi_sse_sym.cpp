@@ -9,14 +9,15 @@
 #include <cstdlib>
 #include <sys/sysinfo.h>
 
-#define TOTAL_ELEMENTS 1024
 #define VECTOR_SIZE 4                     // NEON 可容纳 4 个 float
-#define BLOCK_ELEMENTS VECTOR_SIZE
-#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 256
-#define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(float))
+#define BLOCK_ELEMENTS 8192               // 每块元素数(加大块以降低原子争用)
+#define VECTORS_PER_BLOCK (BLOCK_ELEMENTS / VECTOR_SIZE)  // = 2048
+// 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
 struct TestData {
     alignas(16) float *data;             // 共享数据数组，16 字节对齐
+    size_t num_blocks;                   // 运行时块数(按目标内存计算)
+    size_t total_elements;               // 运行时总元素数
     std::atomic<uint32_t> next_block;
     std::atomic<double> global_sum;      // 用 double 累加，减少误差
     std::atomic<uint32_t> allocated_blocks;
@@ -30,18 +31,45 @@ struct TestData {
     std::atomic<uint32_t> epoch;
 };
 
+// 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
+// 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(FP 用例是唯一大内存消费者)。
+static size_t mesh_target_bytes() {
+    const char *e = getenv("SDC_MESH_BUFFER_BYTES");
+    if (e) {
+        char *end = nullptr;
+        unsigned long long v = strtoull(e, &end, 10);
+        if (end && *end == '\0' && v > 0)
+            return (size_t)v;
+    }
+    struct sysinfo si;
+    if (sysinfo(&si) == 0 && si.totalram > 0) {
+        size_t total = (size_t)si.totalram * si.mem_unit;
+        return total / 10 * 9 / 2;
+    }
+    return (size_t)1 << 30;   // 1 GiB 兜底
+}
+
 static int mesh_upi_sse_sym_init(struct test *test) {
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2) return -255;
 
     auto *td = new TestData;
     if (!td) return EXIT_FAILURE;
 
-    td->data = (float*)aligned_alloc(16, TOTAL_BYTES);
+    const size_t elem_bytes = sizeof(float);
+    const size_t block_bytes = BLOCK_ELEMENTS * elem_bytes;
+    size_t target = mesh_target_bytes();
+    td->num_blocks = target / block_bytes;
+    if (td->num_blocks < 1) td->num_blocks = 1;
+    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    td->total_elements = td->num_blocks * BLOCK_ELEMENTS;
+    size_t total_bytes = td->total_elements * elem_bytes;
+
+    td->data = (float*)aligned_alloc(16, total_bytes);
     if (!td->data) {
         delete td;
         return EXIT_FAILURE;
     }
-    memset(td->data, 0, TOTAL_BYTES);
+    memset(td->data, 0, total_bytes);
 
     td->next_block.store(0, std::memory_order_relaxed);
     td->global_sum.store(0.0, std::memory_order_relaxed);
@@ -76,9 +104,10 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
         return EXIT_SKIP;
     }
 
-    /* randomization hardening H14' (P17): framework RNG */
-    /* randomization hardening H14' (P17): framework RNG, [-1000, 1000) */
-    auto dist = []() { return frandomf_scale(2000.0f) - 1000.0f; };
+    /* randomization hardening H14' (P17): framework RNG。
+     * 取整数值 float：大 N 下 double 求和仍精确(整数 <=2^53 无舍入)，
+     * 保证 read_sum == expected_sum 在任意块序下都成立。 */
+    auto dist = []() { return (float)(int32_t)(frandomf_scale(2000.0f) - 1000.0f); };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -89,29 +118,37 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
         // ---------- 阶段 1：所有线程共同填充数据 ----------
         // （本轮状态已由上一轮 sense-reversal 屏障的最后到达线程重置）
 
-        // 所有线程竞争分配块并写入随机浮点数据
+        // 所有线程竞争分配块并写入随机浮点数据（每块 BLOCK_ELEMENTS 个元素）
         while (true) {
             uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
-            if (block >= NUM_BLOCKS) break;
+            if (block >= td->num_blocks) break;
             size_t offset = block * BLOCK_ELEMENTS;
-            float vals[VECTOR_SIZE];
+            float vals[BLOCK_ELEMENTS];
             double local_sum = 0.0;
-            for (int j = 0; j < VECTOR_SIZE; ++j) {
+            for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
                 vals[j] = dist();
                 local_sum += (double)vals[j];
             }
-            float32x4_t v = vld1q_f32(vals);
-            vst1q_f32(td->data + offset, v);  // 对齐存储（数据已 16 字节对齐）
+            for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
+                float32x4_t vec = vld1q_f32(vals + v * VECTOR_SIZE);
+                vst1q_f32(td->data + offset + v * VECTOR_SIZE, vec);  // 对齐存储
+            }
             __sync_synchronize();   // 类似 _mm_sfence
 
-            // 一致性测试：立即读回并比较
-            float32x4_t loaded = vld1q_f32(td->data + offset);
-            uint32x4_t cmp = vceqq_f32(v, loaded);
-            // 检查所有 4 个元素是否相等
-            bool ok = (vgetq_lane_u32(cmp, 0) == 0xFFFFFFFF &&
-                       vgetq_lane_u32(cmp, 1) == 0xFFFFFFFF &&
-                       vgetq_lane_u32(cmp, 2) == 0xFFFFFFFF &&
-                       vgetq_lane_u32(cmp, 3) == 0xFFFFFFFF);
+            // 一致性测试：立即读回并比较（整块逐向量）
+            bool ok = true;
+            for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
+                float32x4_t written = vld1q_f32(vals + v * VECTOR_SIZE);
+                float32x4_t loaded = vld1q_f32(td->data + offset + v * VECTOR_SIZE);
+                uint32x4_t cmp = vceqq_f32(written, loaded);
+                if (!(vgetq_lane_u32(cmp, 0) == 0xFFFFFFFF &&
+                      vgetq_lane_u32(cmp, 1) == 0xFFFFFFFF &&
+                      vgetq_lane_u32(cmp, 2) == 0xFFFFFFFF &&
+                      vgetq_lane_u32(cmp, 3) == 0xFFFFFFFF)) {
+                    ok = false;
+                    break;
+                }
+            }
             if (!ok) {
                 // 不一致，但最终会在全量校验时捕获
             }
@@ -125,7 +162,7 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
         }
 
         // 等待所有线程完成写入
-        while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
+        while (td->allocated_blocks.load(std::memory_order_seq_cst) < td->num_blocks &&
                test_time_condition(test)) {
             __asm__ volatile("yield");
         }
@@ -134,11 +171,18 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
         __sync_synchronize();  // 确保写入全局可见
 
         // ---------- 阶段 2：所有线程读取完整数组并验证 ----------
+        // Sum snapshot BEFORE the read loop (TOCTOU fix): a fast thread can
+        // finish its read, run the reset phase and start writing the NEXT
+        // iteration while this thread is still walking the buffer. Sampling
+        // global_sum after the read would race that reset/next-write and
+        // produce a false mismatch (expected_sum cleared to 0 / partially
+        // overwritten by the next iteration's writes).
+        double expected_sum = td->global_sum.load(std::memory_order_seq_cst);
         double read_sum = 0.0;
         bool consistent = true;
         alignas(16) float store_buf[VECTOR_SIZE];
 
-        for (size_t i = 0; i < TOTAL_ELEMENTS; i += VECTOR_SIZE) {
+        for (size_t i = 0; i < td->total_elements; i += VECTOR_SIZE) {
             float32x4_t v = vld1q_f32(td->data + i);
             float vals[VECTOR_SIZE];
             vst1q_f32(vals, v);
@@ -157,7 +201,6 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
             }
         }
 
-        double expected_sum = td->global_sum.load(std::memory_order_seq_cst);
         bool passed = (read_sum == expected_sum) && consistent;
 
         // 输出结果（每个线程输出一次）

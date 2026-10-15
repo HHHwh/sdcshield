@@ -94,7 +94,6 @@ static int vmovnt2_run(struct test *test, int cpu) {
             report_fail_msg("vmovntdq (256-bit, int32) mismatch");
             return EXIT_FAILURE;
         }
-        fprintf(stderr, "\033[32mvmovntdq (256-bit, int32) PASS\033[0m\n");
 
         // ---- 测试 256-bit int64 (两个 128 位向量) ----
         int64x2_t v_i64_0 = vld1q_s64(src_i64);
@@ -120,7 +119,6 @@ static int vmovnt2_run(struct test *test, int cpu) {
             report_fail_msg("vmovntdq (256-bit, int64) mismatch");
             return EXIT_FAILURE;
         }
-        fprintf(stderr, "\033[32mvmovntdq (256-bit, int64) PASS\033[0m\n");
 
         // ---- 测试 512-bit 版本（4 个 128 位向量） ----
         for (int i = 0; i < 16; ++i) src_i32_512[i] = i32dist();
@@ -152,7 +150,6 @@ static int vmovnt2_run(struct test *test, int cpu) {
             report_fail_msg("vmovntdq (512-bit, int32) mismatch");
             return EXIT_FAILURE;
         }
-        fprintf(stderr, "\033[32mvmovntdq (512-bit, int32) PASS\033[0m\n");
 
         // int64 512-bit
         int64x2_t vi64_512[4];
@@ -180,7 +177,6 @@ static int vmovnt2_run(struct test *test, int cpu) {
             report_fail_msg("vmovntdq (512-bit, int64) mismatch");
             return EXIT_FAILURE;
         }
-        fprintf(stderr, "\033[32mvmovntdq (512-bit, int64) PASS\033[0m\n");
 
     } while (test_time_condition(test));
 

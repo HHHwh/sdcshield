@@ -116,6 +116,12 @@ static int mesh_upi_avx512_asymm_distrib_write_int_run(struct test *test, int cp
                 td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
                 td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
             }
+            /* 等待读核心完成本轮读取并重置 next_block，避免 32 位
+             * next_block 回绕后覆盖读核心正在读取的数据造成假失败。 */
+            while (td->next_block.load(std::memory_order_seq_cst) != 0 &&
+                   test_time_condition(test)) {
+                __asm__ volatile("yield");
+            }
         }
 
         if (is_reader) {
@@ -125,6 +131,11 @@ static int mesh_upi_avx512_asymm_distrib_write_int_run(struct test *test, int cp
                 __asm__ volatile("yield");
             }
             if (!test_time_condition(test)) break;
+
+            // Sum snapshot BEFORE the read loop (see symm_f64/int): a reader
+            // snapshotting global_sum after the walk races the reset-phase
+            // writer restart and the next iteration's writes.
+            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
 
             // 读取整个数组，计算校验和并进行一致性测试
             uint64_t read_sum = 0;
@@ -161,7 +172,6 @@ static int mesh_upi_avx512_asymm_distrib_write_int_run(struct test *test, int cp
                 }
             }
 
-            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
             bool sum_ok = (read_sum == expected_sum);
             bool passed = sum_ok && consistent;
 

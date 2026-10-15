@@ -99,6 +99,10 @@ static int mesh_upi_sse_asymm_write_int_run(struct test *test, int cpu) {
             __sync_synchronize();
 
             // 读取整个数组，计算校验和并进行一致性测试
+            // Sum snapshot BEFORE the read loop (TOCTOU fix): a fast thread
+            // can finish its read, run the reset phase and start writing the
+            // NEXT iteration while this thread is still walking the buffer.
+            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
             uint64_t read_sum = 0;
             bool consistent = true;
             alignas(16) int32_t store_buf[VECTOR_SIZE];
@@ -124,7 +128,6 @@ static int mesh_upi_sse_asymm_write_int_run(struct test *test, int cpu) {
                 }
             }
 
-            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
             bool sum_ok = (read_sum == expected_sum);
             bool passed = sum_ok && consistent;
 

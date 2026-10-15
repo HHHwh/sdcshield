@@ -47,21 +47,21 @@
 #include <sys/sysinfo.h>
 
 #define NEON_VECTOR_SIZE 2                // NEON 一次处理 2 个 f64
-#define BLOCK_SIZE 16                     // 逻辑块大小(8 个 float64x2)
-#define VECTORS_PER_BLOCK (BLOCK_SIZE / NEON_VECTOR_SIZE)  // = 8
-#define NUM_BLOCKS 64
-#define TOTAL_ELEMENTS (BLOCK_SIZE * NUM_BLOCKS)  // = 1024
-#define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(double))
+#define BLOCK_SIZE 4096                   // 每块元素数(加大块以降低原子争用)
+#define VECTORS_PER_BLOCK (BLOCK_SIZE / NEON_VECTOR_SIZE)  // = 2048
+// 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)，
+// 把用例操作数放大到逼近物理内存(~90%)，作为 SDC 内存通路激发。
 
 struct TestData {
     alignas(16) double *data;             // 共享缓冲(16B 对齐)
+    size_t num_blocks;                    // 运行时块数(按目标内存计算)
+    size_t total_elements;                // 运行时总元素数
     std::atomic<uint32_t> next_block;
     std::atomic<uint64_t> global_sum;     // f64 位模式的精确和(见下)
     std::atomic<uint32_t> write_done;
     std::atomic<uint32_t> read_done;
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
-    uint32_t total_threads;
 };
 
 // 块值生成:slot j 的种子值(精确 0.5 倍数)
@@ -90,6 +90,25 @@ static inline double fma_chain_scalar(double v)
     return v + 0.25 + 0.25 + 0.25 + 0.25;
 }
 
+// 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
+// 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(两者跑同一份 mesh
+// 清单，FP 用例是唯一的大内存消费者)，给 OS 留出余量。返回目标字节数。
+static size_t mesh_target_bytes() {
+    const char *e = getenv("SDC_MESH_BUFFER_BYTES");
+    if (e) {
+        char *end = nullptr;
+        unsigned long long v = strtoull(e, &end, 10);
+        if (end && *end == '\0' && v > 0)
+            return (size_t)v;
+    }
+    struct sysinfo si;
+    if (sysinfo(&si) == 0 && si.totalram > 0) {
+        size_t total = (size_t)si.totalram * si.mem_unit;
+        return total / 10 * 9 / 2;
+    }
+    return (size_t)1 << 30;   // 1 GiB 兜底
+}
+
 static int mesh_upi_avx512_symm_f64_init(struct test *test) {
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2)
         return -255;   // 需要至少 2 个线程
@@ -97,12 +116,21 @@ static int mesh_upi_avx512_symm_f64_init(struct test *test) {
     auto *td = new TestData;
     if (!td) return EXIT_FAILURE;
 
-    td->data = (double *)aligned_alloc(16, TOTAL_BYTES);
+    const size_t elem_bytes = sizeof(double);
+    const size_t block_bytes = BLOCK_SIZE * elem_bytes;
+    size_t target = mesh_target_bytes();
+    td->num_blocks = target / block_bytes;
+    if (td->num_blocks < 1) td->num_blocks = 1;
+    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    td->total_elements = td->num_blocks * BLOCK_SIZE;
+    size_t total_bytes = td->total_elements * elem_bytes;
+
+    td->data = (double *)aligned_alloc(16, total_bytes);
     if (!td->data) {
         delete td;
         return EXIT_FAILURE;
     }
-    memset(td->data, 0, TOTAL_BYTES);
+    memset(td->data, 0, total_bytes);
 
     td->next_block.store(0, std::memory_order_relaxed);
     td->global_sum.store(0, std::memory_order_relaxed);
@@ -110,7 +138,6 @@ static int mesh_upi_avx512_symm_f64_init(struct test *test) {
     td->read_done.store(0, std::memory_order_relaxed);
     td->reset_lock.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->total_threads = sysconf(_SC_NPROCESSORS_ONLN);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -121,18 +148,17 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
     auto *td = static_cast<TestData *>(test->data);
 
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
-    uint32_t total = td->total_threads;
+    uint32_t total = thread_count();
 
     do {
         // ---------- 写阶段:认领块,FP 生产,NEON 存储 ----------
-        uint64_t local_sum_bits = 0;   // 精确和以位模式累加? 不 —— 用 double
-        double local_sum = 0.0;
         while (true) {
             uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
-            if (block >= NUM_BLOCKS) break;
+            if (block >= td->num_blocks) break;
 
             size_t offset = block * BLOCK_SIZE;
             double vals[BLOCK_SIZE];
+            double local_sum = 0.0;
             for (int j = 0; j < BLOCK_SIZE; ++j) {
                 vals[j] = block_value(block, j);
                 local_sum += vals[j];   // 精确:0.5 倍数求和无舍入
@@ -144,31 +170,31 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
             }
             __sync_synchronize();
 
-            td->write_done.fetch_add(1, std::memory_order_seq_cst);
-        }
-        (void)local_sum_bits;
-
-        // 写侧全局和:local_sum 精确,fetch_add 顺序无关
-        // (double 的原子 fetch_add 不存在;用标准 CAS 重试循环)
-        uint64_t exp_bits = td->global_sum.load(std::memory_order_seq_cst);
-        for (;;) {
-            double snapshot, desired;
-            memcpy(&snapshot, &exp_bits, 8);
-            desired = snapshot + local_sum;               // 精确加法
-            uint64_t des_bits;
-            memcpy(&des_bits, &desired, 8);
-            if (td->global_sum.compare_exchange_weak(
-                    exp_bits, des_bits,
-                    std::memory_order_seq_cst,
-                    std::memory_order_seq_cst)) {
-                break;   // success: exp_bits was still current
+            // 写侧全局和必须在 write_done++ 之前完成:读侧在
+            // write_done==NUM_BLOCKS 时快照 global_sum,若累加仍在途
+            // 中会漏掉尚未写入者的贡献,产生虚假的 sum mismatch
+            // (测试自身的并发竞态,而非硬件 SDC)。
+            // (double 无原子 fetch_add,用 CAS 重试循环逐块累加)
+            uint64_t exp_bits = td->global_sum.load(std::memory_order_seq_cst);
+            for (;;) {
+                double snapshot, desired;
+                memcpy(&snapshot, &exp_bits, 8);
+                desired = snapshot + local_sum;           // 精确加法
+                uint64_t des_bits;
+                memcpy(&des_bits, &desired, 8);
+                if (td->global_sum.compare_exchange_weak(
+                        exp_bits, des_bits,
+                        std::memory_order_seq_cst,
+                        std::memory_order_seq_cst)) {
+                    break;
+                }
             }
-            // failure: exp_bits was reloaded with the current value by
-            // compare_exchange — retry with it
+
+            td->write_done.fetch_add(1, std::memory_order_seq_cst);
         }
 
         // 等待所有块写完成
-        while (td->write_done.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
+        while (td->write_done.load(std::memory_order_seq_cst) < td->num_blocks &&
                test_time_condition(test)) {
             __asm__ volatile("yield");
         }
@@ -188,7 +214,7 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
         bool consistent = true;
         alignas(16) double store_buf[BLOCK_SIZE];
 
-        for (size_t i = 0; i < TOTAL_ELEMENTS; i += BLOCK_SIZE) {
+        for (size_t i = 0; i < td->total_elements; i += BLOCK_SIZE) {
             double vals[BLOCK_SIZE];
             for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
                 float64x2_t vec = vld1q_f64(td->data + i + v * NEON_VECTOR_SIZE);

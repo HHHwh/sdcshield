@@ -125,6 +125,13 @@ static int mesh_upi_sse_symm_int_run(struct test *test, int cpu) {
         __sync_synchronize();  // 确保写入对后续读取可见
 
         // ---------- 阶段 2：所有线程读取完整数组并验证 ----------
+        // Sum snapshot BEFORE the read loop (TOCTOU fix): a fast thread can
+        // finish its read, run the reset phase and start writing the NEXT
+        // iteration while this thread is still walking the buffer. Sampling
+        // global_sum after the read would race that reset/next-write and
+        // produce a false mismatch (expected_sum cleared to 0 / partially
+        // overwritten by the next iteration's writes).
+        uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
         uint64_t read_sum = 0;
         bool consistent = true;
         alignas(16) int32_t store_buf[VECTOR_SIZE];
@@ -148,7 +155,6 @@ static int mesh_upi_sse_symm_int_run(struct test *test, int cpu) {
             }
         }
 
-        uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
         bool passed = (read_sum == expected_sum) && consistent;
 
         // 输出结果（每个线程输出一次）

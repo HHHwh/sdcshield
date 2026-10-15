@@ -141,6 +141,10 @@ static int mesh_upi_avx2_asymm_int_run(struct test *test, int cpu) {
 
             __sync_synchronize();  // 确保写者的所有存储可见
 
+            // Sum snapshot BEFORE the read loop (TOCTOU fix): a fast thread
+            // can finish its read, run the reset phase and start writing the
+            // NEXT iteration while this thread is still walking the buffer.
+            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
             uint64_t read_sum = 0;
             bool consistent = true;
             alignas(16) int32_t store_buf[BLOCK_ELEMENTS];
@@ -172,7 +176,6 @@ static int mesh_upi_avx2_asymm_int_run(struct test *test, int cpu) {
                 if (!(ok0 && ok1)) consistent = false;
             }
 
-            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
             bool passed = (read_sum == expected_sum) && consistent;
 
             // 输出结果（每个读者输出一次）

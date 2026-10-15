@@ -89,21 +89,21 @@ static int insert_extract_run(struct test *test, int cpu) {
         float loaded_vals[LANES];
         vst1q_f32(loaded_vals, loaded_vec);
 
-        const char *color = overall_ok ? "\033[32m" : "\033[31m";
-        const char *result_str = overall_ok ? "PASS" : "FAIL";
-
-        fprintf(stderr,
-                "Iter %lu: orig=[%.2f,%.2f,%.2f,%.2f], lane=%d, insert=%.4f, "
-                "extracted=%.4f (insert_extract %s), store/load %s (loaded=[%.2f,%.2f,%.2f,%.2f]) → %s%s\033[0m\n",
-                iteration,
-                orig_vals[0], orig_vals[1], orig_vals[2], orig_vals[3],
-                lane, insert_val, extracted,
-                insert_extract_ok ? "PASS" : "FAIL",
-                store_load_ok ? "PASS" : "FAIL",
-                loaded_vals[0], loaded_vals[1], loaded_vals[2], loaded_vals[3],
-                color, result_str);
-
         if (!overall_ok) {
+            const char *color = "\033[31m";
+            const char *result_str = "FAIL";
+
+            fprintf(stderr,
+                    "Iter %lu: orig=[%.2f,%.2f,%.2f,%.2f], lane=%d, insert=%.4f, "
+                    "extracted=%.4f (insert_extract %s), store/load %s (loaded=[%.2f,%.2f,%.2f,%.2f]) → %s%s\033[0m\n",
+                    iteration,
+                    orig_vals[0], orig_vals[1], orig_vals[2], orig_vals[3],
+                    lane, insert_val, extracted,
+                    insert_extract_ok ? "PASS" : "FAIL",
+                    store_load_ok ? "PASS" : "FAIL",
+                    loaded_vals[0], loaded_vals[1], loaded_vals[2], loaded_vals[3],
+                    color, result_str);
+
             report_fail_msg("Vector insert/extract or store/load consistency check failed");
             return EXIT_FAILURE;
         }

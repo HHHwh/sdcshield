@@ -25,7 +25,6 @@ struct TestData {
     std::atomic<uint32_t> read_done;
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
-    uint32_t total_threads;
 };
 
 static int mesh_upi_avx512_symm_int_init(struct test *test) {
@@ -49,7 +48,6 @@ static int mesh_upi_avx512_symm_int_init(struct test *test) {
     td->read_done.store(0, std::memory_order_relaxed);
     td->reset_lock.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->total_threads = sysconf(_SC_NPROCESSORS_ONLN);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -60,7 +58,7 @@ static int mesh_upi_avx512_symm_int_run(struct test *test, int cpu) {
     auto *td = static_cast<TestData*>(test->data);
 
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
-    uint32_t total = td->total_threads;
+    uint32_t total = thread_count();
 
     /* randomization hardening H14' (P17): framework RNG (per-thread
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
@@ -101,6 +99,14 @@ static int mesh_upi_avx512_symm_int_run(struct test *test, int cpu) {
         }
         if (!test_time_condition(test)) break;
 
+        // Sum snapshot BEFORE the read loop: a fast thread can finish its
+        // read, run the reset phase and start the NEXT iteration's writes
+        // while this thread is still walking the buffer. Comparing against a
+        // snapshot taken after the read would race the reset/next-write and
+        // produce a false mismatch (expected_sum cleared to 0 or partially
+        // overwritten by the next iteration).
+        uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
+
         // ---------- 读阶段：读取整个数组并校验 ----------
         uint64_t read_sum = 0;
         bool consistent = true;
@@ -137,7 +143,6 @@ static int mesh_upi_avx512_symm_int_run(struct test *test, int cpu) {
             if (!consistent) break;
         }
 
-        uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
         bool sum_ok = (read_sum == expected_sum);
         bool passed = sum_ok && consistent;
 
