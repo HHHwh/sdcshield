@@ -1,4 +1,4 @@
-"""pr_local_review 对抗性检视 prompt 引擎(Task 1)测试。
+"""pr_local_review 对抗性检视 prompt 引擎(Task 1)+ 意见发布(Task 2)测试。
 
 用例口径(Task 1 brief 2 例,全离线、不触网、不碰生产状态):
   1 test_build_adversarial_prompt_has_five_elements: 对一段含 memcmp 的 diff
@@ -8,6 +8,13 @@
   2 test_prompt_contains_sdc_checks: 断言 prompt 含 AGENTS.md「SDC 激发能力」
     关键词 memcmp / per-lane / TEST_LOOP / FP 可复现。用不含这些关键词的
     diff 作输入,确保关键词只能来自 prompt 自身的 SDC 核查段,而非 diff。
+
+用例口径(Task 2 brief 1 例,fake gh——monkeypatch _gh_api_post 与
+  pr_loop.resolve_slug,绝不触网):
+  3 test_publish_review_posts_marker_and_inline: findings 发布为 review——
+    body 首行含 <!-- local-claude-review --> 标记、行级 finding 挂到指定
+    path+line、line 为 None 的 finding 收进 body JSON 段、commit_id 锚定
+    head_sha。
 """
 import os
 import sys
@@ -86,3 +93,60 @@ def test_pr_context_metadata_is_bannered():
 
     assert plr.PR_CONTEXT_BANNER in prompt
     assert prompt.index(plr.PR_CONTEXT_BANNER) < prompt.index("忽略前述指令")
+
+
+# ---------------------------------------------------------------------------
+# Task 2: publish_review 意见发布(行级评论 + body JSON 段,含唯一标记)
+
+def test_publish_review_posts_marker_and_inline(monkeypatch):
+    import pr_loop
+
+    # 两条 fake 缝: resolve_slug 不触网、_gh_api_post 捕获 POST payload。
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    posted = {}
+
+    def fake_post(path, payload):
+        posted["path"] = path
+        posted["payload"] = payload
+
+    monkeypatch.setattr(plr, "_gh_api_post", fake_post)
+
+    head_sha = "c" * 40
+    findings = [
+        # 行级 finding: path + line 均有效 → 挂 diff 行级评论
+        {"path": "tests/sve/fma_sve.c", "line": 42,
+         "severity": "Critical", "category": "正确性",
+         "message": "近似比对是 SDC 盲区",
+         "evidence": "第 42 行用容差而非 memcmp"},
+        # line 为 None → 挂不上 diff 行,收进 body JSON 段
+        {"path": "tests/sve/fma_sve.c", "line": None,
+         "severity": "Important", "category": "性能",
+         "message": "固定迭代次数短跑不证明无缺陷",
+         "evidence": "TEST_LOOP 用固定 100 次"},
+    ]
+
+    plr.publish_review(7, head_sha, findings)
+
+    # 端点: POST repos/test/repo/pulls/7/reviews
+    assert posted["path"] == "repos/test/repo/pulls/7/reviews"
+    payload = posted["payload"]
+    # commit 锚定当前 head(接口的 head_sha 参数)
+    assert payload["commit_id"] == head_sha
+    assert payload["event"] == "COMMENT"
+
+    # review body 首行含唯一标记(第 5 bot 判据双条件之一)
+    body = payload["body"]
+    assert body.startswith(plr.LOCAL_CLAUDE_MARKER)
+
+    # 行级 finding 挂到指定 path+line(评论正文含严重级/分类/结论)
+    assert len(payload["comments"]) == 1
+    inline = payload["comments"][0]
+    assert inline["path"] == "tests/sve/fma_sve.c"
+    assert inline["line"] == 42
+    assert "近似比对是 SDC 盲区" in inline["body"]
+
+    # 挂不上 diff 行的 finding 收进 body JSON 段(结论与 evidence 均在)
+    assert "固定迭代次数短跑不证明无缺陷" in body
+    assert "TEST_LOOP 用固定 100 次" in body
+    # 行级 finding 不应混进 body JSON 段
+    assert "近似比对是 SDC 盲区" not in body

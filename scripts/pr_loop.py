@@ -23,6 +23,10 @@
 #                 报告同作者,仅靠内容标记区分)
 #   greptile    = 作者 greptile-apps[bot] 或 check-run app slug "greptile-apps"
 #                 (PR #240 实证: greptile 可只产 check-run 不发评论)
+#   local-claude = 作者 wangxumarshall 且正文含 "<!-- local-claude-review -->" 标记
+#                 (第 5 bot = 本地无头 claude code;「作者 + 内容标记」双条件,不入
+#                 LOGIN_TO_BOT——避免把用户本人普通评论误判为第 5 bot,与 pr-agent
+#                 同构;bot-coverage.yml 不覆盖本地 bot,此判据仅存在于 pr_loop)
 # 在此之上做更强的 head 锚定过滤,甄别 GitHub 评论重锚定(push 新 head 后旧行级
 # 评论的 commit_id 被更新指向新 head,但 created_at 不变)与「旧检视算到新提交」:
 #   时间锚定下界取当前 head 的 push 时间(仓库 events 的 PushEvent.created_at,
@@ -58,6 +62,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
+# 第 5 bot(本地 claude)唯一标记: 从 pr_local_review 导入,避免字面量漂移。
+# scripts/ 在本脚本直接运行时由 Python 自动加入 sys.path;被 ci_triage/测试
+# 引用时它们已先行插入 scripts/。此处再显式插入一次,保证任意导入路径下
+# pr_local_review 可被顶层 import(与 ci_triage.py / pr_local_review.py 同策略)。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pr_local_review import LOCAL_CLAUDE_MARKER  # noqa: E402
+
 # ============ 四 bot 判据(与 .github/workflows/bot-coverage.yml 同步维护) ============
 # bot-coverage.yml 用 `grep -Fxq`(固定字符串整行精确匹配)判定,此处用精确等值。
 CODEX_LOGIN = "chatgpt-codex-connector[bot]"   # codex: 评论/review 作者
@@ -68,8 +79,9 @@ GREPTILE_LOGIN = "greptile-apps[bot]"          # greptile: 评论/review 作者
 GREPTILE_APP_SLUG = "greptile-apps"            #   …或 check-run app slug(只产 check 的场景)
 PRAGENT_LOGIN = "github-actions[bot]"          # pr-agent 检视评论作者(GITHUB_TOKEN 触发)
 PRAGENT_MARKER = "pr-agent:review:full"        #   …且正文须含此标记(区分 bot-coverage 报告)
+LOCAL_CLAUDE_LOGIN = "wangxumarshall"          # 第 5 bot(本地 claude): 评论/review 作者 = 当前 gh 登录用户
 
-BOT_ORDER = ("codex", "coderabbit", "pr-agent", "greptile")
+BOT_ORDER = ("codex", "coderabbit", "pr-agent", "greptile", "local-claude")
 LOGIN_TO_BOT = {
     CODEX_LOGIN: "codex",
     CODERABBIT_LOGIN: "coderabbit",
@@ -77,6 +89,8 @@ LOGIN_TO_BOT = {
 }
 # 注意: github-actions[bot] 不入 LOGIN_TO_BOT——bot-coverage 报告同作者,
 # pr-agent 检视评论靠 PRAGENT_MARKER 内容标记单独判定(见 pragent_comment)。
+# wangxumarshall 同理不入 LOGIN_TO_BOT——用户本人普通评论会被误判为第 5 bot,
+# local-claude 靠 LOCAL_CLAUDE_MARKER 内容标记单独判定(见 local_claude_comment)。
 CHECK_NAME_TO_BOT = {
     CODERABBIT_CHECK: "coderabbit",
     PRAGENT_CHECK: "pr-agent",
@@ -322,6 +336,14 @@ def pragent_comment(item: dict) -> bool:
             and PRAGENT_MARKER in (item.get("body") or ""))
 
 
+def local_claude_comment(author: str, body: str) -> bool:
+    """第 5 bot(本地 claude)检视评论: 作者 wangxumarshall 且正文含
+    LOCAL_CLAUDE_MARKER 标记。双条件——避免把用户本人的普通评论误判为
+    第 5 bot(设计文档反目标 2),与 pragent_comment 的「作者 + 内容标记」
+    同构但不入 LOGIN_TO_BOT。"""
+    return author == LOCAL_CLAUDE_LOGIN and LOCAL_CLAUDE_MARKER in (body or "")
+
+
 def pragent_state_json(body: str) -> Optional[dict]:
     """解析 pr-agent 评论尾部 <!-- pr-agent-review-state:v1 {...} --> 的 JSON。
     失败/不存在返回 None(调用方回退保守路径,不丢数据)。"""
@@ -348,7 +370,9 @@ def pragent_comment_head(item: dict) -> Optional[str]:
 def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
     """issue 评论的 bot 判定(信号/计数用):
     LOGIN_TO_BOT 作者直接命中;pr-agent 须内容标记命中且 last_run.head_sha
-    匹配当前 head(旧 head 的检视不算当前信号;解析失败回退时间锚定语义)。"""
+    匹配当前 head(旧 head 的检视不算当前信号;解析失败回退时间锚定语义);
+    local-claude 须「作者 wangxumarshall 且正文含标记」双条件命中(时间锚定,
+    无 commit 绑定字段——与 issue 评论总体策略一致)。"""
     bot = bot_of(item)
     if bot is not None:
         return bot
@@ -356,6 +380,9 @@ def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
         head = pragent_comment_head(item)
         if head is None or head == head_sha:
             return "pr-agent"
+    if local_claude_comment((item.get("user") or {}).get("login") or "",
+                            item.get("body") or ""):
+        return "local-claude"
     return None
 
 
@@ -488,6 +515,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # ---- reviews: 作者判据 + 有效态 + 时间锚定 + commit 锚定 ----
     for r in reviews:
         bot = bot_of(r)
+        if bot is None and local_claude_comment(
+                (r.get("user") or {}).get("login") or "", r.get("body") or ""):
+            bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
@@ -501,6 +531,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # ---- 行级评论: 时间锚定 + commit 锚定(original_commit_id 为重锚定前的原值) ----
     for c in review_comments:
         bot = bot_of(c)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
@@ -646,7 +679,7 @@ def print_detail(pr: PRData, slug: str, quiet: int) -> None:
     print(head_line)
     if pr.url:
         print(f"  链接: {pr.url}")
-    print("  四 bot 信号(仅计入当前 head 之后; 顺序 codex/coderabbit/pr-agent/greptile):")
+    print("  五 bot 信号(仅计入当前 head 之后; 顺序 codex/coderabbit/pr-agent/greptile/local-claude):")
     for bot in BOT_ORDER:
         first = pr.bot_first.get(bot)
         if first:
@@ -681,7 +714,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("      或指定 PR 号查看详情: scripts/pr_loop.py status <PR>")
         return 0
     print(f"== PR 总览({len(prs)} 个 open,仓库 {slug})==")
-    print("   bots 四位顺序: codex / coderabbit / pr-agent / greptile")
+    print("   bots 五位顺序: codex / coderabbit / pr-agent / greptile / local-claude")
     details = []
     failed = 0
     for item in prs:

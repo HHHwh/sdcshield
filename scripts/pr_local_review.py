@@ -18,7 +18,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 
 # 把 scripts/ 目录放进 sys.path,供后续 Task `import pr_loop`(复用其 gh 封装、
@@ -171,3 +173,86 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
     if not force and already_reviewed(pr_number, head_sha):
         return []
     return []
+
+
+# ============ 意见发布(第 5 bot 身份 = wangxumarshall + 唯一标记) ============
+
+class GhError(RuntimeError):
+    """gh CLI 调用失败(未认证/网络/端点不存在等)。"""
+
+
+GH_TIMEOUT = 45   # 单次 gh api 子进程超时(秒,与 pr_loop.GH_TIMEOUT 一致)
+
+
+def _format_inline_comment(finding: dict) -> str:
+    """行级评论正文: 首行带唯一标记(第 5 bot 判据双条件之一),其后是
+    严重级/分类/结论/证据。挂 diff 行的 finding 才走此路。"""
+    sev = finding.get("severity") or "?"
+    cat = finding.get("category") or "?"
+    msg = finding.get("message") or ""
+    ev = finding.get("evidence") or ""
+    lines = [LOCAL_CLAUDE_MARKER, f"**[{sev}] {cat}**: {msg}"]
+    if ev:
+        lines.append(f"证据: {ev}")
+    return "\n".join(lines)
+
+
+def _gh_api_post(path: str, payload: dict) -> None:
+    """gh api POST——JSON body 经 stdin(--input -)承载,规避超长正文/特殊
+    字符经 argv 透传的注入面(与 ci_triage 的 stdin 通道同策略)。"""
+    try:
+        proc = subprocess.run(
+            ["gh", "api", path, "--method", "POST", "--input", "-"],
+            capture_output=True, text=True, input=json.dumps(payload),
+            timeout=GH_TIMEOUT,
+        )
+    except FileNotFoundError:
+        raise GhError("找不到 gh CLI——请安装并认证: gh auth login")
+    except subprocess.TimeoutExpired:
+        raise GhError(f"gh api {path} 超时({GH_TIMEOUT}s)")
+    if proc.returncode != 0:
+        err = " ".join(proc.stderr.strip().split())[:300]
+        raise GhError(f"gh api {path} 失败(exit {proc.returncode}): {err}")
+
+
+def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
+    """把 findings 发布为 PR review(作者 = 当前 gh 登录用户 wangxumarshall)。
+
+    - 行级 finding(path 且 line 非 None)→ reviews 的 comments 数组挂 diff 行
+      (可逐条 reply、逐条计数,coderabbit 式);
+    - 挂不上 diff 行的(line 为 None 或无 path)→ 收进 review body 的 JSON 段
+      (pr-agent 式);
+    - review body 与每条行级评论正文首行均带 LOCAL_CLAUDE_MARKER(第 5 bot
+      判据「作者 wangxumarshall 且 正文含标记」双条件之一);
+    - commit_id 锚定当前 head,供 pr_loop 的 commit 锚定过滤。
+    """
+    inline, body_findings = [], []
+    for f in findings:
+        if f.get("path") and f.get("line") is not None:
+            inline.append(f)
+        else:
+            body_findings.append(f)
+
+    body = LOCAL_CLAUDE_MARKER + "\n"
+    if body_findings:
+        body += ("\n## 挂不上 diff 行的 findings(JSON)\n\n```json\n"
+                 + json.dumps(body_findings, ensure_ascii=False, indent=2)
+                 + "\n```\n")
+
+    payload = {
+        "commit_id": head_sha,
+        "body": body,
+        "event": "COMMENT",
+        "comments": [
+            {"path": f["path"], "line": f["line"],
+             "body": _format_inline_comment(f)}
+            for f in inline
+        ],
+    }
+
+    # 复用 pr_loop 的 slug 解析(gh 凭据交给 gh)。懒 import 避开顶层循环——
+    # pr_loop 顶层 `from pr_local_review import LOCAL_CLAUDE_MARKER`,此处
+    # 只在调用期 import,届时 pr_loop 已完整加载。
+    import pr_loop
+    slug = pr_loop.resolve_slug(None)
+    _gh_api_post(f"repos/{slug}/pulls/{pr_number}/reviews", payload)
