@@ -63,6 +63,11 @@ MONITORED_BRANCH = "main"
 AGENT_TIMEOUT_SEC = 3600
 # 车道 B(bot 意见处置)最大轮数——超过 4 轮仍在修,升级人工(spec §6)
 MAX_ROUNDS = 4
+# 第 5 bot(local-claude)连续缺位告警阈值: 连续 N 个 scan tick 车道 B 拉到的
+# PR 都缺 local-claude 信号 → 升级告警(认证失效/配额耗尽时无人值守 fix/ci
+# PR 会永久 WAITING_BOTS 且静默)。只告警不降门槛——硬门槛是用户确认项,
+# 不把 local-claude 降为非阻塞(I2)。
+LOCAL_CLAUDE_MISSING_TICK_LIMIT = 3
 # scan 互斥锁文件名(位于 STATE_DIR 下,flock LOCK_EX|LOCK_NB)
 SCAN_LOCK_NAME = "scan.lock"
 # git 子进程超时(秒),与 gh 封装一致
@@ -1145,6 +1150,9 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         print("[lane-b] 车道 B 无条目(无 PR_OPEN / BOT_FIX 条目)")
         return
     slug = repo_slug()
+    # I2 缺位告警记账(车道 B 拉到的 PR 是否普遍缺 local-claude 信号)
+    any_fetched = False
+    any_missing_local = False
     for entry in entries:
         if entry.status == "BOT_FIX":
             if entry.agent_pid is not None and agent_alive(entry.agent_pid):
@@ -1184,6 +1192,20 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             except GhError as exc:
                 print(f"[lane-b] run {entry.run_id}: 第 5 bot 审查失败,"
                       f"按缺信号继续判定: {exc}")
+            else:
+                # I4: ensure_local_review 成功后重拉一次——发布的 review 不在
+                # 此前 fetch_pr 拿到的 stale PRData 里,不重拉会当轮仍
+                # WAITING_BOTS 多耗一个 tick。重拉失败则沿用 stale 数据继续
+                # 判定(诚实降级,不因观测失败炸车道 B)。
+                try:
+                    pr = pr_loop.fetch_pr(slug, entry.pr_number)
+                except GhError as exc:
+                    print(f"[lane-b] run {entry.run_id}: 第 5 bot 审查后重拉"
+                          f"PR 失败,用 stale 数据继续判定: {exc}")
+        any_fetched = True
+        bot_done = getattr(pr, "bot_done", None) or {}
+        if bot_done.get("local-claude") is None:
+            any_missing_local = True
         pr_state = pr_loop.classify_state(
             pr, pr_loop.DEFAULT_QUIET, datetime.now(timezone.utc))
 
@@ -1281,6 +1303,23 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         state["entries"] = [e.to_dict() for e in entries]
     # 与 reap_or_advance 同模式: 序列化回 state(持有同一批 Entry 对象)
     state["entries"] = [e.to_dict() for e in entries]
+
+    # I2: 第 5 bot 连续缺位告警。车道 B 本轮实际拉到了 PR(any_fetched)且全部
+    # 缺 local-claude 信号(any_missing_local)→ streak+1;出现任一 local-claude
+    # 信号则归零(恢复)。连续达到阈值时升级告警(认证失效/配额耗尽会让无人值守
+    # fix/ci PR 永久 WAITING_BOTS 且静默)。只告警、不把本地 bot 降为非阻塞——
+    # 硬门槛是用户确认项,不得在本工具内削弱。
+    if not dry_run and any_fetched:
+        if any_missing_local:
+            state["local_claude_missing_ticks"] = \
+                state.get("local_claude_missing_ticks", 0) + 1
+        else:
+            state["local_claude_missing_ticks"] = 0
+        ticks = state["local_claude_missing_ticks"]
+        if ticks >= LOCAL_CLAUDE_MISSING_TICK_LIMIT:
+            print(f"[lane-b] 第 5 bot(local-claude)连续 {ticks} tick 缺位——"
+                  f"请检查 agent.env 凭据/配额(硬门槛不降级,仅告警)",
+                  file=sys.stderr)
 
 
 def _git(args: list[str], clone_dir: Optional[str] = None) -> str:
