@@ -861,6 +861,14 @@ int thread_count()
     return sApp->thread_count;
 }
 
+int total_thread_count()
+{
+    /* 在子进程(child_run 已把 sApp->thread_count 改写为 slice 内线程数)里,
+     * 全机总线程数保存在 shmem->total_thread_count, 不随改写而变。 */
+    int total = sApp->shmem->total_thread_count;
+    return total > 0 ? total : sApp->thread_count;
+}
+
 int device_count()
 {
     return sApp->device_count;

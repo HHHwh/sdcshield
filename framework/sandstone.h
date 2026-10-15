@@ -629,6 +629,16 @@ extern __thread int thread_num __attribute__((tls_model("initial-exec")));
 /// restricts the number of CPUs sandstone can see.
 int thread_count() __attribute__((pure));
 
+/// Returns the total number of test threads across all concurrently-running
+/// slices (children).  In the main process and in single-slice runs this is
+/// equal to thread_count().  When the framework forks one child per slice
+/// (e.g. one per socket, or for core counts above the slicing threshold),
+/// thread_count() inside a child returns only that slice's thread count while
+/// this returns the sum for all slices.  Memory-budget amortization in tests
+/// must use this value: dividing the machine budget by the per-slice count
+/// once per slice multiplies the total footprint by the number of slices.
+int total_thread_count() __attribute__((pure));
+
 /// Returns the number of devices (CPUs or GPUs) available to a test.
 /// Normally equal to thread_count(), but tracked separately.
 int device_count() __attribute__((pure));
