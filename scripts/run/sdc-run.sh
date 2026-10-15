@@ -21,6 +21,10 @@
 #     --quality N   质量档（缺省 0=PROD+BETA，arm64_sdc 等 BETA 用例需要）
 #     --retest N    框架级失败重测（缺省 3，透传 --retest-on-failure）
 #     --out DIR     输出根目录（缺省 ./sdc-run-scan-<MMDD-HHMMSS>/）
+#     -- <框架参数> 双划线后的一切原样透传给 sdcshield（如 -s AES 换 RNG 引擎、
+#                  -O eigen_svd_double.mdim=3072 调用例参数、--test-list-randomize
+#                  随机序）。不得传 -e/--cpuset/-o/-t/-Y/--quality 等破坏编排的
+#                  选项——那会污染逐核归因。
 #
 # 产出:
 #   <out>/core_<N>.yaml            每核完整 YAML（-Y）
@@ -47,7 +51,7 @@ case "$CMD" in
 esac
 
 BIN_OVERRIDE=""; CORES_SPEC="all"; TESTS="$DEFAULT_TESTS"
-T_PER="5s"; PAR=1; QUALITY=0; RETEST=3; OUT=""
+T_PER="5s"; PAR=1; QUALITY=0; RETEST=3; OUT=""; PASSTHRU=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --bin)     BIN_OVERRIDE="$2"; shift 2 ;;
@@ -58,8 +62,9 @@ while [ $# -gt 0 ]; do
         --quality) QUALITY="$2"; shift 2 ;;
         --retest)  RETEST="$2"; shift 2 ;;
         --out)     OUT="$2"; shift 2 ;;
+        --)        shift; PASSTHRU=("$@"); break ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "FATAL: scan 未知选项 '$1'" >&2; exit 2 ;;
+        *) echo "FATAL: scan 未知选项 '$1'（框架参数请放在 -- 之后）" >&2; exit 2 ;;
     esac
 done
 [ "$PAR" -ge 1 ] 2>/dev/null || { echo "FATAL: --par 须为 >=1 整数" >&2; exit 2; }
@@ -161,6 +166,7 @@ run_one() {
     "$BIN" --cpuset="$core" -t "$T_PER" -Y \
         --quality="$QUALITY" --retest-on-failure="$RETEST" \
         --on-crash=context --on-hang=kill --ignore-timeout --ignore-os-errors \
+        ${PASSTHRU[@]+"${PASSTHRU[@]}"} \
         -e "$TESTS" -o "$OUT/core_${core}.yaml" \
         > "$OUT/core_${core}.stdout" 2>&1
 }
@@ -244,7 +250,8 @@ if [ -n "$FAIL_PAIRS" ]; then
     while read -r core test; do
         [ -z "$test" ] && continue
         "$BIN" --cpuset="$core" -t "$T_PER" -Y --quality="$QUALITY" \
-            -o "$OUT/confirm_${core}_${test}.yaml" > /dev/null 2>&1 || true
+            ${PASSTHRU[@]+"${PASSTHRU[@]}"} \
+            -e "$test" -o "$OUT/confirm_${core}_${test}.yaml" > /dev/null 2>&1 || true
         CR=$(grep -m1 "^  result:" "$OUT/confirm_${core}_${test}.yaml" 2>/dev/null | awk '{print $2}' || true)
         if [ "$CR" = "fail" ]; then CLASS="持续(复现)"; else CLASS="瞬态(未复现)"; fi
         CONFIRM_MD="$CONFIRM_MD
