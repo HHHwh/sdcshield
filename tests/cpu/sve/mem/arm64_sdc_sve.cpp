@@ -16,6 +16,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -30,9 +31,28 @@
 #endif
 #endif
 
-#define SDC_SVE_BUFFER_SIZE (64 * 1024)
+#if defined(__aarch64__)
+/* 扫描缓冲字节数(原 64KB) — 统一优先级链:
+ *   1. -O arm64_sdc_sve.buffer_bytes=N / 配置文件同名条目
+ *   2. 环境变量 SDC_ARM64_SDC_SVE_BUFFER_BYTES
+ *   3. 自适应: 字节数直给(参照 mesh_upi_sve_read_L3_int 模式),
+ *      占物理内存 60%, 2 个大内存消费者均摊(共享检测缓冲 +
+ *      每线程 run 副本)。CRC 表 [256] 与本旋钮无关, 不动。 */
+static size_t sdc_sve_buffer_bytes(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0, 64 << 10,
+                                     1ll << 40);
+    if (v == 0)
+        sdc_env_knob_int_clamped("arm64_sdc_sve", "buffer_bytes", &v,
+                                 64 << 10, 1ll << 40);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_target_workset_bytes(600, 2, nullptr);
+}
+#endif
 
 struct sdc_sve_data {
+    size_t   buffer_bytes;   /* 扫描缓冲字节数(init 定容, 线程共享) */
     uint8_t *test_buffer;
     uint32_t golden_crc32;
     uint64_t golden_crc64;
@@ -96,17 +116,18 @@ static int arm64_sdc_sve_init(struct test *test)
     crc_tables_init();
 
     auto *data = new sdc_sve_data;
-    data->test_buffer = static_cast<uint8_t *>(aligned_alloc(64, SDC_SVE_BUFFER_SIZE));
-    memset_random(data->test_buffer, SDC_SVE_BUFFER_SIZE);
-    sdc_sve_detect(data->test_buffer, SDC_SVE_BUFFER_SIZE,
+    data->buffer_bytes = sdc_sve_buffer_bytes(test);
+    data->test_buffer = static_cast<uint8_t *>(aligned_alloc_safe(64, data->buffer_bytes));
+    memset_random(data->test_buffer, data->buffer_bytes);
+    sdc_sve_detect(data->test_buffer, data->buffer_bytes,
                    &data->golden_crc32, &data->golden_crc64, &data->golden_checksum);
 
     /* 检测器自检 (fail-closed): 注入 1-bit 翻转, 每个检测器必须能抓到 */
-    uint8_t *probe = static_cast<uint8_t *>(aligned_alloc(64, SDC_SVE_BUFFER_SIZE));
-    memcpy(probe, data->test_buffer, SDC_SVE_BUFFER_SIZE);
-    probe[SDC_SVE_BUFFER_SIZE / 2] ^= 0x01;
+    uint8_t *probe = static_cast<uint8_t *>(aligned_alloc_safe(64, data->buffer_bytes));
+    memcpy(probe, data->test_buffer, data->buffer_bytes);
+    probe[data->buffer_bytes / 2] ^= 0x01;
     uint32_t p_crc32; uint64_t p_crc64; uint32_t p_sum;
-    sdc_sve_detect(probe, SDC_SVE_BUFFER_SIZE, &p_crc32, &p_crc64, &p_sum);
+    sdc_sve_detect(probe, data->buffer_bytes, &p_crc32, &p_crc64, &p_sum);
     free(probe);
     if (p_crc32 == data->golden_crc32 && p_crc64 == data->golden_crc64
         && p_sum == data->golden_checksum) {
@@ -131,12 +152,13 @@ static int arm64_sdc_sve_run(struct test *test, int cpu)
     return EXIT_SKIP;
 #else
     auto *data = static_cast<sdc_sve_data *>(test->data);
-    uint8_t *test_buffer = static_cast<uint8_t *>(aligned_alloc(64, SDC_SVE_BUFFER_SIZE));
+    const size_t buffer_bytes = data->buffer_bytes;
+    uint8_t *test_buffer = static_cast<uint8_t *>(aligned_alloc_safe(64, buffer_bytes));
     uint32_t crc32_result; uint64_t crc64_result; uint32_t checksum_result;
 
     TEST_LOOP(test, 128) {
-        memcpy(test_buffer, data->test_buffer, SDC_SVE_BUFFER_SIZE);
-        if (sdc_sve_detect(test_buffer, SDC_SVE_BUFFER_SIZE,
+        memcpy(test_buffer, data->test_buffer, buffer_bytes);
+        if (sdc_sve_detect(test_buffer, buffer_bytes,
                            &crc32_result, &crc64_result, &checksum_result) == 0) {
             if (crc32_result != data->golden_crc32)
                 memcmp_or_fail(&crc32_result, &data->golden_crc32, 1,

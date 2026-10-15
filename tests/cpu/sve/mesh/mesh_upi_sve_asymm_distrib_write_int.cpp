@@ -1,4 +1,5 @@
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -14,14 +15,14 @@
 #define HWCAP_SVE (1 << 22)
 #endif
 
-#define TOTAL_ELEMENTS 1024
 #define VECTOR_SIZE 4                     // 原负载：一次处理 4 个 int32（SVE 谓词分批）
 #define BLOCK_ELEMENTS (VECTOR_SIZE * 2)
-#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)
-#define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
+// 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
 struct TestData {
     alignas(16) int32_t *data;           // 16 字节对齐即可
+    size_t num_blocks;                   // 运行时块数(按目标内存计算)
+    size_t total_elements;               // 运行时总元素数
     std::atomic<uint32_t> next_block;
     std::atomic<uint64_t> global_sum;
     std::atomic<uint32_t> allocated_blocks;
@@ -31,6 +32,28 @@ struct TestData {
     std::atomic<uint32_t> num_threads;
     std::atomic<uint32_t> ready;
 };
+
+// 目标字节数: -O mesh_upi_sve_asymm_distrib_write_int.buffer_bytes=N /
+// SDC_MESH_UPI_SVE_ASYMM_DISTRIB_WRITE_INT_BUFFER_BYTES 环境变量 /
+// 自适应 = 物理内存 90% 在 2 路 mesh 战役间均摊(与 mesh_upi_avx_sym 的
+// SDC_MESH_BUFFER_BYTES 语义一致, 但走统一配置链)
+static size_t mesh_target_bytes(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,
+                                     1 << 20, 1ll << 44);
+    if (v == 0)
+        sdc_env_knob_int_clamped(test->id, "buffer_bytes", &v, 1 << 20, 1ll << 44);
+    if (v > 0)
+        return (size_t)v;
+    /* 旧脚本兼容: SDC_MESH_BUFFER_BYTES 直接指定字节 */
+    if (const char *e = getenv("SDC_MESH_BUFFER_BYTES")) {
+        char *end = nullptr;
+        unsigned long long b = strtoull(e, &end, 10);
+        if (end && *end == '\0' && b > 0)
+            return (size_t)b;
+    }
+    return sdc_target_workset_bytes(900, 2, nullptr);
+}
 
 static int mesh_upi_sve_asymm_distrib_write_int_init(struct test *test) {
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2) return -255;
@@ -45,12 +68,21 @@ static int mesh_upi_sve_asymm_distrib_write_int_init(struct test *test) {
     auto *td = new TestData;
     if (!td) return EXIT_FAILURE;
 
-    td->data = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
+    const size_t elem_bytes = sizeof(int32_t);
+    const size_t block_bytes = BLOCK_ELEMENTS * elem_bytes;
+    size_t target = mesh_target_bytes(test);
+    td->num_blocks = target / block_bytes;
+    if (td->num_blocks < 1) td->num_blocks = 1;
+    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    td->total_elements = td->num_blocks * BLOCK_ELEMENTS;
+    size_t total_bytes = td->total_elements * elem_bytes;
+
+    td->data = (int32_t*)aligned_alloc(16, total_bytes);
     if (!td->data) {
         delete td;
         return EXIT_FAILURE;
     }
-    memset(td->data, 0, TOTAL_BYTES);
+    memset(td->data, 0, total_bytes);
 
     td->next_block.store(0, std::memory_order_relaxed);
     td->global_sum.store(0, std::memory_order_relaxed);
@@ -86,7 +118,7 @@ static int mesh_upi_sve_asymm_distrib_write_int_run(struct test *test, int cpu) 
             // 写核心：循环分配块并写入
             while (test_time_condition(test)) {
                 uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
-                if (block < NUM_BLOCKS) {
+                if (block < td->num_blocks) {
                     size_t offset = block * BLOCK_ELEMENTS;
                     // 生成随机数据（8个 int32）
                     int32_t vals[BLOCK_ELEMENTS];
@@ -120,7 +152,7 @@ static int mesh_upi_sve_asymm_distrib_write_int_run(struct test *test, int cpu) 
 
         if (is_reader) {
             // 读核心：等待数据就绪
-            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
+            while (td->allocated_blocks.load(std::memory_order_seq_cst) < td->num_blocks &&
                    test_time_condition(test)) {
                 __asm__ volatile("yield");
             }
@@ -131,7 +163,7 @@ static int mesh_upi_sve_asymm_distrib_write_int_run(struct test *test, int cpu) 
 
             // 读取全部数据（按块遍历，与写者对称）
             uint64_t read_sum = 0;
-            for (size_t i = 0; i < TOTAL_ELEMENTS; i += BLOCK_ELEMENTS) {
+            for (size_t i = 0; i < td->total_elements; i += BLOCK_ELEMENTS) {
                 int32_t vals[BLOCK_ELEMENTS];
                 for (int v = 0; v < 2; ++v) {
                     svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)VECTOR_SIZE);

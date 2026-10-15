@@ -15,6 +15,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -32,7 +33,26 @@
 #endif
 #endif
 
-static constexpr size_t NUM_ELEMENTS = 1024;
+/* 元素数 NUM_ELEMENTS(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O fisttp_sve.num_elements=N / 配置文件同名条目
+ *   2. 环境变量 SDC_FISTTP_SVE_NUM_ELEMENTS
+ *   3. 自适应: 每线程 golden_in(4B 共享)+out(4B)+store(4B)+reload(4B)+
+ *      golden_out(4B 共享) ~= 20B/元素, 占物理内存 60%,
+ *      clamp [1024, 16M]。线性缓冲用 sdc_auto_linear_count
+ *      （sqrt 缩放会欠缩放压力）。 */
+static size_t fisttp_sve_num_elements(struct test *test)
+{
+    /* hi 动态: 大内存机器按 60% 预算放开, 小内存机器保持 16M 收口 */
+    const int64_t hi = sdc_linear_hi(20, 1, 1.0, 600, thread_count(), 16 << 20);
+    int64_t v = sdc_knob_int_clamped(test, "num_elements", 0, 1024, hi);
+    if (v == 0)
+        sdc_env_knob_int_clamped("fisttp_sve", "num_elements", &v, 1024, hi);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(20, 1, 1.0, 600, thread_count(),
+                                         1024, hi, test->id, "num_elements");
+}
+
 static constexpr float FLOAT_MIN = -100.0f;
 static constexpr float FLOAT_MAX = 100.0f;
 static constexpr uint64_t FIXED_SEED = 0x123456789ABCDEF0ULL;
@@ -63,6 +83,7 @@ static int fisttp_sve_init(struct test *test) {
     auto *d = new (std::nothrow) FisttpSveData;
     if (!d) return EXIT_FAILURE;
 
+    const size_t NUM_ELEMENTS = fisttp_sve_num_elements(test);
     d->golden_input.resize(NUM_ELEMENTS);
     d->golden_output.resize(NUM_ELEMENTS);
 
@@ -96,6 +117,7 @@ static int fisttp_sve_run(struct test *test, int cpu) {
     auto *d = static_cast<FisttpSveData *>(test->data);
     if (!d) return EXIT_FAILURE;
 
+    const size_t NUM_ELEMENTS = d->golden_input.size();
     size_t cpu_idx = (cpu >= 0 && static_cast<size_t>(cpu) < d->out_buf.size())
                      ? static_cast<size_t>(cpu) : 0;
     int32_t *out = d->out_buf[cpu_idx].data();
@@ -132,11 +154,11 @@ static int fisttp_sve_run(struct test *test, int cpu) {
                      mismatch_idx >= 0 ? out[mismatch_idx] : 0,
                      mismatch_idx >= 0 ? d->golden_output[mismatch_idx] : 0,
                      (int)data_ok, (int)consistent);
-            log_data("fisttp_sve input (float, 1024 elems)",
+            log_data("fisttp_sve input (float, runtime-sized)",
                      in, NUM_ELEMENTS * sizeof(float));
-            log_data("fisttp_sve output (int32 SVE svcvt result, 1024 elems)",
+            log_data("fisttp_sve output (int32 SVE svcvt result, runtime-sized)",
                      out, NUM_ELEMENTS * sizeof(int32_t));
-            log_data("fisttp_sve golden (std::trunc int32 result, 1024 elems)",
+            log_data("fisttp_sve golden (std::trunc int32 result, runtime-sized)",
                      d->golden_output.data(), NUM_ELEMENTS * sizeof(int32_t));
             report_fail_msg("%s", ctx_msg);
         }

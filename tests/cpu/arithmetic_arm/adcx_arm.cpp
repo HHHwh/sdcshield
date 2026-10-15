@@ -181,22 +181,21 @@ static int adcx_arm_run(struct test *test, int cpu) {
 
             bool passed = data_ok && consistent;
 
-            // 7. 输出结果（每次迭代都输出）
-            const char *color = passed ? "\033[32m" : "\033[31m";
-            const char *result_str = passed ? "PASS" : "FAIL";
-
-            fprintf(stderr,
-                    "[adcx_arm] Iter %zu: a_high=0x%016" PRIx64 " b_high=0x%016" PRIx64 " "
-                    "hw_high=0x%016" PRIx64 " golden_high=0x%016" PRIx64 " "
-                    "carry hw=%" PRIu64 " golden=%" PRIu64 " consistent=%d → %s%s\033[0m\n",
-                    i,
-                    a_words[NUM_WORDS-1], b_words[NUM_WORDS-1],
-                    hw_words[NUM_WORDS-1], golden[NUM_WORDS-1],
-                    hw_words[NUM_WORDS], golden[NUM_WORDS],
-                    consistent,
-                    color, result_str);
-
             if (!passed) {
+                const char *color = "\033[31m";
+                const char *result_str = "FAIL";
+
+                fprintf(stderr,
+                        "[adcx_arm] Iter %zu: a_high=0x%016" PRIx64 " b_high=0x%016" PRIx64 " "
+                        "hw_high=0x%016" PRIx64 " golden_high=0x%016" PRIx64 " "
+                        "carry hw=%" PRIu64 " golden=%" PRIu64 " consistent=%d → %s%s\033[0m\n",
+                        i,
+                        a_words[NUM_WORDS-1], b_words[NUM_WORDS-1],
+                        hw_words[NUM_WORDS-1], golden[NUM_WORDS-1],
+                        hw_words[NUM_WORDS], golden[NUM_WORDS],
+                        consistent,
+                        color, result_str);
+
                 report_fail_msg("adcx_arm: mismatch at pair %zu", i);
                 mpz_clear(a_mpz);
                 mpz_clear(b_mpz);

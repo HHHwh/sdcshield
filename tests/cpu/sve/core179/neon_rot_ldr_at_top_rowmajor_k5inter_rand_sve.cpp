@@ -22,6 +22,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -43,10 +44,11 @@
 #define K5IR_SVE_DUMP_DIR "movbe_log/gps_rowmajor"
 
 struct NeonRotLdrAtTopRowmajorK5irSveData {
-    uint64_t *src;        /* 2 x SLOTS vectors, interleaved dual source */
+    uint64_t *src;        /* 2 x slots vectors, interleaved dual source */
     uint64_t *scratch;
     uint64_t *expected;
     int lanes;
+    int slots;   /* 运行时向量槽数 (knob `slots`, 默认设计值) */
 };
 
 #if defined(__aarch64__)
@@ -61,6 +63,18 @@ static inline svuint64_t load_vec_sve(const void *addr) {
     return res;
 }
 
+/* 优先级: 1. -O neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve.slots=N
+ * 2. SDC_NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5INTER_RAND_SVE_SLOTS 3. 设计默认 1024
+ * （诊断探针: 默认保持设计几何, 显式配置才生效 — 槽距/行距模式是激发参数不动） */
+static size_t neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_slots(struct test *test)
+{
+    const int64_t dflt = NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS;
+    int64_t v = sdc_knob_int_clamped(test, "slots", 0, NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS, 1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve", "slots", &v, NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS, 1 << 20);
+    return v > 0 ? (size_t)v : (size_t)dflt;
+}
+
 #endif
 
 static int neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_init(struct test *test) {
@@ -73,10 +87,12 @@ static int neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_init(struct test *test)
     }
 
     const int lanes = (int)svcntd();
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS * lanes;
+    const size_t slots = neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_slots(test);
+    const size_t elems = slots * (size_t)lanes;
 
     auto *data = static_cast<NeonRotLdrAtTopRowmajorK5irSveData *>(malloc(sizeof(NeonRotLdrAtTopRowmajorK5irSveData)));
     data->lanes = lanes;
+    data->slots = (int)slots;
     data->src = static_cast<uint64_t *>(aligned_alloc(64, 2 * elems * sizeof(uint64_t)));
     data->scratch = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
     data->expected = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
@@ -86,7 +102,7 @@ static int neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_init(struct test *test)
     memset_random(data->scratch, elems * sizeof(uint64_t));
 
     svbool_t pg = svptrue_b64();
-    for (int i = 0; i < NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS; i++) {
+    for (int i = 0; i < data->slots; i++) {
         svuint64_t a = svld1_u64(pg, data->src + (size_t)(2 * i) * lanes);
         svuint64_t b = svld1_u64(pg, data->src + (size_t)(2 * i + 1) * lanes);
         svuint64_t res;
@@ -123,7 +139,7 @@ static int neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_run(struct test *test, 
         report_fail_msg("neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve: vector length changed between init and run");
     }
 
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS * data->lanes;
+    const size_t elems = (size_t)data->slots * data->lanes;
     const size_t bytes = elems * sizeof(uint64_t);
     uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, bytes));
     uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, bytes));
@@ -131,8 +147,8 @@ static int neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_run(struct test *test, 
     uint64_t sweep = 0;
     TEST_LOOP(test, 1 << 13) {
         const bool ascending = (sweep & 1) == 0;
-        for (int n = 0; n < NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS; n++) {
-            const int i = ascending ? n : (NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS - 1 - n);
+        for (int n = 0; n < data->slots; n++) {
+            const int i = ascending ? n : (data->slots - 1 - n);
             const size_t off = (size_t)i * data->lanes;
 
             svuint64_t unused_x = load_vec_sve(data->scratch + off);
@@ -157,11 +173,11 @@ static int neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_run(struct test *test, 
         if (memcmp(dst, data->expected, bytes) != 0) {
             uint64_t *viewA = static_cast<uint64_t *>(aligned_alloc(64, bytes));
             uint64_t *viewB = static_cast<uint64_t *>(aligned_alloc(64, bytes));
-            for (int i = 0; i < NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS; i++) {
+            for (int i = 0; i < data->slots; i++) {
                 memcpy(viewA + (size_t)i * data->lanes,
-                       data->src + (size_t)(2 * i) * data->lanes, bytes / NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS);
+                       data->src + (size_t)(2 * i) * data->lanes, bytes / (size_t)data->slots);
                 memcpy(viewB + (size_t)i * data->lanes,
-                       data->src + (size_t)(2 * i + 1) * data->lanes, bytes / NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS);
+                       data->src + (size_t)(2 * i + 1) * data->lanes, bytes / (size_t)data->slots);
             }
             char path[256];
             snprintf(path, sizeof(path),

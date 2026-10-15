@@ -22,11 +22,29 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <Eigen/Core>
 using namespace Eigen;
 
-#define M_DIM 256
+/*
+ * 矩阵维度: 同 eigen_gemm_double_dynamic_square 的优先级链
+ * (-O mdim / 配置文件 / SDC_EIGEN_GEMM_FLOAT_DYNAMIC_SQUARE_MDIM /
+ * 自适应)。float 元素 4 字节, 相同内存预算下可容纳更大 N。
+ */
+static int gemm_mdim(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 8192);
+    if (v == 0) {
+        int64_t envv = 0;
+        if (sdc_env_knob_int("eigen_gemm_float_dynamic_square", "mdim", &envv))
+            v = (envv < 16) ? 16 : (envv > 8192 ? 8192 : envv);
+    }
+    if (v > 0)
+        return (int)v;
+    return sdc_auto_square_dim(4, 4, 6.0, 850, thread_count(), 16, 8192, test->id, "mdim");
+}
+#define M_DIM gemm_mdim(test)
 
 typedef Matrix < float, Dynamic, Dynamic > Mat;
 
@@ -63,10 +81,11 @@ static int eigen_gemm_float_dynamic_square_run(struct test *test, int cpu) {
                 for (int c = 0; c < m.cols(); ++c)
                     m(r, c) = frandomf_scale(2.0f) - 1.0f;
         };
+    const int dim = gemm_mdim(test);
     Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(M_DIM, M_DIM);
-    l_rhs.resize(M_DIM, M_DIM);
-    l_prod.resize(M_DIM, M_DIM);
+    l_lhs.resize(dim, dim);
+    l_rhs.resize(dim, dim);
+    l_prod.resize(dim, dim);
     fill_rand(l_lhs);
     fill_rand(l_rhs);
     l_prod = l_lhs * l_rhs;
@@ -76,7 +95,7 @@ static int eigen_gemm_float_dynamic_square_run(struct test *test, int cpu) {
         Mat x;
         x = l_lhs * l_rhs;
 
-        memcmp_or_fail(x.data(), l_prod.data(), M_DIM * M_DIM);
+        memcmp_or_fail(x.data(), l_prod.data(), (size_t)dim * (size_t)dim);
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;

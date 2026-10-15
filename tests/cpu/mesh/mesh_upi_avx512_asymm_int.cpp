@@ -24,7 +24,6 @@ struct TestData {
     std::atomic<uint32_t> thread_idx;    // 线程 ID 分配器
     std::atomic<uint32_t> reset_lock;    // 重置互斥锁
     std::atomic<uint32_t> readers_done;  // 已完成校验的读核心数
-    uint32_t total_readers;              // 总读核心数（系统 CPU 数 - 1）
 };
 
 static int mesh_upi_avx512_asymm_int_init(struct test *test) {
@@ -48,7 +47,6 @@ static int mesh_upi_avx512_asymm_int_init(struct test *test) {
     td->thread_idx.store(0, std::memory_order_relaxed);
     td->reset_lock.store(0, std::memory_order_relaxed);
     td->readers_done.store(0, std::memory_order_relaxed);
-    td->total_readers = sysconf(_SC_NPROCESSORS_ONLN) - 1;   // 一个写核心，其余为读核心
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -60,6 +58,7 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
 
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_writer = (id == 0);
+    uint32_t total_readers = thread_count() - 1;   // 一个写核心，其余为读核心
 
     /* randomization hardening H14' (P17): framework RNG (per-thread
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
@@ -110,6 +109,13 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
                 td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
                 td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
             }
+            /* 等待读核心完成本轮读取并重置 next_block，避免 32 位
+             * next_block 被越界 fetch_add 回绕后覆盖读核心正在读取的数据，
+             * 造成 sum 校验假失败。 */
+            while (td->next_block.load(std::memory_order_seq_cst) != 0 &&
+                   test_time_condition(test)) {
+                __asm__ volatile("yield");
+            }
         } else {
             // 读核心：等待所有块分配完成
             while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
@@ -117,6 +123,11 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
                 __asm__ volatile("yield");
             }
             if (!test_time_condition(test)) break;
+
+            // Sum snapshot BEFORE the read loop (see symm_f64/int): a reader
+            // snapshotting global_sum after the walk races the reset-phase
+            // writer restart and the next iteration's writes.
+            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
 
             // 读取整个数组，计算校验和并进行一致性测试
             uint64_t read_sum = 0;
@@ -153,7 +164,6 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
                 }
             }
 
-            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
             bool sum_ok = (read_sum == expected_sum);
             bool passed = sum_ok && consistent;
 
@@ -183,7 +193,7 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
                                                        std::memory_order_seq_cst,
                                                        std::memory_order_seq_cst)) {
                 // 等待所有读核心完成校验
-                while (td->readers_done.load(std::memory_order_seq_cst) < td->total_readers &&
+                while (td->readers_done.load(std::memory_order_seq_cst) < total_readers &&
                        test_time_condition(test)) {
                     __asm__ volatile("yield");
                 }

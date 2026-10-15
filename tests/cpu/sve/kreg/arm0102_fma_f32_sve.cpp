@@ -24,10 +24,15 @@
  * svcntw() elements (runtime VL) of buffer slack cover the asm full-VL
  * ldr z at the final sub-block (documented deviation from the mask_sve
  * template). Back-to-back str z -> ldr z -> str z amplifier.
+ * The element count (originally ARM0102_FMA_F32_SVE_COUNT=1024) is
+ * runtime configurable via -O arm0102_fma_f32_sve.count=N /
+ * SDC_ARM0102_FMA_F32_SVE_COUNT, with a memory-adaptive default when
+ * unconfigured.
  * @endparblock
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -51,9 +56,26 @@ struct Arm0102FmaF32SveData {
     float *srcB;
     float *srcC;
     float *expected;
+    int count;               /* 运行时元素数 (≤64M, int 足够) */
 };
 
 #if defined(__aarch64__)
+
+/* 元素数 ARM0102_FMA_F32_SVE_COUNT(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O arm0102_fma_f32_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_ARM0102_FMA_F32_SVE_COUNT
+ *   3. 自适应: srcA/srcB/srcC/expected(共享)+每线程 temp/dst, 6×4B,
+ *      占物理内存 60%, clamp [1024, 64M]。pg4 子块/相位/尾部松弛不变。 */
+static size_t arm0102_fma_f32_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, ARM0102_FMA_F32_SVE_COUNT, 64 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("arm0102_fma_f32_sve", "count", &v, ARM0102_FMA_F32_SVE_COUNT, 64 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(4, 6, 1.0, 600, thread_count(),
+                                         ARM0102_FMA_F32_SVE_COUNT, 64 << 20, test->id, "count");
+}
 
 #define FMA_SVE_SUBLANES 4
 
@@ -92,15 +114,17 @@ static int arm0102_fma_f32_sve_init(struct test *test) {
     }
 
     const int slack = svcntw();   /* asm ldr z 尾批松弛, 见文件头注释 */
-    const size_t total = (size_t)(ARM0102_FMA_F32_SVE_COUNT + slack) * sizeof(float);
+    const int count = (int)arm0102_fma_f32_sve_count(test);
+    const size_t total = (size_t)(count + slack) * sizeof(float);
     auto *data = static_cast<Arm0102FmaF32SveData *>(malloc(sizeof(Arm0102FmaF32SveData)));
+    data->count = count;
     data->srcA = static_cast<float *>(aligned_alloc_safe(64, total));
     data->srcB = static_cast<float *>(aligned_alloc_safe(64, total));
     data->srcC = static_cast<float *>(aligned_alloc_safe(64, total));
     data->expected = static_cast<float *>(aligned_alloc_safe(64, total));
 
     /* 逐 lane 缩放随机 (raw bits 会出 NaN/Inf — 原版语义) */
-    for (int i = 0; i < ARM0102_FMA_F32_SVE_COUNT; i++) {
+    for (int i = 0; i < count; i++) {
         data->srcA[i] = frandomf_scale(100.0f);
         data->srcB[i] = frandomf_scale(100.0f);
         data->srcC[i] = frandomf_scale(100.0f);
@@ -111,9 +135,9 @@ static int arm0102_fma_f32_sve_init(struct test *test) {
      * (base 是 svcntw() 倍数、sub 是 4 的倍数), 旋转失效 */
     const int lanes = svcntw();
     svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)FMA_SVE_SUBLANES);
-    for (int base = 0; base < ARM0102_FMA_F32_SVE_COUNT; base += lanes) {
-        const int n = (ARM0102_FMA_F32_SVE_COUNT - base < lanes)
-                          ? ARM0102_FMA_F32_SVE_COUNT - base : lanes;
+    for (int base = 0; base < count; base += lanes) {
+        const int n = (count - base < lanes)
+                          ? count - base : lanes;
         for (int sub = 0; sub < n; sub += FMA_SVE_SUBLANES) {
             const int phase = (base + sub) / FMA_SVE_SUBLANES;
             float av[8], bv[8], cv[8], ov[8];
@@ -144,14 +168,15 @@ static int arm0102_fma_f32_sve_init(struct test *test) {
 static int arm0102_fma_f32_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<Arm0102FmaF32SveData *>(test->data);
+    const int count = data->count;
 
-    float *temp = static_cast<float *>(aligned_alloc_safe(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + svcntw()) * sizeof(float)));
-    float *dst  = static_cast<float *>(aligned_alloc_safe(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + svcntw()) * sizeof(float)));
+    float *temp = static_cast<float *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(float)));
+    float *dst  = static_cast<float *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(float)));
 
     TEST_LOOP(test, 1 << 13) {
-        for (int base = 0; base < ARM0102_FMA_F32_SVE_COUNT; base += svcntw()) {
-            const int n = (ARM0102_FMA_F32_SVE_COUNT - base < svcntw())
-                              ? ARM0102_FMA_F32_SVE_COUNT - base : svcntw();
+        for (int base = 0; base < count; base += svcntw()) {
+            const int n = (count - base < svcntw())
+                              ? count - base : svcntw();
             for (int sub = 0; sub < n; sub += FMA_SVE_SUBLANES) {
                 /* 3 源加载 (a, b, 加数 c): asm 保证的 ldr z */
                 svfloat32_t a = load_vec_sve(data->srcA + base + sub);
@@ -166,12 +191,12 @@ static int arm0102_fma_f32_sve_run(struct test *test, int cpu) {
             }
         }
 
-        if (memcmp(dst, data->expected, (size_t)ARM0102_FMA_F32_SVE_COUNT * sizeof(float)) != 0) {
+        if (memcmp(dst, data->expected, (size_t)count * sizeof(float)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (bit pattern + float) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(ARM0102_FMA_F32_SVE_COUNT); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < (size_t)(count); ++_dump_j) {
                     uint32_t _dump_g, _dump_a;
                     memcpy(&_dump_g, &data->expected[_dump_j], 4);
                     memcpy(&_dump_a, &dst[_dump_j], 4);
@@ -186,7 +211,7 @@ static int arm0102_fma_f32_sve_run(struct test *test, int cpu) {
                     }
                 }
                 log_error("arm0102_fma_f32_sve: total mismatched elements: %zu / %d", _dump_bad,
-                          ARM0102_FMA_F32_SVE_COUNT);
+                          count);
             }
             report_fail_msg("arm0102_fma_f32_sve data miscompare");
         }

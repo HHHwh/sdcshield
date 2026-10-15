@@ -17,6 +17,7 @@
 #if SANDSTONE_SSL_BUILD
 
 #include "sandstone_ssl.h"
+#include "sdc_stress_config.h"
 
 #include <assert.h>
 #include <string.h>
@@ -92,8 +93,14 @@ static void ssl_sha512(sha_elem *target)
     s_EVP_MD_CTX_free(mdctx);
 }
 
+static size_t sha_arena_bytes(struct test *test);
+
 static int ssl_sha_init(struct test* test)
 {
+    /* 预热 knob 缓存: arena_bytes 在 run(worker线程)里经 sdc_knob_int_clamped
+     * 的缓存读取, 必须在 init(主线程)查询一次填充缓存, 否则 debug 构建下
+     * worker 线程查询 knob 触发 abort, 且显式配置会失效。 */
+    (void)sha_arena_bytes(test);
     if (s_EVP_DigestInit_ex && s_EVP_DigestUpdate && s_EVP_DigestFinal_ex && s_EVP_get_digestbyname) {
         const size_t sha_offset = (random64() & 0x1ff) | 1;
         const size_t sha_arena_size = sha_offset + sizeof(sha_test);
@@ -125,17 +132,41 @@ static int ssl_sha_init(struct test* test)
 }
 
 /* Per-thread MB-scale work arena: the elem pair lands at random offsets
- * anywhere inside 4 MiB (was ±512 B), so the digest inputs/outputs touch
- * different cache sets, pages and (with THP) huge-page offsets every
+ * anywhere inside the arena (was fixed 4 MiB), so the digest inputs/outputs
+ * touch different cache sets, pages and (with THP) huge-page offsets every
  * iteration. Each thread re-rolls ITS OWN golden elem every iteration
  * (fresh plaintext + freshly computed digests through the same EVP
  * path), so no shared state is written after init — thread-safe by
- * construction (randomization hardening H7'). */
-#define SHA_WORK_ARENA_SIZE    (4UL << 20)
+ * construction (randomization hardening H7').
+ *
+ * Arena 尺寸 — 统一配置链:
+ *   1. -O openssl_sha.arena_bytes=N / 配置文件同名条目
+ *   2. 环境变量 SDC_OPENSSL_SHA_ARENA_BYTES
+ *   3. 自适应: 物理内存 60% 按线程数均摊, clamp [1MiB, 4GiB]。
+ * arena 越大, golden/our elem 随机落点跨度越大, 覆盖越多 cache set /
+ * 页 / THP 偏移。历史硬编码 4MiB。 */
+static size_t sha_arena_bytes(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "arena_bytes", 0,
+                                     1 << 20, 4ll << 30);
+    if (v == 0)
+        sdc_env_knob_int_clamped("openssl_sha", "arena_bytes", &v, 1 << 20, 4ll << 30);
+    if (v > 0)
+        return (size_t)v;
+    int nthreads = thread_count();
+    if (nthreads < 1)
+        nthreads = 1;
+    uint64_t per = sdc_phys_mem_bytes() / 1000 * 600 / (uint64_t)nthreads;
+    if (per < (1u << 20))
+        per = 1u << 20;
+    if (per > (4ull << 30))
+        per = 4ull << 30;
+    return (size_t)per;
+}
 
 static int ssl_sha_run(struct test* test, int cpu)
 {
-    const size_t our_arena_size = SHA_WORK_ARENA_SIZE;
+    const size_t our_arena_size = sha_arena_bytes(test);
     uint8_t *our_arena = (uint8_t *) mmap(NULL, our_arena_size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
     if (our_arena == MAP_FAILED) {
         log_skip(TestResourceIssueSkipCategory, "ssl_sha: work-arena mmap failed");

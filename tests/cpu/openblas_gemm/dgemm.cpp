@@ -17,14 +17,20 @@
  * init-time finiteness canary): copy->compute->verify, the most frequent
  * CORE179 trigger structure. A third scheduling sample beside Eigen/ACL
  * GEMM.
- * The matrix dimension is runtime-configurable via the test knob
- * "-O openblas_dgemm.mdim=N" (16..4096, default 256; the test-id
- * prefix is required — a bare "mdim=N" is silently ignored), sweeping
- * the working set across L1D (64KB) / L2 (512KB) / LLC / DRAM /
- * remote-NUMA on TSV110 (64: 32KB ... 1024: 8MB, 2048: 32MB, 4096:
- * 128MB per matrix) — the CORE179 probes showed the store->reload
- * cache-domain pattern is a triggering discriminator, so each size
- * class exercises different forwarding paths.
+ * The matrix dimension is runtime-configurable through the unified
+ * stress-config chain (priority order): "-O openblas_dgemm.mdim=N" or
+ * a config-file entry (16..16384; out-of-range values warn and clamp
+ * instead of failing; the test-id prefix is required — a bare
+ * "mdim=N" is silently ignored), the SDC_OPENBLAS_DGEMM_MDIM
+ * environment variable, or a memory-adaptive default when neither is
+ * set (6 double matrices per thread — 3 shared (a/b/golden) + 3
+ * per-thread scratch (a_copy/b_copy/c) — at a 6.0x (eigen-GEMM) RSS ratio and 85%
+ * of physical memory, clamped to 128..8192; explicit knob range 16..16384). It sweeps the working
+ * set across L1D (64KB) / L2 (512KB) / LLC / DRAM / remote-NUMA on
+ * TSV110 (64: 32KB ... 1024: 8MB, 2048: 32MB, 4096: 128MB per
+ * matrix) — the CORE179 probes showed the store->reload cache-domain
+ * pattern is a triggering discriminator, so each size class exercises
+ * different forwarding paths.
  * Two further runtime knobs (same test-id prefix rule) sweep orthogonal
  * axes of the kernel beside the working-set size: "-O
  * openblas_dgemm.transab=0..3" selects the TransA/TransB quadrant
@@ -46,6 +52,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <cblas.h>
 
@@ -54,7 +61,10 @@
 
 namespace {
 struct gemm_test_data {
-    int mdim;             /* matrix dimension, from the -O openblas_dgemm.mdim=N knob */
+    int mdim;             /* matrix dimension, from the unified config chain (-O
+                             openblas_dgemm.mdim / config file /
+                             SDC_OPENBLAS_DGEMM_MDIM / memory-adaptive default;
+                             see openblas_dgemm_mdim) */
     int transab;          /* TransA/TransB quadrant from -O openblas_dgemm.transab=0..3
                              (bit1=TransA, bit0=TransB: 0=NN 1=NT 2=TN 3=TT) */
     double beta;          /* beta = beta_permille/1000 from -O openblas_dgemm.beta_permille
@@ -100,22 +110,34 @@ static double random_bounded(void) {
     return sign * (frac * 2.0e-3 + 1.0e-6);
 }
 
+/* 方阵维度 mdim — 统一配置链 (旧式 get_testspecific_knob_value_int + 越界
+ * 致命 report_fail_msg 的迁移版, knob 名不变):
+ *   1. -O openblas_dgemm.mdim=N / 配置文件同名条目 (16..16384, 越界
+ *      告警并 clamp — 旧版致命失败改为非致命)
+ *   2. 环境变量 SDC_OPENBLAS_DGEMM_MDIM
+ *   3. 自适应默认: 全局 a/b/golden 3 个 + 每线程 a_copy/b_copy/c 3 个
+ *      = 6 个 double 方阵/线程, RSS 峰值 ≈ 矩阵体积 6.0 倍(与 eigen GEMM 同模型), 合计占
+ *      物理内存 85%, clamp [128, 8192] (显式配置范围 16..16384 兼容旧范围,
+ *      自适应下限 128 免得默认工作集缩进 L1)。 */
+static int openblas_dgemm_mdim(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 16384);
+    if (v == 0)
+        sdc_env_knob_int_clamped("openblas_dgemm", "mdim", &v, 16, 16384);
+    if (v > 0)
+        return (int)v;
+    return sdc_auto_square_dim(8, 6, 6.0, 850, thread_count(), 128, 8192, test->id, "mdim");
+}
+
 static int openblas_dgemm_init(struct test *test) {
     auto d = new(gemm_test_data);
     test->data = d;
-    int64_t knob = get_testspecific_knob_value_int(test, "mdim", 256);
-    if (knob < 16 || knob > 4096) {
-        report_fail_msg("mdim knob out of range: %ld (valid 16..4096, default 256)", (long)knob);
-    }
-    d->mdim = (int)knob;
-    int64_t transab = get_testspecific_knob_value_int(test, "transab", 0);
-    if (transab < 0 || transab > 3) {
-        report_fail_msg("transab knob out of range: %ld (valid 0..3: 0=NN 1=NT 2=TN 3=TT, default 0)", (long)transab);
-    }
-    int64_t beta_pm = get_testspecific_knob_value_int(test, "beta_permille", 0);
-    if (beta_pm < 0 || beta_pm > 1000000) {
-        report_fail_msg("beta_permille knob out of range: %ld (valid 0..1000000, default 0; beta=permille/1000)", (long)beta_pm);
-    }
+    d->mdim = openblas_dgemm_mdim(test);
+    /* transab / beta_permille: same knob namespace, migrated to the clamped
+     * reader — out-of-range values now warn and clamp instead of failing
+     * fatally (defaults unchanged: 0 = NN, beta 0.0) */
+    int64_t transab = sdc_knob_int_clamped(test, "transab", 0, 0, 3);
+    int64_t beta_pm = sdc_knob_int_clamped(test, "beta_permille", 0, 0, 1000000);
     d->transab = (int)transab;
     d->beta    = (double)beta_pm / 1000.0;
     size_t n2 = (size_t)d->mdim * (size_t)d->mdim;

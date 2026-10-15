@@ -57,6 +57,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -79,9 +80,41 @@
 
 #define MOVBE_L1D_SVE_BUFFER_SIZE (1 << 14)
 
+/* 元素数 count (u32 元素) — 运行时可配置, 统一优先级链 (init 由
+ * movbe_l1d_sve / movbe_l2_sve 两测试共享, 经 test->id 各自独立):
+ *   1. -O movbe_l1d_sve.count=N / movbe_l2_sve.count=N (或配置文件同名条目)
+ *   2. 环境变量 SDC_MOVBE_L1D_SVE_COUNT / SDC_MOVBE_L2_SVE_COUNT
+ *   3. 设计默认 1<<14 (16384 元素 = 64KB/缓冲)
+ * （core179 诊断探针: 未配置时默认 = 原硬编码设计几何, 不做内存
+ *   自适应 — 缓冲几何本身是激发参数; 显式配置 clamp 到
+ *   [1<<14, 1<<22]。非 16 的倍数 log_warning + 向下取整, 保持 u32
+ *   缓冲字节数的 64B cache-line 对齐。） */
+static size_t movbe_l1d_sve_count(struct test *test)
+{
+    const int64_t dflt = MOVBE_L1D_SVE_BUFFER_SIZE;
+    const int64_t hi = 1ll << 22;
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, dflt, hi);
+    if (v == 0 && sdc_env_knob_int(test->id, "count", &v)
+        && (v < dflt || v > hi)) {
+        int64_t c = (v < dflt) ? dflt : hi;
+        log_warning("%s: count=%ld 越界 (有效 %ld..%ld), 已 clamp 为 %ld",
+                    test->id, (long)v, (long)dflt, (long)hi, (long)c);
+        v = c;
+    }
+    if (v <= 0)
+        v = dflt;
+    if (v % 16 != 0) {
+        log_warning("%s: count=%ld 非 16 的倍数, 向下取整为 %ld (保持 64B 缓冲对齐)",
+                    test->id, (long)v, (long)(v - v % 16));
+        v -= v % 16;
+    }
+    return (size_t)v;
+}
+
 struct MovbeL1dL2SveData {
     uint32_t *input;
     uint32_t *swapped;
+    size_t count;
 };
 
 static int movbe_l1d_sve_init(struct test *test)
@@ -95,10 +128,11 @@ static int movbe_l1d_sve_init(struct test *test)
     }
 #endif
     auto *data = static_cast<MovbeL1dL2SveData *>(malloc(sizeof(MovbeL1dL2SveData)));
-    data->input = static_cast<uint32_t *>(aligned_alloc_safe(64, MOVBE_L1D_SVE_BUFFER_SIZE * sizeof(uint32_t)));
-    data->swapped = static_cast<uint32_t *>(aligned_alloc_safe(64, MOVBE_L1D_SVE_BUFFER_SIZE * sizeof(uint32_t)));
+    data->count = movbe_l1d_sve_count(test);
+    data->input = static_cast<uint32_t *>(aligned_alloc_safe(64, data->count * sizeof(uint32_t)));
+    data->swapped = static_cast<uint32_t *>(aligned_alloc_safe(64, data->count * sizeof(uint32_t)));
 
-    for (size_t i = 0; i < MOVBE_L1D_SVE_BUFFER_SIZE; ++i) {
+    for (size_t i = 0; i < data->count; ++i) {
         data->input[i] = random32();
     }
 
@@ -190,9 +224,9 @@ template<int evict> static int movbe_l1d_sve_run_impl(struct test *test, int cpu
     uint8_t round_bytes[SVE_MAX_VECTOR_BYTES];
 
     TEST_LOOP(test, 1 << 13) {
-        for (size_t base = 0; base < MOVBE_L1D_SVE_BUFFER_SIZE; base += lanes) {
-            int n = (MOVBE_L1D_SVE_BUFFER_SIZE - base < (size_t)lanes)
-                        ? (int)(MOVBE_L1D_SVE_BUFFER_SIZE - base) : lanes;
+        for (size_t base = 0; base < data->count; base += lanes) {
+            int n = (data->count - base < (size_t)lanes)
+                        ? (int)(data->count - base) : lanes;
             svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)(n * 4));
 
             /* 加载 1 (堆直读) + REV 1 + 堆 store 到 swapped */

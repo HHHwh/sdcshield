@@ -18,7 +18,7 @@ struct TestData {
     alignas(16) int32_t *data;            // 16 字节对齐即可
     std::atomic<uint32_t> next_block;
     std::atomic<uint64_t> global_sum;
-    std::atomic<uint32_t> allocated_blocks;
+    std::atomic<uint32_t> write_done;      // 已完成写入并提交校验和的块数
     std::atomic<uint32_t> thread_idx;
     std::atomic<uint32_t> reset_lock;
 };
@@ -40,7 +40,7 @@ static int mesh_upi_avx2_asymm_write_int_init(struct test *test) {
 
     td->next_block.store(0, std::memory_order_relaxed);
     td->global_sum.store(0, std::memory_order_relaxed);
-    td->allocated_blocks.store(0, std::memory_order_relaxed);
+    td->write_done.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
     td->reset_lock.store(0, std::memory_order_relaxed);
     test->data = td;
@@ -66,39 +66,33 @@ static int mesh_upi_avx2_asymm_write_int_run(struct test *test, int cpu) {
     do {
         if (!is_reader) {
             // 写核心：竞争分配块并写入
-            while (test_time_condition(test)) {
+            while (true) {
                 uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
-                if (block < NUM_BLOCKS) {
-                    // 生成随机数据（8个 int32）
-                    int32_t vals[TOTAL_ELEMENTS];
-                    uint64_t local_sum = 0;
-                    for (int j = 0; j < TOTAL_ELEMENTS; ++j) {
-                        vals[j] = dist();
-                        local_sum += (uint64_t)vals[j];
-                    }
-                    // 分两个 NEON 向量存储
-                    int32x4_t v0 = vld1q_s32(vals);
-                    int32x4_t v1 = vld1q_s32(vals + 4);
-                    vst1q_s32(td->data, v0);
-                    vst1q_s32(td->data + 4, v1);
-                    __sync_synchronize();   // 确保数据对其它核心可见
+                if (block >= NUM_BLOCKS) break;
 
-                    td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
-                    td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
-                } else {
-                    /* 没有可用块，等待读核心重置（allocated_blocks 变为 0）。
-                     * ttc 预算检查按 1024 自旋一档节流：test_time_condition()
-                     * 每次调用都消耗 auto-fracture 的 inner_loop_count 预算
-                     * （默认 40），每自旋一次就检查会把预算在微秒级烧光。 */
-                    uint32_t spin = 0;
-                    while (td->allocated_blocks.load(std::memory_order_seq_cst) > 0) {
-                        if ((++spin & 1023u) == 0) {
-                            if (!test_time_condition(test)) goto out_of_budget;
-                        } else {
-                            __asm__ volatile("yield");
-                        }
-                    }
+                // 生成随机数据（8个 int32）
+                int32_t vals[TOTAL_ELEMENTS];
+                uint64_t local_sum = 0;
+                for (int j = 0; j < TOTAL_ELEMENTS; ++j) {
+                    vals[j] = dist();
+                    local_sum += (uint64_t)vals[j];
                 }
+                // 分两个 NEON 向量存储
+                int32x4_t v0 = vld1q_s32(vals);
+                int32x4_t v1 = vld1q_s32(vals + 4);
+                vst1q_s32(td->data, v0);
+                vst1q_s32(td->data + 4, v1);
+                __sync_synchronize();   // 确保数据对其它核心可见
+
+                td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
+                td->write_done.fetch_add(1, std::memory_order_seq_cst);
+            }
+            /* 等待读核心完成本轮读取并重置 next_block。若不等待，写核心会在
+             * 读核心读取期间越界重入 next_block.fetch_add，使 32 位 next_block
+             * 回绕后覆盖读核心正在读取的数据，造成 sum 校验假失败。 */
+            while (td->next_block.load(std::memory_order_seq_cst) != 0 &&
+                   test_time_condition(test)) {
+                __asm__ volatile("yield");
             }
         } else {
             // 读核心：等待数据就绪，校验，并重置
@@ -122,7 +116,7 @@ static int mesh_upi_avx2_asymm_write_int_run(struct test *test, int cpu) {
                  * 面向微秒级等待（其写者是先进入的线程，数据早已
                  * 就绪），本文件角色相反，读者的首次等待是毫秒级。 */
                 uint32_t spin = 0;
-                while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
+                while (td->write_done.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
                     if ((++spin & 131071u) == 0) {
                         if (!test_time_condition(test)) goto out_of_budget;
                     } else {
@@ -131,6 +125,12 @@ static int mesh_upi_avx2_asymm_write_int_run(struct test *test, int cpu) {
                 }
 
                 // 读取数据（两个向量）
+                // Sum snapshot BEFORE the read (TOCTOU fix): a fast thread
+                // can finish its read, run the reset phase and start writing
+                // the NEXT iteration while this thread is still walking the
+                // buffer. Sampling global_sum after the read would race that
+                // reset/next-write and produce a false mismatch.
+                uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
                 int32x4_t v0 = vld1q_s32(td->data);
                 int32x4_t v1 = vld1q_s32(td->data + 4);
                 int32_t vals[TOTAL_ELEMENTS];
@@ -141,7 +141,6 @@ static int mesh_upi_avx2_asymm_write_int_run(struct test *test, int cpu) {
                     read_sum += (uint64_t)vals[j];
                 }
 
-                uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
                 bool passed = (read_sum == expected_sum);
 
                 if (!passed) {
@@ -164,15 +163,17 @@ static int mesh_upi_avx2_asymm_write_int_run(struct test *test, int cpu) {
                 if (td->reset_lock.compare_exchange_strong(expected_lock, 1,
                                                            std::memory_order_seq_cst,
                                                            std::memory_order_seq_cst)) {
+                    // next_block 必须最后归零，作为写核心重新入场的释放栅栏；
+                    // 否则写核心会在 write_done 归零前重入，造成计数丢失。
                     td->global_sum.store(0, std::memory_order_seq_cst);
+                    td->write_done.store(0, std::memory_order_seq_cst);
                     td->next_block.store(0, std::memory_order_seq_cst);
-                    td->allocated_blocks.store(0, std::memory_order_seq_cst);
                     td->reset_lock.store(0, std::memory_order_seq_cst);
                 } else {
                     /* 未获得锁，等待重置完成（同样按 1024 自旋一档节流
                      * ttc 预算检查）。 */
                     uint32_t spin = 0;
-                    while (td->allocated_blocks.load(std::memory_order_seq_cst) > 0) {
+                    while (td->write_done.load(std::memory_order_seq_cst) > 0) {
                         if ((++spin & 1023u) == 0) {
                             if (!test_time_condition(test)) goto out_of_budget;
                         } else {

@@ -27,18 +27,31 @@
  */
 
 #include "eigen_svd/sandstone_eigen_common.h"
+#include "sdc_stress_config.h"
 
 using namespace Eigen;
 
 typedef Matrix < std::complex <double >, Dynamic, Dynamic > Mat;
 typedef Eigen::JacobiSVD < Mat > SVD;
 
-#define M_DIM 128
+/* 运行时维度模式, 统一配置链。历史硬编码 128。 */
+using eigen_svd_jacobi_cdouble_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
-using eigen_svd_jacobi_cdouble_test = EigenSVDTest<SVD, M_DIM>;
+static int eigen_svd_jacobi_cdouble_init(struct test *test)
+{
+    auto d = new eigen_svd_jacobi_cdouble_test::eigen_test_data;
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
+    if (v == 0)
+        sdc_env_knob_int_clamped("eigen_svd_jacobi_cdouble", "mdim", &v, 64, 2048);
+    d->dim = (v > 0) ? (int)v
+                     : sdc_auto_square_dim(16, 6, 8.0, 650, thread_count(), 64, 2048, test->id, "mdim");
+    test->data = d;
+    return EXIT_SUCCESS;
+}
+
 DECLARE_TEST(eigen_svd_jacobi_cdouble, "Eigen SVD (Singular Value Decomposition, Jacobi algorithm) solving payload, which issues a bunch of matrix multiplies underneath, now operating on std::complex<double>")
   .groups = DECLARE_TEST_GROUPS(&group_math),
-  .test_init = eigen_svd_jacobi_cdouble_test::init,
+  .test_init = eigen_svd_jacobi_cdouble_init,
   .test_run = eigen_svd_jacobi_cdouble_test::run,
   .test_cleanup = eigen_svd_jacobi_cdouble_test::cleanup,
   .quality_level = TEST_QUALITY_SKIP,

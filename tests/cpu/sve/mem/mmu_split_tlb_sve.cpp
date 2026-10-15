@@ -51,6 +51,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cinttypes>
 #include <cstring>
@@ -73,10 +74,6 @@
 // (the aliasing/coherency surface only manifests with >=2 concurrent
 // translations of the same frame).
 static constexpr int NUM_ALIASES = 8;
-// Number of pages in the large-ASID pressure sweep. 8192 pages = 32 MB,
-// ~128x a typical aarch64 DTLB (48-64 entries), so every stride pass evicts
-// resident entries and replays the page-table walker.
-static constexpr size_t PRESSURE_PAGES = 8192;
 
 // High-Hamming golden table (same construction as mmu_stress_arm / operand
 // space: successive entries maximise toggling in the data-path gates).
@@ -90,6 +87,34 @@ static const uint64_t GOLDEN_TABLE[] = {
 };
 static constexpr size_t GOLDEN_TABLE_SIZE =
     sizeof(GOLDEN_TABLE) / sizeof(GOLDEN_TABLE[0]);
+
+#if defined(__aarch64__)
+struct MmuSplitTlbSveData {
+    size_t pressure_pages;   /* 每线程 TLB 压力扫描页数(init 定容, 线程共享) */
+};
+
+/* 压力扫描页数(原 8192 页 = 4K 页 × 32MB/线程跨度) — 统一优先级链:
+ *   1. -O mmu_split_tlb_sve.pressure_pages=N / 配置文件同名条目
+ *   2. 环境变量 SDC_MMU_SPLIT_TLB_SVE_PRESSURE_PAGES
+ *   3. 自适应: 每线程一个 pressure_pages 页的私有 mmap 压力跨度,
+ *      页数 = 60% 物理内存(2 个大内存消费者均摊) / (线程数 × 4KB),
+ *      除后 clamp [8192, 1M]。NUM_ALIASES / GOLDEN_TABLE 不动。 */
+static size_t mmu_split_tlb_sve_pressure_pages(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "pressure_pages", 0, 8192, 1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("mmu_split_tlb_sve", "pressure_pages", &v, 8192, 1 << 20);
+    if (v > 0)
+        return (size_t)v;
+    uint64_t budget = sdc_target_workset_bytes(600, 2, nullptr);
+    int64_t pages = (int64_t)(budget / ((uint64_t)thread_count() * 4096));
+    if (pages < 8192)
+        pages = 8192;
+    if (pages > (1 << 20))
+        pages = 1 << 20;
+    return (size_t)pages;
+}
+#endif
 
 #if defined(__aarch64__)
 // ARM64 inline-asm 64-bit load/store — keeps the access type visible to the
@@ -134,8 +159,6 @@ static inline uint64_t mmu_load64(const void *addr)
     return v;
 }
 static inline void mmu_store128_sve(void *addr, uint64_t lo, uint64_t hi)
-{ uint64_t p[2] = {lo, hi}; svbool_t pg = svwhilelt_b64(0, 2);
-  svst1_u64(pg, (uint64_t *)addr, svld1_u64(pg, p)); }
 {
     uint64_t pair[2] = {lo, hi};
     std::memcpy(addr, pair, sizeof(pair));
@@ -163,6 +186,11 @@ static int mmu_split_tlb_sve_init(struct test *test)
                  "to be implemented (placeholder): ARM SVE required for mmu_split_tlb_sve");
         return EXIT_SKIP;
     }
+    auto *data = static_cast<MmuSplitTlbSveData *>(malloc(sizeof(MmuSplitTlbSveData)));
+    if (!data)
+        return EXIT_FAILURE;
+    data->pressure_pages = mmu_split_tlb_sve_pressure_pages(test);
+    test->data = data;
 #endif
     (void)test;
     return EXIT_SUCCESS;
@@ -200,7 +228,8 @@ static int make_aliased_page(void *out[NUM_ALIASES], int *out_fd, size_t page_si
 static int mmu_split_tlb_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
-    (void)test;
+    auto *data = static_cast<MmuSplitTlbSveData *>(test->data);
+    const size_t pressure_pages = data->pressure_pages;
 
     long ps = sysconf(_SC_PAGESIZE);
     if (ps <= 0) ps = 4096;
@@ -217,7 +246,7 @@ static int mmu_split_tlb_sve_run(struct test *test, int cpu)
 
     // Large-ASID pressure region: per-thread private so no cross-thread
     // madvise races (mirrors mmu_stress_arm's lesson).
-    size_t pressure_size = PRESSURE_PAGES * page_size;
+    size_t pressure_size = pressure_pages * page_size;
     uint8_t *pressure = static_cast<uint8_t *>(
         mmap(nullptr, pressure_size, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
@@ -331,15 +360,15 @@ static int mmu_split_tlb_sve_run(struct test *test, int cpu)
         }
 
         // ---- (4) Large-ASID TLB pressure sweep. Touch one cache line per
-        // page across the whole 8192-page region; the working set far exceeds
+        // page across the whole pressure region; the working set far exceeds
         // DTLB capacity, so every access evicts a resident entry and replays
         // the page-table walker — real PTW torture, run under alias pressure.
-        for (size_t p = 0; p < PRESSURE_PAGES; ++p) {
+        for (size_t p = 0; p < pressure_pages; ++p) {
             uint64_t sv = GOLDEN_TABLE[p % GOLDEN_TABLE_SIZE]
                           ^ (p * 0x9E3779B97F4A7C15ULL);
             mmu_store64(pressure + p * page_size, sv);
         }
-        for (size_t p = 0; p < PRESSURE_PAGES; ++p) {
+        for (size_t p = 0; p < pressure_pages; ++p) {
             uint64_t sv = GOLDEN_TABLE[p % GOLDEN_TABLE_SIZE]
                           ^ (p * 0x9E3779B97F4A7C15ULL);
             uint64_t srd = mmu_load64(pressure + p * page_size);
@@ -382,7 +411,14 @@ static int mmu_split_tlb_sve_run(struct test *test, int cpu)
 
 static int mmu_split_tlb_sve_finish(struct test *test)
 {
+#if defined(__aarch64__)
+    if (test->data) {
+        free(test->data);
+        test->data = nullptr;
+    }
+#else
     (void)test;
+#endif
     return EXIT_SUCCESS;
 }
 

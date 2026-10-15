@@ -52,6 +52,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cinttypes>
 #include <cstring>
@@ -65,9 +66,40 @@
 #endif
 #include <vector>
 
-static constexpr size_t CHAIN_LEN = 4096;   // pointer-chase steps
-static constexpr size_t ALU_DEPTH = 256;    // dependent ALU chain depth
-static constexpr size_t ROB_DEPTH = 2048;  // long ALU chain to fill the ROB
+static constexpr size_t ALU_DEPTH = 256;    // dependent ALU chain depth (纯寄存器链, 不随内存自适应)
+
+/* 指针追逐链长(原 4096 步, 每线程 16B/节点 × chain_len 的节点阵) — 统一优先级链:
+ *   1. -O ooo_dep_chain_sve.chain_len=N / 配置文件同名条目
+ *   2. 环境变量 SDC_OOO_DEP_CHAIN_SVE_CHAIN_LEN
+ *   3. 自适应: 每线程 1 个 16B/元素线性缓冲, 占物理内存 60%,
+ *      clamp [4096, 16M] (16M × 16B = 256MB/线程)。 */
+static size_t ooo_dep_chain_len(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "chain_len", 0, 4096, 16 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("ooo_dep_chain_sve", "chain_len", &v, 4096, 16 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(16, 1, 1.0, 600, thread_count(),
+                                         4096, 16 << 20, test->id, "chain_len");
+}
+
+/* RW-hazard 槽深(原 2048, 每线程 64B 独立 cache line/槽; 同值复用作长 ALU
+ * 链深度) — 统一优先级链:
+ *   1. -O ooo_dep_chain_sve.rob_depth=N
+ *   2. 环境变量 SDC_OOO_DEP_CHAIN_SVE_ROB_DEPTH
+ *   3. 自适应: 与 chain_len 同一 16B/元素口径, clamp [2048, 4M]
+ *      (hi 按每线程 4M × 64B = 256MB 实际占用收口)。 */
+static size_t ooo_dep_rob_depth(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "rob_depth", 0, 2048, 4 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("ooo_dep_chain_sve", "rob_depth", &v, 2048, 4 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(16, 1, 1.0, 600, thread_count(),
+                                         2048, 4 << 20, test->id, "rob_depth");
+}
 
 #if defined(__aarch64__)
 // Inline-asm load/store/add so the toolchain cannot hoist/CSE the dependent
@@ -88,13 +120,15 @@ static inline void dep_store64(void *a, uint64_t v) { std::memcpy(a,&v,8); }
 #endif
 
 struct OooDepData {
-    // Permutation chain array (CHAIN_LEN entries). chain[i] holds the index
+    size_t chain_len;    // pointer-chase steps (运行时, 从统一配置链解析)
+    size_t rob_depth;    // RW-hazard 槽数 == 长 ALU 链深度 (运行时)
+    // Permutation chain array (chain_len entries). chain[i] holds the index
     // of the next node when visiting node i. The node's *value* is stored in
     // a parallel array `values` so the pointer-chase address depends on data.
-    std::vector<uint64_t> chain;    // CHAIN_LEN entries, each an index 0..CHAIN_LEN-1
-    std::vector<uint64_t> values;   // CHAIN_LEN entries, the data at each node
+    std::vector<uint64_t> chain;    // chain_len entries, each an index 0..chain_len-1
+    std::vector<uint64_t> values;   // chain_len entries, the data at each node
     // The RW-hazard store addresses (distinct cache lines).
-    std::vector<uint64_t> rw_addrs; // ROB_DEPTH entries
+    std::vector<uint64_t> rw_addrs; // rob_depth entries
 };
 
 // Build a pseudo-random permutation of 0..N-1 using a high-Hamming LCG so
@@ -133,7 +167,9 @@ static int ooo_dep_chain_sve_init(struct test *test)
 #endif
     try {
         auto data = std::make_unique<OooDepData>();
-        build_permutation(data->chain, CHAIN_LEN);
+        data->chain_len = ooo_dep_chain_len(test);
+        data->rob_depth = ooo_dep_rob_depth(test);
+        build_permutation(data->chain, data->chain_len);
         // Node values: high-Hamming table indexed by position so the data
         // checksum toggles across the chase.
         static const uint64_t VT[] = {
@@ -142,12 +178,12 @@ static int ooo_dep_chain_sve_init(struct test *test)
             0x0F0F0F0F0F0F0F0FULL, 0xF0F0F0F0F0F0F0F0ULL,
         };
         constexpr size_t VS = sizeof(VT) / sizeof(VT[0]);
-        data->values.resize(CHAIN_LEN);
-        for (size_t i = 0; i < CHAIN_LEN; ++i)
+        data->values.resize(data->chain_len);
+        for (size_t i = 0; i < data->chain_len; ++i)
             data->values[i] = VT[i % VS] ^ (i * 0x9E3779B97F4A7C15ULL);
         // RW-hazard addresses: distinct cache-line-aligned slots.
-        data->rw_addrs.resize(ROB_DEPTH);
-        for (size_t i = 0; i < ROB_DEPTH; ++i)
+        data->rw_addrs.resize(data->rob_depth);
+        for (size_t i = 0; i < data->rob_depth; ++i)
             data->rw_addrs[i] = i * 0x100ULL; // placeholder; run allocates real addrs
         test->data = data.release();
         return EXIT_SUCCESS;
@@ -161,12 +197,12 @@ static int ooo_dep_chain_sve_init(struct test *test)
 #ifdef __aarch64__
 
 // Software reference: walk the permutation chain summing node values (the
-// golden checksum), starting at node 0 for CHAIN_LEN steps.
+// golden checksum), starting at node 0 for d->chain_len steps.
 static uint64_t chain_reference(const OooDepData *d)
 {
     uint64_t acc = 0;
     uint64_t cur = 0; // start at node 0
-    for (size_t step = 0; step < CHAIN_LEN; ++step) {
+    for (size_t step = 0; step < d->chain_len; ++step) {
         acc += d->values[cur];
         cur = d->chain[cur];
     }
@@ -178,7 +214,7 @@ static uint64_t carry_chain_reference(const OooDepData *d)
 {
     uint64_t acc = 1;
     uint64_t cur = 0;
-    for (size_t step = 0; step < CHAIN_LEN; ++step) {
+    for (size_t step = 0; step < d->chain_len; ++step) {
         acc = (acc << 1) + d->values[cur];
         cur = d->chain[cur];
     }
@@ -201,6 +237,8 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *d = static_cast<OooDepData *>(test->data);
+    const size_t chain_len = d->chain_len;
+    const size_t rob_depth = d->rob_depth;
 
     // Per-thread working buffers (no cross-thread sharing).
     // pointer-chase + carry-chain node storage: a flat array of node records,
@@ -208,20 +246,20 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
     // the current index points at. Allocate cache-line-aligned records so
     // node accesses are on distinct lines (maximise LSU traffic).
     struct NodeRec { uint64_t value; uint64_t next; };
-    size_t recbytes = CHAIN_LEN * sizeof(NodeRec);
+    size_t recbytes = chain_len * sizeof(NodeRec);
     NodeRec *nodes = static_cast<NodeRec *>(aligned_alloc_safe(64, recbytes));
     if (!nodes) {
         log_skip(TestResourceIssueSkipCategory,
                  "ooo_dep_chain_sve: node alloc failed");
         return EXIT_SKIP;
     }
-    for (size_t i = 0; i < CHAIN_LEN; ++i) {
+    for (size_t i = 0; i < chain_len; ++i) {
         nodes[i].value = d->values[i];
         nodes[i].next  = d->chain[i];
     }
 
     // RW-hazard slots: distinct cache lines.
-    size_t rwbytes = ROB_DEPTH * 64;
+    size_t rwbytes = rob_depth * 64;
     uint8_t *rwbuf = static_cast<uint8_t *>(aligned_alloc_safe(64, rwbytes));
     if (!rwbuf) {
         free(nodes);
@@ -234,7 +272,7 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
     uint64_t golden_chase = chain_reference(d);
     uint64_t golden_carry = carry_chain_reference(d);
     uint64_t golden_alu_short = alu_chain_reference(0xDEADBEEFCAFEBABEULL, ALU_DEPTH);
-    uint64_t golden_alu_long  = alu_chain_reference(0x0123456789ABCDEFULL, ROB_DEPTH);
+    uint64_t golden_alu_long  = alu_chain_reference(0x0123456789ABCDEFULL, rob_depth);
 
     do {
         bool all_passed = true;
@@ -244,7 +282,7 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
         // A replay/rename fault corrupts the visited set -> wrong checksum.
         uint64_t acc = 0;
         uint64_t cur = 0; // node 0
-        for (size_t step = 0; step < CHAIN_LEN; ++step) {
+        for (size_t step = 0; step < chain_len; ++step) {
             // data-dependent load: the address depends on `cur`, which is the
             // previous load's result.
             NodeRec *p = nodes + cur;
@@ -266,7 +304,7 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
         // the scheduler to reorder ALU and memory across the dependency.
         uint64_t cacc = 1;
         uint64_t ccur = 0;
-        for (size_t step = 0; step < CHAIN_LEN; ++step) {
+        for (size_t step = 0; step < chain_len; ++step) {
             NodeRec *p = nodes + ccur;
             uint64_t val = dep_load64(&p->value);
             uint64_t nxt = dep_load64(&p->next);
@@ -285,8 +323,8 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
         // track the RW hazard across the chain. A rename fault corrupts the
         // read-back. Golden = the stored values summed (deterministic).
         uint64_t rw_acc = 0;
-        for (size_t k = 0; k < ROB_DEPTH; ++k) {
-            uint64_t v = d->values[k % CHAIN_LEN] ^ (k * 0x9E3779B97F4A7C15ULL);
+        for (size_t k = 0; k < rob_depth; ++k) {
+            uint64_t v = d->values[k % chain_len] ^ (k * 0x9E3779B97F4A7C15ULL);
             uint8_t *slot = rwbuf + k * 64;
             dep_store64(slot, v);
             uint64_t rd = dep_load64(slot); // RW read-back (hazard)
@@ -300,8 +338,8 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
         }
         // Golden for rw_acc = sum of the deterministic stored values.
         uint64_t rw_golden = 0;
-        for (size_t k = 0; k < ROB_DEPTH; ++k) {
-            uint64_t v = d->values[k % CHAIN_LEN] ^ (k * 0x9E3779B97F4A7C15ULL);
+        for (size_t k = 0; k < rob_depth; ++k) {
+            uint64_t v = d->values[k % chain_len] ^ (k * 0x9E3779B97F4A7C15ULL);
             rw_golden += v;
         }
         if (rw_acc != rw_golden) {
@@ -313,7 +351,7 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
 
         // ---- (4) Long dependent ALU chain (no memory) — stresses PRF/ROB
         // depth and rename of a serial dependency. Short (ALU_DEPTH) and
-        // long (ROB_DEPTH) variants.
+        // long (rob_depth) variants.
         uint64_t as = 0xDEADBEEFCAFEBABEULL;
         for (size_t i = 0; i < ALU_DEPTH; ++i) {
             as = (as * 0x100000001B3ULL) + 0x9E3779B97F4A7C15ULL;
@@ -327,7 +365,7 @@ static int ooo_dep_chain_sve_run(struct test *test, int cpu)
             all_passed = false;
         }
         uint64_t al = 0x0123456789ABCDEFULL;
-        for (size_t i = 0; i < ROB_DEPTH; ++i) {
+        for (size_t i = 0; i < rob_depth; ++i) {
             al = (al * 0x100000001B3ULL) + 0x9E3779B97F4A7C15ULL;
             al ^= (al >> 23);
             al = (al << 7) | (al >> 57);

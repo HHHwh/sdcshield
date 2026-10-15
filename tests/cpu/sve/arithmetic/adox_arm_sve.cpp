@@ -6,10 +6,14 @@
  * SVE port of adox_arm: ARM64 overflow-carry chain via SVE svadd lanes (replacing GMP; __int128 golden). The carry chain runs with the
  * in-vector additions on SVE lanes (svadd) and the serial carry
  * fold preserved; golden is the __int128 software reference.
+ * The chain length (originally N=1024) is runtime configurable via
+ * -O adox_arm_sve.count=N / SDC_ADOX_ARM_SVE_COUNT, with a
+ * memory-adaptive default when unconfigured.
  * @endparblock
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -96,6 +100,23 @@ static void compute_golden(const uint64_t *lhs, const uint64_t *rhs,
     }
 }
 
+/* 链长 N(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O adox_arm_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_ADOX_ARM_SVE_COUNT
+ *   3. 自适应: lhs/rhs/gold 共享 3 份 + 每线程 result/store_buf 2 份,
+ *      5×8B, rss_ratio 1.0, 占物理内存 60%, clamp [1024, 64M]。
+ *      原 1024 为下限。 */
+static size_t adox_arm_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, 1024, 64 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("adox_arm_sve", "count", &v, 1024, 64 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(8, 5, 1.0, 600, thread_count(),
+                                         1024, 64 << 20, test->id, "count");
+}
+
 
 static int adox_arm_sve_init(struct test *test) {
 #ifdef __aarch64__
@@ -109,7 +130,7 @@ static int adox_arm_sve_init(struct test *test) {
     auto *data = new TestData;
     if (!data) return EXIT_FAILURE;
 
-    constexpr size_t N = 1024;
+    const size_t N = adox_arm_sve_count(test);
     data->num_elems = N;
     data->lhs.resize(N);
     data->rhs.resize(N);

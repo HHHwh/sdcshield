@@ -20,6 +20,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -35,25 +36,30 @@
 #endif
 #endif
 
-#define GEMM_DIM 64
-
+/* GEMM 维度 n (M=N=K) 运行时可配置, 统一优先级链:
+ *   1. -O acl_gemm_sve.dim=N / 配置文件同名条目
+ *   2. 环境变量 SDC_ACL_GEMM_SVE_DIM
+ *   3. 自适应: float 4B/元素, 每线程 A/B/golden 共享 + per-thread C ≈
+ *      4 份矩阵, rss_ratio 2.0 (分配器余量, GEMM 无额外临时大矩阵),
+ *      占物理内存 60%, clamp [64, 4096]。原硬编码 64。 */
 struct acl_gemm_sve_data {
+    int n;                   /* 运行时 GEMM 维度 (M=N=K) */
     std::vector<float> A;
     std::vector<float> B;
     std::vector<float> golden;
 };
 
-static void naive_gemm(const float *A, const float *B, float *C)
+static void naive_gemm(const float *A, const float *B, float *C, int n)
 {
-    for (int i = 0; i < GEMM_DIM; ++i)
-        for (int j = 0; j < GEMM_DIM; ++j) {
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j) {
             float acc = 0.0f;
-            for (int k = 0; k < GEMM_DIM; ++k) {
+            for (int k = 0; k < n; ++k) {
                 /* fmaf: 单次舍入 fused 乘加, 与 SVE svmla(FMLA)舍入序
                  * 一致 -> 有限值输入下位级可比较。 */
-                acc = std::fmaf(A[i * GEMM_DIM + k], B[k * GEMM_DIM + j], acc);
+                acc = std::fmaf(A[(size_t)i * n + k], B[(size_t)k * n + j], acc);
             }
-            C[i * GEMM_DIM + j] = acc;
+            C[(size_t)i * n + j] = acc;
         }
 }
 
@@ -68,9 +74,18 @@ static int acl_gemm_sve_init(struct test *test)
     }
 #endif
     auto *d = new acl_gemm_sve_data;
-    d->A.resize(GEMM_DIM * GEMM_DIM);
-    d->B.resize(GEMM_DIM * GEMM_DIM);
-    d->golden.resize(GEMM_DIM * GEMM_DIM);
+
+    /* 统一配置链解析维度 (见上方注释) */
+    int64_t v = sdc_knob_int_clamped(test, "dim", 0, 64, 4096);
+    if (v == 0)
+        sdc_env_knob_int_clamped("acl_gemm_sve", "dim", &v, 64, 4096);
+    d->n = (v > 0) ? (int)v
+                   : sdc_auto_square_dim(4, 4, 2.0, 600, thread_count(),
+                                         64, 4096, test->id, "dim");
+
+    d->A.resize((size_t)d->n * d->n);
+    d->B.resize((size_t)d->n * d->n);
+    d->golden.resize((size_t)d->n * d->n);
     memset_random(d->A.data(), d->A.size() * sizeof(float));
     memset_random(d->B.data(), d->B.size() * sizeof(float));
     /* memset_random 任意位模式, 每矩阵约 1/256 元素为 NaN/Inf。NaN
@@ -83,7 +98,7 @@ static int acl_gemm_sve_init(struct test *test)
     for (size_t idx = 0; idx < d->B.size(); ++idx)
         if (!std::isfinite(d->B[idx]))
             d->B[idx] = 1.5f;
-    naive_gemm(d->A.data(), d->B.data(), d->golden.data());
+    naive_gemm(d->A.data(), d->B.data(), d->golden.data(), d->n);
     test->data = d;
     return EXIT_SUCCESS;
 }
@@ -93,27 +108,34 @@ static int acl_gemm_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *d = static_cast<acl_gemm_sve_data *>(test->data);
-    std::vector<float> C(GEMM_DIM * GEMM_DIM);
+    const int N = d->n;
+    std::vector<float> C((size_t)N * N);
     const int lanes = svcntw();
-    float brow[64];
+    /* B 行转置缓冲: n 可大于 64, 栈上定长放不下 -> 堆上一次性分配,
+     * run 只调一次, 循环外统一释放。 */
+    float *brow = (float *)aligned_alloc(64, (size_t)N * sizeof(float));
+    if (!brow) {
+        report_fail_msg("acl_gemm_sve: brow alloc failed");
+        return EXIT_FAILURE;
+    }
 
     TEST_LOOP(test, 64) {
         /* SVE GEMM: 每 i 行的累加器向量按 j-lane 展开, K 步进 svmla */
-        for (int i = 0; i < GEMM_DIM; ++i) {
-            for (size_t jbase = 0; jbase < (size_t)GEMM_DIM; jbase += lanes) {
-                int n = (GEMM_DIM - (int)jbase < lanes) ? GEMM_DIM - (int)jbase : lanes;
+        for (int i = 0; i < N; ++i) {
+            for (size_t jbase = 0; jbase < (size_t)N; jbase += lanes) {
+                int n = (N - (int)jbase < lanes) ? N - (int)jbase : lanes;
                 svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)n);
                 svfloat32_t acc = svdup_f32(0.0f);
-                for (int k = 0; k < GEMM_DIM; ++k) {
+                for (int k = 0; k < N; ++k) {
                     /* B 行 k 的 jbase..jbase+n 列 → 向量 (谓词控) */
-                    for (int c = 0; c < n; ++c) brow[c] = d->B[k * GEMM_DIM + jbase + c];
+                    for (int c = 0; c < n; ++c) brow[c] = d->B[(size_t)k * N + jbase + c];
                     svfloat32_t vb = svld1_f32(pg, brow);
                     /* svmla = FMLA fused 乘加(单次舍入), 与 golden 的
                      * fmaf 舍入序一致, 有限值输入下位级一致 */
                     acc = svmla_f32_x(pg, acc,
-                              svdup_f32(d->A[i * GEMM_DIM + k]), vb);
+                              svdup_f32(d->A[(size_t)i * N + k]), vb);
                 }
-                svst1_f32(pg, C.data() + i * GEMM_DIM + jbase, acc);
+                svst1_f32(pg, C.data() + (size_t)i * N + jbase, acc);
             }
         }
         if (memcmp(C.data(), d->golden.data(), C.size() * sizeof(float)) != 0) {
@@ -138,9 +160,11 @@ static int acl_gemm_sve_run(struct test *test, int cpu)
                 log_error("acl_gemm_sve: total mismatched elements: %zu / %d",
                           _dump_bad, (int)C.size());
             }
+            free(brow); /* heap brow: 释放后再 report_fail_msg (noreturn) */
             report_fail_msg("acl_gemm_sve: GEMM output miscompare (SVE svmla path)");
         }
     }
+    free(brow);
     return EXIT_SUCCESS;
 }
 #else

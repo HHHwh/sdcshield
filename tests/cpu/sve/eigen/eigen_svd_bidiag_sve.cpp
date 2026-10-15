@@ -82,6 +82,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -96,14 +97,19 @@
 #endif
 #endif
 
-/* 维度选择: 实测标定 n=128 单次 ~0.92ms (含输入重建),
- * 60s 单线程 ~65000 次迭代——统计深度充足;
- * 矩阵 128KB (n*n*8) 落在 L2 域, 与 eigen SVD 家族的 cache 压力风格相近。 */
-#define M_DIM 128
-
+/* 维度 n 运行时可配置, 统一优先级链:
+ *   1. -O eigen_svd_bidiag_sve.mdim=N / 配置文件同名条目
+ *   2. 环境变量 SDC_EIGEN_SVD_BIDIAG_SVE_MDIM
+ *   3. 自适应: double 8B/元素, 每线程 work 1 份矩阵 + 共享 orig/golden
+ *      均摊 ≈ 3 份矩阵, rss_ratio 2.0 (分配器/TLB 余量, 双对角化本身
+ *      无额外临时矩阵), 占物理内存 65%, clamp [64, 2048]
+ *      (与 eigen SVD 家族 svd_cdouble_noavx512 一致)。
+ * 实测标定 n=128 单次 ~0.92ms (含输入重建), 60s 单线程 ~65000 次迭代。 */
 struct bidiag_data {
     double *orig;     /* init 时的输入矩阵 (回放轮读, 重掷轮不读) */
     double *golden;   /* init 首算的标量参考结果 (回放轮比对) */
+    double *work;     /* 保留字段(未用, run 用 per-thread TLS); 兼容旧结构 */
+    int n;            /* 运行时矩阵维度 */
 };
 
 #ifdef __aarch64__
@@ -113,12 +119,16 @@ struct bidiag_data {
  * 进入 run, 任何 run 内写入的缓冲必须线程私有。惰性分配, cleanup 不
  * 释放: worker 线程先于主线程 cleanup 退出, fork 子进程随后整体回收
  * (dgemm 同款论证)。第二工作副本 work2 供双跑自一致 memcmp (PR #244
- * review): 同输入两跑 DUT, 逐字节一致证明内核在 DUT 核上确定性。 */
+ * review): 同输入两跑 DUT, 逐字节一致证明内核在 DUT 核上确定性。
+ * l_hv/l_hw 是 Householder 向量缓冲 (各 n 个 double, 大维度栈放不下,
+ * 改 TLS 堆分配 —— 改造侧 per-thread 堆缓冲思路并入本惰性分配)。 */
 static thread_local double *l_orig = nullptr;
 static thread_local double *l_golden = nullptr;
 static thread_local double *work = nullptr;
 static thread_local double *work2 = nullptr;
 static thread_local uint64_t *l_gofs = nullptr; /* 列 gather/scatter 偏移表 */
+static thread_local double *l_hv = nullptr;     /* Householder 向量 v */
+static thread_local double *l_hw = nullptr;     /* Householder 向量 w */
 
 /* 独立标量参考 (B1-015 修复核心): 逐元素标量 Golub-Kahan 双对角化,
  * 与 SVE 内核同算法不同实现 (fixed +sqrt 定号 + 显式消元写回),
@@ -127,7 +137,10 @@ static thread_local uint64_t *l_gofs = nullptr; /* 列 gather/scatter 偏移表 
  * ~4e-14 * ||B||_F; off-bidiagonal 残差 0; ||B||_F/||A||_F = 1。 */
 static void bidiagonalize_ref(double *A, int n)
 {
-    double v[M_DIM], w[M_DIM];
+    /* Householder 缓冲由调用方提供 (n 可达 2048, 栈放不下);
+     * 独立标量参考是 golden 的唯一来源 (见上方注释)。 */
+    double *v = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
+    double *w = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
     for (int k = 0; k + 1 < n; ++k) {
         /* 左 Householder: 消去列 k 对角线下元素 */
         double norm2 = 0.0;
@@ -188,6 +201,8 @@ static void bidiagonalize_ref(double *A, int n)
         for (int j = k + 2; j < n; ++j)
             A[k * n + j] = 0.0;
     }
+    free(v);
+    free(w);
 }
 
 /* Golub-Kahan Householder 双对角化 (SVE 向量化内层, DUT)。
@@ -196,16 +211,16 @@ static void bidiagonalize_ref(double *A, int n)
  * 显式写回 alpha/0 (原先从不写回, 输出根本不是双对角阵, 残差 ~2.3
  * 散布在任意位置), 同时成为强 SDC 探测位; (3) 循环界 k+1<n 补上最后
  * 一个左反射器, 右反射器仅在 k+2<n 时执行; (4) alpha 定号 +sqrt,
- * 消除近零跨越分支。栈上 v/w: static 局部数组全线程共享会互踩。
+ * 消除近零跨越分支。
  * PR #244 review 修复 (greptile/coderabbit): 左更新的归约与 FMA 两个
  * 循环原先用连续 svld1_f64(A + base*n + j) 读"列", 实际读到的是行
  * base 的列 j..j+VL-1 —— 数学上需要的是列 j 的行 base..base+VL-1
  * (步长 n), 任何 VL 的真 SVE 硬件上都会误报失败 (此前的自比 golden
- * 与 VL=8 仿真都掩盖了它)。现在用 gather/scatter (步长 n 偏移表)。 */
-static void bidiagonalize_sve(double *A, int n)
+ * 与 VL=8 仿真都掩盖了它)。现在用 gather/scatter (步长 n 偏移表)。
+ * v/w 是 Householder 向量缓冲——必须线程私有, 大维度下栈放不下,
+ * 改由调用方提供 per-thread 堆缓冲 (各 n 个 double)。 */
+static void bidiagonalize_sve(double *A, int n, double *v, double *w)
 {
-    double v[M_DIM], w[M_DIM];
-
     for (int k = 0; k + 1 < n; ++k) {
         /* ---- 左 Householder: 消去列 k 的对角线下元素 ---- */
         double norm2 = 0.0;
@@ -357,7 +372,16 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
     if (!d)
         return EXIT_FAILURE;
 
-    size_t bytes = (size_t)M_DIM * M_DIM * sizeof(double);
+    /* 统一配置链解析维度 (见文件头注释) */
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
+    if (v == 0)
+        sdc_env_knob_int_clamped("eigen_svd_bidiag_sve", "mdim", &v, 64, 2048);
+    d->n = (v > 0) ? (int)v
+                   : sdc_auto_square_dim(8, 3, 2.0, 650, thread_count(),
+                                         64, 2048, test->id, "mdim");
+    d->work = nullptr;   /* 保留字段, run 用 per-thread TLS 缓冲 */
+
+    size_t bytes = (size_t)d->n * d->n * sizeof(double);
     d->orig   = (double *)aligned_alloc(64, bytes);
     d->golden = (double *)aligned_alloc(64, bytes);
     if (!d->orig || !d->golden) {
@@ -372,11 +396,11 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
      * 一次 —— 跨核参考, 持续性 (mercurial 型) 单核缺陷无法同时污染
      * init 核与 worker 核。随机输入经 Householder 正交变换范数守恒
      * (||B||_F = ||A||_F ~ 74), 远离 NaN/Inf。 */
-    for (int i = 0; i < M_DIM * M_DIM; ++i)
+    for (int i = 0; i < d->n * d->n; ++i)
         d->orig[i] = random_pm_one();
     memcpy(d->golden, d->orig, bytes);
-    bidiagonalize_ref(d->golden, M_DIM);
-    for (int i = 0; i < M_DIM * M_DIM; ++i) {
+    bidiagonalize_ref(d->golden, d->n);
+    for (int i = 0; i < d->n * d->n; ++i) {
         double g = d->golden[i];
         if (g != g || g > 1.0e300 || g < -1.0e300) {
             report_fail_msg("golden bidiagonalization not finite at "
@@ -393,7 +417,8 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *d = static_cast<bidiag_data *>(test->data);
-    size_t bytes = (size_t)M_DIM * M_DIM * sizeof(double);
+    const int n = d->n;
+    size_t bytes = (size_t)n * n * sizeof(double);
     long iter = 0;
 
     /* B6 (R2b 冻结盲区): 本线程的输入每 kRerollEvery 轮从框架 RNG
@@ -414,13 +439,17 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
     int since_reroll = kRerollEvery; /* 首轮强制重掷 */
 
     TEST_LOOP(test, 1) {
-        if (__builtin_expect(!l_orig || !l_golden || !work || !work2 || !l_gofs, 0)) {
+        if (__builtin_expect(!l_orig || !l_golden || !work || !work2 || !l_gofs || !l_hv || !l_hw, 0)) {
             l_orig   = (double *)aligned_alloc(64, bytes);
             l_golden = (double *)aligned_alloc(64, bytes);
             work     = (double *)aligned_alloc(64, bytes);
             work2    = (double *)aligned_alloc(64, bytes);
             l_gofs   = (uint64_t *)aligned_alloc(64, svcntd() * sizeof(uint64_t));
-            if (!l_orig || !l_golden || !work || !work2 || !l_gofs)
+            /* Householder 向量缓冲 hv/hw: 线程私有, 各 n 个 double
+             * (大维度栈放不下, 由本 TLS 分配; 见 bidiagonalize_sve 签名)。 */
+            l_hv     = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
+            l_hw     = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
+            if (!l_orig || !l_golden || !work || !work2 || !l_gofs || !l_hv || !l_hw)
                 report_fail_msg("eigen_svd_bidiag_sve: per-thread scratch "
                                 "alloc failed (%zu bytes)", bytes * 4);
             /* 列 gather/scatter 偏移表: lane l -> 字节偏移 l*n*8。
@@ -428,7 +457,7 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
              * ld1d 无 lsl 缩放 —— gem5 VL=512 仿真实证: 元素单位表在
              * 所有 VL 发散, 字节单位表 MAXDIFF ~1e-13 全绿)。 */
             for (uint64_t l = 0; l < svcntd(); ++l)
-                l_gofs[l] = l * (uint64_t)M_DIM * sizeof(double);
+                l_gofs[l] = l * (uint64_t)n * sizeof(double);
         }
 
         if (iter & 1) {
@@ -436,22 +465,22 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
              * 重掷状态原样保留), DUT 输出与 init 线程 (另一核) 算好的
              * golden 比对 —— 跨核 byte-tolerant 参考 */
             memcpy(work, d->orig, bytes);
-            bidiagonalize_sve(work, M_DIM);
+            bidiagonalize_sve(work, n, l_hv, l_hw);
             ++iter;
-            bidiag_compare_or_fail(work, d->golden, M_DIM, iter);
+            bidiag_compare_or_fail(work, d->golden, n, iter);
         } else {
             if (++since_reroll >= kRerollEvery) {
                 since_reroll = 0;
-                for (int i = 0; i < M_DIM * M_DIM; ++i)
+                for (int i = 0; i < n * n; ++i)
                     l_orig[i] = random_pm_one();
                 memcpy(l_golden, l_orig, bytes);
-                bidiagonalize_ref(l_golden, M_DIM);
+                bidiagonalize_ref(l_golden, n);
             }
 
             memcpy(work, l_orig, bytes);
-            bidiagonalize_sve(work, M_DIM);
+            bidiagonalize_sve(work, n, l_hv, l_hw);
             ++iter;
-            bidiag_compare_or_fail(work, l_golden, M_DIM, iter);
+            bidiag_compare_or_fail(work, l_golden, n, iter);
 
             /* 双跑自一致 (PR #244 review, greptile "逐字节可重复检查"):
              * 同输入第二跑 DUT, 逐字节 memcmp —— 独立标量参考因树形归约
@@ -459,14 +488,14 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
              * 但 DUT 自身在确定性核上必须逐字节可重复; 低位翻转在两次
              * DUT 跑之间不一致时立即被抓。 */
             memcpy(work2, l_orig, bytes);
-            bidiagonalize_sve(work2, M_DIM);
+            bidiagonalize_sve(work2, n, l_hv, l_hw);
             if (memcmp(work, work2, bytes) != 0) {
-                for (int i = 0; i < M_DIM * M_DIM; ++i) {
+                for (int i = 0; i < n * n; ++i) {
                     if (memcmp(&work[i], &work2[i], sizeof(double)) != 0) {
                         report_fail_msg("bidiagonalization not repeatable "
                                 "on the same input at (%d, %d): pass1 "
                                 "%.17g vs pass2 %.17g (iteration %ld)",
-                                i / M_DIM, i % M_DIM, work[i], work2[i], iter);
+                                i / n, i % n, work[i], work2[i], iter);
                         break;
                     }
                 }

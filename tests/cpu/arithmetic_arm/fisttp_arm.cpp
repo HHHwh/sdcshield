@@ -22,6 +22,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -35,18 +36,45 @@
 #include <arm_compute/runtime/Scheduler.h>
 #include <arm_compute/core/TensorInfo.h>
 
-static constexpr size_t NUM_ELEMENTS = 1024;
+/* 元素数 NUM_ELEMENTS(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O fisttp_arm.num_elements=N / 配置文件同名条目
+ *   2. 环境变量 SDC_FISTTP_ARM_NUM_ELEMENTS
+ *   3. 自适应: 每线程 input(4B)+output(4B)+store(4B)+reload(4B)+
+ *      golden(4B) = 20B/元素, 占物理内存 60%, clamp [1024, 16M]。
+ *      线性缓冲用 sdc_auto_linear_count（sqrt 缩放会欠缩放压力）。
+ * ACL tensor 维度在 init 阶段 configure, 尺寸在 init 内解析一次。 */
+static size_t fisttp_num_elements(struct test *test)
+{
+    /* hi 动态: 大内存机器按 60% 预算放开, 小内存机器保持 16M 收口;
+     * 但每轮 run 对全缓冲做 生成+golden+cast+memcpy+memcmp 全量遍历,
+     * hi 再按"单轮遍历 <= ~240s (~2GB elem/s/线程)"封顶, 否则单轮
+     * 超过框架 hard timeout (5*duration+30s, >=300s) 会被判 timed out
+     * (376GB 机 -n 2 自适应 6.06e9 元素实测 327s 超时)。 */
+    int64_t hi = sdc_linear_hi(20, 1, 1.0, 600, thread_count(), 16 << 20);
+    const int64_t hi_time = 2000000000;   /* 单轮全量遍历时间安全上限 */
+    if (hi > hi_time)
+        hi = hi_time;
+    int64_t v = sdc_knob_int_clamped(test, "num_elements", 0, 1024, hi);
+    if (v == 0)
+        sdc_env_knob_int_clamped("fisttp_arm", "num_elements", &v, 1024, hi);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(20, 1, 1.0, 600, thread_count(),
+                                         1024, hi, test->id, "num_elements");
+}
+
 static constexpr float FLOAT_MIN = -100.0f;
 static constexpr float FLOAT_MAX = 100.0f;
 
-// 单个线程专属的资源上下文
+// 单个线程专属的资源上下文。定长栈数组 → 堆指针, 支持运行时尺寸。
 struct PerThreadContext {
-    alignas(128) float input[NUM_ELEMENTS];
-    alignas(128) int32_t output[NUM_ELEMENTS];
-    alignas(128) int32_t store_buf[NUM_ELEMENTS];
-    alignas(128) int32_t reload_buf[NUM_ELEMENTS];
+    alignas(128) float *input;
+    alignas(128) int32_t *output;
+    alignas(128) int32_t *store_buf;
+    alignas(128) int32_t *reload_buf;
     // 每线程独立 golden（run 每迭代重掷时无共享写竞争）
-    alignas(128) int32_t golden_output[NUM_ELEMENTS];
+    alignas(128) int32_t *golden_output;
+    size_t num_elements;
 
     arm_compute::Tensor src_tensor{};
     arm_compute::Tensor dst_tensor{};
@@ -75,7 +103,11 @@ static int fisttp_arm_init(struct test *test) {
     auto *shared_data = new (std::nothrow) SharedTestData;
     if (!shared_data) return EXIT_FAILURE;
 
-    int max_cpus = num_cpus();
+    /* ctx 数按实际并发线程数分配(非 num_cpus()): 内存自适应模型的预算按
+     * thread_count 分摊, 若按 num_cpus() 全机分配, -n 2 时实际驻留
+     * = 64/2 倍预算(本机 64 核实测 375s 超时/内存远超模型)。
+     * run() 的 cpu 索引 < thread_count, 线程数足够覆盖。 */
+    int max_cpus = thread_count();
     if (max_cpus <= 0) max_cpus = static_cast<int>(std::thread::hardware_concurrency());
     if (max_cpus <= 0) max_cpus = 256;
 
@@ -85,14 +117,27 @@ static int fisttp_arm_init(struct test *test) {
     // framework's per-thread RNG (frandomf_scale, -s reproducible) into
     // per-thread buffers, so no shared operand state is needed here anymore
     // (the fixed mt19937_64 seed that made every run byte-identical is gone).
-    (void)shared_data;
+    const size_t num_elements = fisttp_num_elements(test);
 
     // 2. 在单线程 Init 阶段预先初始化并 configure 所有算子，确保多线程运行阶段零数据竞争
-    arm_compute::TensorInfo src_info(arm_compute::TensorShape(NUM_ELEMENTS), 1, arm_compute::DataType::F32);
-    arm_compute::TensorInfo dst_info(arm_compute::TensorShape(NUM_ELEMENTS), 1, arm_compute::DataType::S32);
+    arm_compute::TensorInfo src_info(arm_compute::TensorShape(num_elements), 1, arm_compute::DataType::F32);
+    arm_compute::TensorInfo dst_info(arm_compute::TensorShape(num_elements), 1, arm_compute::DataType::S32);
 
     for (int i = 0; i < max_cpus; ++i) {
         auto ctx = std::make_unique<PerThreadContext>();
+        ctx->num_elements = num_elements;
+        ctx->input         = (float *)  aligned_alloc(128, num_elements * sizeof(float));
+        ctx->output        = (int32_t *)aligned_alloc(128, num_elements * sizeof(int32_t));
+        ctx->store_buf     = (int32_t *)aligned_alloc(128, num_elements * sizeof(int32_t));
+        ctx->reload_buf    = (int32_t *)aligned_alloc(128, num_elements * sizeof(int32_t));
+        ctx->golden_output = (int32_t *)aligned_alloc(128, num_elements * sizeof(int32_t));
+        if (!ctx->input || !ctx->output || !ctx->store_buf ||
+            !ctx->reload_buf || !ctx->golden_output) {
+            report_fail_msg("fisttp_arm: per-thread buffer alloc failed for "
+                            "num_elements=%zu (reduce fisttp_arm.num_elements)",
+                            num_elements);
+            return EXIT_FAILURE;
+        }
 
         ctx->src_tensor.allocator()->init(src_info);
         ctx->dst_tensor.allocator()->init(dst_info);
@@ -120,6 +165,7 @@ static int fisttp_arm_run(struct test *test, int cpu) {
     auto &ctx = *shared_data->thread_ctx[cpu_idx];
 
     do {
+        const size_t NUM_ELEMENTS = ctx.num_elements;
         // 1. 输入数据准备：每迭代重掷（框架 RNG 按线程独立流，无共享竞争），
         //    golden 同迭代用独立标量 truncate_to_int 重算到每线程缓冲（复现铁律）
         for (size_t i = 0; i < NUM_ELEMENTS; ++i) {
@@ -153,11 +199,11 @@ static int fisttp_arm_run(struct test *test, int cpu) {
                      mismatch_idx >= 0 ? ctx.output[mismatch_idx] : 0,
                      mismatch_idx >= 0 ? ctx.golden_output[mismatch_idx] : 0,
                      (int)data_ok, (int)consistent);
-            log_data("fisttp input (float, 1024 elems)",
+            log_data("fisttp input (float, runtime-sized)",
                      ctx.input, NUM_ELEMENTS * sizeof(float));
-            log_data("fisttp output (int32 ACL FCVTZS result, 1024 elems)",
+            log_data("fisttp output (int32 ACL FCVTZS result, runtime-sized)",
                      ctx.output, NUM_ELEMENTS * sizeof(int32_t));
-            log_data("fisttp golden (std::trunc int32 result, 1024 elems)",
+            log_data("fisttp golden (std::trunc int32 result, runtime-sized)",
                      ctx.golden_output, NUM_ELEMENTS * sizeof(int32_t));
             report_fail_msg("%s", ctx_msg);
             // report_fail_msg 不返回
@@ -171,6 +217,13 @@ static int fisttp_arm_run(struct test *test, int cpu) {
 static int fisttp_arm_finish(struct test *test) {
     auto *shared_data = static_cast<SharedTestData*>(test->data);
     if (shared_data) {
+        for (auto &ctx : shared_data->thread_ctx) {
+            free(ctx->input);
+            free(ctx->output);
+            free(ctx->store_buf);
+            free(ctx->reload_buf);
+            free(ctx->golden_output);
+        }
         delete shared_data;
     }
     test->data = nullptr;

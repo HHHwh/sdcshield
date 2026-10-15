@@ -17,10 +17,15 @@
  * asm full-VL ldr z at the final sub-block (documented deviation from
  * the mask_sve template). Back-to-back str z -> ldr z -> str z
  * amplifier.
+ * The element count (originally ARM0102_KREG_NOT_SVE_COUNT=1024) is
+ * runtime configurable via -O arm0102_kreg_not_sve.count=N /
+ * SDC_ARM0102_KREG_NOT_SVE_COUNT, with a memory-adaptive default
+ * when unconfigured.
  * @endparblock
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -43,9 +48,26 @@ struct Arm0102KregNotSveData {
     uint32_t *srcA;
     uint32_t *srcB;
     uint32_t *expected;
+    int count;                /* 运行时元素数 (≤64M, int 足够) */
 };
 
 #if defined(__aarch64__)
+
+/* 元素数 ARM0102_KREG_NOT_SVE_COUNT(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O arm0102_kreg_not_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_ARM0102_KREG_NOT_SVE_COUNT
+ *   3. 自适应: srcA/srcB/expected(共享)+每线程 temp/dst, 5×4B,
+ *      占物理内存 60%, clamp [1024, 64M]。pg4 子块/相位/尾部松弛不变。 */
+static size_t arm0102_kreg_not_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, ARM0102_KREG_NOT_SVE_COUNT, 64 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("arm0102_kreg_not_sve", "count", &v, ARM0102_KREG_NOT_SVE_COUNT, 64 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(4, 5, 1.0, 600, thread_count(),
+                                         ARM0102_KREG_NOT_SVE_COUNT, 64 << 20, test->id, "count");
+}
 
 #define KNOT_SVE_SUBLANES 4
 
@@ -83,8 +105,10 @@ static int arm0102_kreg_not_sve_init(struct test *test) {
     }
 
     const int slack = svcntw();   /* asm ldr z 尾批松弛, 见文件头注释 */
-    const size_t total = (size_t)(ARM0102_KREG_NOT_SVE_COUNT + slack) * sizeof(uint32_t);
+    const int count = (int)arm0102_kreg_not_sve_count(test);
+    const size_t total = (size_t)(count + slack) * sizeof(uint32_t);
     auto *data = static_cast<Arm0102KregNotSveData *>(malloc(sizeof(Arm0102KregNotSveData)));
+    data->count = count;
     data->srcA = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->srcB = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->expected = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
@@ -94,9 +118,9 @@ static int arm0102_kreg_not_sve_init(struct test *test) {
 
     const int lanes = svcntw();
     svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)KNOT_SVE_SUBLANES);
-    for (int base = 0; base < ARM0102_KREG_NOT_SVE_COUNT; base += lanes) {
-        const int n = (ARM0102_KREG_NOT_SVE_COUNT - base < lanes)
-                          ? ARM0102_KREG_NOT_SVE_COUNT - base : lanes;
+    for (int base = 0; base < count; base += lanes) {
+        const int n = (count - base < lanes)
+                          ? count - base : lanes;
         for (int sub = 0; sub < n; sub += KNOT_SVE_SUBLANES) {
             /* 相位 = 子块序号 (base+sub)/KNOT_SVE_SUBLANES, 按子块旋转;
              * 原式 (base+sub)%4 恒为 0 (base 是 svcntw() 倍数、sub 是 4 的倍数) */
@@ -128,14 +152,15 @@ static int arm0102_kreg_not_sve_init(struct test *test) {
 static int arm0102_kreg_not_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<Arm0102KregNotSveData *>(test->data);
+    const int count = data->count;
 
-    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(ARM0102_KREG_NOT_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
-    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(ARM0102_KREG_NOT_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
+    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
+    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
 
     TEST_LOOP(test, 1 << 13) {
-        for (int base = 0; base < ARM0102_KREG_NOT_SVE_COUNT; base += svcntw()) {
-            const int n = (ARM0102_KREG_NOT_SVE_COUNT - base < svcntw())
-                              ? ARM0102_KREG_NOT_SVE_COUNT - base : svcntw();
+        for (int base = 0; base < count; base += svcntw()) {
+            const int n = (count - base < svcntw())
+                              ? count - base : svcntw();
             for (int sub = 0; sub < n; sub += KNOT_SVE_SUBLANES) {
                 svuint32_t a = load_vec_sve(data->srcA + base + sub);
                 svuint32_t b = load_vec_sve(data->srcB + base + sub);
@@ -148,12 +173,12 @@ static int arm0102_kreg_not_sve_run(struct test *test, int cpu) {
             }
         }
 
-        if (memcmp(dst, data->expected, (size_t)ARM0102_KREG_NOT_SVE_COUNT * sizeof(uint32_t)) != 0) {
+        if (memcmp(dst, data->expected, (size_t)count * sizeof(uint32_t)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(ARM0102_KREG_NOT_SVE_COUNT); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < (size_t)(count); ++_dump_j) {
                     if (dst[_dump_j] != data->expected[_dump_j]) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
@@ -165,7 +190,7 @@ static int arm0102_kreg_not_sve_run(struct test *test, int cpu) {
                     }
                 }
                 log_error("arm0102_kreg_not_sve: total mismatched elements: %zu / %d", _dump_bad,
-                          ARM0102_KREG_NOT_SVE_COUNT);
+                          count);
             }
             report_fail_msg("arm0102_kreg_not_sve data miscompare");
         }

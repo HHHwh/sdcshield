@@ -133,9 +133,9 @@ static int vmovnt3_run(struct test *test, int cpu) {
 
         // ---------- 6. 输出结果 ----------
         // 这里我们将 reload_buf 视为 "输出"（即从内存读取回来的数据）
-        print_colored_result("vmovnt3", passed, src, reload_buf, TOTAL_FLOATS);
-
+        // 仅在失败时打印，避免每轮 PASS 导致日志膨胀。
         if (!passed) {
+            print_colored_result("vmovnt3", passed, src, reload_buf, TOTAL_FLOATS);
             report_fail_msg("vmovnt3: data mismatch or consistency failure");
             return EXIT_FAILURE;
         }

@@ -21,7 +21,6 @@ static int load_port_run(struct test *test, int cpu) {
      * -s reproducible) replaces std::mt19937. */
     auto dist = []() { return random32(); };  /* full [0, 2^32) */
 
-    #define GREEN "\033[32m"
     #define RED   "\033[31m"
     #define RESET "\033[0m"
 
@@ -52,14 +51,11 @@ static int load_port_run(struct test *test, int cpu) {
 
         bool passed = data_ok && consistent;
 
-        const char *color = passed ? GREEN : RED;
-        const char *result_str = passed ? "PASS" : "FAIL";
-        fprintf(stderr, "load_port: src[0..7]=%08X %08X %08X %08X %08X %08X %08X %08X, data_ok=%d, consistent=%d, result=%s%s%s\n",
-                src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7],
-                data_ok, consistent, color, result_str, RESET);
-        fflush(stderr);
-
         if (!passed) {
+            fprintf(stderr, "load_port: src[0..7]=%08X %08X %08X %08X %08X %08X %08X %08X, data_ok=%d, consistent=%d, result=%sFAIL%s\n",
+                    src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7],
+                    data_ok, consistent, RED, RESET);
+            fflush(stderr);
             report_fail_msg("load_port: Data mismatch or consistency failure");
             return EXIT_FAILURE;
         }

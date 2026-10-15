@@ -1,28 +1,60 @@
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #ifdef __aarch64__
 #include <arm_neon.h>          // NEON intrinsics (aarch64 only)
 #endif
 
 static constexpr int VECTOR_SIZE = 16;          // 16 个 int32
-static constexpr int DATA_SIZE = 1024;          // 源/目标数据大小
+
+/*
+ * 源/目标数据大小: 统一配置链:
+ *   1. -O gatherscatter_i32.data_size=N / 配置文件同名条目
+ *   2. 环境变量 SDC_GATHERSCATTER_I32_DATA_SIZE
+ *   3. 自适应: 每线程 src+dst+ref 3 个数组 (4B/元素) ~ 12B/元素, 占
+ *      物理内存 60%, clamp [1024, 16M]。历史硬编码 1024。
+ *      线性缓冲用 sdc_auto_linear_count（sqrt 缩放会欠缩放压力）。
+ * 放大后 gather/scatter 访问跨度加大, 随机索引命中 L2/LLC/DRAM 不同域。
+ */
+static int gather_data_size(struct test *test)
+{
+    /* hi 动态: 大内存机器按 60% 预算放开, 小内存机器保持 16M 收口 */
+    const int64_t hi = sdc_linear_hi(4, 3, 1.0, 600, thread_count(), 16 << 20);
+    int64_t v = sdc_knob_int_clamped(test, "data_size", 0, 1024, hi);
+    if (v == 0)
+        sdc_env_knob_int_clamped("gatherscatter_i32", "data_size", &v, 1024, hi);
+    if (v > 0)
+        return (int)v;
+    return (int)sdc_auto_linear_count(4, 3, 1.0, 600, thread_count(), 1024, hi, test->id, "data_size");
+}
 
 static int gatherscatter_i32_init(struct test *test) {
-    (void)test;
+    /* 预热 knob 缓存: data_size 在 run(worker线程)里经 sdc_knob_int_clamped
+     * 的缓存读取, 必须在 init(主线程)查询一次填充缓存, 否则 debug 构建下
+     * worker 线程查询 knob 触发 abort, 且显式配置会失效。 */
+    (void)gather_data_size(test);
     return EXIT_SUCCESS;
 }
 
 #ifdef __aarch64__
 static int gatherscatter_i32_run(struct test *test, int cpu) {
     (void)cpu;
-    // 每个线程独立分配数据
-    alignas(16) int32_t src[DATA_SIZE];
-    alignas(16) int32_t dst[DATA_SIZE];
+    const int DATA_SIZE = gather_data_size(test);
+    const size_t bytes = (size_t)DATA_SIZE * sizeof(int32_t);
+    // 每个线程独立分配数据 (堆分配, 支持运行时尺寸)
+    int32_t *src = (int32_t *)aligned_alloc(16, bytes);
+    int32_t *dst = (int32_t *)aligned_alloc(16, bytes);
+    if (!src || !dst) {
+        free(src);
+        free(dst);
+        return EXIT_FAILURE;
+    }
     int32_t indices[VECTOR_SIZE];
 
     auto int_dist = []() { return (int32_t)((-10000) + (int64_t)(random64() % (uint64_t)((10000) - (-10000) + 1))); };
-    auto idx_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((DATA_SIZE - 1) - (0) + 1))); };
+    auto idx_dist = [&]() { return (int)((0) + (int64_t)(random64() % (uint64_t)((DATA_SIZE - 1) - (0) + 1))); };
 
     // 压载结构（CodeRabbit 意见）：每轮 DUT 只有 gather/scatter 共
     // 2*VECTOR_SIZE 次 lane 访存，若内层每轮仍整块 memset dst/ref 并
@@ -41,7 +73,7 @@ static int gatherscatter_i32_run(struct test *test, int cpu) {
         }
 
         // 整块清零仅此一次（建立全零基准；内层不再整块 memset）
-        memset(dst, 0, sizeof(dst));
+        memset(dst, 0, bytes);
 
         for (int round = 0; round < kInnerRounds; ++round) {
             // 生成随机索引（16个）
@@ -65,6 +97,8 @@ static int gatherscatter_i32_run(struct test *test, int cpu) {
                                     "actual=%d (0x%08x), expected=%d (0x%08x), xor=0x%08x",
                                     idx, round, dst[idx], actual_bits, zero, expected_bits,
                                     actual_bits ^ expected_bits);
+                    free(src);
+                    free(dst);
                     return EXIT_FAILURE;
                 }
             }
@@ -135,6 +169,8 @@ static int gatherscatter_i32_run(struct test *test, int cpu) {
                 } else {
                     report_fail_msg("gatherscatter_i32: Gather-scatter mismatch or consistency failure");
                 }
+                free(src);
+                free(dst);
                 return EXIT_FAILURE;
             }
 
@@ -166,12 +202,16 @@ static int gatherscatter_i32_run(struct test *test, int cpu) {
                                 i, lane, i, src[i],
                                 dst[i], actual_bits, zero, expected_bits,
                                 actual_bits ^ expected_bits);
+                free(src);
+                free(dst);
                 return EXIT_FAILURE;
             }
         }
 
     } while (test_time_condition(test));
 
+    free(src);
+    free(dst);
     return EXIT_SUCCESS;
 }
 #else

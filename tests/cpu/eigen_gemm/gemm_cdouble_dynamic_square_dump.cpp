@@ -27,13 +27,28 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <Eigen/Core>
 #include <cstdint>
 #include <cstring>
 using namespace Eigen;
 
-#define M_DIM 221 // weird dim on purpose
+/* 矩阵维度: 优先级链同 eigen_gemm_cdouble_dynamic_square
+ * (-O eigen_gemm_cdouble_dynamic_square_dump.mdim=N / 配置文件 / 自适应)。
+ * 历史硬编码 221 是刻意的"怪"维度, 显式配置时保留任意值语义。 */
+static int gemm_mdim(struct test *test)
+{
+    static int dim = -1;
+    if (dim < 0) {
+        int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
+        if (v <= 0)
+            v = sdc_auto_square_dim(16, 4, 6.0, 850, thread_count(), 16, 4096, test->id, "mdim");
+        dim = (int)v;
+    }
+    return dim;
+}
+#define M_DIM gemm_mdim(test)
 
 typedef Matrix < std::complex < double >, Dynamic, Dynamic > Mat;
 

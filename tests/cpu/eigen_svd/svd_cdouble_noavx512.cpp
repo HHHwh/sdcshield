@@ -27,18 +27,34 @@
  */
 
 #include "sandstone_eigen_common.h"
+#include "sdc_stress_config.h"
 
 using namespace Eigen;
 
 typedef Matrix < std::complex <double >, Dynamic, Dynamic > Mat;
 typedef Eigen::BDCSVD < Mat > SVD;
 
-#define M_DIM 300               // weird dim on purpose
+/*
+ * 运行时维度模式, 统一配置链 (-O eigen_svd_cdouble_noavx512.mdim=N /
+ * 配置文件 / 环境变量 / 自适应)。历史硬编码 300。
+ */
+using eigen_svd_cdouble_noavx512_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
-using eigen_svd_cdouble_noavx512_test = EigenSVDTest<SVD, M_DIM>;
+static int eigen_svd_cdouble_noavx512_init(struct test *test)
+{
+    auto d = new eigen_svd_cdouble_noavx512_test::eigen_test_data;
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
+    if (v == 0)
+        sdc_env_knob_int_clamped("eigen_svd_cdouble_noavx512", "mdim", &v, 64, 2048);
+    d->dim = (v > 0) ? (int)v
+                     : sdc_auto_square_dim(16, 6, 12.0, 650, thread_count(), 64, 2048, test->id, "mdim");
+    test->data = d;
+    return EXIT_SUCCESS;
+}
+
 DECLARE_TEST(eigen_svd_cdouble_noavx512, "Eigen SVD (Singular Value Decomposition) solving payload, which issues a bunch of matrix multiplies underneath, now operating on std::complex<double>")
   .groups = DECLARE_TEST_GROUPS(&group_math),
-  .test_init = eigen_svd_cdouble_noavx512_test::init,
+  .test_init = eigen_svd_cdouble_noavx512_init,
   .test_run = eigen_svd_cdouble_noavx512_test::run,
   .test_cleanup = eigen_svd_cdouble_noavx512_test::cleanup,
   .fracture_loop_count = 5,

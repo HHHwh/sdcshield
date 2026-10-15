@@ -30,6 +30,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -69,6 +70,7 @@ struct NeonRotLdrAtTopStr3CheckallSveData {
     uint64_t *scratch;
     uint64_t *expected;
     int lanes;
+    int slots;   /* 运行时向量槽数 (knob `slots`, 默认设计值) */
     int dump_fd;
 };
 
@@ -91,13 +93,26 @@ static inline svuint64_t load_vec_sve(const void *addr) {
     return res;
 }
 
+/* 优先级: 1. -O neon_rot_ldr_at_top_str3_checkall_sve.slots=N
+ * 2. SDC_NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS 3. 设计默认 1024
+ * （诊断探针: 默认保持设计几何, 显式配置才生效 — 槽距/行距模式是激发参数不动；
+ *   record.index u32: slots<=1M x lanes<=32 = 32M 元素, 不溢出） */
+static size_t neon_rot_ldr_at_top_str3_checkall_sve_slots(struct test *test)
+{
+    const int64_t dflt = NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS;
+    int64_t v = sdc_knob_int_clamped(test, "slots", 0, NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS, 1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("neon_rot_ldr_at_top_str3_checkall_sve", "slots", &v, NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS, 1 << 20);
+    return v > 0 ? (size_t)v : (size_t)dflt;
+}
+
 /* noinline: 防冷扫描与热循环融合 (tlbstress 教训) */
 __attribute__((noinline)) static void str3_checkall_sve_cold_scan(
         struct test *test, int cpu, const NeonRotLdrAtTopStr3CheckallSveData *data,
         const uint64_t *temp, const uint64_t *junk, const uint64_t *dst,
         uint32_t sweep_slot_mask, uint64_t iteration, uint32_t sweep_dir)
 {
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS * data->lanes;
+    const size_t elems = (size_t)data->slots * data->lanes;
     bool any = false;
     for (size_t j = 0; j < elems; j++) {
         const bool t_bad = temp[j] != data->expected[j];
@@ -165,10 +180,12 @@ static int neon_rot_ldr_at_top_str3_checkall_sve_init(struct test *test) {
     }
 
     const int lanes = (int)svcntd();
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS * lanes;
+    const size_t slots = neon_rot_ldr_at_top_str3_checkall_sve_slots(test);
+    const size_t elems = slots * (size_t)lanes;
 
     auto *data = static_cast<NeonRotLdrAtTopStr3CheckallSveData *>(malloc(sizeof(NeonRotLdrAtTopStr3CheckallSveData)));
     data->lanes = lanes;
+    data->slots = (int)slots;
     data->srcA = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
     data->srcB = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
     data->scratch = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
@@ -179,7 +196,7 @@ static int neon_rot_ldr_at_top_str3_checkall_sve_init(struct test *test) {
     memset_random(data->scratch, elems * sizeof(uint64_t));
 
     svbool_t pg = svptrue_b64();
-    for (int i = 0; i < NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS; i++) {
+    for (int i = 0; i < data->slots; i++) {
         svuint64_t a = svld1_u64(pg, data->srcA + (size_t)i * lanes);
         svuint64_t b = svld1_u64(pg, data->srcB + (size_t)i * lanes);
         svuint64_t res;
@@ -221,7 +238,7 @@ static int neon_rot_ldr_at_top_str3_checkall_sve_run(struct test *test, int cpu)
         report_fail_msg("neon_rot_ldr_at_top_str3_checkall_sve: vector length changed between init and run");
     }
 
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS * data->lanes;
+    const size_t elems = (size_t)data->slots * data->lanes;
     const size_t bytes = elems * sizeof(uint64_t);
     uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, bytes));
     uint64_t *junk = static_cast<uint64_t *>(aligned_alloc(64, bytes));
@@ -230,8 +247,8 @@ static int neon_rot_ldr_at_top_str3_checkall_sve_run(struct test *test, int cpu)
     uint64_t sweep = 0;
     TEST_LOOP(test, 1 << 13) {
         const bool ascending = (sweep & 1) == 0;
-        for (int n = 0; n < NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS; n++) {
-            const int i = ascending ? n : (NEON_ROT_LDR_AT_TOP_STR3_CHECKALL_SVE_SLOTS - 1 - n);
+        for (int n = 0; n < data->slots; n++) {
+            const int i = ascending ? n : (data->slots - 1 - n);
             const size_t off = (size_t)i * data->lanes;
 
             svuint64_t unused_x = load_vec_sve(data->scratch + off);

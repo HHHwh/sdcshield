@@ -27,6 +27,7 @@
 
 #include "sandstone_ssl.h"
 #include "sve_hmac.h"
+#include "sdc_stress_config.h"
 #include <sys/auxv.h>
 #include <string.h>
 #include <stdlib.h>
@@ -35,7 +36,6 @@
 #define HWCAP_SVE (1 << 22)
 #endif
 
-#define DATA_SIZE (1024u)
 #define HMAC_KEY_SIZE_V (20)
 #define HMAC_96_DIGEST_SIZE (12)
 #define AES_KEY_SIZE_V (16)
@@ -46,12 +46,24 @@ struct aes128_cbc_hmac_sha1_sve_data {
     uint8_t aes_key[AES_KEY_SIZE_V];
     uint8_t aes_iv[AES_IV_SIZE_V];
     uint8_t hmac_key[20];
-    uint8_t plaintext[DATA_SIZE];
-    uint8_t golden_ciphertext[DATA_SIZE];
+    uint8_t *plaintext;
+    uint8_t *golden_ciphertext;
     uint8_t golden_mac[NSTREAM][20];   /* 内部全摘要 20B, 比较取前 12 */
     /* 7 条变体消息: 确定性派生(异或字节掩码), 填 SVE lane */
-    uint8_t variant_msg[NSTREAM-1][DATA_SIZE];
+    uint8_t *variant_msg[NSTREAM-1];
+    size_t data_size;
 };
+
+static size_t ipsec_data_size(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "data_size", 0, 1024, 16 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("ipsec_aes128_cbc_hmac_sha1_sve", "data_size", &v, 1024, 16 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(1, 4, 1.5, 600, thread_count(),
+                                         1024, 16 << 20, test->id, "data_size");
+}
 
 static void aes_encrypt(const uint8_t *key, const uint8_t *iv, const uint8_t *in, uint8_t *out, size_t len) {
     EVP_CIPHER_CTX *ctx = s_EVP_CIPHER_CTX_new();
@@ -75,7 +87,7 @@ static void aes_decrypt(const uint8_t *key, const uint8_t *iv, const uint8_t *in
 }
 
 static void aes128_cbc_hmac_sha1_sve_compute_golden(struct aes128_cbc_hmac_sha1_sve_data *d) {
-    aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, DATA_SIZE);
+    aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, d->data_size);
     /* SVE 多流 HMAC: lane0=密文(主语义), lane1..7=变体 */
     const uint8_t *keys[NSTREAM], *msgs[NSTREAM];
     uint8_t variant_keys[NSTREAM][20];
@@ -88,11 +100,11 @@ static void aes128_cbc_hmac_sha1_sve_compute_golden(struct aes128_cbc_hmac_sha1_
     msgs[0] = d->golden_ciphertext;
     for (int s = 1; s < NSTREAM; ++s) {
         /* 变体消息: 密文异或流掩码(确定性) */
-        for (size_t i = 0; i < DATA_SIZE; ++i)
+        for (size_t i = 0; i < d->data_size; ++i)
             d->variant_msg[s-1][i] = d->golden_ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
         msgs[s] = d->variant_msg[s-1];
     }
-    hmac_sha1_x8(d->golden_mac, keys, 20, msgs, DATA_SIZE);
+    hmac_sha1_x8(d->golden_mac, keys, 20, msgs, d->data_size);
 }
 
 static int aes128_cbc_hmac_sha1_sve_init(struct test *test) {
@@ -118,10 +130,38 @@ static int aes128_cbc_hmac_sha1_sve_init(struct test *test) {
         }
         struct aes128_cbc_hmac_sha1_sve_data *d = (struct aes128_cbc_hmac_sha1_sve_data *)malloc(sizeof(*d));
         if (!d) return EXIT_SKIP;
+        /* 工作集字节数: -O ipsec_aes128_cbc_hmac_sha1_sve.data_size=N /
+         * SDC_IPSEC_AES128_CBC_HMAC_SHA1_SVE_DATA_SIZE 环境变量 / 自适应:
+         * 每线程明文+密文+golden 密文+解密缓冲+变体消息 ~= (3+NSTREAM-1)x,
+         * 占物理内存 60%, clamp [1024, 16M]。线性缓冲用 sdc_auto_linear_count（sqrt 缩放会欠缩放压力）。历史硬编码 1024。CBC 无填充
+         * 场景尺寸必须对齐到 AES 分组 16B, 对齐后 < 1024 取 1024。 */
+        d->data_size = ipsec_data_size(test);
+        d->data_size &= ~(size_t)15;
+        if (d->data_size < 1024)
+            d->data_size = 1024;
+        d->plaintext = (uint8_t *)malloc(d->data_size);
+        d->golden_ciphertext = (uint8_t *)malloc(d->data_size);
+        if (!d->plaintext || !d->golden_ciphertext) {
+            free(d->plaintext);
+            free(d->golden_ciphertext);
+            free(d);
+            return EXIT_SKIP;
+        }
+        for (int s = 0; s < NSTREAM - 1; ++s) {
+            d->variant_msg[s] = (uint8_t *)malloc(d->data_size);
+            if (!d->variant_msg[s]) {
+                free(d->plaintext);
+                free(d->golden_ciphertext);
+                for (int t = 0; t < s; ++t)
+                    free(d->variant_msg[t]);
+                free(d);
+                return EXIT_SKIP;
+            }
+        }
         memset_random(d->aes_key, AES_KEY_SIZE_V);
         memset_random(d->aes_iv, AES_IV_SIZE_V);
         memset_random(d->hmac_key, 20);
-        memset_random(d->plaintext, DATA_SIZE);
+        memset_random(d->plaintext, d->data_size);
         aes128_cbc_hmac_sha1_sve_compute_golden(d);
         test->data = d;
         return EXIT_SUCCESS;
@@ -134,10 +174,10 @@ static int aes128_cbc_hmac_sha1_sve_init(struct test *test) {
 static int aes128_cbc_hmac_sha1_sve_run(struct test *test, int cpu) {
     (void)cpu;
     struct aes128_cbc_hmac_sha1_sve_data *d = (struct aes128_cbc_hmac_sha1_sve_data *)test->data;
-    uint8_t *ciphertext = (uint8_t *)malloc(DATA_SIZE);
-    uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
+    uint8_t *ciphertext = (uint8_t *)malloc(d->data_size);
+    uint8_t *decrypted = (uint8_t *)malloc(d->data_size);
     uint8_t mac[NSTREAM][20];
-    uint8_t *variant_msg = (uint8_t *)malloc((NSTREAM-1) * DATA_SIZE);
+    uint8_t *variant_msg = (uint8_t *)malloc((NSTREAM-1) * d->data_size);
 
     /* R2b (B2-003): per-thread plaintext + golden, re-rolled every
      * iteration (thread-safe: shared d is only read after init; the
@@ -146,6 +186,36 @@ static int aes128_cbc_hmac_sha1_sve_run(struct test *test, int cpu) {
      * this thread's stack). */
     struct aes128_cbc_hmac_sha1_sve_data local_d;
     memcpy(&local_d, d, sizeof(local_d));
+    /* plaintext/golden_ciphertext/variant_msg 是指针, 浅拷贝会让 local_d
+     * 与共享 d 指向同一缓冲; re-roll 的 memset_random/compute_golden 会
+     * 破坏 d 的冻结输入与 golden, 使下一轮 frozen replay 误比较。独立分配隔离。 */
+    local_d.plaintext = (uint8_t *)malloc(d->data_size);
+    local_d.golden_ciphertext = (uint8_t *)malloc(d->data_size);
+    if (!local_d.plaintext || !local_d.golden_ciphertext) {
+        free(local_d.plaintext);
+        free(local_d.golden_ciphertext);
+        free(ciphertext);
+        free(decrypted);
+        free(variant_msg);
+        log_skip(TestResourceIssueSkipCategory,
+                 "out of memory for per-thread buffers");
+        return EXIT_SKIP;
+    }
+    for (int s = 0; s < NSTREAM - 1; ++s) {
+        local_d.variant_msg[s] = (uint8_t *)malloc(d->data_size);
+        if (!local_d.variant_msg[s]) {
+            free(local_d.plaintext);
+            free(local_d.golden_ciphertext);
+            for (int t = 0; t < s; ++t)
+                free(local_d.variant_msg[t]);
+            free(ciphertext);
+            free(decrypted);
+            free(variant_msg);
+            log_skip(TestResourceIssueSkipCategory,
+                     "out of memory for per-thread buffers");
+            return EXIT_SKIP;
+        }
+    }
     long iter = 0;
     TEST_LOOP(test, 256) {
         if (iter & 1) {
@@ -156,10 +226,10 @@ static int aes128_cbc_hmac_sha1_sve_run(struct test *test, int cpu) {
              * other round replays init's frozen inputs and compares
              * byte-exact against init's golden computed on a
              * different core. */
-            aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
-            memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "ciphertext mismatch (frozen replay)");
-            aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
-            memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "decryption mismatch (frozen replay)");
+            aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, d->data_size);
+            memcmp_or_fail(ciphertext, d->golden_ciphertext, d->data_size, "ciphertext mismatch (frozen replay)");
+            aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, d->data_size);
+            memcmp_or_fail(decrypted, d->plaintext, d->data_size, "decryption mismatch (frozen replay)");
 
             /* SVE 多流 HMAC (主消息 + 变体) */
             {
@@ -172,23 +242,23 @@ static int aes128_cbc_hmac_sha1_sve_run(struct test *test, int cpu) {
                 }
                 msgs[0] = ciphertext;
                 for (int s = 1; s < NSTREAM; ++s) {
-                    for (size_t i = 0; i < DATA_SIZE; ++i)
-                        variant_msg[(s-1)*DATA_SIZE + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
-                    msgs[s] = variant_msg + (s-1)*DATA_SIZE;
+                    for (size_t i = 0; i < d->data_size; ++i)
+                        variant_msg[(s-1)*d->data_size + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
+                    msgs[s] = variant_msg + (s-1)*d->data_size;
                 }
-                hmac_sha1_x8(mac, keys, 20, msgs, DATA_SIZE);
+                hmac_sha1_x8(mac, keys, 20, msgs, d->data_size);
             }
             for (int s = 0; s < NSTREAM; ++s)
                 memcmp_or_fail(mac[s], d->golden_mac[s], 12, "HMAC-SHA1-96 digest mismatch (frozen replay)");
         } else {
             /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
              * SVE HMAC recomputed for this thread's data) */
-            memset_random(local_d.plaintext, DATA_SIZE);
+            memset_random(local_d.plaintext, d->data_size);
             aes128_cbc_hmac_sha1_sve_compute_golden(&local_d);
-            aes_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
-            memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "ciphertext mismatch (SVE)");
-            aes_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
-            memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "decryption mismatch (SVE)");
+            aes_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, d->data_size);
+            memcmp_or_fail(ciphertext, local_d.golden_ciphertext, d->data_size, "ciphertext mismatch (SVE)");
+            aes_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, d->data_size);
+            memcmp_or_fail(decrypted, local_d.plaintext, d->data_size, "decryption mismatch (SVE)");
 
             /* SVE 多流 HMAC (主消息 + 变体) */
             {
@@ -201,11 +271,11 @@ static int aes128_cbc_hmac_sha1_sve_run(struct test *test, int cpu) {
                 }
                 msgs[0] = ciphertext;
                 for (int s = 1; s < NSTREAM; ++s) {
-                    for (size_t i = 0; i < DATA_SIZE; ++i)
-                        variant_msg[(s-1)*DATA_SIZE + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
-                    msgs[s] = variant_msg + (s-1)*DATA_SIZE;
+                    for (size_t i = 0; i < d->data_size; ++i)
+                        variant_msg[(s-1)*d->data_size + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
+                    msgs[s] = variant_msg + (s-1)*d->data_size;
                 }
-                hmac_sha1_x8(mac, keys, 20, msgs, DATA_SIZE);
+                hmac_sha1_x8(mac, keys, 20, msgs, d->data_size);
             }
             for (int s = 0; s < NSTREAM; ++s)
                 memcmp_or_fail(mac[s], local_d.golden_mac[s], 12, "HMAC-SHA1-96 digest mismatch (SVE)");
@@ -215,11 +285,22 @@ static int aes128_cbc_hmac_sha1_sve_run(struct test *test, int cpu) {
     free(ciphertext);
     free(decrypted);
     free(variant_msg);
+    for (int s = 0; s < NSTREAM - 1; ++s)
+        free(local_d.variant_msg[s]);
+    free(local_d.plaintext);
+    free(local_d.golden_ciphertext);
     return EXIT_SUCCESS;
 }
 
 static int aes128_cbc_hmac_sha1_sve_cleanup(struct test *test) {
-    free(test->data);
+    struct aes128_cbc_hmac_sha1_sve_data *d = (struct aes128_cbc_hmac_sha1_sve_data *)test->data;
+    if (d) {
+        free(d->plaintext);
+        free(d->golden_ciphertext);
+        for (int s = 0; s < NSTREAM - 1; ++s)
+            free(d->variant_msg[s]);
+    }
+    free(d);
     return EXIT_SUCCESS;
 }
 

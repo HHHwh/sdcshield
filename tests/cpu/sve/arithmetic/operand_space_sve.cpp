@@ -12,10 +12,16 @@
  * store-to-load-forwarding probe stays the original inline-asm str/ldr
  * (a scalar datapath by design). Goldens are the __int128 software
  * references exactly as the original.
+ * The operand-pair count (originally NUM_PAIRS=80) is runtime
+ * configurable via -O operand_space_sve.num_pairs=N /
+ * SDC_OPERAND_SPACE_SVE_NUM_PAIRS, with a memory-adaptive default
+ * when unconfigured. NUM_WORDS=4 (the 256-bit operand width) stays
+ * fixed.
  * @endparblock
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -56,6 +62,26 @@ struct OperandSpaceSveData {
     std::vector<uint64_t> golden_mul_hi;
     size_t num_pairs;
 };
+
+/* 操作数对数 NUM_PAIRS(80) — 运行时可配置, 统一优先级链:
+ *   1. -O operand_space_sve.num_pairs=N / 配置文件同名条目
+ *   2. 环境变量 SDC_OPERAND_SPACE_SVE_NUM_PAIRS
+ *   3. 自适应: a_words/b_words/golden_add/golden_mul_lo/golden_mul_hi
+ *      共 5 份共享向量 (实际 15×8B=120B/对, 按规格 bytes_per_elem=8×
+ *      arrays=5 均摊), rss_ratio 1.0, 占物理内存 60%, clamp [80, 1M]。
+ *      原 80 为下限。NUM_WORDS=4 (256-bit 操作数宽度) 固定不动。 */
+static size_t operand_space_sve_num_pairs(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "num_pairs", 0, NUM_PAIRS,
+                                     1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("operand_space_sve", "num_pairs", &v,
+                                 NUM_PAIRS, 1 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(8, 5, 1.0, 600, thread_count(),
+                                         NUM_PAIRS, 1 << 20, test->id, "num_pairs");
+}
 
 static void software_add_words(const uint64_t *a, const uint64_t *b, uint64_t *res)
 {
@@ -141,16 +167,17 @@ static int operand_space_sve_init(struct test *test)
         return EXIT_SKIP;
     }
 #endif
+    const size_t NUM_P = operand_space_sve_num_pairs(test);
     try {
         auto data = std::make_unique<OperandSpaceSveData>();
-        data->num_pairs = NUM_PAIRS;
-        data->a_words.resize(NUM_PAIRS * NUM_WORDS);
-        data->b_words.resize(NUM_PAIRS * NUM_WORDS);
-        data->golden_add.resize(NUM_PAIRS * (NUM_WORDS + 1));
-        data->golden_mul_lo.resize(NUM_PAIRS);
-        data->golden_mul_hi.resize(NUM_PAIRS);
+        data->num_pairs = NUM_P;
+        data->a_words.resize(NUM_P * NUM_WORDS);
+        data->b_words.resize(NUM_P * NUM_WORDS);
+        data->golden_add.resize(NUM_P * (NUM_WORDS + 1));
+        data->golden_mul_lo.resize(NUM_P);
+        data->golden_mul_hi.resize(NUM_P);
 
-        for (size_t i = 0; i < NUM_PAIRS; ++i) {
+        for (size_t i = 0; i < NUM_P; ++i) {
             uint64_t a_base = HAMMING_TABLE[i % HAMMING_TABLE_SIZE];
             uint64_t b_base = HAMMING_TABLE[(i + 1) % HAMMING_TABLE_SIZE];
 

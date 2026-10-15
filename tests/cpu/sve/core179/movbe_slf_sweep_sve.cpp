@@ -32,6 +32,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -56,9 +57,42 @@ static_assert(SLF_SWEEP_BUFFER_BYTES % 16 == 0,
 /* init 自检: 每种宽度的随机向量数 (家族 50k 验证先例) */
 #define SLF_SWEEP_SELFCHECK_VECS 50000
 
+/* 扫描缓冲字节数 buffer_bytes (字节型) — 运行时可配置, 统一优先级链:
+ *   1. -O movbe_slf_sweep_sve.buffer_bytes=N / 配置文件同名条目
+ *   2. 环境变量 SDC_MOVBE_SLF_SWEEP_SVE_BUFFER_BYTES
+ *   3. 设计默认 64KB (64*1024 字节)
+ * （core179 诊断探针: 未配置时默认 = 原硬编码设计几何, 不做内存
+ *   自适应 — 缓冲几何本身是激发参数; 显式配置 clamp 到
+ *   [64<<10, 256<<20]。非 16 的倍数 log_warning + 向下取整 — 与
+ *   SLF_SWEEP_BUFFER_BYTES 的 static_assert 同语义: 尾批必须对
+ *   W∈{2,4,8} 元素对齐, 否则双 svtbl 对合读到未定义车道。）
+ *   SELFCHECK_VECS=50000 的 init 自检不随缓冲变化。 */
+static size_t movbe_slf_sweep_sve_buffer_bytes(struct test *test)
+{
+    const int64_t dflt = SLF_SWEEP_BUFFER_BYTES;
+    const int64_t hi = 256ll << 20;
+    int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0, dflt, hi);
+    if (v == 0 && sdc_env_knob_int(test->id, "buffer_bytes", &v)
+        && (v < dflt || v > hi)) {
+        int64_t c = (v < dflt) ? dflt : hi;
+        log_warning("%s: buffer_bytes=%ld 越界 (有效 %ld..%ld), 已 clamp 为 %ld",
+                    test->id, (long)v, (long)dflt, (long)hi, (long)c);
+        v = c;
+    }
+    if (v <= 0)
+        v = dflt;
+    if (v % 16 != 0) {
+        log_warning("%s: buffer_bytes=%ld 非 16 的倍数, 向下取整为 %ld (保持尾批元素对齐)",
+                    test->id, (long)v, (long)(v - v % 16));
+        v -= v % 16;
+    }
+    return (size_t)v;
+}
+
 struct movbe_slf_sweep_sve_data {
     /* 改进 C: 唯一必要字段 — init 填充后只读的 golden 缓冲 */
     uint8_t *golden;
+    size_t buffer_bytes;
 };
 
 #if defined(__aarch64__)
@@ -177,11 +211,12 @@ static int movbe_slf_sweep_sve_init(struct test *test)
     }
 #endif
     auto *data = (movbe_slf_sweep_sve_data *)malloc(sizeof(movbe_slf_sweep_sve_data));
-    data->golden = (uint8_t *)aligned_alloc_safe(64, SLF_SWEEP_BUFFER_BYTES);
+    data->buffer_bytes = movbe_slf_sweep_sve_buffer_bytes(test);
+    data->golden = (uint8_t *)aligned_alloc_safe(64, data->buffer_bytes);
 
-    /* 64KB 按 u32 填充随机值; 运行时按字节扫描, 三种宽度共用同一 golden */
+    /* 缓冲按 u32 填充随机值; 运行时按字节扫描, 三种宽度共用同一 golden */
     uint32_t *fill = (uint32_t *)data->golden;
-    for (size_t i = 0; i < SLF_SWEEP_BUFFER_BYTES / sizeof(uint32_t); ++i)
+    for (size_t i = 0; i < data->buffer_bytes / sizeof(uint32_t); ++i)
         fill[i] = random32();
 
 #if defined(__aarch64__)
@@ -201,7 +236,7 @@ static int movbe_slf_sweep_sve_run(struct test *test, int cpu)
     (void)cpu;
     auto *data = (movbe_slf_sweep_sve_data *)test->data;
 
-    const uint64_t total = SLF_SWEEP_BUFFER_BYTES;
+    const uint64_t total = data->buffer_bytes;
     const uint64_t vbytes = (uint64_t)svcntb();
     /* SVE 架构保证 VL 是 128bit 的倍数 → vbytes 是 16 的倍数 → 对 W∈{2,4,8}
      * 每批 (含 svwhilelt 尾批) 恒元素对齐。256 字节定容封死原探针的栈溢出:
@@ -212,7 +247,7 @@ static int movbe_slf_sweep_sve_run(struct test *test, int cpu)
      * 随子进程退出回收, cleanup 只释放 test->data 所辖分配 — 同家族约定) */
     static thread_local uint8_t *priv = nullptr;
     if (!priv)
-        priv = (uint8_t *)aligned_alloc(64, SLF_SWEEP_BUFFER_BYTES);
+        priv = (uint8_t *)aligned_alloc(64, data->buffer_bytes);
 
     /* 三种宽度的索引表, 每 run-call 建一次 (svuint8_t 是 sizeless 类型,
      * 不能作数组元素, 故向量本体在宽度循环内从表中加载) */

@@ -21,11 +21,33 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <Eigen/Core>
 using namespace Eigen;
 
-#define M_DIM 256
+/*
+ * 矩阵维度 N: 运行时可配, 优先级链:
+ *   1. -O eigen_gemm_double_dynamic_square.mdim=N / 配置文件同名条目
+ *      (sdc_stress.conf 或 $SDC_STRESS_CONFIG)
+ *   2. 环境变量 SDC_EIGEN_GEMM_DOUBLE_DYNAMIC_SQUARE_MDIM
+ *   3. 缺省自适应: 按 (4 矩阵/线程 x 6x RSS 比率) 占物理内存 85% 计算
+ *      GEMM 的内存安全 N, clamp [16, 4096]。
+ * 历史缺省 256 (= 未配置且小内存环境下的自适应下限附近)。
+ */
+static int gemm_mdim(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
+    if (v == 0) {
+        int64_t envv = 0;
+        if (sdc_env_knob_int("eigen_gemm_double_dynamic_square", "mdim", &envv))
+            v = (envv < 16) ? 16 : (envv > 4096 ? 4096 : envv);
+    }
+    if (v > 0)
+        return (int)v;
+    return sdc_auto_square_dim(8, 4, 6.0, 850, thread_count(), 16, 4096, test->id, "mdim");
+}
+#define M_DIM gemm_mdim(test)
 
 typedef Matrix < double, Dynamic, Dynamic > Mat;
 
@@ -62,10 +84,11 @@ static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {
                 for (int c = 0; c < m.cols(); ++c)
                     m(r, c) = frandom_scale(2.0) - 1.0;
         };
+    const int dim = gemm_mdim(test);
     Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(M_DIM, M_DIM);
-    l_rhs.resize(M_DIM, M_DIM);
-    l_prod.resize(M_DIM, M_DIM);
+    l_lhs.resize(dim, dim);
+    l_rhs.resize(dim, dim);
+    l_prod.resize(dim, dim);
     fill_rand(l_lhs);
     fill_rand(l_rhs);
     l_prod = l_lhs * l_rhs;
@@ -75,7 +98,7 @@ static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {
         Mat x;
         x = l_lhs * l_rhs;
 
-        memcmp_or_fail(x.data(), l_prod.data(), M_DIM * M_DIM);
+        memcmp_or_fail(x.data(), l_prod.data(), (size_t)dim * (size_t)dim);
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;

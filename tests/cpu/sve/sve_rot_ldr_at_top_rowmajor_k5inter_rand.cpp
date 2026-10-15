@@ -29,6 +29,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -38,7 +39,23 @@
 #include <arm_sve.h>
 #endif
 
-#define SVE_K5IR_SLOTS 1024
+/* 结果槽 VL 数(原 1024; src 交错缓冲 2 倍宽, 缓冲 = 槽数 × VL 字节) — 统一优先级链:
+ *   1. -O sve_rot_ldr_at_top_rowmajor_k5inter_rand.slots=N / 配置文件同名条目
+ *   2. 环境变量 SDC_SVE_ROT_LDR_AT_TOP_ROWMAJOR_K5INTER_RAND_SLOTS
+ *   3. 自适应: 共享 src(2 VL 宽)+scratch+expected 3 + 每线程 temp/dst 2,
+ *      每结果槽共 6 个 VL(128b VL 即 16B/槽), 占物理内存 60%,
+ *      clamp [1024, 1M]。失败路径 viewA/viewB 用同一槽数(随 vl_slots)。 */
+static size_t sve_k5ir_slots(struct test *test, size_t vl_bytes)
+{
+    int64_t v = sdc_knob_int_clamped(test, "slots", 0, 1024, 1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("sve_rot_ldr_at_top_rowmajor_k5inter_rand", "slots", &v, 1024, 1 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count((int64_t)vl_bytes, 6, 1.0, 600,
+                                         thread_count(), 1024, 1 << 20, test->id, "slots");
+}
+
 #define SVE_K5IR_DUMP_DIR "movbe_log/gps_rowmajor"
 
 struct SveK5InterRandData {
@@ -75,7 +92,7 @@ static inline svuint64_t rot_alu(int i, svuint64_t a, svuint64_t b) {
 static int sve_k5ir_init(struct test *test) {
     auto *data = static_cast<SveK5InterRandData *>(malloc(sizeof(SveK5InterRandData)));
     data->vl_bytes = svcntb();
-    data->vl_slots = SVE_K5IR_SLOTS;
+    data->vl_slots = (int)sve_k5ir_slots(test, data->vl_bytes);
 
     const size_t src_buf = (size_t)data->vl_slots * 2 * data->vl_bytes;
     const size_t res_buf = (size_t)data->vl_slots * data->vl_bytes;

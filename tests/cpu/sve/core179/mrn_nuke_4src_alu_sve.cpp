@@ -16,6 +16,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -37,12 +38,43 @@
 
 #define MRN_NUKE_4SRC_ALU_SVE_COUNT 1024
 
+/* 元素数 count — 运行时可配置, 统一优先级链:
+ *   1. -O mrn_nuke_4src_alu_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_MRN_NUKE_4SRC_ALU_SVE_COUNT
+ *   3. 设计默认 1024
+ * （core179 诊断探针: 未配置时默认 = 原硬编码设计几何, 不做内存
+ *   自适应 — 缓冲几何本身是激发参数; 显式配置 clamp 到
+ *   [1024, 1<<22]。非 8 的倍数 log_warning + 向下取整, 保持 u64
+ *   缓冲字节数的 64B cache-line 对齐。） */
+static size_t mrn_nuke_4src_alu_sve_count(struct test *test)
+{
+    const int64_t dflt = MRN_NUKE_4SRC_ALU_SVE_COUNT;
+    const int64_t hi = 1ll << 22;
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, dflt, hi);
+    if (v == 0 && sdc_env_knob_int(test->id, "count", &v)
+        && (v < dflt || v > hi)) {
+        int64_t c = (v < dflt) ? dflt : hi;
+        log_warning("%s: count=%ld 越界 (有效 %ld..%ld), 已 clamp 为 %ld",
+                    test->id, (long)v, (long)dflt, (long)hi, (long)c);
+        v = c;
+    }
+    if (v <= 0)
+        v = dflt;
+    if (v % 8 != 0) {
+        log_warning("%s: count=%ld 非 8 的倍数, 向下取整为 %ld (保持 64B 缓冲对齐)",
+                    test->id, (long)v, (long)(v - v % 8));
+        v -= v % 8;
+    }
+    return (size_t)v;
+}
+
 struct MrnNuke4srcAluSveData {
     uint64_t *srcA;
     uint64_t *srcB;
     uint64_t *srcC;
     uint64_t *srcD;
     uint64_t *expected;
+    size_t count;
 };
 
 static int mrn_nuke_4src_alu_sve_init(struct test *test)
@@ -56,18 +88,19 @@ static int mrn_nuke_4src_alu_sve_init(struct test *test)
     }
 #endif
     auto *data = static_cast<MrnNuke4srcAluSveData *>(malloc(sizeof(MrnNuke4srcAluSveData)));
-    data->srcA = static_cast<uint64_t *>(aligned_alloc(64, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t)));
-    data->srcB = static_cast<uint64_t *>(aligned_alloc(64, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t)));
-    data->srcC = static_cast<uint64_t *>(aligned_alloc(64, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t)));
-    data->srcD = static_cast<uint64_t *>(aligned_alloc(64, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t)));
-    data->expected = static_cast<uint64_t *>(aligned_alloc(64, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t)));
+    data->count = mrn_nuke_4src_alu_sve_count(test);
+    data->srcA = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
+    data->srcB = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
+    data->srcC = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
+    data->srcD = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
+    data->expected = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
 
-    memset_random(data->srcA, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t));
-    memset_random(data->srcB, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t));
-    memset_random(data->srcC, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t));
-    memset_random(data->srcD, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t));
+    memset_random(data->srcA, data->count * sizeof(uint64_t));
+    memset_random(data->srcB, data->count * sizeof(uint64_t));
+    memset_random(data->srcC, data->count * sizeof(uint64_t));
+    memset_random(data->srcD, data->count * sizeof(uint64_t));
 
-    for (int i = 0; i < MRN_NUKE_4SRC_ALU_SVE_COUNT; i++) {
+    for (size_t i = 0; i < data->count; i++) {
         switch (i % 4) {
             case 0: data->expected[i] = data->srcA[i] ^ data->srcB[i] ^ data->srcC[i] ^ data->srcD[i]; break;
             case 1: data->expected[i] = ((data->srcA[i] + data->srcB[i]) ^ data->srcC[i]) + data->srcD[i]; break;
@@ -93,14 +126,14 @@ static int mrn_nuke_4src_alu_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *data = static_cast<MrnNuke4srcAluSveData *>(test->data);
-    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t)));
-    uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t)));
+    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
+    uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
     const int lanes = svcntd();
 
     TEST_LOOP(test, 1 << 13) {
-        for (size_t base = 0; base < MRN_NUKE_4SRC_ALU_SVE_COUNT; base += lanes) {
-            int n = (MRN_NUKE_4SRC_ALU_SVE_COUNT - base < (size_t)lanes)
-                        ? (int)(MRN_NUKE_4SRC_ALU_SVE_COUNT - base) : lanes;
+        for (size_t base = 0; base < data->count; base += lanes) {
+            int n = (data->count - base < (size_t)lanes)
+                        ? (int)(data->count - base) : lanes;
             svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)n);
 
             svuint64_t va = svld1_u64(pg, data->srcA + base);
@@ -124,12 +157,12 @@ static int mrn_nuke_4src_alu_sve_run(struct test *test, int cpu)
             svst1_u64(pg, dst + base, load_vec_sve(temp + base));
         }
 
-        if (memcmp(dst, data->expected, MRN_NUKE_4SRC_ALU_SVE_COUNT * sizeof(uint64_t)) != 0) {
+        if (memcmp(dst, data->expected, data->count * sizeof(uint64_t)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(MRN_NUKE_4SRC_ALU_SVE_COUNT); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < data->count; ++_dump_j) {
                     if (dst[_dump_j] != data->expected[_dump_j]) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
@@ -142,8 +175,8 @@ static int mrn_nuke_4src_alu_sve_run(struct test *test, int cpu)
                         }
                     }
                 }
-                log_error("mrn_nuke_4src_alu_sve: total mismatched elements: %zu / %d",
-                          _dump_bad, MRN_NUKE_4SRC_ALU_SVE_COUNT);
+                log_error("mrn_nuke_4src_alu_sve: total mismatched elements: %zu / %zu",
+                          _dump_bad, data->count);
             }
             report_fail_msg("mrn_nuke_4src_alu_sve data miscompare");
         }

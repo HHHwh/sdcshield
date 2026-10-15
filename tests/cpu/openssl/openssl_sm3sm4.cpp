@@ -35,21 +35,48 @@
 #if SANDSTONE_SSL_BUILD
 
 #include "sandstone_ssl.h"
+#include "sdc_stress_config.h"
 
 #include <string.h>
 #include <stdlib.h>
 
-#define SM_DATA_SIZE   (1024u)   /* 64 SM4 blocks, no padding needed */
 #define SM3_DIGEST_SIZE (32)
 #define SM4_KEY_SIZE  (16)
 #define SM4_IV_SIZE   (16)
 #define SM4_BLOCK     (16)
 
+/* 数据字节 — 统一配置链:
+ *   1. -O openssl_sm3sm4.data_size=N / 配置文件同名条目
+ *   2. 环境变量 SDC_OPENSSL_SM3SM4_DATA_SIZE
+ *   3. 自适应: 每线程 plaintext+ciphertext+golden+decrypted ~= 4x,
+ *      占物理内存 60%, clamp [1024, 16M]。线性缓冲用
+ *      sdc_auto_linear_count（sqrt 缩放会欠缩放压力）。
+ * SM4-CBC 无填充要求 16B 对齐: 显式/自适应值均向下对齐到 16,
+ * 对齐后 <1024 取 1024。历史硬编码 1024 (= 64 SM4 块)。 */
+static size_t sm_data_size(struct test *test)
+{
+    /* hi 动态: 大内存机器按 60% 预算放开, 小内存机器保持 16M 收口 */
+    const int64_t hi = sdc_linear_hi(1, 4, 1.5, 600, thread_count(), 16 << 20);
+    int64_t v = sdc_knob_int_clamped(test, "data_size", 0, 1024, hi);
+    if (v == 0)
+        sdc_env_knob_int_clamped("openssl_sm3sm4", "data_size", &v, 1024, hi);
+    if (v > 0)
+        v &= ~(int64_t)(SM4_BLOCK - 1);
+    else
+        v = sdc_auto_linear_count(1, 4, 1.5, 600, thread_count(),
+                                  1024, hi, test->id, "data_size")
+            & ~(int64_t)(SM4_BLOCK - 1);
+    if (v < 1024)
+        v = 1024;
+    return (size_t)v;
+}
+
 struct sm_test_data {
     uint8_t sm4_key[SM4_KEY_SIZE], sm4_iv[SM4_IV_SIZE];
-    uint8_t plaintext[SM_DATA_SIZE];
-    uint8_t golden_ciphertext[SM_DATA_SIZE];   /* SM4-CBC no padding: 1024 in = 1024 out */
-    uint8_t golden_sm3[SM3_DIGEST_SIZE];       /* SM3 digest of plaintext */
+    uint8_t *plaintext;
+    uint8_t *golden_ciphertext;           /* SM4-CBC no padding: N in = N out */
+    size_t data_size;
+    uint8_t golden_sm3[SM3_DIGEST_SIZE];  /* SM3 digest of plaintext */
 };
 
 static void sm4_cbc_encrypt(const uint8_t *key, const uint8_t *iv, const uint8_t *in,
@@ -101,26 +128,39 @@ static int ssl_sm3sm4_init(struct test *test)
         if (!d)
             return EXIT_SKIP;
 
+        d->data_size = sm_data_size(test);
+        d->plaintext = (uint8_t *)malloc(d->data_size);
+        d->golden_ciphertext = (uint8_t *)malloc(d->data_size);
+        if (!d->plaintext || !d->golden_ciphertext) {
+            free(d->plaintext);
+            free(d->golden_ciphertext);
+            free(d);
+            return EXIT_SKIP;
+        }
+
         memset_random(d->sm4_key, SM4_KEY_SIZE);
         memset_random(d->sm4_iv, SM4_IV_SIZE);
-        memset_random(d->plaintext, SM_DATA_SIZE);
+        memset_random(d->plaintext, d->data_size);
 
-        /* Golden SM4-CBC ciphertext, padding disabled: 1024 bytes is an
-         * exact multiple of the 16-byte SM4 block, so the output must be
-         * exactly 1024 bytes. Any other length means padding kicked in —
-         * a surprise that would silently shift the golden comparison. */
+        /* Golden SM4-CBC ciphertext, padding disabled: data_size is 16B
+         * aligned (see sm_data_size), an exact multiple of the 16-byte SM4
+         * block, so the output must be exactly data_size bytes. Any other
+         * length means padding kicked in — a surprise that would silently
+         * shift the golden comparison. */
         int enc_len = 0;
         sm4_cbc_encrypt(d->sm4_key, d->sm4_iv, d->plaintext, d->golden_ciphertext,
-                        SM_DATA_SIZE, &enc_len);
-        if (enc_len != (int)SM_DATA_SIZE) {
-            log_error("SM4-CBC encryption produced %d bytes, expected %u (padding surprise)",
-                      enc_len, SM_DATA_SIZE);
+                        d->data_size, &enc_len);
+        if (enc_len != (int)d->data_size) {
+            log_error("SM4-CBC encryption produced %d bytes, expected %zu (padding surprise)",
+                      enc_len, d->data_size);
+            free(d->plaintext);
+            free(d->golden_ciphertext);
             free(d);
             return EXIT_FAILURE;
         }
 
         /* Golden SM3 digest of the plaintext */
-        sm3_digest(d->plaintext, SM_DATA_SIZE, d->golden_sm3);
+        sm3_digest(d->plaintext, d->data_size, d->golden_sm3);
 
         test->data = d;
         return EXIT_SUCCESS;
@@ -134,21 +174,30 @@ static int ssl_sm3sm4_run(struct test *test, int cpu)
 {
     struct sm_test_data *d = (struct sm_test_data *)test->data;
 
-    /* Per-thread work buffers, allocated once outside the loop (the
-     * underlying crypto operates on the same 1024 bytes every iteration
-     * — no offsets needed, the cipher/digest work itself is the stress,
-     * same as the ipsec EVP tests). */
+    /* randomization hardening H7': per-thread copy of the (small) struct —
+     * the shared d is only read; plaintext and goldens live in this
+     * thread's copy and are re-rolled every iteration.  plaintext/
+     * golden_ciphertext 是堆指针: 整结构体浅拷贝后必须换成线程私有
+     * 缓冲, 否则 127 线程共享写同一块内存 = 假失败。 */
+    struct sm_test_data local_d;
+    memcpy(&local_d, d, sizeof(local_d));   /* key/iv/data_size/golden_sm3 */
+    local_d.plaintext = (uint8_t *)malloc(local_d.data_size);
+    local_d.golden_ciphertext = (uint8_t *)malloc(local_d.data_size);
+    if (!local_d.plaintext || !local_d.golden_ciphertext) {
+        free(local_d.plaintext);
+        free(local_d.golden_ciphertext);
+        return EXIT_SKIP;
+    }
+    const size_t SM_DATA_SIZE = local_d.data_size;
+
+    /* Per-thread work buffers, allocated once outside the loop (no
+     * offsets needed, the cipher/digest work itself is the stress, same
+     * as the ipsec EVP tests). */
     uint8_t *ciphertext = (uint8_t *)malloc(SM_DATA_SIZE);
     uint8_t *decrypted = (uint8_t *)malloc(SM_DATA_SIZE);
     uint8_t *digest = (uint8_t *)malloc(SM3_DIGEST_SIZE);
 
     int outlen = 0;
-
-    /* randomization hardening H7': per-thread copy of the whole (small,
-     * ~2 KB) struct — the shared d is only read; plaintext and goldens
-     * live in this thread's copy and are re-rolled every iteration. */
-    struct sm_test_data local_d;
-    memcpy(&local_d, d, sizeof(local_d));
 
     TEST_LOOP(test, 256) {
         /* Re-roll: fresh plaintext + same-iteration golden through the
@@ -158,7 +207,7 @@ static int ssl_sm3sm4_run(struct test *test, int cpu)
         sm4_cbc_encrypt(local_d.sm4_key, local_d.sm4_iv, local_d.plaintext,
                         local_d.golden_ciphertext, SM_DATA_SIZE, &g_len);
         if (g_len != (int)SM_DATA_SIZE)
-            report_fail_msg("golden SM4-CBC encryption produced %d bytes, expected %u (padding surprise)",
+            report_fail_msg("golden SM4-CBC encryption produced %d bytes, expected %zu (padding surprise)",
                             g_len, SM_DATA_SIZE);
         sm3_digest(local_d.plaintext, SM_DATA_SIZE, local_d.golden_sm3);
 
@@ -166,7 +215,7 @@ static int ssl_sm3sm4_run(struct test *test, int cpu)
         sm4_cbc_encrypt(local_d.sm4_key, local_d.sm4_iv, local_d.plaintext, ciphertext,
                         SM_DATA_SIZE, &outlen);
         if (outlen != (int)SM_DATA_SIZE)
-            report_fail_msg("SM4-CBC encryption produced %d bytes, expected %u (padding surprise)",
+            report_fail_msg("SM4-CBC encryption produced %d bytes, expected %zu (padding surprise)",
                             outlen, SM_DATA_SIZE);
         memcmp_or_fail(ciphertext, local_d.golden_ciphertext, SM_DATA_SIZE,
                        "sm4-cbc ciphertext mismatch");
@@ -175,7 +224,7 @@ static int ssl_sm3sm4_run(struct test *test, int cpu)
         sm4_cbc_decrypt(local_d.sm4_key, local_d.sm4_iv, local_d.golden_ciphertext, decrypted,
                         SM_DATA_SIZE, &outlen);
         if (outlen != (int)SM_DATA_SIZE)
-            report_fail_msg("SM4-CBC decryption produced %d bytes, expected %u (padding surprise)",
+            report_fail_msg("SM4-CBC decryption produced %d bytes, expected %zu (padding surprise)",
                             outlen, SM_DATA_SIZE);
         memcmp_or_fail(decrypted, local_d.plaintext, SM_DATA_SIZE,
                        "sm4-cbc roundtrip mismatch");
@@ -187,6 +236,8 @@ static int ssl_sm3sm4_run(struct test *test, int cpu)
     }
 
 
+    free(local_d.plaintext);
+    free(local_d.golden_ciphertext);
     free(ciphertext);
     free(decrypted);
     free(digest);
@@ -195,7 +246,12 @@ static int ssl_sm3sm4_run(struct test *test, int cpu)
 
 static int ssl_sm3sm4_cleanup(struct test *test)
 {
-    free(test->data);
+    struct sm_test_data *d = (struct sm_test_data *)test->data;
+    if (d) {
+        free(d->plaintext);
+        free(d->golden_ciphertext);
+        free(d);
+    }
     return EXIT_SUCCESS;
 }
 

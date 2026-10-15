@@ -95,7 +95,10 @@ static int lockless_cmpxchg8b_finish(struct test *test) {
     memcpy(&reload_buf, &store_buf, sizeof(store_buf));
     bool consistent = (reload_buf == counter_value);
 
-    bool data_ok = (counter_value == total_local);
+    // counter 是 8 字节原子对象里的低 32 位，随 CAS 按 2^32 回绕；
+    // total_local 是各线程 64 位本地增量之和，不会回绕。这里必须按
+    // 模 2^32 比较，否则 total_local 超过 4G 时必然误报 data_ok=0。
+    bool data_ok = (counter_value == static_cast<uint32_t>(total_local));
     bool passed = data_ok && consistent;
 
     const char *color = passed ? "\033[32m" : "\033[31m";

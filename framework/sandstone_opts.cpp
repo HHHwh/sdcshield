@@ -6,6 +6,7 @@
 #include "sandstone_p.h"
 #include "topology.h"
 #include "sandstone_opts.hpp"
+#include "sdc_stress_config.h"
 
 #include <boost/algorithm/string.hpp>
 
@@ -949,6 +950,27 @@ struct ProgramOptionsParser {
             } else {
                 fprintf(ERR_STREAM, "%s: unknown reschedule mode: %s\n", argv[0], value);
                 return EX_USAGE;
+            }
+        }
+
+        /* SDC stress config file: load BEFORE the -O knobs so an explicit
+         * command-line -O overrides the file. The file uses the exact same
+         * KEY=VALUE namespace as -O (i.e. "testid.knob=value" lines), so
+         * semantics stay identical. Path resolution: $SDC_STRESS_CONFIG,
+         * else ./sdc_stress.conf if it exists; absence is not an error. */
+        {
+            const char *cfg_path = getenv("SDC_STRESS_CONFIG");
+            char default_path[] = "sdc_stress.conf";
+            if (!cfg_path || !*cfg_path) {
+                if (access("sdc_stress.conf", R_OK) == 0)
+                    cfg_path = default_path;
+            }
+            if (cfg_path && *cfg_path) {
+                char errbuf[256];
+                if (sdc_load_config_file(cfg_path, errbuf, sizeof(errbuf)) != 0) {
+                    fprintf(ERR_STREAM, "%s: %s: %s\n", argv[0], cfg_path, errbuf);
+                    return EX_USAGE;
+                }
             }
         }
 

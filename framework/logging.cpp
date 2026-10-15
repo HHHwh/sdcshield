@@ -630,9 +630,11 @@ static std::string create_filtered_message_string(const char *fmt, va_list va)
 {
     std::string s = vstdprintf(fmt, va);
     for (char &c : s) {
-        // filter any non-US-ASCII character from the message
-        // (this includes any non-terminating NUL)
-        if (c < 0x20 || c > 0x7e) {
+        // filter any control character from the message (this includes any
+        // non-terminating NUL).  Bytes >= 0x80 are kept intact so that valid
+        // UTF-8 diagnostics (e.g. Chinese log messages) stay readable instead
+        // of degrading to '?'.
+        if (static_cast<unsigned char>(c) < 0x20) {
             if (c != '\n' && c != '\t')
                 c = '?';
         }

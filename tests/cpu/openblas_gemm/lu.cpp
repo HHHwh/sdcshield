@@ -35,9 +35,15 @@
  * (n doubles, nrhs=1). All three are deterministic: the same input bits
  * through the same binary always produce the same pivot choices, so a
  * byte-exact memcmp is valid.
- * The matrix dimension is runtime-configurable via the test knob
- * "-O openblas_lu.n=N" (16..2048, default 256; the test-id prefix is
- * required — a bare "n=N" is silently ignored). The knob sweeps the
+ * The matrix dimension is runtime-configurable through the unified
+ * stress-config chain (priority order): "-O openblas_lu.n=N" or a
+ * config-file entry (16..16384; out-of-range values warn and clamp
+ * instead of failing; the test-id prefix is required — a bare "n=N"
+ * is silently ignored), the SDC_OPENBLAS_LU_N environment variable,
+ * or a memory-adaptive default when neither is set (4 double matrices
+ * per thread — the global a/lu and per-thread ac buffers are n^2 each
+ * and b/ipiv/x/ipivc/xc are O(n) — at a 6.0x (eigen-GEMM) RSS ratio and 85% of
+ * physical memory, clamped to 128..8192; explicit knob range 16..16384). The knob sweeps the
  * working set across L1D (64KB) / L2 (512KB) / LLC / DRAM on TSV110
  * (64: 32KB, 256: 512KB, 1024: 8MB, 2048: 32MB per matrix) at an O(n^3)
  * flop budget per iteration (2048^3 = 8.6e9 flops, matching the mdim 2048
@@ -54,6 +60,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <lapacke.h>
 
@@ -62,7 +69,9 @@
 
 namespace {
 struct lu_test_data {
-    int n;               /* matrix dimension, from the -O openblas_lu.n=N knob */
+    int n;               /* matrix dimension, from the unified config chain (-O
+                            openblas_lu.n / config file / SDC_OPENBLAS_LU_N /
+                            memory-adaptive default; see openblas_lu_n) */
     double *a;           /* original matrix, n^2, read-only (input to the dgesv copy) */
     double *lu;          /* golden packed L\U factors (dgesv overwrites its A arg in-place) */
     int *ipiv;           /* golden pivot sequence, n ints */
@@ -96,14 +105,29 @@ static double random_bounded(void) {
     return sign * (frac * 2.0e-3 + 1.0e-6);
 }
 
+/* 方阵维度 n — 统一配置链 (旧式 get_testspecific_knob_value_int + 越界
+ * 致命 report_fail_msg 的迁移版, knob 名不变):
+ *   1. -O openblas_lu.n=N / 配置文件同名条目 (16..16384, 越界告警并
+ *      clamp — 旧版致命失败改为非致命)
+ *   2. 环境变量 SDC_OPENBLAS_LU_N
+ *   3. 自适应默认: 全局 a/lu (n²) + b/ipiv/x (O(n)) + 每线程 ac (n²) +
+ *      ipivc/xc (O(n)) ≈ 4 个 double 方阵/线程, RSS 峰值 ≈ 矩阵体积
+ *      6.0 倍(eigen 同模型), 合计占物理内存 85%, clamp [128, 8192] (显式配置下限
+ *      16 兼容旧范围, 自适应下限 128 免得默认工作集缩进 L1)。 */
+static int openblas_lu_n(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "n", 0, 16, 16384);
+    if (v == 0)
+        sdc_env_knob_int_clamped("openblas_lu", "n", &v, 16, 16384);
+    if (v > 0)
+        return (int)v;
+    return sdc_auto_square_dim(8, 4, 6.0, 850, thread_count(), 128, 8192, test->id, "n");
+}
+
 static int openblas_lu_init(struct test *test) {
     auto d = new(lu_test_data);
     test->data = d;
-    int64_t knob = get_testspecific_knob_value_int(test, "n", 256);
-    if (knob < 16 || knob > 2048) {
-        report_fail_msg("n knob out of range: %ld (valid 16..2048, default 256)", (long)knob);
-    }
-    d->n = (int)knob;
+    d->n = openblas_lu_n(test);
     size_t n2 = (size_t)d->n * (size_t)d->n;
     d->a    = (double *)malloc(n2 * sizeof(double));
     d->b    = (double *)malloc((size_t)d->n * sizeof(double));

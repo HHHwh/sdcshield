@@ -11,10 +11,15 @@
  * packing — the predicate register IS the sign mask, the native SVE
  * expression of MOVMSKPS/PD. Goldens are computed from raw sign bits
  * exactly as the original.
+ * The operand-pair count (originally MOVMSK_COUNT=1024) is runtime
+ * configurable via -O movmskpspd_sve.count=N / SDC_MOVMSKPSPD_SVE_COUNT,
+ * with a memory-adaptive default when unconfigured (FPS_LANES/FPD_LANES
+ * width semantics unchanged).
  * @endparblock
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -32,11 +37,29 @@
 #define FPS_LANES 4
 #define FPD_LANES 2
 
+/* 操作数对数 MOVMSK_COUNT(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O movmskpspd_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_MOVMSKPSPD_SVE_COUNT
+ *   3. 自适应: fvalues(4×4B)+dvalues(2×8B)+fexpected(4B)+dexpected(4B)
+ *      ≈ 40B/对(模型 8B×4), 占物理内存 60%, clamp [1024, 64M]。
+ *      FPS_LANES/FPD_LANES 宽度语义不动。 */
+static size_t movmskpspd_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, MOVMSK_COUNT, 64 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("movmskpspd_sve", "count", &v, MOVMSK_COUNT, 64 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(8, 4, 1.0, 600, thread_count(),
+                                         MOVMSK_COUNT, 64 << 20, test->id, "count");
+}
+
 struct MovmskpspdSveData {
     float *fvalues;
     double *dvalues;
     uint32_t *fexpected;
     uint32_t *dexpected;
+    size_t count;
 };
 
 static int movmskpspd_sve_init(struct test *test)
@@ -51,17 +74,19 @@ static int movmskpspd_sve_init(struct test *test)
 #endif
 
     auto *data = static_cast<MovmskpspdSveData *>(malloc(sizeof(MovmskpspdSveData)));
+    const size_t count = movmskpspd_sve_count(test);
+    data->count = count;
 
-    data->fvalues  = static_cast<float *>(aligned_alloc(16, MOVMSK_COUNT * FPS_LANES * sizeof(float)));
-    data->dvalues  = static_cast<double *>(aligned_alloc(16, MOVMSK_COUNT * FPD_LANES * sizeof(double)));
-    data->fexpected = static_cast<uint32_t *>(malloc(MOVMSK_COUNT * sizeof(uint32_t)));
-    data->dexpected = static_cast<uint32_t *>(malloc(MOVMSK_COUNT * sizeof(uint32_t)));
+    data->fvalues  = static_cast<float *>(aligned_alloc(16, count * FPS_LANES * sizeof(float)));
+    data->dvalues  = static_cast<double *>(aligned_alloc(16, count * FPD_LANES * sizeof(double)));
+    data->fexpected = static_cast<uint32_t *>(malloc(count * sizeof(uint32_t)));
+    data->dexpected = static_cast<uint32_t *>(malloc(count * sizeof(uint32_t)));
 
-    memset_random(data->fvalues, MOVMSK_COUNT * FPS_LANES * sizeof(float));
-    memset_random(data->dvalues, MOVMSK_COUNT * FPD_LANES * sizeof(double));
+    memset_random(data->fvalues, count * FPS_LANES * sizeof(float));
+    memset_random(data->dvalues, count * FPD_LANES * sizeof(double));
 
     /* Golden masks from raw sign bits (independent of the instruction under test) */
-    for (int i = 0; i < MOVMSK_COUNT; i++) {
+    for (size_t i = 0; i < count; i++) {
         uint32_t mask = 0;
         for (int j = 0; j < FPS_LANES; j++) {
             uint32_t bits;
@@ -71,7 +96,7 @@ static int movmskpspd_sve_init(struct test *test)
         }
         data->fexpected[i] = mask;
     }
-    for (int i = 0; i < MOVMSK_COUNT; i++) {
+    for (size_t i = 0; i < count; i++) {
         uint32_t mask = 0;
         for (int j = 0; j < FPD_LANES; j++) {
             uint64_t bits;
@@ -131,22 +156,23 @@ static int movmskpspd_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *data = static_cast<MovmskpspdSveData *>(test->data);
+    const size_t count = data->count;
 
     TEST_LOOP(test, 1 << 13) {
-        for (int i = 0; i < MOVMSK_COUNT; i++) {
+        for (size_t i = 0; i < count; i++) {
             uint32_t fmask = do_movmskps_sve(&data->fvalues[i * FPS_LANES]);
             if (fmask != data->fexpected[i]) {
                 report_fail_msg(
-                    "movmskpspd_sve: MOVMSKPS mismatch at index %d: "
+                    "movmskpspd_sve: MOVMSKPS mismatch at index %zu: "
                     "expected 0x%x got 0x%x",
                     i, data->fexpected[i], fmask);
             }
         }
-        for (int i = 0; i < MOVMSK_COUNT; i++) {
+        for (size_t i = 0; i < count; i++) {
             uint32_t dmask = do_movmskpd_sve(&data->dvalues[i * FPD_LANES]);
             if (dmask != data->dexpected[i]) {
                 report_fail_msg(
-                    "movmskpspd_sve: MOVMSKPD mismatch at index %d: "
+                    "movmskpspd_sve: MOVMSKPD mismatch at index %zu: "
                     "expected 0x%x got 0x%x",
                     i, data->dexpected[i], dmask);
             }

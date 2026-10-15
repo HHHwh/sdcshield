@@ -22,9 +22,9 @@
 
 #if SANDSTONE_SSL_BUILD
 #include "sandstone_ssl.h"
+#include "sdc_stress_config.h"
 #include <string.h>
 
-#define DATA_SIZE             (1024u)
 #define AES_KEY_SIZE          (16)
 #define AES_IV_SIZE           (16)
 #define CMAC_KEY_SIZE         (16)
@@ -35,10 +35,22 @@ struct aes_cmac_avx_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
     uint8_t cmac_key[CMAC_KEY_SIZE];
-    uint8_t plaintext[DATA_SIZE];
-    uint8_t golden_ciphertext[DATA_SIZE];
+    uint8_t *plaintext;
+    uint8_t *golden_ciphertext;
     uint8_t golden_mac[CMAC_96_DIGEST_SIZE];
+    size_t data_size;
 };
+
+static size_t ipsec_data_size(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "data_size", 0, 1024, 16 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("ipsec_aes128_cbc_aes_cmac_sve", "data_size", &v, 1024, 16 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(1, 4, 1.5, 600, thread_count(),
+                                         1024, 16 << 20, test->id, "data_size");
+}
 
 static void aes_cmac_96(const uint8_t *key, const uint8_t *msg, size_t len, uint8_t *out) {
     CMAC_CTX *ctx = s_CMAC_CTX_new();
@@ -74,19 +86,36 @@ static void aes_decrypt(const uint8_t *key, const uint8_t *iv, const uint8_t *in
 }
 
 static void aes_cmac_avx_compute_golden(struct aes_cmac_avx_data *d) {
-    aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, DATA_SIZE);
-    aes_cmac_96(d->cmac_key, d->golden_ciphertext, DATA_SIZE, d->golden_mac);
+    aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, d->data_size);
+    aes_cmac_96(d->cmac_key, d->golden_ciphertext, d->data_size, d->golden_mac);
 }
 
 static int aes_cmac_avx_init(struct test *test) {
     if (s_EVP_CIPHER_CTX_new && s_EVP_EncryptInit_ex && s_EVP_DecryptInit_ex && s_EVP_aes_128_cbc() && s_CMAC_CTX_new) {
         struct aes_cmac_avx_data *d = (struct aes_cmac_avx_data *)malloc(sizeof(*d));
         if (!d) return EXIT_SKIP;
+        /* 工作集字节数: -O ipsec_aes128_cbc_aes_cmac_sve.data_size=N /
+         * SDC_IPSEC_AES128_CBC_AES_CMAC_SVE_DATA_SIZE 环境变量 / 自适应:
+         * 每线程明文+密文+golden 密文+解密缓冲 ~= 4x, 占物理内存 60%,
+         * clamp [1024, 16M]。线性缓冲用 sdc_auto_linear_count（sqrt 缩放会欠缩放压力）。历史硬编码 1024。CBC 无填充场景尺寸必须
+         * 对齐到 AES 分组 16B, 对齐后 < 1024 取 1024。 */
+        d->data_size = ipsec_data_size(test);
+        d->data_size &= ~(size_t)15;
+        if (d->data_size < 1024)
+            d->data_size = 1024;
+        d->plaintext = (uint8_t *)malloc(d->data_size);
+        d->golden_ciphertext = (uint8_t *)malloc(d->data_size);
+        if (!d->plaintext || !d->golden_ciphertext) {
+            free(d->plaintext);
+            free(d->golden_ciphertext);
+            free(d);
+            return EXIT_SKIP;
+        }
 
         memset_random(d->aes_key, AES_KEY_SIZE);
         memset_random(d->aes_iv, AES_IV_SIZE);
         memset_random(d->cmac_key, CMAC_KEY_SIZE);
-        memset_random(d->plaintext, DATA_SIZE);
+        memset_random(d->plaintext, d->data_size);
 
         aes_cmac_avx_compute_golden(d);
 
@@ -101,8 +130,8 @@ static int aes_cmac_avx_init(struct test *test) {
 static int aes_cmac_avx_run(struct test *test, int cpu) {
     struct aes_cmac_avx_data *d = (struct aes_cmac_avx_data *)test->data;
 
-    uint8_t *ciphertext = (uint8_t *)malloc(DATA_SIZE);
-    uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
+    uint8_t *ciphertext = (uint8_t *)malloc(d->data_size);
+    uint8_t *decrypted = (uint8_t *)malloc(d->data_size);
     uint8_t *mac = (uint8_t *)malloc(CMAC_96_DIGEST_SIZE);
 
     /* R2b (B2-003): per-thread plaintext + golden, re-rolled every
@@ -112,6 +141,21 @@ static int aes_cmac_avx_run(struct test *test, int cpu) {
      * thread's stack; keys/IV ride along as identical values). */
     struct aes_cmac_avx_data local_d;
     memcpy(&local_d, d, sizeof(local_d));
+    /* plaintext/golden_ciphertext 是指针, 浅拷贝会让 local_d 与共享 d
+     * 指向同一缓冲; re-roll 的 memset_random/compute_golden 会破坏 d 的
+     * 冻结输入与 golden, 使下一轮 frozen replay 误比较。独立分配隔离。 */
+    local_d.plaintext = (uint8_t *)malloc(d->data_size);
+    local_d.golden_ciphertext = (uint8_t *)malloc(d->data_size);
+    if (!local_d.plaintext || !local_d.golden_ciphertext) {
+        free(local_d.plaintext);
+        free(local_d.golden_ciphertext);
+        free(ciphertext);
+        free(decrypted);
+        free(mac);
+        log_skip(TestResourceIssueSkipCategory,
+                 "out of memory for per-thread buffers");
+        return EXIT_SKIP;
+    }
     long iter = 0;
     TEST_LOOP(test, 256) {
         if (iter & 1) {
@@ -122,26 +166,26 @@ static int aes_cmac_avx_run(struct test *test, int cpu) {
              * other round replays init's frozen inputs and compares
              * byte-exact against init's golden computed on a
              * different core. */
-            aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
-            memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "AES-128-CBC ciphertext mismatch (frozen replay)");
+            aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, d->data_size);
+            memcmp_or_fail(ciphertext, d->golden_ciphertext, d->data_size, "AES-128-CBC ciphertext mismatch (frozen replay)");
 
-            aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
-            memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "AES-128-CBC decryption mismatch (frozen replay)");
+            aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, d->data_size);
+            memcmp_or_fail(decrypted, d->plaintext, d->data_size, "AES-128-CBC decryption mismatch (frozen replay)");
 
-            aes_cmac_96(d->cmac_key, ciphertext, DATA_SIZE, mac);
+            aes_cmac_96(d->cmac_key, ciphertext, d->data_size, mac);
             memcmp_or_fail(mac, d->golden_mac, CMAC_96_DIGEST_SIZE, "AES-CMAC-96 digest mismatch (frozen replay)");
         } else {
             /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
              * CMAC-96 recomputed for this thread's data) */
-            memset_random(local_d.plaintext, DATA_SIZE);
+            memset_random(local_d.plaintext, d->data_size);
             aes_cmac_avx_compute_golden(&local_d);
-            aes_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
-            memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "AES-128-CBC ciphertext mismatch (AVX)");
+            aes_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, d->data_size);
+            memcmp_or_fail(ciphertext, local_d.golden_ciphertext, d->data_size, "AES-128-CBC ciphertext mismatch (AVX)");
 
-            aes_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
-            memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "AES-128-CBC decryption mismatch (AVX)");
+            aes_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, d->data_size);
+            memcmp_or_fail(decrypted, local_d.plaintext, d->data_size, "AES-128-CBC decryption mismatch (AVX)");
 
-            aes_cmac_96(local_d.cmac_key, ciphertext, DATA_SIZE, mac);
+            aes_cmac_96(local_d.cmac_key, ciphertext, d->data_size, mac);
             memcmp_or_fail(mac, local_d.golden_mac, CMAC_96_DIGEST_SIZE, "AES-CMAC-96 digest mismatch (AVX)");
         }
         ++iter;
@@ -150,11 +194,18 @@ static int aes_cmac_avx_run(struct test *test, int cpu) {
     free(ciphertext);
     free(decrypted);
     free(mac);
+    free(local_d.plaintext);
+    free(local_d.golden_ciphertext);
     return EXIT_SUCCESS;
 }
 
 static int aes_cmac_avx_cleanup(struct test *test) {
-    free(test->data);
+    struct aes_cmac_avx_data *d = (struct aes_cmac_avx_data *)test->data;
+    if (d) {
+        free(d->plaintext);
+        free(d->golden_ciphertext);
+    }
+    free(d);
     return EXIT_SUCCESS;
 }
 

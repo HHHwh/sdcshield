@@ -49,6 +49,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <Eigen/Core>
 
@@ -60,7 +61,9 @@ using namespace Eigen;
 
 typedef Matrix<double, Dynamic, Dynamic> Mat;
 
-/* Memory-safe dimension bounds. N=4096 -> 4 matrices x 128 MB per thread. */
+/* Memory-safe dimension bounds. N=4096 -> 4 matrices x 128 MB per thread.
+ * 全部可通过统一配置层覆盖: -O eigen_gemm_double_max_arm.mdim=N /
+ * 配置文件 / 环境变量, 见 sdc_stress_config.h。 */
 #define MDIM_MIN 1024
 #define MDIM_MAX 4096
 #define RSS_MATRIX_RATIO 6.0
@@ -70,7 +73,7 @@ constexpr int kRerollEvery = 16;
 
 int g_dim = MDIM_MIN;
 
-int choose_dim(struct test *test)
+static int choose_dim(struct test *test)
 {
     long pages = sysconf(_SC_PHYS_PAGES);
     long page_size = sysconf(_SC_PAGESIZE);
@@ -79,9 +82,16 @@ int choose_dim(struct test *test)
                                 ? (double)pages * (double)page_size / nthreads
                                 : 0.0;
 
-    int64_t knob = get_testspecific_knob_value_int(test, "mdim", 0);
+    /* 统一配置链: -O mdim= / 配置文件 / SDC_EIGEN_GEMM_DOUBLE_MAX_ARM_MDIM */
+    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
+    if (knob == 0) {
+        int64_t envv = 0;
+        if (sdc_env_knob_int("eigen_gemm_double_max_arm", "mdim", &envv))
+            knob = (envv < MDIM_MIN) ? MDIM_MIN
+                  : (envv > MDIM_MAX ? MDIM_MAX : envv);
+    }
     if (knob > 0)
-        return (int)(knob < MDIM_MIN ? MDIM_MIN : (knob > MDIM_MAX ? MDIM_MAX : knob));
+        return (int)knob;
 
     if (ram_per_worker <= 0.0)
         return MDIM_MIN;    /* introspection unavailable: conservative floor */

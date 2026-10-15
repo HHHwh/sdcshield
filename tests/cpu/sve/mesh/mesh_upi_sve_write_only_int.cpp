@@ -1,4 +1,5 @@
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -12,12 +13,37 @@
 #define HWCAP_SVE (1 << 22)
 #endif
 
-#define PER_THREAD_SIZE (1 << 20)      // 每个线程 1M 个 int32 = 4MB
 #define VECTOR_SIZE 4                  // 原负载：每次存储 4 个 int32（SVE 谓词分批）
+// 每线程元素数在 run 中按目标内存动态计算(见 mesh_target_bytes)。
 
 struct TestData {
     std::atomic<uint64_t> thread_idx;
+    size_t per_thread_elements;         // 运行时每线程元素数(按目标内存计算)
 };
+
+// 每线程目标字节数: -O mesh_upi_sve_write_only_int.buffer_bytes=N /
+// SDC_MESH_UPI_SVE_WRITE_ONLY_INT_BUFFER_BYTES 环境变量 /
+// 自适应 = 物理内存 90% 在 2 路 mesh 战役间均摊后, 再按线程数均摊
+// (每线程独立缓冲, 总占用 = buffer_bytes * nthreads)
+static size_t mesh_target_bytes(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,
+                                     1 << 20, 1ll << 44);
+    if (v == 0)
+        sdc_env_knob_int_clamped(test->id, "buffer_bytes", &v, 1 << 20, 1ll << 44);
+    if (v > 0)
+        return (size_t)v;
+    /* 旧脚本兼容: SDC_MESH_BUFFER_BYTES 直接指定字节 */
+    if (const char *e = getenv("SDC_MESH_BUFFER_BYTES")) {
+        char *end = nullptr;
+        unsigned long long b = strtoull(e, &end, 10);
+        if (end && *end == '\0' && b > 0)
+            return (size_t)b;
+    }
+    int threads = thread_count();
+    if (threads < 1) threads = 1;
+    return sdc_target_workset_bytes(900, 2, nullptr) / (size_t)threads;
+}
 
 static int mesh_upi_sve_write_only_int_init(struct test *test) {
     unsigned long hwcap = getauxval(AT_HWCAP);
@@ -30,6 +56,13 @@ static int mesh_upi_sve_write_only_int_init(struct test *test) {
     auto *td = new TestData;
     if (!td) return EXIT_FAILURE;
     td->thread_idx.store(0, std::memory_order_relaxed);
+
+    const size_t elem_bytes = sizeof(int32_t);
+    size_t target = mesh_target_bytes(test);
+    td->per_thread_elements = target / elem_bytes;
+    /* 向下对齐到 VECTOR_SIZE 的整数倍, 保证写循环步进不越界 */
+    td->per_thread_elements = td->per_thread_elements / VECTOR_SIZE * VECTOR_SIZE;
+    if (td->per_thread_elements < VECTOR_SIZE) td->per_thread_elements = VECTOR_SIZE;
     test->data = td;
     return EXIT_SUCCESS;
 }
@@ -41,7 +74,8 @@ static int mesh_upi_sve_write_only_int_run(struct test *test, int cpu) {
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
 
     // 每个线程独立分配自己的缓冲区（对齐到 16 字节）
-    alignas(16) int32_t *buf = (int32_t*)aligned_alloc(16, PER_THREAD_SIZE * sizeof(int32_t));
+    const size_t per_thread_bytes = td->per_thread_elements * sizeof(int32_t);
+    alignas(16) int32_t *buf = (int32_t*)aligned_alloc(16, per_thread_bytes);
     if (!buf) {
         report_fail_msg("Failed to allocate buffer");
         return EXIT_FAILURE;
@@ -61,7 +95,7 @@ static int mesh_upi_sve_write_only_int_run(struct test *test, int cpu) {
         bool passed = true;
         int32_t first_vals[VECTOR_SIZE]; // 用于输出本次的输入
 
-        for (size_t i = 0; i < PER_THREAD_SIZE; i += VECTOR_SIZE) {
+        for (size_t i = 0; i < td->per_thread_elements; i += VECTOR_SIZE) {
             // 生成 VECTOR_SIZE 个随机数
             int32_t vals[VECTOR_SIZE];
             for (int j = 0; j < VECTOR_SIZE; ++j) {

@@ -37,6 +37,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 
@@ -44,7 +45,23 @@
 #include <arm_sve.h>
 #endif
 
-#define SVE_ROT_LDR_AT_TOP_SLOTS 1024   /* z-register-width elements per buffer */
+/* 每缓冲 VL 槽数(原 1024, 缓冲 = 槽数 × VL 字节) — 统一优先级链:
+ *   1. -O sve_rot_ldr_at_top.slots=N / 配置文件同名条目
+ *   2. 环境变量 SDC_SVE_ROT_LDR_AT_TOP_SLOTS
+ *   3. 自适应: 共享 srcA/srcB/scratch/expected 4 + 每线程 temp/dst 2,
+ *      共 6 个 VL 宽缓冲, 每槽一个 VL(128b VL 即 16B/槽), 占物理内存
+ *      60%, clamp [1024, 1M]。槽距 = 1 个 VL(连续排布), 槽数只决定
+ *      缓冲槽数, 不影响槽间地址模式。 */
+static size_t sve_rot_ldr_at_top_slots(struct test *test, size_t vl_bytes)
+{
+    int64_t v = sdc_knob_int_clamped(test, "slots", 0, 1024, 1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("sve_rot_ldr_at_top", "slots", &v, 1024, 1 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count((int64_t)vl_bytes, 6, 1.0, 600,
+                                         thread_count(), 1024, 1 << 20, test->id, "slots");
+}
 
 struct SveRotLdrAtTopData {
     int      vl_slots;   /* element count in full z-register widths */
@@ -83,7 +100,7 @@ static inline svuint64_t rot_alu(int i, svuint64_t a, svuint64_t b) {
 static int sve_rot_ldr_at_top_init(struct test *test) {
     auto *data = static_cast<SveRotLdrAtTopData *>(malloc(sizeof(SveRotLdrAtTopData)));
     data->vl_bytes = svcntb();
-    data->vl_slots = SVE_ROT_LDR_AT_TOP_SLOTS;
+    data->vl_slots = (int)sve_rot_ldr_at_top_slots(test, data->vl_bytes);
 
     const size_t buf = data->vl_slots * data->vl_bytes;
     data->srcA     = static_cast<uint8_t *>(aligned_alloc_safe(64, buf));

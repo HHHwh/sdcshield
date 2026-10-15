@@ -27,15 +27,32 @@
  */
 
 #include "sandstone_eigen_common.h"
+#include "sdc_stress_config.h"
 
 using namespace Eigen;
 
 typedef Matrix < std::complex <double >, Dynamic, Dynamic > Mat;
 typedef Eigen::BDCSVD < Mat > SVD;
 
-#define M_DIM 300               // weird dim on purpose
+/*
+ * 运行时维度模式, 统一配置链 (-O eigen_svd_cdouble.mdim=N / 配置文件 /
+ * 环境变量 SDC_EIGEN_SVD_CDOUBLE_MDIM / 自适应)。complex<double>
+ * 16B/元素, RSS ~12x, 6 矩阵/线程, 物理内存 65%。历史硬编码 300
+ * (刻意的"怪"维度, 显式配置时保留任意值语义)。
+ */
+using eigen_svd_cdouble_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
-using eigen_svd_cdouble_test = EigenSVDTest<SVD, M_DIM>;
+static int eigen_svd_cdouble_init(struct test *test)
+{
+    auto d = new eigen_svd_cdouble_test::eigen_test_data;
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
+    if (v == 0)
+        sdc_env_knob_int_clamped("eigen_svd_cdouble", "mdim", &v, 64, 2048);
+    d->dim = (v > 0) ? (int)v
+                     : sdc_auto_square_dim(16, 6, 12.0, 650, thread_count(), 64, 2048, test->id, "mdim");
+    test->data = d;
+    return EXIT_SUCCESS;
+}
 
 /* On x86-64 the test is gated on AVX-512 (Eigen selects the AVX-512 packet
  * path); on other architectures (e.g. ARM64) there is no equivalent feature
@@ -49,7 +66,7 @@ using eigen_svd_cdouble_test = EigenSVDTest<SVD, M_DIM>;
 
 DECLARE_TEST(eigen_svd_cdouble, "Eigen SVD (Singular Value Decomposition) solving payload, which issues a bunch of matrix multiplies underneath, now operating on std::complex<double>")
   .groups = DECLARE_TEST_GROUPS(&group_math),
-  .test_init = eigen_svd_cdouble_test::init,
+  .test_init = eigen_svd_cdouble_init,
   .test_run = eigen_svd_cdouble_test::run,
   .test_cleanup = eigen_svd_cdouble_test::cleanup,
   .minimum_cpu = SVD_CDOUBLE_MINIMUM_CPU,

@@ -281,12 +281,13 @@ phase_l2() {
             handle_failure "l2_$(basename "$f" .yaml)" "$f" 0 "spectrum sweep"
         fi
     done
-    # 1g: ipsec 数据路径谱系（代表子集 × datasize）
+    # 1g: ipsec 数据路径谱系（代表子集 × data_size）
+    # 旋钮名 data_size 与重构后的 ipsec 用例一致（旧名 datasize 静默失效）
     if [ -n "$IPSEC_SUBSET" ]; then
         local ds t oargs
         for ds in 1024 65536 16777216; do
             oargs=(); IFS=',' read -ra arr <<< "$IPSEC_SUBSET"
-            for t in "${arr[@]}"; do oargs+=(-O "$t.datasize=$ds"); done
+            for t in "${arr[@]}"; do oargs+=(-O "$t.data_size=$ds"); done
             run_bounded "l2_ipsec_ds${ds}_c${CYCLE}" "$(DUR_S "$T_IPSEC")" 120 \
                 -e "$IPSEC_SUBSET" "${oargs[@]}" "${FLAGS[@]}"
         done

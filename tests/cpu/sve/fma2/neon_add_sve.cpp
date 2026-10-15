@@ -9,10 +9,14 @@
  * (svld1/svadd/svst1) instead of NEON vaddq. Golden precomputed in init
  * on the same SVE units (same pattern as the original); every run
  * recomputes and memcmp-compares.
+ * The element count (originally SVE_ADD_ELEMENTS=1024) is runtime
+ * configurable via -O neon_add_sve.count=N / SDC_NEON_ADD_SVE_COUNT,
+ * with a memory-adaptive default when unconfigured.
  * @endparblock
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 
 #ifdef __aarch64__
 #include <arm_sve.h>
@@ -25,21 +29,37 @@
 #endif
 
 #define SVE_ADD_ELEMENTS (1u << 10)
-#define SVE_ADD_BUF_SIZE (SVE_ADD_ELEMENTS * sizeof(uint32_t))
 
 struct neon_add_sve_t_ {
         uint32_t *a;
         uint32_t *b;
         uint32_t *golden;
+        size_t count;
 };
 typedef struct neon_add_sve_t_ neon_add_sve_t;
 
 #ifdef __aarch64__
-static void prv_do_add(const uint32_t *a, const uint32_t *b, uint32_t *res)
+/* 元素数 SVE_ADD_ELEMENTS(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O neon_add_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_NEON_ADD_SVE_COUNT
+ *   3. 自适应: a/b/golden(共享)+每线程 res, 4×4B/元素,
+ *      占物理内存 60%, clamp [1024, 64M]。原 1024 为下限。 */
+static size_t neon_add_sve_count(struct test *test)
+{
+        int64_t v = sdc_knob_int_clamped(test, "count", 0, SVE_ADD_ELEMENTS, 64 << 20);
+        if (v == 0)
+                sdc_env_knob_int_clamped("neon_add_sve", "count", &v, SVE_ADD_ELEMENTS, 64 << 20);
+        if (v > 0)
+                return (size_t)v;
+        return (size_t)sdc_auto_linear_count(4, 4, 1.0, 600, thread_count(),
+                                             SVE_ADD_ELEMENTS, 64 << 20, test->id, "count");
+}
+
+static void prv_do_add(const uint32_t *a, const uint32_t *b, uint32_t *res, size_t n)
 {
         /* VL 无关: svcntw() 分批 + whilelt 尾部 */
-        for (size_t base = 0; base < SVE_ADD_ELEMENTS; base += svcntw()) {
-                svbool_t pg = svwhilelt_b32((uint64_t)base, (uint64_t)SVE_ADD_ELEMENTS);
+        for (size_t base = 0; base < n; base += svcntw()) {
+                svbool_t pg = svwhilelt_b32((uint64_t)base, (uint64_t)n);
                 svuint32_t r1 = svld1_u32(pg, a + base);
                 svuint32_t r2 = svld1_u32(pg, b + base);
                 svst1_u32(pg, res + base, svadd_u32_x(pg, r1, r2));
@@ -58,14 +78,18 @@ static int neon_add_sve_init(struct test *test)
         }
 
         neon_add_sve_t *na = static_cast<neon_add_sve_t *>(malloc(sizeof(*na)));
+        const size_t count = neon_add_sve_count(test);
+        const size_t buf_size = count * sizeof(uint32_t);
+        na->count = count;
 
-        na->a = static_cast<uint32_t *>(aligned_alloc(64, SVE_ADD_BUF_SIZE));
-        na->b = static_cast<uint32_t *>(aligned_alloc(64, SVE_ADD_BUF_SIZE));
-        na->golden = static_cast<uint32_t *>(aligned_alloc_safe(64, SVE_ADD_BUF_SIZE));
+        /* aligned_alloc_safe: 运行时 count*4 不保证 64 的倍数, 向上取整保对齐 */
+        na->a = static_cast<uint32_t *>(aligned_alloc_safe(64, buf_size));
+        na->b = static_cast<uint32_t *>(aligned_alloc_safe(64, buf_size));
+        na->golden = static_cast<uint32_t *>(aligned_alloc_safe(64, buf_size));
 
-        memset_random(na->a, SVE_ADD_BUF_SIZE);
-        memset_random(na->b, SVE_ADD_BUF_SIZE);
-        prv_do_add(na->a, na->b, na->golden);
+        memset_random(na->a, buf_size);
+        memset_random(na->b, buf_size);
+        prv_do_add(na->a, na->b, na->golden, count);
 
         test->data = na;
 
@@ -79,12 +103,14 @@ static int neon_add_sve_run(struct test *test, int cpu)
 {
 #ifdef __aarch64__
         neon_add_sve_t *na = static_cast<neon_add_sve_t *>(test->data);
-        uint32_t *res = static_cast<uint32_t *>(aligned_alloc(64, SVE_ADD_BUF_SIZE));
+        const size_t count = na->count;
+        const size_t buf_size = count * sizeof(uint32_t);
+        uint32_t *res = static_cast<uint32_t *>(aligned_alloc_safe(64, buf_size));
 
         TEST_LOOP(test, 1 << 13) {
-                memset(res, 0, SVE_ADD_BUF_SIZE);
-                prv_do_add(na->a, na->b, res);
-                memcmp_or_fail(res, na->golden, SVE_ADD_ELEMENTS);
+                memset(res, 0, buf_size);
+                prv_do_add(na->a, na->b, res, count);
+                memcmp_or_fail(res, na->golden, count);
         }
 
         free(res);

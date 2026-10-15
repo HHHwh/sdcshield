@@ -27,18 +27,39 @@
  */
 
 #include "sandstone_eigen_common.h"
+#include "sdc_stress_config.h"
 
 using namespace Eigen;
 
 typedef Matrix < float, Dynamic, Dynamic > Mat;
 typedef Eigen::BDCSVD < Mat > SVD;
 
-#define M_DIM 256
+/*
+ * 运行时维度模式: 维度经统一配置链解析:
+ *   1. -O eigen_svd.mdim=N / 配置文件同名条目
+ *   2. 环境变量 SDC_EIGEN_SVD_MDIM
+ *   3. 自适应: 6 矩阵/线程(orig/u_gold/v_gold/u/v + BDCSVD 工作区,
+ *      RSS ~12x), 占物理内存 65%, clamp [64, 4096]。
+ * 历史硬编码 256。float SVD 时间上限: N=4096 远超 10 分钟预算,
+ * 因此 hi 保守取 2048 (实测 BDCSVD float N=2048 数十秒级)。
+ */
+using eigen_svd_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
-using eigen_svd_test = EigenSVDTest<SVD, M_DIM>;
+static int eigen_svd_init(struct test *test)
+{
+    auto d = new eigen_svd_test::eigen_test_data;
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
+    if (v == 0)
+        sdc_env_knob_int_clamped("eigen_svd", "mdim", &v, 64, 2048);
+    d->dim = (v > 0) ? (int)v
+                     : sdc_auto_square_dim(4, 6, 12.0, 650, thread_count(), 64, 2048, test->id, "mdim");
+    test->data = d;
+    return EXIT_SUCCESS;
+}
+
 DECLARE_TEST(eigen_svd, "Eigen SVD (Singular Value Decomposition) solving payload, which issues a bunch of matrix multiplies underneath")
   .groups = DECLARE_TEST_GROUPS(&group_math),
-  .test_init = eigen_svd_test::init,
+  .test_init = eigen_svd_init,
   .test_run = eigen_svd_test::run,
   .test_cleanup = eigen_svd_test::cleanup,
   .fracture_loop_count = 2,

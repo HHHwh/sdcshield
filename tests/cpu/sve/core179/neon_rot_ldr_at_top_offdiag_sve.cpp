@@ -21,6 +21,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -37,10 +38,11 @@
 #define NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS 1024
 
 struct NeonRotLdrAtTopOffdiagSveData {
-    uint64_t *interleaved;   /* 3 x SLOTS vectors; src pair at [3i+1],[3i+2] */
+    uint64_t *interleaved;   /* 3 x slots vectors; src pair at [3i+1],[3i+2] */
     uint64_t *scratch;
     uint64_t *expected;
     int lanes;
+    int slots;   /* 运行时向量槽数 (knob `slots`, 默认设计值) */
 };
 
 #if defined(__aarch64__)
@@ -55,6 +57,18 @@ static inline svuint64_t load_vec_sve(const void *addr) {
     return res;
 }
 
+/* 优先级: 1. -O neon_rot_ldr_at_top_offdiag_sve.slots=N
+ *   2. SDC_NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS  3. 设计默认 1024
+ * （诊断探针: 默认保持设计几何, 显式配置才生效 — 槽距/行距模式是激发参数不动） */
+static size_t neon_rot_ldr_at_top_offdiag_sve_slots(struct test *test)
+{
+    const int64_t dflt = NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS;
+    int64_t v = sdc_knob_int_clamped(test, "slots", 0, NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS, 1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("neon_rot_ldr_at_top_offdiag_sve", "slots", &v, NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS, 1 << 20);
+    return v > 0 ? (size_t)v : (size_t)dflt;
+}
+
 #endif
 
 static int neon_rot_ldr_at_top_offdiag_sve_init(struct test *test) {
@@ -67,11 +81,13 @@ static int neon_rot_ldr_at_top_offdiag_sve_init(struct test *test) {
     }
 
     const int lanes = (int)svcntd();
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS * lanes;
+    const size_t slots = neon_rot_ldr_at_top_offdiag_sve_slots(test);
+    const size_t elems = slots * (size_t)lanes;
 
     auto *data = static_cast<NeonRotLdrAtTopOffdiagSveData *>(malloc(sizeof(NeonRotLdrAtTopOffdiagSveData)));
     data->lanes = lanes;
-    /* 交错缓冲: 3 x SLOTS 向量 (与父系等量加载足迹) */
+    data->slots = (int)slots;
+    /* 交错缓冲: 3 x slots 向量 (与父系等量加载足迹) */
     data->interleaved = static_cast<uint64_t *>(aligned_alloc(64, 3 * elems * sizeof(uint64_t)));
     data->scratch = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
     data->expected = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
@@ -81,7 +97,7 @@ static int neon_rot_ldr_at_top_offdiag_sve_init(struct test *test) {
 
     /* golden: 源对 [3i+1]/[3i+2], 父系旋转 add/eor/and/orr, 同 SVE 单元 */
     svbool_t pg = svptrue_b64();
-    for (int i = 0; i < NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS; i++) {
+    for (int i = 0; i < data->slots; i++) {
         svuint64_t a = svld1_u64(pg, data->interleaved + (size_t)(3 * i + 1) * lanes);
         svuint64_t b = svld1_u64(pg, data->interleaved + (size_t)(3 * i + 2) * lanes);
         svuint64_t res;
@@ -115,12 +131,12 @@ static int neon_rot_ldr_at_top_offdiag_sve_run(struct test *test, int cpu) {
         report_fail_msg("neon_rot_ldr_at_top_offdiag_sve: vector length changed between init and run");
     }
 
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS * data->lanes;
+    const size_t elems = (size_t)data->slots * data->lanes;
     uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
     uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, elems * sizeof(uint64_t)));
 
     TEST_LOOP(test, 1 << 13) {
-        for (int i = 0; i < NEON_ROT_LDR_AT_TOP_OFFDIAG_SVE_SLOTS; i++) {
+        for (int i = 0; i < data->slots; i++) {
             const size_t off = (size_t)i * data->lanes;
 
             svuint64_t unused_x = load_vec_sve(data->scratch + off);

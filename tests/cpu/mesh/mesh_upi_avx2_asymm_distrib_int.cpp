@@ -124,6 +124,10 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
             }
 
             // 读取数据（两个向量）
+            // Sum snapshot BEFORE the read (TOCTOU fix): a fast thread can
+            // finish its read, run the reset phase and start writing the NEXT
+            // iteration while this thread is still walking the buffer.
+            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
             int32x4_t v0 = vld1q_s32(td->data);
             int32x4_t v1 = vld1q_s32(td->data + 4);
             int32_t vals[8];
@@ -134,7 +138,6 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
                 read_sum += (uint64_t)vals[j];
             }
 
-            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
             bool passed = (read_sum == expected_sum);
 
             if (!passed) {
