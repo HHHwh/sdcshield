@@ -732,6 +732,13 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
                    increment_rounds: bool = False) -> Optional[int]:
     """派修复 agent(nohup 后台)→ 返回 PID;单飞冲突/PAUSED 返回 None。
 
+    派发成功即置状态(单一权威,调用方无需再赋值): 车道 A
+    (increment_rounds=False)→ DIAGNOSING;车道 B(increment_rounds=True)
+    → BOT_FIX。否则条目停在 ISSUED,而单飞/收割/heal 全以
+    status ∈ AGENT_STATES 为前提——单飞失明(同轮连派多个 agent)、收割
+    失明(死 agent 永不重派)、heal 踩活 agent 工作区(生产首跑实证)。
+    dry_run 不置状态(预演零变更语义)。
+
     命令形态:
       nohup bash -c 'source <STATE_DIR>/agent.env && timeout <T> claude
       -p <shlex 引用的 prompt> --dangerously-skip-permissions'
@@ -775,6 +782,10 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     entry.agent_log = log
     entry.agent_started_at = _now_iso()
     entry.fix_branch = fix_branch
+    # 派发成功即置状态(单一权威): 车道 A → DIAGNOSING、车道 B → BOT_FIX。
+    # 不置状态时条目停在 ISSUED,单飞/收割/heal 全部失明(Task 4 R2 检视
+    # Critical——生产首跑同轮连派 4 个 agent 的根因)。
+    entry.status = "BOT_FIX" if increment_rounds else "DIAGNOSING"
     if increment_rounds:
         entry.rounds += 1
     else:
@@ -900,11 +911,23 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
       auth_failure_streak 归零(成功即证明凭据活着)。
     - 单飞语义: 处理中的 agent 未退场(PID 活)不影响本函数——只收割
       已结束的结局。
+    - 历史 state 兼容(Task 4 R2 前): 「ISSUED + agent_pid 非 None」是旧
+      缺陷形态(dispatch 成功但不置状态,生产 state.json 现存)——先归一为
+      DIAGNOSING 再走既有收割逻辑,结局分支全部复用;归一不落盘,只在
+      本轮内存推进(收割本身照常序列化回 state)。
     """
     entries = StateStore.entries(state)
     for entry in entries:
         if entry.status not in AGENT_STATES:
-            continue
+            # 历史 state 兼容(Task 4 R2 前 ISSUED 条目): 派发成功但状态
+            # 没推进,PID 已死也无人收割 → 永久卡死。归一为 DIAGNOSING
+            # 后复用全部结局分支(success/escalated/auth_fail/dead/timeout)。
+            if entry.status == "ISSUED" and entry.agent_pid is not None:
+                print(f"[reap] run {entry.run_id}: ISSUED+PID(历史 state "
+                      f"形态,Task 4 R2 前条目)归一为 DIAGNOSING 收割")
+                entry.status = "DIAGNOSING"
+            else:
+                continue
         if entry.agent_pid is None and entry.status == "DIAGNOSING":
             continue          # 尚未派发,无结局可收割
         outcome = check_agent_outcome(entry)
@@ -1213,7 +1236,7 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         pid = dispatch_agent(entry, state, dry_run=False,
                              prompt_override=prompt,
                              increment_rounds=True)
-        # 立即回写: dispatch 记账(PID)落回 state dict——同轮后续条目的
+        # 立即回写: dispatch 记账(PID/状态)落回 state dict——同轮后续条目的
         # 单飞判定(has_running_agent 从 dict 解析)才能看到刚派的 agent
         state["entries"] = [e.to_dict() for e in entries]
         if pid is None:
@@ -1222,7 +1245,7 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
                   f"保持 PR_OPEN 待下轮")
             continue
         entry.last_dispatched_head = pr.head_sha
-        entry.status = "BOT_FIX"
+        # entry.status 已由 dispatch_agent 统一置 BOT_FIX(单一权威,Task 4 R2)
         entry.updated_at = _now_iso()
         state["entries"] = [e.to_dict() for e in entries]
     # 与 reap_or_advance 同模式: 序列化回 state(持有同一批 Entry 对象)

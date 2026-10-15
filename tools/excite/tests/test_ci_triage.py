@@ -103,6 +103,25 @@
     BOT_FIX 条目 outcome=success → reap 只记录结局,但 streak 同样归零
     (成功即证明凭据活着;不清零会把「连续 ≥3」退化成「累计 ≥3」,跨周期
     间歇 auth_fail 过早全局 PAUSED)。
+
+用例口径（Task 4 fix round 2,3 例: 生产首跑实证 Critical——dispatch_agent
+  派发成功后从不置 entry.status,车道 A 条目停在 ISSUED,而单飞/收割/heal
+  全以 status ∈ AGENT_STATES={DIAGNOSING,BOT_FIX} 为前提 → 同轮连派 4 个
+  agent(生产 issue #246–#249 现存证据)、死 agent 永不收割、活 agent 被
+  heal 踩工作区。全部离线,口径同前):
+ 29 test_dispatch_sets_diagnosing_and_single_flight_within_round
+    (Critical 主证): ISSUED 条目经 dispatch_agent 派发成功 → 立即
+    DIAGNOSING(单飞/收割/heal 即刻可见);同轮第二个 ISSUED 条目再派 →
+    None(单飞拒绝,活 PID 用 os.getpid() 顶替);车道 A attempts 记账
+    不变;dry_run 路径零状态变更(预演零变更语义);
+ 30 test_cmd_scan_lane_a_sweep_single_flight(端到端锚定生产缺陷):
+    fake gh(run list 返回 2 个不同 workflow 红 run)+ fake run_background
+    → cmd_scan 全编排跑完,run_background 恰 1 次调用,被派条目
+    DIAGNOSING,另一条目 ISSUED 且 attempts==0;并入历史 state 兼容
+    (Task 4 R2 前 ISSUED+死 PID 条目经 reap → attempts+1 待重派);
+ 31 test_lane_b_dispatch_keeps_bot_fix(回归锚): 车道 B(increment_rounds=
+    True)派发成功 → 条目 BOT_FIX,rounds+1、attempts 不动——不因
+    dispatch 内统一置状态而回归 ISSUED/DIAGNOSING。
 """
 import argparse
 import os, shlex, signal, subprocess, sys, time
@@ -485,14 +504,18 @@ def _fake_run_detail(run_id=123456):
 
 
 class FakeBg:
-    """run_background 的替身: 记录 (cmd, cwd, log),不真实 spawn。"""
+    """run_background 的替身: 记录 (cmd, cwd, log),不真实 spawn。
+
+    返回 os.getpid()(测试进程自身)——真活 PID,单飞判定在多轮 scan
+    编排内立即看到「已有 agent 在跑」(伪 PID 会因探活为死而连派)。
+    """
 
     def __init__(self):
         self.calls = []   # (cmd, cwd, log)
 
     def __call__(self, cmd, cwd, log):
         self.calls.append((cmd, cwd, log))
-        return 424242    # 伪 PID
+        return os.getpid()    # 真活 PID(本测试进程)
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +537,7 @@ def test_dispatch_sources_agent_env(monkeypatch, tmp_path):
 
     pid = ct.dispatch_agent(entry, state)
 
-    assert pid == 424242
+    assert pid == os.getpid()                  # FakeBg 真活 PID(测试进程)
     assert len(bg.calls) == 1
     cmd, cwd, log = bg.calls[0]
     assert cwd == str(clone_dir)             # 在克隆目录执行(绝不在用户工作区)
@@ -524,7 +547,7 @@ def test_dispatch_sources_agent_env(monkeypatch, tmp_path):
     assert "timeout 3600" in cmd             # agent 最长运行 1 小时
     assert "claude -p" in cmd                # prompt 经 -p 传入
     # entry 已记录派发现场: PID/日志路径/起点 + attempts+1
-    assert entry.agent_pid == 424242
+    assert entry.agent_pid == os.getpid()
     assert entry.agent_log is not None and "agent.env" not in entry.agent_log
     assert entry.agent_started_at is not None
     assert entry.attempts == 1
@@ -867,7 +890,7 @@ def test_lane_b_dispatches_once_per_head(monkeypatch, tmp_path):
     assert e.rounds == 2                            # rounds+1,不动 attempts
     assert e.attempts == 1                          # 采样值未被 lane B 篡改
     assert e.last_dispatched_head == "b" * 40
-    assert e.agent_pid == 424242
+    assert e.agent_pid == os.getpid()
     # collect 导出已落盘(供 bot agent 读取)
     collect = tmp_path / "collect-pr88.md"
     assert collect.exists()
@@ -1319,3 +1342,155 @@ def test_bot_fix_success_resets_auth_streak(monkeypatch, tmp_path):
     ct.reap_or_advance(state)
     assert state["auth_failure_streak"] == 1     # 从零重新累计(未熔断)
     assert not (tmp_path / "PAUSED").exists()
+
+
+# ===========================================================================
+# Task 4 fix round 2: dispatch 成功即置状态(单飞/收割/heal 失明修复)
+# 检视主证(生产首跑实证): dispatch_agent 派发成功后只记 PID/log/
+# started_at/fix_branch 与计数,从不置 entry.status——车道 A 条目停在
+# ISSUED,而 has_running_agent/reap_or_advance/heal_clone 全以
+# status ∈ AGENT_STATES={"DIAGNOSING","BOT_FIX"} 为前提:
+#   1. 单飞失明: 同轮第 2..N 个 ISSUED 条目派发时 has_running_agent
+#      仍 False(刚派的 agent 状态是 ISSUED)→ 生产同轮连派 4 个 agent
+#      (issue #246–#249,state.json 现存证据);
+#   2. 收割失明: agent 死后条目卡 ISSUED,reap 只看 DIAGNOSING/BOT_FIX
+#      → 永不收割/重派/升级,attempts 停 1;
+#   3. heal 踩活 agent: heal_clone 的 has_running_agent 同样失明 →
+#      活 agent 的 fix 分支工作区被 heal reset。
+# 口径同前: 全部离线,fake gh / fake run_background,绝不触网。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 用例 29(Critical 主证): 派发成功即置 DIAGNOSING;同轮第二个条目被
+# 单飞拒绝;attempts 记账不变;dry_run 零状态变更。
+
+def test_dispatch_sets_diagnosing_and_single_flight_within_round(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    # 两个待派 ISSUED 条目(不同 workflow,attempts=0)
+    a = _sample_entry(workflow="Sanitizer", run_id=61, status="ISSUED",
+                      issue_number=161, agent_pid=None,
+                      agent_started_at=None, agent_log=None, attempts=0,
+                      extra_runs=[])
+    b = _sample_entry(workflow="CodeQL", run_id=62, status="ISSUED",
+                      issue_number=162, agent_pid=None,
+                      agent_started_at=None, agent_log=None, attempts=0,
+                      extra_runs=[])
+    state = {"entries": [a.to_dict(), b.to_dict()], "auth_failure_streak": 0}
+
+    # 第一个派发成功 → 条目立即 DIAGNOSING(单飞/收割/heal 即刻可见)
+    ea = ct.StateStore.entries(state)[0]
+    pid = ct.dispatch_agent(ea, state)
+    assert pid is not None
+    assert ea.status == "DIAGNOSING"            # 修复主断言: 派发即置状态
+    assert ea.agent_pid == os.getpid()          # FakeBg 真活 PID(测试进程)
+    assert ea.attempts == 1                     # 车道 A attempts 记账不变
+
+    # 单飞判定须看到刚派的 agent(FakeBg 返回的 PID 即真活,无需顶替)
+    state["entries"] = [e.to_dict() for e in (ea, b)]
+    assert ct.has_running_agent(state) is True  # 旧缺陷下此处 False
+
+    # 同轮(state 已回写后)第二个条目 → 单飞拒绝
+    eb = ct.StateStore.entries(state)[1]
+    assert ct.dispatch_agent(eb, state) is None
+    assert len(bg.calls) == 1                   # 只有第一次 spawn
+    assert eb.agent_pid is None and eb.attempts == 0
+
+    # dry_run: 预演零变更——不置状态、零记账、零 spawn
+    c = _sample_entry(workflow="Security", run_id=63, status="ISSUED",
+                      issue_number=163, agent_pid=None,
+                      agent_started_at=None, agent_log=None, attempts=0,
+                      extra_runs=[])
+    state["entries"] = [e.to_dict() for e in (ea, c)]
+    assert ct.dispatch_agent(ct.StateStore.entries(state)[1], state,
+                             dry_run=True) is None
+    ec = ct.StateStore.entries(state)[1]
+    assert ec.status == "ISSUED"                # 预演不置状态
+    assert ec.attempts == 0 and ec.agent_pid is None
+    assert len(bg.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# 用例 30(端到端锚定生产缺陷): scan 车道 A 派发扫单飞——2 个不同
+# workflow 红 run 只派 1 个 agent;被派条目 DIAGNOSING,另一个留 ISSUED
+# 且 attempts==0。并入历史 state 兼容: Task 4 R2 前「ISSUED+死 PID」
+# 条目(生产 state.json 现存形态)经 reap 收割 → attempts+1、清引用待重派。
+
+def test_cmd_scan_lane_a_sweep_single_flight(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    # 两个不同 workflow 的红 run → 两个 ISSUED 条目(同轮派发扫的输入)
+    runs = [
+        _run(38482214201, "Sanitizer", "schedule", "failure"),
+        _run(38243398052, "CodeQL", "schedule", "failure"),
+    ]
+    fake = FakeGh(runs=runs)
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+    monkeypatch.setattr(ct, "_git", lambda args: "")
+
+    rc = ct.cmd_scan(argparse.Namespace(dry_run=False))
+    assert rc == 0
+
+    # 单飞: 两个 ISSUED 条目只派 1 个 agent(生产实证同轮派了 4 个)
+    assert len(bg.calls) == 1
+    saved = ct.StateStore().load()
+    entries = {e["run_id"]: e for e in saved["entries"]}
+    assert len(entries) == 2
+    dispatched = [e for e in entries.values() if e["agent_pid"] is not None]
+    waiting = [e for e in entries.values() if e["agent_pid"] is None]
+    assert len(dispatched) == 1 and len(waiting) == 1
+    assert dispatched[0]["status"] == "DIAGNOSING"   # 派发即置状态
+    assert dispatched[0]["attempts"] == 1
+    assert waiting[0]["status"] == "ISSUED"          # 未派条目不动
+    assert waiting[0]["attempts"] == 0
+    assert waiting[0]["agent_pid"] is None
+
+    # ---- 历史 state 兼容: Task 4 R2 前的「ISSUED + 死 PID」条目 ----
+    # 生产 state.json 现存 4 条此形态(派发成功但状态没推进,PID 已死)。
+    # 修复后的 reap 须按 DIAGNOSING 同口径收割: dead → attempts+1、
+    # 清引用,条目回到 ISSUED(待派发扫重派)——不再永久卡死。
+    legacy = _sample_entry(workflow="Security", run_id=38240202283,
+                           status="ISSUED", issue_number=249,
+                           agent_pid=999999901,     # 必死伪 PID(>pid_max)
+                           attempts=1, rounds=0,
+                           agent_started_at=datetime.now(
+                               timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                           agent_log=str(tmp_path / "agent-legacy.log"),
+                           fix_branch="fix/ci-38240202283", extra_runs=[])
+    (tmp_path / "agent-legacy.log").write_text("…中途暴毙…\n",
+                                               encoding="utf-8")
+    state = {"entries": [legacy.to_dict()], "auth_failure_streak": 0}
+    ct.reap_or_advance(state)
+    e = ct.StateStore.entries(state)[0]
+    assert e.attempts == 2                       # dead → attempts+1(1→2)
+    assert e.agent_pid is None                   # 引用已清,待派发扫重派
+    assert e.status in ("ISSUED", "DIAGNOSING")  # 未超限不升级
+
+
+# ---------------------------------------------------------------------------
+# 用例 31(回归锚): 车道 B 派发成功 → BOT_FIX(dispatch 内统一置状态后,
+# 不因缺省 DIAGNOSING 而把车道 B 条目打回 ISSUED/DIAGNOSING)。
+
+def test_lane_b_dispatch_keeps_bot_fix(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=64,
+                          status="PR_OPEN", issue_number=77, pr_number=88,
+                          rounds=1, agent_pid=None, agent_started_at=None,
+                          agent_log=None, attempts=2, extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    pid = ct.dispatch_agent(entry, state, prompt_override="x",
+                            increment_rounds=True)
+
+    assert pid == os.getpid()
+    assert entry.status == "BOT_FIX"             # 车道 B 派发即置 BOT_FIX
+    assert entry.rounds == 2                     # rounds+1(车道 B 记账)
+    assert entry.attempts == 2                   # 不动车道 A 的 attempts
