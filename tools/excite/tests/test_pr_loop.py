@@ -8,8 +8,11 @@
     无标记评论不算、非 wangxumarshall 有标记不算、两者齐备才算(避免把
     用户本人普通评论误判为第 5 bot,设计文档反目标 2)。
 """
+import json
 import os
 import sys
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "scripts"))
@@ -148,3 +151,176 @@ def test_wait_ensure_local_review_failure_degrades(monkeypatch):
         ["wait", "9", "--interval", "0", "--timeout", "1"])
     # 第 5 bot 触发失败不硬中止 wait——四 bot 轮询照常进入并完成,exit 0
     assert pr_loop.cmd_wait(args) == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 4: 意见计数(body JSON 段 findings + 行级评论)+ 闭环逐条答复 + 意见数
+# 计入(第 5 bot 意见不再让 status 误判 READY_TO_MERGE)。
+
+def _local_review_body(num_findings):
+    """构造一条 local-claude review body: 首行标记 + ```json 段收 n 条 finding。"""
+    body_findings = [
+        {"path": "tests/sve/fma_sve.c", "line": None, "severity": "Critical",
+         "category": "正确性", "message": f"近似比对是 SDC 盲区 {i}",
+         "evidence": "容差而非 memcmp"}
+        for i in range(num_findings)
+    ]
+    return (pr_loop.LOCAL_CLAUDE_MARKER
+            + "\n\n## 挂不上 diff 行的 findings(JSON)\n\n```json\n"
+            + json.dumps(body_findings, ensure_ascii=False, indent=2)
+            + "\n```\n")
+
+
+def test_count_local_claude_findings_parses_body_json():
+    # body JSON 段 3 条 findings + 2 行级评论(review.comments)= 计数 5
+    review = {"body": _local_review_body(3),
+              "comments": [{"id": 1}, {"id": 2}]}
+    assert pr_loop.count_local_claude_findings(review) == 5
+
+
+def test_reply_all_findings_no_miss(monkeypatch):
+    posted = []
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "_gh_api_post",
+                        lambda path, payload: posted.append((path, payload)))
+
+    findings = [
+        {"path": "a.c", "line": 1, "id": 101},
+        {"path": "b.c", "line": 2, "id": 102},
+        {"path": "c.c", "line": 3, "id": 103},
+        # 挂不上 diff 行(line=None)的 2 条 → 收进 issue comment
+        {"path": "d.c", "line": None, "severity": "Important",
+         "category": "性能", "message": "m4", "evidence": "e4"},
+        {"path": "e.c", "line": None, "severity": "Minor",
+         "category": "可维护性", "message": "m5", "evidence": "e5"},
+    ]
+    replies = [{"conclusion": "采纳", "reason": "r", "evidence": "e"}
+               for _ in range(5)]
+
+    pr_loop.reply_to_findings(9, findings, replies)
+
+    # 3 条行级 reply + 1 条 issue comment(承载 2 条 body finding 答复)= 5 条答复
+    inline = [p for p in posted if "/replies" in p[0]]
+    issue = [p for p in posted if "/issues/9/comments" in p[0]]
+    assert len(inline) == 3
+    assert len(issue) == 1
+    assert {p[0] for p in inline} == {
+        "repos/test/repo/pulls/9/comments/101/replies",
+        "repos/test/repo/pulls/9/comments/102/replies",
+        "repos/test/repo/pulls/9/comments/103/replies",
+    }
+    body = issue[0][1]["body"]
+    # issue comment 内逐条独立成段(2 条 body finding → 2 个 ### 段)
+    assert body.count("### ") == 2
+    assert "d.c" in body and "e.c" in body
+
+    # 完整性校验: 漏 1 条(replies 只有 4 条)→ 抛错/非零退出,漏答不结案
+    with pytest.raises(pr_loop.GhError):
+        pr_loop.reply_to_findings(9, findings, replies[:4])
+
+
+def test_reply_accept_has_sha_reject_has_evidence(monkeypatch):
+    posted = []
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "_gh_api_post",
+                        lambda path, payload: posted.append((path, payload)))
+
+    sha = "f" * 40
+    findings = [
+        {"path": "tests/sve/fma_sve.c", "line": 42, "id": 201},
+        {"path": "tests/sve/fma_sve.c", "line": 43, "id": 202},
+    ]
+    replies = [
+        {"conclusion": "采纳", "reason": "golden 比对必须字节级 memcmp",
+         "evidence": f"已修复于 commit {sha}"},
+        {"conclusion": "驳回", "reason": "误报,非本 PR 引入",
+         "evidence": "实证: ninja -C builddir 零新警告;"
+                     "./builddir/sdcshield -e zstd19 -t 2000 -n 1 → exit: pass"},
+    ]
+
+    pr_loop.reply_to_findings(9, findings, replies)
+    assert len(posted) == 2
+
+    accept_body = posted[0][1]["body"]
+    reject_body = posted[1][1]["body"]
+    # 接纳含 commit SHA、驳回含证据字段(统一结构: 结论 + 理由 + 证据)
+    assert "采纳" in accept_body and sha in accept_body
+    assert "驳回" in reject_body and "实证" in reject_body
+
+
+def test_local_claude_opinion_counted_not_ready_to_merge(monkeypatch):
+    """第 5 bot 意见须计入 opinion_count: 发 1 条 Critical 行级评论 + 2 条 body
+    finding 后,status 不再给 READY_TO_MERGE(n_review/n_rcomment 均须纳入)。"""
+    head = "e" * 40
+    marker = pr_loop.LOCAL_CLAUDE_MARKER
+
+    reviews = [
+        {"id": 1, "user": {"login": "chatgpt-codex-connector[bot]"},
+         "state": "APPROVED", "commit_id": head,
+         "submitted_at": "2026-10-15T00:01:00Z", "body": ""},
+        {"id": 2, "user": {"login": "coderabbitai[bot]"},
+         "state": "APPROVED", "commit_id": head,
+         "submitted_at": "2026-10-15T00:01:00Z", "body": ""},
+        # local-claude review: state COMMENTED + body JSON 段 2 条 finding
+        {"id": 3, "user": {"login": "wangxumarshall"},
+         "state": "COMMENTED", "commit_id": head,
+         "submitted_at": "2026-10-15T00:01:00Z",
+         "body": _local_review_body(2)},
+    ]
+    inline_comments = [
+        {"id": 100, "user": {"login": "wangxumarshall"},
+         "body": f"{marker}\n**[Critical] 正确性**: 近似比对是 SDC 盲区",
+         "created_at": "2026-10-15T00:02:00Z",
+         "original_commit_id": head, "commit_id": head,
+         "path": "tests/sve/fma_sve.c", "line": 42},
+    ]
+    checks = [
+        {"name": "pr-agent", "status": "completed", "conclusion": "success",
+         "head_sha": head, "completed_at": "2026-10-15T00:01:00Z"},
+        {"name": "greptile-scan", "app": {"slug": "greptile-apps"},
+         "status": "completed", "conclusion": "success",
+         "head_sha": head, "completed_at": "2026-10-15T00:01:00Z"},
+    ]
+
+    def fake_gh_api(path):
+        if path == "repos/test/repo/pulls/9":
+            return {"number": 9, "title": "t", "state": "open", "draft": False,
+                    "head": {"sha": head, "ref": "feat/x",
+                             "repo": {"full_name": "test/repo"}},
+                    "base": {"ref": "main", "repo": {"full_name": "test/repo"}},
+                    "user": {"login": "wangxumarshall"},
+                    "html_url": "https://example.invalid/9"}
+        if path == f"repos/test/repo/commits/{head}":
+            return {"commit": {"committer": {"date": "2026-10-15T00:00:00Z"},
+                               "author": {"date": "2026-10-15T00:00:00Z"}}}
+        if path.startswith("repos/test/repo/events"):
+            return []
+        raise AssertionError(f"意外 gh_api 调用: {path}")
+
+    def fake_paged(path, list_key=None):
+        # 模仿真实 gh_api_paged 的返回约定: 已提取 list_key,直接返回条目列表
+        if "check-runs" in path:
+            return checks
+        if "/reviews" in path:
+            return reviews
+        if "/issues/9/comments" in path:
+            return []
+        if "/comments" in path:
+            return inline_comments
+        raise AssertionError(f"意外 gh_api_paged 调用: {path}")
+
+    monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+
+    pr = pr_loop.fetch_pr("test/repo", 9)
+
+    # 五 bot 全有信号 + local-claude 实质意见(2 body finding + 1 行级 Critical)
+    assert all(pr.bot_done.get(b) is not None for b in pr_loop.BOT_ORDER)
+    assert pr.opinion_count == 3
+    assert pr.opinion_breakdown["review"] == 2
+    assert pr.opinion_breakdown["review_comment"] == 1
+
+    state = pr_loop.classify_state(pr, 0, pr_loop.now_utc())
+    # 有意见 → READY_TO_FIX,绝不 READY_TO_MERGE
+    assert state == "READY_TO_FIX"
+    assert state != "READY_TO_MERGE"

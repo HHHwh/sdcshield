@@ -74,6 +74,7 @@ from pr_local_review import (  # noqa: E402
     # except GhError 捕获,降级容错形同虚设。
     GhError,
     LOCAL_CLAUDE_MARKER,
+    _gh_api_post,
     already_reviewed,
     publish_review,
     run_review,
@@ -350,6 +351,47 @@ def local_claude_comment(author: str, body: str) -> bool:
     return author == LOCAL_CLAUDE_LOGIN and LOCAL_CLAUDE_MARKER in (body or "")
 
 
+def _local_claude_body_findings(body: str) -> list:
+    """解析 local-claude review body 里 ```json 围栏包裹的 findings 数组。
+
+    publish_review 把挂不上 diff 行的 finding 收进 body JSON 段(设计文档 §5
+    「挂不上 diff 行的 finding 退到 review body 的 JSON 段」)。取首个 ```json
+    围栏内的完整文本再 json.loads(不贪心截到第一个 `]`——finding 的 evidence/
+    message 里可能含 `]`),无围栏/畸形返回 []。"""
+    text = body or ""
+    start = text.find("```json")
+    if start < 0:
+        return []
+    start += len("```json")
+    end = text.find("```", start)
+    if end < 0:
+        return []
+    try:
+        data = json.loads(text[start:end].strip())
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [f for f in data if isinstance(f, dict)]
+
+
+def count_local_claude_findings(review: dict) -> int:
+    """一条 local-claude review 的实质 finding 数 = body JSON 段 findings 数
+    + 行级评论数(review['comments'] 存在时计入)。
+
+    list reviews 端点不返回 comments(行级评论在 pulls/{n}/comments 单独拉取),
+    pr_loop 的意见计数把行级评论从 n_rcomment 另行计入,故此处在该端点下等价
+    于 body findings 数;review['comments'] 仅用于 create-review 响应/测试形态
+    (一条 review 同时携带行级评论)。
+    """
+    review = review or {}
+    n = len(_local_claude_body_findings(review.get("body") or ""))
+    comments = review.get("comments")
+    if isinstance(comments, list):
+        n += len(comments)
+    return n
+
+
 def ensure_local_review(pr_number: int, head_sha: str) -> None:
     """事件线触发: 若第 5 bot 尚未对该 head 发过信号,跑一次本地对抗审查
     并发布(设计文档 §6.1 wait 内主动触发)。
@@ -595,15 +637,36 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # ---- 意见计数(当前 head,双锚定;摘要/LGTM 类不计,见文件头「意见计数」注释) ----
     n_review = 0
     for r in reviews:
-        body = (r.get("body") or "").strip()
-        if (bot_of(r) and r.get("state") in REVIEW_OPINION_STATES
-                and is_after_head(r, "submitted_at", anchor)
-                and commit_anchored(r, ("commit_id",), head_sha)
-                and body and not is_summary_text(body)):
+        raw_body = r.get("body") or ""
+        body = raw_body.strip()
+        bot = bot_of(r)
+        if bot is None and local_claude_comment(
+                (r.get("user") or {}).get("login") or "", raw_body):
+            bot = "local-claude"
+        if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
+            continue
+        if not (is_after_head(r, "submitted_at", anchor)
+                and commit_anchored(r, ("commit_id",), head_sha)):
+            continue
+        if not body or is_summary_text(body):
+            continue
+        if bot == "local-claude":
+            # 第 5 bot review 按 body JSON 段的 findings 数计(行级评论由
+            # n_rcomment 另行计入,不重复)——挂不上 diff 行的 finding 只在正文。
+            n_review += len(_local_claude_body_findings(raw_body))
+        else:
             n_review += 1
-    n_rcomment = sum(1 for c in review_comments
-                     if bot_of(c) and is_after_head(c, "created_at", anchor)
-                     and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha))
+    n_rcomment = 0
+    for c in review_comments:
+        bot = bot_of(c)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
+        if bot is None:
+            continue
+        if (is_after_head(c, "created_at", anchor)
+                and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha)):
+            n_rcomment += 1
     n_icomment = 0
     for c in issue_comments:
         body = (c.get("body") or "")
@@ -653,6 +716,57 @@ def classify_state(pr: PRData, quiet: int, now: datetime) -> str:
     if pr.opinion_count > 0 or pr.annotations_fetch_failed:
         return "READY_TO_FIX"
     return "READY_TO_MERGE"
+
+
+# ============ 闭环逐条答复(设计文档 §8) ============
+
+def _format_reply(reply) -> str:
+    """把一条处置结论格式化为固定结构正文: 结论(采纳/变通/驳回) + 理由 +
+    证据。采纳的证据 = 修复 commit SHA;驳回的证据 = 实证依据(CLAUDE.md 规则 2:
+    ninja 零警告 / 真实输出 / 定向回归 / x86 非回归)。"""
+    if isinstance(reply, dict):
+        conclusion = reply.get("conclusion") or "?"
+        reason = (reply.get("reason") or "").strip()
+        evidence = (reply.get("evidence") or "").strip()
+        lines = [f"结论: {conclusion}"]
+        if reason:
+            lines.append(f"理由: {reason}")
+        if evidence:
+            lines.append(f"证据: {evidence}")
+        return "\n".join(lines)
+    return str(reply)
+
+
+def reply_to_findings(pr_number: int, findings: list, replies: list) -> None:
+    """对给定 findings 逐条在 GitHub 答复(设计文档 §8 闭环完整答复)。
+
+    - 行级 finding(path 且 line 非 None)→ gh api 逐条 reply 到对应 review
+      comment(finding 需带该评论的 id);
+    - 挂不上 diff 行的 body JSON 段 finding → 汇总成一条 issue comment,
+      每条答复独立成段;
+    - 完整性校验: len(findings) == len(replies),漏答/多答抛 GhError——诚实性,
+      反目标 3(闭环答复漏答/错答即失败)。
+    """
+    if len(findings) != len(replies):
+        raise GhError(
+            f"答复条数({len(replies)})与待处置意见数({len(findings)})不一致"
+            "——漏答/多答,拒绝结案(闭环必须逐条答复)")
+    slug = resolve_slug(None)
+    body_entries = []
+    for finding, reply in zip(findings, replies):
+        text = _format_reply(reply)
+        if finding.get("path") and finding.get("line") is not None:
+            cid = finding.get("id")
+            if not cid:
+                raise GhError("行级 finding 缺 review comment id,无法逐条 reply")
+            _gh_api_post(f"repos/{slug}/pulls/{pr_number}/comments/{cid}/replies",
+                         {"body": text})
+        else:
+            loc = finding.get("path") or "?"
+            body_entries.append(f"### {loc}\n{text}")
+    if body_entries:
+        _gh_api_post(f"repos/{slug}/issues/{pr_number}/comments",
+                     {"body": "\n\n".join(body_entries)})
 
 
 # ============ 渲染 ============
