@@ -24,7 +24,7 @@
 #                 报告同作者,仅靠内容标记区分)
 #   greptile    = 作者 greptile-apps[bot] 或 check-run app slug "greptile-apps"
 #                 (PR #240 实证: greptile 可只产 check-run 不发评论)
-#   local-claude = 作者 wangxumarshall 且正文含 "<!-- local-claude-review -->" 标记
+#   local-claude = 作者 wangxumarshall(claude and glm)(GitHub 账号 wangxumarshall) 且正文含 "<!-- local-claude-review -->" 标记
 #                 (第 5 bot = 本地无头 claude code;「作者 + 内容标记」双条件,不入
 #                 LOGIN_TO_BOT——避免把用户本人普通评论误判为第 5 bot,与 pr-agent
 #                 同构;bot-coverage.yml 不覆盖本地 bot,此判据仅存在于 pr_loop)
@@ -91,7 +91,7 @@ GREPTILE_LOGIN = "greptile-apps[bot]"          # greptile: 评论/review 作者
 GREPTILE_APP_SLUG = "greptile-apps"            #   …或 check-run app slug(只产 check 的场景)
 PRAGENT_LOGIN = "github-actions[bot]"          # pr-agent 检视评论作者(GITHUB_TOKEN 触发)
 PRAGENT_MARKER = "pr-agent:review:full"        #   …且正文须含此标记(区分 bot-coverage 报告)
-LOCAL_CLAUDE_LOGIN = "wangxumarshall"          # 第 5 bot(本地 claude): 评论/review 作者 = 当前 gh 登录用户
+LOCAL_CLAUDE_LOGIN = "wangxumarshall"          # 第 5 bot(claude+glm 双模型): 评论/review 作者 login = wangxumarshall(展示名 "wangxumarshall(claude and glm)")
 
 BOT_ORDER = ("codex", "coderabbit", "pr-agent", "greptile", "local-claude")
 LOGIN_TO_BOT = {
@@ -345,7 +345,7 @@ def pragent_comment(item: dict) -> bool:
 
 
 def local_claude_comment(author: str, body: str) -> bool:
-    """第 5 bot(本地 claude)检视评论: 作者 wangxumarshall 且正文含
+    """第 5 bot(claude+glm 双模型)检视评论: 作者 wangxumarshall(claude and glm) 且正文含
     LOCAL_CLAUDE_MARKER 标记。双条件——避免把用户本人的普通评论误判为
     第 5 bot(设计文档反目标 2),与 pragent_comment 的「作者 + 内容标记」
     同构但不入 LOGIN_TO_BOT。"""
@@ -406,7 +406,7 @@ def ensure_local_review(pr_number: int, head_sha: str) -> None:
 
     幂等: `already_reviewed` 为真(该 head 已有含标记的 review)直接返回——
     事件线 + 时间线撞车只审一次。未审则 `run_review` 产出 findings 后经
-    `publish_review` 上 GitHub(作者 = 当前 gh 登录用户 wangxumarshall)。
+    `publish_review` 上 GitHub(作者 = 当前 gh 登录用户 wangxumarshall,展示名 wangxumarshall(claude and glm))。
     """
     if already_reviewed(pr_number, head_sha):
         return
@@ -441,7 +441,7 @@ def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
     """issue 评论的 bot 判定(信号/计数用):
     LOGIN_TO_BOT 作者直接命中;pr-agent 须内容标记命中且 last_run.head_sha
     匹配当前 head(旧 head 的检视不算当前信号;解析失败回退时间锚定语义);
-    local-claude 须「作者 wangxumarshall 且正文含标记」双条件命中(时间锚定,
+    local-claude 须「作者 wangxumarshall(claude and glm) 且正文含标记」双条件命中(时间锚定,
     无 commit 绑定字段——与 issue 评论总体策略一致)。"""
     bot = bot_of(item)
     if bot is not None:

@@ -91,7 +91,7 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   （workflow 用 GITHUB_TOKEN 触发、评论作者是 `github-actions[bot]`，与 bot-coverage
   报告同作者，靠内容标记区分）；greptile = `greptile-apps[bot]` 作者，或 check-run
   app slug `greptile-apps`（PR #240 实证：greptile 可只产 check-run 不发评论）；
-  local-claude = 作者 `wangxumarshall` **且** 正文含 `<!-- local-claude-review -->` 标记
+  local-claude = 作者 `wangxumarshall(claude and glm)`（GitHub 账号 `wangxumarshall`，claude+glm 双模型）**且** 正文含 `<!-- local-claude-review -->` 标记
   （双条件，与 pr-agent 同构——避免把用户本人普通评论误判为第 5 bot；
   `BOT_ORDER` 五元素顺序 codex/coderabbit/pr-agent/greptile/local-claude）。
 - **判据分裂（已知不变量破例）**：`.github/workflows/bot-coverage.yml` 保持**四 bot**
