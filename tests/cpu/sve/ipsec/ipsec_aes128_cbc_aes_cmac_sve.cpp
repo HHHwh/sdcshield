@@ -152,7 +152,9 @@ static int aes_cmac_avx_run(struct test *test, int cpu) {
         free(ciphertext);
         free(decrypted);
         free(mac);
-        return EXIT_FAILURE;
+        log_skip(TestResourceIssueSkipCategory,
+                 "out of memory for per-thread buffers");
+        return EXIT_SKIP;
     }
     long iter = 0;
     TEST_LOOP(test, 256) {

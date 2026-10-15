@@ -197,7 +197,9 @@ static int ipsec_3des_docsis_hmac_sha512_sve_wide_run(struct test *test, int cpu
         free(ciphertext);
         free(decrypted);
         free(variant_msg);
-        return EXIT_FAILURE;
+        log_skip(TestResourceIssueSkipCategory,
+                 "out of memory for per-thread buffers");
+        return EXIT_SKIP;
     }
     for (int s = 0; s < NSTREAM - 1; ++s) {
         local_d.variant_msg[s] = (uint8_t *)malloc(d->data_size);
@@ -209,7 +211,9 @@ static int ipsec_3des_docsis_hmac_sha512_sve_wide_run(struct test *test, int cpu
             free(ciphertext);
             free(decrypted);
             free(variant_msg);
-            return EXIT_FAILURE;
+            log_skip(TestResourceIssueSkipCategory,
+                     "out of memory for per-thread buffers");
+            return EXIT_SKIP;
         }
     }
     long iter = 0;
