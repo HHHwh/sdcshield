@@ -83,6 +83,20 @@ autoci 克隆的 main 在该分支 PR 合入前**没有此文件**——期间 c
 `PATH` 提供（dispatch 命令先 `source agent.env` 再起 claude），cron 自身
 PATH 里有没有它们都无所谓。
 
+**第 5 bot（本地 claude）时间触发线**（补漏/周期重审）：
+
+```cron
+*/30 * * * * cd /home/sdc/wangxu/operator/sdcshield && /usr/bin/python3 scripts/pr_local_review.py --all-open >> ~/.local/state/sdcshield-ci-triage/cron.log 2>&1
+```
+
+该行在**主工作区**运行（`pr_local_review.py` 随特性分支交付；其 run_review
+需在主仓库内 `git worktree add` checkout head，故 cd 主工作区而非 autoci
+克隆）。`--all-open` 枚举全部 open PR，对尚无第 5 bot 信号的 head 跑一次
+对抗审查并发布（幂等：同 head 已审跳过）。它是第 5 bot 的**时间触发线**
+——补漏事件线（车道 B / `pr_loop wait` 的主动触发）未覆盖的场景，并周期
+重审新 push 的 head；与车道 B 主动触发互为冗余，确保无人值守的 fix/ci PR
+也有第 5 bot 信号，避免 `WAITING_BOTS` 硬门槛死锁。
+
 ### 2.3 完全停用
 
 ```console

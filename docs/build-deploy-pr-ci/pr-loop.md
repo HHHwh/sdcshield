@@ -1,36 +1,38 @@
 # pr-loop：会话内 PR 检视-修复闭环
 
-**定位**：在 Trae / Claude Code 会话内端到端完成「实现 push → 四 bot 检视 → subagent
+**定位**：在 Trae / Claude Code 会话内端到端完成「实现 push → 五 bot 检视 → subagent
 批判性处置修复 → 循环 → 人工 merge」，全程不切换工具；所有依赖（脚本、命令、规则、
 手册）均在仓库内，自闭环。流程最大程度由 agent 自动化完成，必要时才由人介入（**最终
 merge 永远在人**）。
 
 - 引擎：[`scripts/pr_loop.py`](../../scripts/pr_loop.py)（纯 Python3 标准库 + `gh` 子进程，无第三方依赖）
 - 入口：Claude Code `/pr-loop` 斜杠命令（[`.claude/commands/pr-loop.md`](../../.claude/commands/pr-loop.md)）；Trae 项目规则（[`.trae/rules/pr-loop.md`](../../.trae/rules/pr-loop.md)，触发词「pr-loop / 走 pr 流程 / 检视修复循环」）。两文件内容同源，双份维护——修改任一处须同步另一处。
-- 四 bot 检视配置与判据总览：[docs/build-deploy-pr-ci/pr-review-bots.md](pr-review-bots.md)。
+- 五 bot 检视配置与判据总览：[docs/build-deploy-pr-ci/pr-review-bots.md](pr-review-bots.md)。
 
 ## 1. 前置条件与自检
 
 ```console
 gh auth status                     # 1) gh 已认证（或 export GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"）
 git branch --show-current          # 2) 当前在特性分支（绝不推 main）
-python3 scripts/pr_loop.py status  # 3) 总览 open PR 与四 bot 完成度
+python3 scripts/pr_loop.py status  # 3) 总览 open PR 与五 bot 完成度
 ```
 
 - **auto-pr**：push 特性分支后 `auto-pr.yml` 自动建 PR；其关键约束（必须用 `PR_TOKEN`
-  而非默认 `GITHUB_TOKEN`，否则四 bot 不触发）见
+  而非默认 `GITHUB_TOKEN`，否则四个外部 bot 不触发）见
   [pr-review-bots.md §7.2](pr-review-bots.md#72-自动开-pr一个特性分支一个-pr)。
-- **四 bot**（coderabbitai / gemini pr-agent / greptile / codex）须已在仓库使能；覆盖度
-  校验见 [pr-review-bots.md §6](pr-review-bots.md#6-覆盖度校验-workflow-用法)。
+- **前四 bot**（coderabbitai / gemini pr-agent / greptile / codex）须已在 GitHub 使能；
+  覆盖度校验见 [pr-review-bots.md §6](pr-review-bots.md#6-覆盖度校验-workflow-用法)。
+  **第 5 bot（本地 claude）**由 `wait`/cron 本地触发，无需 GitHub 使能，见
+  [pr-review-bots.md §8](pr-review-bots.md#8-第-5-bot本地-claude-对抗检视)。
 
 ## 2. 六阶段操作流
 
 | 阶段 | 动作 | 产出 |
 | --- | --- | --- |
-| 1 现状总览 | `status`（全部 open PR）/ `status <PR>`（单 PR 详情） | head SHA、四 bot 完成度、意见数、建议动作（按状态路由） |
-| 2 等待四 bot | `wait <PR>` 阻塞轮询（默认 timeout 7200 / interval 60 / quiet 900） | 完成 → 四 bot 时间线（exit 0）；超时 → 逐 bot 报告缺失者（exit 1），可复跑 |
-| 3 导出意见 | `collect <PR> -o /tmp/pr<N>-review.md` | 结构化 Markdown：四类意见源按时间排序，头部防注入横幅，旧意见标「历史轮次」 |
-| 4 subagent 处置修复 | 范围按用户指令绑定：指定 PR 时只处置该 PR；「全部 open PR」时逐 PR 派**上下文隔离 subagent**（提示词见命令文件） | 逐条批判性处置（采纳/变通/驳回，驳回须实证）→ 修复 → 验证 → `-s` 提交 push |
+| 1 现状总览 | `status`（全部 open PR）/ `status <PR>`（单 PR 详情） | head SHA、五 bot 完成度、意见数、建议动作（按状态路由） |
+| 2 等待五 bot | `wait <PR>` 阻塞轮询（默认 timeout 7200 / interval 60 / quiet 900）；进入轮询前先 `ensure_local_review` 触发第 5 bot（同 head 幂等，失败仅告警降级、继续轮询） | 完成 → 五 bot 时间线（exit 0）；超时 → 逐 bot 报告缺失者（exit 1），可复跑 |
+| 3 导出意见 | `collect <PR> -o /tmp/pr<N>-review.md` | 结构化 Markdown：四类意见源（reviews / 行级评论 / PR 评论 / check runs + annotations）按时间排序，含五 bot 意见，头部防注入横幅，旧意见标「历史轮次」 |
+| 4 subagent 处置修复 | 范围按用户指令绑定：指定 PR 时只处置该 PR；「全部 open PR」时逐 PR 派**上下文隔离 subagent**（提示词见命令文件）；处置后 `reply <PR> -f <处置结果.json>` 逐条闭环答复 | 逐条批判性处置（采纳/变通/驳回，驳回须实证）→ 修复 → 验证 → `-s` 提交 push → 逐条答复（采纳带 SHA、驳回带实证、漏答报错） |
 | 5 循环 | 新 head 自动触发新一轮检视 → 回到阶段 2，直到 `READY_TO_MERGE` | 每轮闭环记录；建议 4 轮上限转人工 |
 | 6 人工 merge 提醒 | 向用户报告 PR 链接与状态摘要 | **由人执行 merge；工具绝不自动 merge、不自动 resolve review threads** |
 
@@ -42,10 +44,12 @@ python3 scripts/pr_loop.py status  # 3) 总览 open PR 与四 bot 完成度
 
 ```console
 python3 scripts/pr_loop.py [--repo owner/repo] status [<PR>]    # 总览 / 单 PR 详情
-python3 scripts/pr_loop.py [--repo owner/repo] wait <PR>        # 阻塞等四 bot 完成
+python3 scripts/pr_loop.py [--repo owner/repo] wait <PR>        # 阻塞等五 bot 完成
     [--timeout 7200] [--interval 60] [--quiet 900]
 python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>     # 导出意见为 Markdown
     [-o FILE] [--quiet 900]
+python3 scripts/pr_loop.py [--repo owner/repo] reply <PR>       # 按处置结果 JSON 逐条答复意见
+    -f FILE
 python3 scripts/pr_loop.py selftest                             # 离线自检(四场景故障注入)
 ```
 
@@ -70,18 +74,35 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   此时应同步补 fake 端点。脚本内临时路径一律 `shlex.quote`（TMPDIR 含空格安全）。
   维护要点：fake 的路径 case 须**先特异后宽泛**（如 `check-runs` 在 `commits/` 之前，
   否则前缀吞并导致 JSON 形状错配）。
-- **四 bot 判据**（与 [bot-coverage.yml](../../.github/workflows/bot-coverage.yml) 一致，
-  同步维护）：codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]`
+- **reply（闭环逐条答复）**：`python3 scripts/pr_loop.py reply <PR> -f <处置结果.json>`
+  读一份处置结果 JSON（数组，每条含 `path`/`line`/`id` 定位 + `conclusion`/`reason`/
+  `evidence`），逐条在 GitHub 答复：行级 finding（`path` 且 `line` 非 None）经 `gh api`
+  逐条 reply 到对应 review comment；挂不上 diff 行的 body JSON 段 finding 汇总成一条
+  issue comment 逐条列出。答复正文固定「结论（采纳/变通/驳回）+ 理由 + 证据」；轻量
+  校验——采纳缺修复 SHA / 驳回缺实证抛 `GhError` 拒绝答复；完整性校验——答复前先
+  `fetch_pr` 拉当前 head 的真实待处置意见集，与处置 JSON 做双向集合差（行级意见按
+  `(path, line, id)` 三元组精确比对；body 意见按条数比对，覆盖五 bot 的 reviews body
+  findings + 待处置 issue 评论 + check annotations 的 failure/warning 级），漏答 / 多答
+  / id 错绑 / body 条数不符分别抛 `GhError`（闭环必须逐条答复，见反目标 3）。
+- **五 bot 判据**：前四 bot 与 [bot-coverage.yml](../../.github/workflows/bot-coverage.yml) 一致
+  （同步维护）——codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]`
   作者或 `CodeRabbit` check（精确等值）；pr-agent = `pr-agent` check（精确等值），或
   `github-actions[bot]` 作者且正文含 `<!-- pr-agent:review:full -->` 标记的检视评论
   （workflow 用 GITHUB_TOKEN 触发、评论作者是 `github-actions[bot]`，与 bot-coverage
   报告同作者，靠内容标记区分）；greptile = `greptile-apps[bot]` 作者，或 check-run
-  app slug `greptile-apps`（PR #240 实证：greptile 可只产 check-run 不发评论）。
+  app slug `greptile-apps`（PR #240 实证：greptile 可只产 check-run 不发评论）；
+  local-claude = 作者 `wangxumarshall` **且** 正文含 `<!-- local-claude-review -->` 标记
+  （双条件，与 pr-agent 同构——避免把用户本人普通评论误判为第 5 bot；
+  `BOT_ORDER` 五元素顺序 codex/coderabbit/pr-agent/greptile/local-claude）。
+- **判据分裂（已知不变量破例）**：`.github/workflows/bot-coverage.yml` 保持**四 bot**
+  不变（GitHub-hosted 触发不了本地 claude）——「pr_loop 等五 bot、bot-coverage 校验
+  四 bot」。bot-coverage 报告的「汇总 4/4」仅指四个外部 SaaS bot；第 5 bot 完成度以
+  `status` 第 5 位（local-claude）为准。详见 [pr-review-bots.md §8.5](pr-review-bots.md#85-判据分裂已知不变量破例)。
 
 ## 4. 判定规则
 
 - **状态机**：`DRAFT` / `FORK` / `CLOSED` / `WAITING_BOTS`（任一 bot 无计入信号）/
-  `QUIET_WINDOW`（四 bot 完成但最新信号距今 < quiet）/ `READY_TO_FIX`（完成 + 过静默窗
+  `QUIET_WINDOW`（五 bot 完成但最新信号距今 < quiet）/ `READY_TO_FIX`（完成 + 过静默窗
   + 有待处置意见或数据不完整）/ `READY_TO_MERGE`（完成 + 过静默窗 + 零意见）。
   annotations 拉取失败时数据不完整，不给 `READY_TO_MERGE`（诚实性：无法确认「零意见」
   时不提示合并），转 `READY_TO_FIX` 由人工复核。
@@ -144,6 +165,7 @@ runner + 本地 LLM 网关**的无人值守自动修复方案。本仓库最终�
 
 ## 8. 延伸阅读
 
-- [PR 代码检视机器人（聚焦 SDC 激发）](pr-review-bots.md) — 四 bot 配置、判据、PR_TOKEN 约束、auto-pr
+- [PR 代码检视机器人（聚焦 SDC 激发）](pr-review-bots.md) — 五 bot 配置、判据、PR_TOKEN 约束、auto-pr
 - [代码检视代理仓库上下文 `AGENTS.md`](../../AGENTS.md) — SDC 激发能力检视重点（处置意见时的对照标准）
-- [.github/workflows/bot-coverage.yml](../../.github/workflows/bot-coverage.yml) — 四 bot 判据的同源定义
+- [.github/workflows/bot-coverage.yml](../../.github/workflows/bot-coverage.yml) — 前四 bot 判据的同源定义（保持四 bot，见判据分裂说明）
+- [`scripts/pr_local_review.py`](../../scripts/pr_local_review.py) — 第 5 bot 本地对抗检视引擎（`<PR>` / `--all-open`）

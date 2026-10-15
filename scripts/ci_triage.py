@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 即可整体替换,零触网。import 失败即进程失败(诚实报错,不吞错静默跳过
 # 车道 B——scan 会顶层崩溃退出而非半盲运行)。
 import pr_loop  # noqa: E402
-from pr_loop import UNTRUSTED_BANNER  # noqa: E402
+from pr_loop import GhError, UNTRUSTED_BANNER  # noqa: E402
 
 # ============ 常量(监控范围与节奏,spec §2/§14) ============
 
@@ -63,6 +63,11 @@ MONITORED_BRANCH = "main"
 AGENT_TIMEOUT_SEC = 3600
 # 车道 B(bot 意见处置)最大轮数——超过 4 轮仍在修,升级人工(spec §6)
 MAX_ROUNDS = 4
+# 第 5 bot(local-claude)连续缺位告警阈值: 连续 N 个 scan tick 车道 B 拉到的
+# PR 都缺 local-claude 信号 → 升级告警(认证失效/配额耗尽时无人值守 fix/ci
+# PR 会永久 WAITING_BOTS 且静默)。只告警不降门槛——硬门槛是用户确认项,
+# 不把 local-claude 降为非阻塞(I2)。
+LOCAL_CLAUDE_MISSING_TICK_LIMIT = 3
 # scan 互斥锁文件名(位于 STATE_DIR 下,flock LOCK_EX|LOCK_NB)
 SCAN_LOCK_NAME = "scan.lock"
 # git 子进程超时(秒),与 gh 封装一致
@@ -258,9 +263,10 @@ class StateStore:
 
 
 # ============ gh CLI 封装(凭据全权交给 gh,与 pr_loop 同策略) ============
-
-class GhError(RuntimeError):
-    """gh CLI 调用失败(未认证/网络/端点不存在等)。"""
+# GhError 统一从 pr_loop 导入(= pr_local_review.GhError,全仓唯一异常类)。
+# 本文件不再定义独立的 GhError——否则 lane_b 的 `except GhError` 捕获的是
+# 本地类,而 pr_loop.fetch_pr 抛的是 pr_local_review.GhError,拉 PR 失败会裸
+# traceback 崩掉 scan(单条目降级容错形同虚设)。
 
 
 def gh_json(args: list[str], input_text: Optional[str] = None):
@@ -1144,6 +1150,10 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         print("[lane-b] 车道 B 无条目(无 PR_OPEN / BOT_FIX 条目)")
         return
     slug = repo_slug()
+    # I2 缺位告警记账(车道 B 本轮拉到的 PR 是否全部缺 local-claude 信号——
+    # 单个 PR 缺位不升级,只有「全部缺」才意味着第 5 bot 全局停摆/凭据配额问题)
+    any_fetched = False
+    all_missing_local = True
     for entry in entries:
         if entry.status == "BOT_FIX":
             if entry.agent_pid is not None and agent_alive(entry.agent_pid):
@@ -1167,12 +1177,38 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             continue
         try:
             pr = pr_loop.fetch_pr(slug, entry.pr_number)
-            pr_state = pr_loop.classify_state(
-                pr, pr_loop.DEFAULT_QUIET, datetime.now(timezone.utc))
         except GhError as exc:
             print(f"[lane-b] run {entry.run_id}: fetch PR #{entry.pr_number}"
                   f" 失败,跳过该条目: {exc}")
             continue
+        # 硬门槛规避(Task 5): 无人值守的 fix/ci PR 缺会话触发第 5 bot(本地
+        # claude),判定前先主动补第 5 bot 信号——否则 classify_state 永远
+        # WAITING_BOTS,车道 B 永久死锁。ensure_local_review 幂等(同 head 已审
+        # 即返回)。dry_run 零写零触网,跳过真实审查;审查失败仅告警降级、继续
+        # 判定(与 pr_loop.cmd_wait 的事件线触发同口径——第 5 bot 是辅助触发
+        # 线,非硬前置)。
+        if not dry_run:
+            try:
+                pr_loop.ensure_local_review(entry.pr_number, pr.head_sha)
+            except GhError as exc:
+                print(f"[lane-b] run {entry.run_id}: 第 5 bot 审查失败,"
+                      f"按缺信号继续判定: {exc}")
+            else:
+                # I4: ensure_local_review 成功后重拉一次——发布的 review 不在
+                # 此前 fetch_pr 拿到的 stale PRData 里,不重拉会当轮仍
+                # WAITING_BOTS 多耗一个 tick。重拉失败则沿用 stale 数据继续
+                # 判定(诚实降级,不因观测失败炸车道 B)。
+                try:
+                    pr = pr_loop.fetch_pr(slug, entry.pr_number)
+                except GhError as exc:
+                    print(f"[lane-b] run {entry.run_id}: 第 5 bot 审查后重拉"
+                          f"PR 失败,用 stale 数据继续判定: {exc}")
+        any_fetched = True
+        bot_done = getattr(pr, "bot_done", None) or {}
+        if bot_done.get("local-claude") is not None:
+            all_missing_local = False
+        pr_state = pr_loop.classify_state(
+            pr, pr_loop.DEFAULT_QUIET, datetime.now(timezone.utc))
 
         if pr_state in ("WAITING_BOTS", "QUIET_WINDOW"):
             print(f"[lane-b] run {entry.run_id}: PR #{entry.pr_number} "
@@ -1268,6 +1304,23 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         state["entries"] = [e.to_dict() for e in entries]
     # 与 reap_or_advance 同模式: 序列化回 state(持有同一批 Entry 对象)
     state["entries"] = [e.to_dict() for e in entries]
+
+    # I2: 第 5 bot 连续缺位告警。车道 B 本轮实际拉到了 PR(any_fetched)且全部
+    # 缺 local-claude 信号(all_missing_local)→ streak+1;出现任一 local-claude
+    # 信号则归零(恢复)。连续达到阈值时升级告警(认证失效/配额耗尽会让无人值守
+    # fix/ci PR 永久 WAITING_BOTS 且静默)。只告警、不把本地 bot 降为非阻塞——
+    # 硬门槛是用户确认项,不得在本工具内削弱。
+    if not dry_run and any_fetched:
+        if all_missing_local:
+            state["local_claude_missing_ticks"] = \
+                state.get("local_claude_missing_ticks", 0) + 1
+        else:
+            state["local_claude_missing_ticks"] = 0
+        ticks = state["local_claude_missing_ticks"]
+        if ticks >= LOCAL_CLAUDE_MISSING_TICK_LIMIT:
+            print(f"[lane-b] 第 5 bot(local-claude)连续 {ticks} tick 缺位——"
+                  f"请检查 agent.env 凭据/配额(硬门槛不降级,仅告警)",
+                  file=sys.stderr)
 
 
 def _git(args: list[str], clone_dir: Optional[str] = None) -> str:

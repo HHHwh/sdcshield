@@ -869,12 +869,16 @@ def _fake_pr_loop(monkeypatch, pr, state="READY_TO_FIX"):
     """三件套替换: fetch_pr / classify_state / render_collect 全走 fake。
 
     classify_state 可由后续用例覆写;render_collect 返回固定导出文本。
+    ensure_local_review 亦替换为 no-op(Task 5 起 lane_b 在判定前主动触发
+    第 5 bot——离线测试不得触网;需锚定触发时序的用例另行覆写)。
     """
     monkeypatch.setattr(ct.pr_loop, "fetch_pr", lambda slug, num: pr)
     monkeypatch.setattr(ct.pr_loop, "classify_state",
                         lambda p, quiet, now: state)
     monkeypatch.setattr(ct.pr_loop, "render_collect",
                         lambda p, slug, quiet: "# collect 导出(fake)\n")
+    monkeypatch.setattr(ct.pr_loop, "ensure_local_review",
+                        lambda num, sha: None)
 
 
 # ---------------------------------------------------------------------------
@@ -1703,3 +1707,187 @@ def test_kill_agent_if_alive_guards_pid_zero(monkeypatch, tmp_path):
     assert kills == [(999999905, signal.SIGKILL)]
     assert entry.agent_pid is None                # 引用照常清
     assert entry2.agent_pid is None
+
+
+# ===========================================================================
+# Task 5: 车道 B 主动触发第 5 bot(硬门槛死锁规避)
+# 口径同前: 全部离线——fake gh / fake pr_loop / fake run_background,
+# 绝不触网、绝不真实跑 claude。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 用例 37(车道 B 主动触发): PR_OPEN 条目在派发 bot 处置 agent 前,先调
+# ensure_local_review(Task 3 交付)补第 5 bot 信号——无人值守的 fix/ci PR
+# 缺会话触发本地 claude 审查,否则 classify 永远 WAITING_BOTS 硬门槛死锁。
+# 顺序锚定: review 信号必须发生在 dispatch_agent 之前。
+
+def test_lane_b_triggers_local_review_before_dispatch(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+
+    pr = _fake_pr(head_sha="b" * 40)
+    _fake_pr_loop(monkeypatch, pr, "READY_TO_FIX")
+
+    order = []
+    review_calls = []
+
+    def fake_ensure(n, s):
+        order.append("review")
+        review_calls.append((n, s))
+
+    monkeypatch.setattr(ct.pr_loop, "ensure_local_review", fake_ensure)
+
+    bg = FakeBg()
+
+    def bg_record(cmd, cwd, log):
+        order.append("dispatch")
+        return bg(cmd, cwd, log)
+
+    monkeypatch.setattr(ct, "run_background", bg_record)
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=91, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=0,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, last_dispatched_head=None,
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    ct.lane_b_advance(state, dry_run=False)
+
+    # 第 5 bot 信号补触发: 以正确的 (pr_number, head_sha) 调用
+    assert review_calls == [(88, "b" * 40)]
+    # 顺序契约: 先补第 5 bot 信号,后派发 bot 处置 agent
+    assert order.index("review") < order.index("dispatch")
+    # 且确实派发了一次(READY_TO_FIX 主路径不被触发逻辑破坏)
+    assert len(bg.calls) == 1
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "BOT_FIX"
+
+
+# ---------------------------------------------------------------------------
+# 用例 38(I4): ensure_local_review 成功后重拉 PR 再判态——发布的 review 不在
+# ensure 之前 fetch_pr 拿到的 stale PRData 里,不重拉会当轮仍 WAITING_BOTS
+# 多耗一个 tick(无人值守 fix/ci PR 永久卡死)。
+# 口径同前: 全部离线,fake gh / fake pr_loop / fake run_background。
+
+def test_lane_b_refetches_pr_after_ensure_local_review(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    pr_stale = _fake_pr(head_sha="b" * 40)
+    pr_fresh = _fake_pr(head_sha="b" * 40)
+    fetches = []
+
+    def fake_fetch(slug, num):
+        fetches.append(len(fetches))
+        return pr_stale if len(fetches) == 1 else pr_fresh
+
+    monkeypatch.setattr(ct.pr_loop, "fetch_pr", fake_fetch)
+    monkeypatch.setattr(ct.pr_loop, "ensure_local_review", lambda n, s: None)
+    monkeypatch.setattr(ct.pr_loop, "render_collect",
+                        lambda p, slug, quiet: "# collect(fake)\n")
+    classified = []
+
+    def fake_classify(p, quiet, now):
+        classified.append(p)
+        return "READY_TO_FIX"
+
+    monkeypatch.setattr(ct.pr_loop, "classify_state", fake_classify)
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=93, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=0,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, last_dispatched_head=None,
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    ct.lane_b_advance(state, dry_run=False)
+
+    # ensure 成功后重拉一次 → 用 fresh PR 判态(旧实现拿 stale PR 当轮仍
+    # WAITING_BOTS,多耗一个 tick)
+    assert len(fetches) == 2
+    assert classified == [pr_fresh]
+    assert len(bg.calls) == 1                 # READY_TO_FIX 主路径仍派发
+
+
+# ---------------------------------------------------------------------------
+# 用例 39(I2): 第 5 bot(local-claude)连续 N tick 缺位 → 升级告警(认证失效/
+# 配额耗尽时无人值守 fix/ci PR 永久 WAITING_BOTS 且静默)。只告警、不降门槛
+# ——硬门槛是用户确认项,不把 local-claude 降为非阻塞。
+
+def test_lane_b_alerts_on_prolonged_local_claude_absence(
+        monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    # SimpleNamespace 无 bot_done → 视为 local-claude 缺位
+    pr = _fake_pr()
+    _fake_pr_loop(monkeypatch, pr, "WAITING_BOTS")
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=94, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=0,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, last_dispatched_head=None,
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    for _ in range(ct.LOCAL_CLAUDE_MISSING_TICK_LIMIT):
+        ct.lane_b_advance(state, dry_run=False)
+
+    assert state["local_claude_missing_ticks"] == \
+        ct.LOCAL_CLAUDE_MISSING_TICK_LIMIT
+    err = capsys.readouterr().err
+    assert "第 5 bot" in err
+    assert "agent.env" in err
+    # 缺位只告警,不得派发 bot 处置 agent(WAITING_BOTS 不动)
+    assert len(bg.calls) == 0
+
+
+def test_lane_b_missing_streak_resets_when_any_pr_has_local_claude(
+        monkeypatch, tmp_path):
+    """修残余(Low): 缺位告警语义对齐注释——「全部缺」才 streak+1,出现任一
+    local-claude 信号即归零(单个持续缺位 PR 不再让告警永久递增,不误报为
+    凭据/配额全局问题)。"""
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    pr_ok = _fake_pr(number=88, head_sha="b" * 40)
+    pr_ok.bot_done = {"local-claude": datetime.now(timezone.utc)}
+    pr_missing = _fake_pr(number=89, head_sha="c" * 40)  # 无 bot_done → 缺位
+
+    def fake_fetch(slug, num):
+        return pr_ok if num == 88 else pr_missing
+
+    monkeypatch.setattr(ct.pr_loop, "fetch_pr", fake_fetch)
+    monkeypatch.setattr(ct.pr_loop, "classify_state",
+                        lambda p, quiet, now: "WAITING_BOTS")
+    monkeypatch.setattr(ct.pr_loop, "render_collect",
+                        lambda p, slug, quiet: "# collect(fake)\n")
+    monkeypatch.setattr(ct.pr_loop, "ensure_local_review", lambda n, s: None)
+
+    e1 = _sample_entry(workflow="Sanitizer", run_id=97, status="PR_OPEN",
+                       issue_number=77, pr_number=88, rounds=0,
+                       agent_pid=None, agent_started_at=None, agent_log=None,
+                       last_dispatched_head=None, extra_runs=[])
+    e2 = _sample_entry(workflow="CodeQL", run_id=98, status="PR_OPEN",
+                       issue_number=78, pr_number=89, rounds=0,
+                       agent_pid=None, agent_started_at=None, agent_log=None,
+                       last_dispatched_head=None, extra_runs=[])
+    state = {"entries": [e1.to_dict(), e2.to_dict()],
+             "auth_failure_streak": 0, "local_claude_missing_ticks": 2}
+
+    ct.lane_b_advance(state, dry_run=False)
+
+    # PR #88 有 local-claude 信号 → 全部缺不成立,streak 归零(不再永久递增)
+    assert state["local_claude_missing_ticks"] == 0
+    assert len(bg.calls) == 0                 # WAITING_BOTS 零派发

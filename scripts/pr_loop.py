@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 # pr_loop.py — Agent 驱动的 PR 检视闭环工具(会话驱动,仓库自闭环)。
 #
-# 在 trae / claude code 会话内完成「实现 push → 等四 bot 检视 → 导出意见 →
+# 在 trae / claude code 会话内完成「实现 push → 等五 bot 检视 → 导出意见 →
 # subagent 批判性处置修复 → 循环 → 提醒人工 merge」,全程不切换工具。
 # 六阶段流程定义见 .claude/commands/pr-loop.md 与 .trae/rules/pr-loop.md,
 # 端到端手册见 docs/build-deploy-pr-ci/pr-loop.md。
 #
 # 子命令:
-#   status [<pr>]  open PR 的四 bot 完成度总览 / 单 PR 详情 + 下一步行动建议
-#   wait <pr>      阻塞轮询,直到四 bot 对当前 head 全部发信号且过静默窗
-#   collect <pr>   导出当前 head 的全部四 bot 意见为结构化 Markdown(供 subagent)
+#   status [<pr>]  open PR 的五 bot 完成度总览 / 单 PR 详情 + 下一步行动建议
+#   wait <pr>      阻塞轮询,直到五 bot 对当前 head 全部发信号且过静默窗
+#   collect <pr>   导出当前 head 的全部五 bot 意见为结构化 Markdown(供 subagent)
+#   reply <pr>     按处置结果 JSON 逐条答复意见(阶段 4 处置后的闭环段)
 #
 # 依赖: Python3 标准库 + gh CLI(GitHub 凭据全权交给 gh,本脚本不管理 token)。
 #   自检: gh --version && gh auth status
 #
-# 四 bot 判据与 .github/workflows/bot-coverage.yml 逐字一致(两处需同步维护):
+# 五 bot 判据(前四外部 bot 与 .github/workflows/bot-coverage.yml 逐字一致,两处需同步维护):
 #   codex       = 作者 chatgpt-codex-connector[bot]
 #   coderabbit  = 作者 coderabbitai[bot] 或 check-run 名 "CodeRabbit"
 #   pr-agent    = check-run 名 "pr-agent"; 检视评论另须作者 github-actions[bot] 且
@@ -23,6 +24,10 @@
 #                 报告同作者,仅靠内容标记区分)
 #   greptile    = 作者 greptile-apps[bot] 或 check-run app slug "greptile-apps"
 #                 (PR #240 实证: greptile 可只产 check-run 不发评论)
+#   local-claude = 作者 wangxumarshall 且正文含 "<!-- local-claude-review -->" 标记
+#                 (第 5 bot = 本地无头 claude code;「作者 + 内容标记」双条件,不入
+#                 LOGIN_TO_BOT——避免把用户本人普通评论误判为第 5 bot,与 pr-agent
+#                 同构;bot-coverage.yml 不覆盖本地 bot,此判据仅存在于 pr_loop)
 # 在此之上做更强的 head 锚定过滤,甄别 GitHub 评论重锚定(push 新 head 后旧行级
 # 评论的 commit_id 被更新指向新 head,但 created_at 不变)与「旧检视算到新提交」:
 #   时间锚定下界取当前 head 的 push 时间(仓库 events 的 PushEvent.created_at,
@@ -58,7 +63,25 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-# ============ 四 bot 判据(与 .github/workflows/bot-coverage.yml 同步维护) ============
+# 第 5 bot(本地 claude)唯一标记: 从 pr_local_review 导入,避免字面量漂移。
+# scripts/ 在本脚本直接运行时由 Python 自动加入 sys.path;被 ci_triage/测试
+# 引用时它们已先行插入 scripts/。此处再显式插入一次,保证任意导入路径下
+# pr_local_review 可被顶层 import(与 ci_triage.py / pr_local_review.py 同策略)。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pr_local_review import (  # noqa: E402
+    # GhError 亦从 pr_local_review 导入——全仓唯一异常类。避免本文件再定义
+    # 同名类,否则 ensure_local_review 内部 already_reviewed/run_review/
+    # publish_review 抛出的 pr_local_review.GhError 不会被 cmd_wait/main 的
+    # except GhError 捕获,降级容错形同虚设。
+    GhError,
+    LOCAL_CLAUDE_MARKER,
+    _gh_api_post,
+    already_reviewed,
+    publish_review,
+    run_review,
+)
+
+# ============ 五 bot 判据(前四外部 bot 与 .github/workflows/bot-coverage.yml 同步维护) ============
 # bot-coverage.yml 用 `grep -Fxq`(固定字符串整行精确匹配)判定,此处用精确等值。
 CODEX_LOGIN = "chatgpt-codex-connector[bot]"   # codex: 评论/review 作者
 CODERABBIT_LOGIN = "coderabbitai[bot]"         # coderabbit: 作者 …
@@ -68,8 +91,9 @@ GREPTILE_LOGIN = "greptile-apps[bot]"          # greptile: 评论/review 作者
 GREPTILE_APP_SLUG = "greptile-apps"            #   …或 check-run app slug(只产 check 的场景)
 PRAGENT_LOGIN = "github-actions[bot]"          # pr-agent 检视评论作者(GITHUB_TOKEN 触发)
 PRAGENT_MARKER = "pr-agent:review:full"        #   …且正文须含此标记(区分 bot-coverage 报告)
+LOCAL_CLAUDE_LOGIN = "wangxumarshall"          # 第 5 bot(本地 claude): 评论/review 作者 = 当前 gh 登录用户
 
-BOT_ORDER = ("codex", "coderabbit", "pr-agent", "greptile")
+BOT_ORDER = ("codex", "coderabbit", "pr-agent", "greptile", "local-claude")
 LOGIN_TO_BOT = {
     CODEX_LOGIN: "codex",
     CODERABBIT_LOGIN: "coderabbit",
@@ -77,6 +101,8 @@ LOGIN_TO_BOT = {
 }
 # 注意: github-actions[bot] 不入 LOGIN_TO_BOT——bot-coverage 报告同作者,
 # pr-agent 检视评论靠 PRAGENT_MARKER 内容标记单独判定(见 pragent_comment)。
+# wangxumarshall 同理不入 LOGIN_TO_BOT——用户本人普通评论会被误判为第 5 bot,
+# local-claude 靠 LOCAL_CLAUDE_MARKER 内容标记单独判定(见 local_claude_comment)。
 CHECK_NAME_TO_BOT = {
     CODERABBIT_CHECK: "coderabbit",
     PRAGENT_CHECK: "pr-agent",
@@ -115,14 +141,14 @@ UNTRUSTED_BANNER = (
 )
 
 SUGGESTIONS = {
-    "DRAFT": "草稿 PR,四 bot 通常不检视——完成开发后标记 ready for review 再走本流程",
+    "DRAFT": "草稿 PR,五 bot 通常不检视——完成开发后标记 ready for review 再走本流程",
     "FORK": "来自 fork 的 PR——本流程只处理同仓库分支,跳过",
     "CLOSED": "PR 已关闭/合并,无需处理",
-    "WAITING_BOTS": "运行 `scripts/pr_loop.py wait <PR>` 阻塞等待四 bot 完成",
-    "QUIET_WINDOW": "四 bot 已对当前 head 发信号,静默窗内——稍候片刻后复查 status",
+    "WAITING_BOTS": "运行 `scripts/pr_loop.py wait <PR>` 阻塞等待五 bot 完成",
+    "QUIET_WINDOW": "五 bot 已对当前 head 发信号,静默窗内——稍候片刻后复查 status",
     "READY_TO_FIX": "运行 `scripts/pr_loop.py collect <PR>` 导出意见,按 /pr-loop 第 4 阶段"
                     "派上下文隔离 subagent 批判性处置",
-    "READY_TO_MERGE": "四 bot 完成、当前 head 无待处置意见——请人工 merge"
+    "READY_TO_MERGE": "五 bot 完成、当前 head 无待处置意见——请人工 merge"
                       "(本工具绝不自动 merge、不自动 resolve review threads)",
 }
 SUGGEST_ORDER = ["READY_TO_FIX", "READY_TO_MERGE", "QUIET_WINDOW",
@@ -130,10 +156,6 @@ SUGGEST_ORDER = ["READY_TO_FIX", "READY_TO_MERGE", "QUIET_WINDOW",
 
 
 # ============ gh CLI 封装(凭据交给 gh) ============
-
-class GhError(RuntimeError):
-    """gh CLI 调用失败(未认证/网络/端点不存在等)。"""
-
 
 def _gh_once(argv: List[str]) -> Optional[subprocess.CompletedProcess]:
     """跑一次 gh 子进程。gh 缺失抛 GhError(确定性错误,不重试);超时返回 None。"""
@@ -234,7 +256,7 @@ class CheckRun:
     head_sha: Optional[str]
     completed_at: Optional[datetime]
     html_url: Optional[str]
-    matched_bot: Optional[str]   # 命中四 bot 判据者(coderabbit / pr-agent / greptile)
+    matched_bot: Optional[str]   # 命中四外部 bot 判据者(coderabbit / pr-agent / greptile)
     counted: bool                # matched 且 head_sha 匹配且 completed
     output: dict = field(default_factory=dict)   # API 原始 output(title/summary/text)
     annotations: list = field(default_factory=list)
@@ -287,7 +309,7 @@ def fmt_ts(dt: Optional[datetime]) -> str:
 
 
 def bot_of(item: dict) -> Optional[str]:
-    """条目(user.login)命中四 bot 作者判据 → bot 名,否则 None。"""
+    """条目(user.login)命中四外部 bot 作者判据 → bot 名,否则 None。"""
     return LOGIN_TO_BOT.get((item.get("user") or {}).get("login") or "")
 
 
@@ -322,6 +344,76 @@ def pragent_comment(item: dict) -> bool:
             and PRAGENT_MARKER in (item.get("body") or ""))
 
 
+def local_claude_comment(author: str, body: str) -> bool:
+    """第 5 bot(本地 claude)检视评论: 作者 wangxumarshall 且正文含
+    LOCAL_CLAUDE_MARKER 标记。双条件——避免把用户本人的普通评论误判为
+    第 5 bot(设计文档反目标 2),与 pragent_comment 的「作者 + 内容标记」
+    同构但不入 LOGIN_TO_BOT。"""
+    return author == LOCAL_CLAUDE_LOGIN and LOCAL_CLAUDE_MARKER in (body or "")
+
+
+def _local_claude_body_findings(body: str) -> list:
+    """解析 local-claude review body 里 ```json 围栏包裹的 findings 数组。
+
+    publish_review 把挂不上 diff 行的 finding 收进 body JSON 段(设计文档 §5
+    「挂不上 diff 行的 finding 退到 review body 的 JSON 段」)。取首个 ```json
+    围栏内的完整文本再 json.loads(不贪心截到第一个 `]`——finding 的 evidence/
+    message 里可能含 `]`),无围栏/畸形返回 []。"""
+    text = body or ""
+    start = text.find("```json")
+    if start < 0:
+        return []
+    start += len("```json")
+    # 结束围栏须是收尾的 ```(独立成行,前有换行)——finding 的 message/evidence
+    # 可能贴含 ``` 的代码块,若以首个 ``` 作结束围栏会提前截断致 json.loads 失败
+    # 而静默返回 [](意见被静默丢弃)。收尾围栏前必有实际换行,而 JSON 字符串内
+    # 的换行被 json.dumps 转义为字面 \n,故 "\n```" 不会命中 JSON 内部的 ```。
+    end = text.find("\n```", start)
+    if end < 0:
+        # 围栏未独立成行(正文以 ``` 结尾且无前置换行)的畸形情形,rfind 兜底
+        end = text.rfind("```", start)
+    if end < 0:
+        return []
+    try:
+        data = json.loads(text[start:end].strip())
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [f for f in data if isinstance(f, dict)]
+
+
+def count_local_claude_findings(review: dict) -> int:
+    """一条 local-claude review 的实质 finding 数 = body JSON 段 findings 数
+    + 行级评论数(review['comments'] 存在时计入)。
+
+    list reviews 端点不返回 comments(行级评论在 pulls/{n}/comments 单独拉取),
+    pr_loop 的意见计数把行级评论从 n_rcomment 另行计入,故此处在该端点下等价
+    于 body findings 数;review['comments'] 仅用于 create-review 响应/测试形态
+    (一条 review 同时携带行级评论)。
+    """
+    review = review or {}
+    n = len(_local_claude_body_findings(review.get("body") or ""))
+    comments = review.get("comments")
+    if isinstance(comments, list):
+        n += len(comments)
+    return n
+
+
+def ensure_local_review(pr_number: int, head_sha: str) -> None:
+    """事件线触发: 若第 5 bot 尚未对该 head 发过信号,跑一次本地对抗审查
+    并发布(设计文档 §6.1 wait 内主动触发)。
+
+    幂等: `already_reviewed` 为真(该 head 已有含标记的 review)直接返回——
+    事件线 + 时间线撞车只审一次。未审则 `run_review` 产出 findings 后经
+    `publish_review` 上 GitHub(作者 = 当前 gh 登录用户 wangxumarshall)。
+    """
+    if already_reviewed(pr_number, head_sha):
+        return
+    findings = run_review(pr_number, head_sha)
+    publish_review(pr_number, head_sha, findings)
+
+
 def pragent_state_json(body: str) -> Optional[dict]:
     """解析 pr-agent 评论尾部 <!-- pr-agent-review-state:v1 {...} --> 的 JSON。
     失败/不存在返回 None(调用方回退保守路径,不丢数据)。"""
@@ -348,7 +440,9 @@ def pragent_comment_head(item: dict) -> Optional[str]:
 def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
     """issue 评论的 bot 判定(信号/计数用):
     LOGIN_TO_BOT 作者直接命中;pr-agent 须内容标记命中且 last_run.head_sha
-    匹配当前 head(旧 head 的检视不算当前信号;解析失败回退时间锚定语义)。"""
+    匹配当前 head(旧 head 的检视不算当前信号;解析失败回退时间锚定语义);
+    local-claude 须「作者 wangxumarshall 且正文含标记」双条件命中(时间锚定,
+    无 commit 绑定字段——与 issue 评论总体策略一致)。"""
     bot = bot_of(item)
     if bot is not None:
         return bot
@@ -356,6 +450,9 @@ def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
         head = pragent_comment_head(item)
         if head is None or head == head_sha:
             return "pr-agent"
+    if local_claude_comment((item.get("user") or {}).get("login") or "",
+                            item.get("body") or ""):
+        return "local-claude"
     return None
 
 
@@ -404,7 +501,7 @@ def fetch_push_time(slug: str, branch: str, head_sha: str) -> Optional[datetime]
 
 
 def fetch_pr(slug: str, number: int) -> PRData:
-    """拉取单个 PR 的全部检视信号并完成四 bot 判定。"""
+    """拉取单个 PR 的全部检视信号并完成五 bot 判定。"""
     pr = gh_api(f"repos/{slug}/pulls/{number}")
     if not isinstance(pr, dict) or "number" not in pr:
         raise GhError(f"PR #{number}: 返回数据异常")
@@ -488,6 +585,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # ---- reviews: 作者判据 + 有效态 + 时间锚定 + commit 锚定 ----
     for r in reviews:
         bot = bot_of(r)
+        if bot is None and local_claude_comment(
+                (r.get("user") or {}).get("login") or "", r.get("body") or ""):
+            bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
@@ -501,6 +601,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # ---- 行级评论: 时间锚定 + commit 锚定(original_commit_id 为重锚定前的原值) ----
     for c in review_comments:
         bot = bot_of(c)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
@@ -542,15 +645,39 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # ---- 意见计数(当前 head,双锚定;摘要/LGTM 类不计,见文件头「意见计数」注释) ----
     n_review = 0
     for r in reviews:
-        body = (r.get("body") or "").strip()
-        if (bot_of(r) and r.get("state") in REVIEW_OPINION_STATES
-                and is_after_head(r, "submitted_at", anchor)
-                and commit_anchored(r, ("commit_id",), head_sha)
-                and body and not is_summary_text(body)):
+        raw_body = r.get("body") or ""
+        body = raw_body.strip()
+        bot = bot_of(r)
+        if bot is None and local_claude_comment(
+                (r.get("user") or {}).get("login") or "", raw_body):
+            bot = "local-claude"
+        if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
+            continue
+        if not (is_after_head(r, "submitted_at", anchor)
+                and commit_anchored(r, ("commit_id",), head_sha)):
+            continue
+        if not body or is_summary_text(body):
+            continue
+        if bot == "local-claude":
+            # 第 5 bot review 按 body JSON 段的 findings 数计(行级评论由
+            # n_rcomment 另行计入,不重复)——挂不上 diff 行的 finding 只在正文。
+            # 复用 count_local_claude_findings 的 body 口径(单一真源,避免与
+            # _local_claude_body_findings 两处漂移);list reviews 端点不返回
+            # comments,此处即 body findings 数。
+            n_review += count_local_claude_findings(r)
+        else:
             n_review += 1
-    n_rcomment = sum(1 for c in review_comments
-                     if bot_of(c) and is_after_head(c, "created_at", anchor)
-                     and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha))
+    n_rcomment = 0
+    for c in review_comments:
+        bot = bot_of(c)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
+        if bot is None:
+            continue
+        if (is_after_head(c, "created_at", anchor)
+                and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha)):
+            n_rcomment += 1
     n_icomment = 0
     for c in issue_comments:
         body = (c.get("body") or "")
@@ -602,6 +729,184 @@ def classify_state(pr: PRData, quiet: int, now: datetime) -> str:
     return "READY_TO_MERGE"
 
 
+# ============ 闭环逐条答复(设计文档 §8) ============
+
+# 答复轻量校验: 采纳须给修复 commit SHA(7-40 位十六进制),驳回须给实证依据。
+# 防「答复无证据」蒙混结案(CLAUDE.md 规则 2: 无实证不提交)。
+_REPLY_SHA_RE = re.compile(r"\b[0-9a-fA-F]{7,40}\b")
+
+
+def _format_reply(reply) -> str:
+    """把一条处置结论格式化为固定结构正文: 结论(采纳/变通/驳回) + 理由 +
+    证据。采纳的证据 = 修复 commit SHA;驳回的证据 = 实证依据(CLAUDE.md 规则 2:
+    ninja 零警告 / 真实输出 / 定向回归 / x86 非回归)。轻量校验: 采纳缺 SHA /
+    驳回缺实证 → 抛 GhError 拒绝答复(诚实性,反目标 3)。"""
+    if isinstance(reply, dict):
+        conclusion = reply.get("conclusion") or "?"
+        reason = (reply.get("reason") or "").strip()
+        evidence = (reply.get("evidence") or "").strip()
+        if conclusion == "采纳" and not _REPLY_SHA_RE.search(evidence):
+            raise GhError("采纳类答复缺修复 commit SHA——证据须含 7-40 位十六进制 SHA")
+        if conclusion == "驳回" and not evidence:
+            raise GhError("驳回类答复缺实证依据——证据不能为空,须引用构建/回归真实输出")
+        lines = [f"结论: {conclusion}"]
+        if reason:
+            lines.append(f"理由: {reason}")
+        if evidence:
+            lines.append(f"证据: {evidence}")
+        return "\n".join(lines)
+    return str(reply)
+
+
+def _real_opinion_inventory(pr: PRData) -> tuple:
+    """从 PRData 提取当前 head 的真实待处置意见集(与 fetch_pr 的意见计数同口径:
+    双锚定 + 双条件判据):
+      inline     = {(path, line, id)}  全部 bot 的行级评论(逐条可 reply 的载体);
+      body_count = 全部 bot 的非行级待处置意见(reviews body findings + 待处置
+                   issue 评论 + check annotations 的 failure/warning 级)。
+    供 verify_reply_completeness 做双向集合差——真实数据,不是自产数组。
+    """
+    anchor = pr.push_time or pr.head_time
+    inline = set()
+    for c in pr.review_comments:
+        bot = bot_of(c)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
+        if bot is None:
+            continue
+        if not (is_after_head(c, "created_at", anchor)
+                and commit_anchored(c, ("original_commit_id", "commit_id"),
+                                    pr.head_sha)):
+            continue
+        path = c.get("path") or ""
+        line = c.get("line")
+        if line is None:
+            line = c.get("original_line")
+        inline.add((path, line, c.get("id")))
+
+    body_count = 0
+    # reviews: 全部 bot 的 body findings(local-claude 按 body JSON 段条数计,
+    # 其余 bot 每条非摘要 review 计 1)——与 fetch_pr 的 n_review 同口径。
+    for r in pr.reviews:
+        raw_body = r.get("body") or ""
+        bot = bot_of(r)
+        if bot is None and local_claude_comment(
+                (r.get("user") or {}).get("login") or "", raw_body):
+            bot = "local-claude"
+        if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
+            continue
+        if not (is_after_head(r, "submitted_at", anchor)
+                and commit_anchored(r, ("commit_id",), pr.head_sha)):
+            continue
+        if not raw_body.strip() or is_summary_text(raw_body):
+            continue
+        if bot == "local-claude":
+            body_count += len(_local_claude_body_findings(raw_body))
+        else:
+            body_count += 1
+    # issue 评论: pr-agent 按尾部 JSON 的 ACTIVE findings 计,其余 bot 每条非
+    # 摘要评论计 1——与 fetch_pr 的 n_icomment 同口径。
+    for c in pr.issue_comments:
+        body = c.get("body") or ""
+        if not (issue_comment_bot(c, pr.head_sha)
+                and is_after_head(c, "created_at", anchor)
+                and body.strip() and not is_summary_text(body)):
+            continue
+        if pragent_comment(c):
+            state = pragent_state_json(body)
+            findings = state.get("findings") if state else None
+            if isinstance(findings, list):
+                body_count += sum(1 for f in findings
+                                  if isinstance(f, dict)
+                                  and f.get("state") == "ACTIVE")
+            else:
+                body_count += 1
+        else:
+            body_count += 1
+    # check annotations: failure/warning 级计入待处置意见(notice 是信息性提示)。
+    body_count += sum(1 for e in pr.check_runs if e.counted
+                      for a in e.annotations
+                      if a.get("annotation_level") in ("failure", "warning"))
+    return inline, body_count
+
+
+def verify_reply_completeness(pr: PRData, findings: list, replies: list) -> None:
+    """闭环完整性校验(真实数据口径,替换旧的自指空校验——C1)。
+
+    旧实现在 reply_to_findings 里只比 `len(findings) != len(replies)`,而两者由
+    cmd_reply 从同一份 JSON 数组平行拆出、长度恒等,漏答生产路径永不报错。
+    此处把处置结果与 GitHub 上**当前 head 的真实待处置意见集**做双向集合差:
+    行级意见按 (path, line, id) 三元组比对,漏答(真实有、处置没有)/ 多答(处置
+    有、真实没有——含同 (path,line) 但 id 错绑)/ body 意见条数不符分别报
+    GhError——诚实性,反目标 3(闭环答复漏答/错答即失败)。
+    """
+    if len(findings) != len(replies):
+        raise GhError(
+            f"答复条数({len(replies)})与待处置意见数({len(findings)})不一致"
+            "——漏答/多答,拒绝结案(闭环必须逐条答复)")
+    inline_real, body_count_real = _real_opinion_inventory(pr)
+
+    inline_disp = set()
+    body_count_disp = 0
+    for f in findings:
+        path = f.get("path")
+        if path and f.get("line") is not None:
+            inline_disp.add((path, f.get("line"), f.get("id")))
+        else:
+            body_count_disp += 1
+
+    # 漏答: 真实行级评论有、处置 JSON 没覆盖(含同 (path,line) 但 id 错绑——
+    # 三元组精确覆盖,不再另做 real_by_loc 单层映射: 同一行多条 bot 评论会被
+    # 后者误判 id 不匹配)
+    missed = inline_real - inline_disp
+    if missed:
+        locs = ", ".join(f"{p}:{l}" for p, l, _ in sorted(missed))
+        raise GhError(f"闭环漏答 {len(missed)} 条行级意见: {locs}")
+    # 多答: 处置 JSON 有、真实行级评论不存在
+    extra = inline_disp - inline_real
+    if extra:
+        locs = ", ".join(f"{p}:{l}(id={i})" for p, l, i in sorted(extra))
+        raise GhError(f"闭环多答/定位不匹配 {len(extra)} 条: {locs}")
+
+    if body_count_real != body_count_disp:
+        raise GhError(
+            f"闭环 body 意见条数不符: 真实 {body_count_real} 条,"
+            f"处置 {body_count_disp} 条——漏答/多答,拒绝结案")
+
+
+def reply_to_findings(pr_number: int, findings: list, replies: list) -> None:
+    """对给定 findings 逐条在 GitHub 答复(设计文档 §8 闭环完整答复)。
+
+    - 行级 finding(path 且 line 非 None)→ gh api 逐条 reply 到对应 review
+      comment(finding 需带该评论的 id);
+    - 挂不上 diff 行的 body JSON 段 finding → 汇总成一条 issue comment,
+      每条答复独立成段;
+    - 条数一致性校验: len(findings) == len(replies)——与真实意见集的完整性
+      比对在 verify_reply_completeness 完成(cmd_reply 生产路径先调它)。
+    """
+    if len(findings) != len(replies):
+        raise GhError(
+            f"答复条数({len(replies)})与待处置意见数({len(findings)})不一致"
+            "——漏答/多答,拒绝结案(闭环必须逐条答复)")
+    slug = resolve_slug(None)
+    body_entries = []
+    for finding, reply in zip(findings, replies):
+        text = _format_reply(reply)
+        if finding.get("path") and finding.get("line") is not None:
+            cid = finding.get("id")
+            if not cid:
+                raise GhError("行级 finding 缺 review comment id,无法逐条 reply")
+            _gh_api_post(f"repos/{slug}/pulls/{pr_number}/comments/{cid}/replies",
+                         {"body": text})
+        else:
+            loc = finding.get("path") or "?"
+            body_entries.append(f"### {loc}\n{text}")
+    if body_entries:
+        _gh_api_post(f"repos/{slug}/issues/{pr_number}/comments",
+                     {"body": "\n\n".join(body_entries)})
+
+
 # ============ 渲染 ============
 
 def fmt_bots(pr: PRData) -> str:
@@ -646,7 +951,7 @@ def print_detail(pr: PRData, slug: str, quiet: int) -> None:
     print(head_line)
     if pr.url:
         print(f"  链接: {pr.url}")
-    print("  四 bot 信号(仅计入当前 head 之后; 顺序 codex/coderabbit/pr-agent/greptile):")
+    print("  五 bot 信号(仅计入当前 head 之后; 顺序 codex/coderabbit/pr-agent/greptile/local-claude):")
     for bot in BOT_ORDER:
         first = pr.bot_first.get(bot)
         if first:
@@ -681,7 +986,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("      或指定 PR 号查看详情: scripts/pr_loop.py status <PR>")
         return 0
     print(f"== PR 总览({len(prs)} 个 open,仓库 {slug})==")
-    print("   bots 四位顺序: codex / coderabbit / pr-agent / greptile")
+    print("   bots 五位顺序: codex / coderabbit / pr-agent / greptile / local-claude")
     details = []
     failed = 0
     for item in prs:
@@ -720,11 +1025,22 @@ def cmd_wait(args: argparse.Namespace) -> int:
     pr = fetch_pr(slug, args.pr)
     if pr.draft or pr.fork:
         why = "草稿(DRAFT)" if pr.draft else "fork(FORK)"
-        print(f"PR #{args.pr} 为{why} PR——四 bot 检视流程不覆盖,退出。", file=sys.stderr)
+        print(f"PR #{args.pr} 为{why} PR——五 bot 检视流程不覆盖,退出。", file=sys.stderr)
         return 1
     if pr.state != "open":
         print(f"PR #{args.pr} 状态为 {pr.state}(非 open),等待无意义,退出。", file=sys.stderr)
         return 1
+    # 事件线主动触发(设计文档 §6.1): 进入阻塞轮询前,先确保第 5 bot(本地
+    # claude)已对该 head 发过检视信号——未审则同步跑一次并发布,再与四 bot
+    # 同等待遇计入完成判定。同 head 幂等(already_reviewed 门禁)。
+    # 第 5 bot 是辅助触发线,不是 wait 的硬前置: 触发失败(gh 失败/claude 未装/
+    # agent.env 缺失/head 未 fetch/claude 输出非 JSON)仅告警降级,继续四 bot
+    # 轮询(绝不能因此 exit 2 而让四 bot 轮询无法进入)。
+    try:
+        ensure_local_review(args.pr, pr.head_sha)
+    except GhError as exc:
+        print(f"警告: 第 5 bot(本地 claude)触发失败,跳过主动审查,"
+              f"继续四 bot 轮询: {exc}", file=sys.stderr)
     start = time.monotonic()
     deadline = start + args.timeout
     while True:
@@ -741,7 +1057,7 @@ def cmd_wait(args: argparse.Namespace) -> int:
         waited = int(time.monotonic() - start)
         if state in ("READY_TO_FIX", "READY_TO_MERGE"):
             print()
-            print(f"== 四 bot 检视完成(PR #{pr.number},head {pr.head_sha[:8]})==")
+            print(f"== 五 bot 检视完成(PR #{pr.number},head {pr.head_sha[:8]})==")
             print_timeline(pr)
             print_opinions(pr)
             print(f"  状态: {state}")
@@ -754,7 +1070,7 @@ def cmd_wait(args: argparse.Namespace) -> int:
             return 1
         if state == "QUIET_WINDOW":
             remain = int(args.quiet - (now - pr.latest_signal).total_seconds())
-            print(f"[{now:%H:%M:%S}] 已等待 {waited}s: 四 bot 完成,静默窗剩 {remain}s"
+            print(f"[{now:%H:%M:%S}] 已等待 {waited}s: 五 bot 完成,静默窗剩 {remain}s"
                   f"(head={pr.head_sha[:8]})", flush=True)
         else:
             missing = ",".join(b for b in BOT_ORDER if pr.bot_done.get(b) is None)
@@ -771,7 +1087,7 @@ def cmd_wait(args: argparse.Namespace) -> int:
                 else:
                     print(f"    {bot:<11} ✗ 未对当前 head 发信号")
             if state == "QUIET_WINDOW":
-                print("  四 bot 已全部完成,仅静默窗未过——重跑 wait 或增大 --quiet/--timeout。")
+                print("  五 bot 已全部完成,仅静默窗未过——重跑 wait 或增大 --quiet/--timeout。")
             else:
                 missing = [b for b in BOT_ORDER if pr.bot_done.get(b) is None]
                 print(f"  缺失信号的 bot: {', '.join(missing)}")
@@ -795,6 +1111,9 @@ def _collect_entries(pr: PRData) -> list:
 
     for r in pr.reviews:
         bot = bot_of(r)
+        if bot is None and local_claude_comment(
+                (r.get("user") or {}).get("login") or "", r.get("body") or ""):
+            bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
@@ -809,23 +1128,31 @@ def _collect_entries(pr: PRData) -> list:
                         (r.get("body") or "").strip() or "(无正文)"))
     for c in pr.review_comments:
         bot = bot_of(c)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
         if ts is None:
             continue
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
+        cid = c.get("id")
+        id_suffix = f" (id={cid})" if cid is not None else ""
         extra = ""
         oid = c.get("original_commit_id") or c.get("commit_id")
         if oid and oid != pr.head_sha:
             extra = f" — 评论锚定 head {oid[:8]}(非当前 head)"
         entries.append((ts,
-                        f"[{bot}] 行级评论 {loc} — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
+                        f"[{bot}] 行级评论 {loc}{id_suffix} — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
                         (c.get("body") or "").strip() or "(无正文)"))
     for c in pr.issue_comments:
         bot = bot_of(c)
         if bot is None and pragent_comment(c):
             bot = "pr-agent"   # 收录一切 pr-agent 检视输出(含旧 head,靠锚定标注甄别)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
@@ -872,7 +1199,7 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
     if pr.annotations_fetch_failed:
         A("- 注意: 部分 annotations 拉取失败,annotations 计数可能低估")
     A("")
-    A("## 四 bot 完成度(当前 head)")
+    A("## 五 bot 完成度(当前 head)")
     for bot in BOT_ORDER:
         done = pr.bot_done.get(bot)
         A(f"- {bot}: " + (f"✓ 首个信号 {fmt_ts(done)}" if done else "✗ 未发信号"))
@@ -880,7 +1207,7 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
     A("## 意见明细(按时间排序; 正文缩进为代码块,其中 markdown 不渲染)")
     entries = _collect_entries(pr)
     if not entries:
-        A("(四 bot 在本 PR 无任何 review/评论)")
+        A("(五 bot 在本 PR 无任何 review/评论)")
     for i, (ts, title, body) in enumerate(entries, 1):
         A("")
         A(f"### {i}. {title}")
@@ -940,6 +1267,41 @@ def cmd_collect(args: argparse.Namespace) -> int:
               f"({len(md)} 字符,状态 {state},待处置意见 {pr.opinion_count} 条)")
     else:
         sys.stdout.write(md)
+    return 0
+
+
+# ============ 子命令: reply ============
+
+def cmd_reply(args: argparse.Namespace) -> int:
+    """阶段 4 处置结果的闭环逐条答复(production 调用路径)。
+
+    读一份处置结果 JSON(数组,每条一个 finding 的处置:path/line/id 定位 +
+    conclusion/reason/evidence 结论),拆成 findings 与 replies 两平行列表;答复
+    前先 fetch_pr 拉当前 head 的真实意见集,经 verify_reply_completeness 做双向
+    集合差(漏答/多答/id 不匹配/body 条数不符分别报错),再调 reply_to_findings——
+    行级 finding 逐条 reply,body 段 finding 汇总成一条 issue comment。此前
+    reply_to_findings 无任何生产调用入口(仅测试引用),本命令补上 CLI 闭环段;
+    C1 起在此把完整性校验锚到 GitHub 真实意见,而非自产数组长度。
+    """
+    slug = resolve_slug(args.repo)
+    with open(args.file, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        raise GhError(f"处置结果 {args.file} 须为 JSON 数组(每条一条处置结论)")
+    findings: list = []
+    replies: list = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            raise GhError("处置结果数组元素须为 JSON 对象")
+        findings.append({"path": entry.get("path"), "line": entry.get("line"),
+                         "id": entry.get("id")})
+        replies.append({"conclusion": entry.get("conclusion"),
+                        "reason": entry.get("reason"),
+                        "evidence": entry.get("evidence")})
+    pr = fetch_pr(slug, args.pr)
+    verify_reply_completeness(pr, findings, replies)
+    reply_to_findings(args.pr, findings, replies)
+    print(f"已逐条答复 PR #{args.pr} 的 {len(findings)} 条意见")
     return 0
 
 
@@ -1106,21 +1468,22 @@ def build_parser() -> argparse.ArgumentParser:
             示例:
               scripts/pr_loop.py status                # 所有 open PR 总览
               scripts/pr_loop.py status 242            # 单 PR 详情 + 行动建议
-              scripts/pr_loop.py wait 242              # 等四 bot 完成(默认 2h 超时)
+              scripts/pr_loop.py wait 242              # 等五 bot 完成(默认 2h 超时)
               scripts/pr_loop.py wait 242 --timeout 900 --interval 30
               scripts/pr_loop.py collect 242 -o /tmp/pr242.md
+              scripts/pr_loop.py reply 242 -f /tmp/dispositions.json
         """))
     p.add_argument("--repo", help="目标仓库 owner/repo(默认取 gh 上下文仓库)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    ps = sub.add_parser("status", help="open PR 的四 bot 完成度总览 / 单 PR 详情 + 行动建议")
+    ps = sub.add_parser("status", help="open PR 的五 bot 完成度总览 / 单 PR 详情 + 行动建议")
     ps.add_argument("pr", nargs="?", type=int, help="PR 号(省略 = 全部 open PR 总览)")
     ps.add_argument("--quiet", type=int, default=DEFAULT_QUIET,
                     help=f"静默窗秒数(默认 {DEFAULT_QUIET})")
     ps.set_defaults(func=cmd_status)
 
     pw = sub.add_parser("wait",
-                        help="阻塞轮询直到四 bot 完成 + 过静默窗(完成 exit 0 / 超时 exit 1)")
+                        help="阻塞轮询直到五 bot 完成 + 过静默窗(完成 exit 0 / 超时 exit 1)")
     pw.add_argument("pr", type=int, help="PR 号")
     pw.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
                     help=f"总超时秒数(默认 {DEFAULT_TIMEOUT})")
@@ -1130,12 +1493,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"静默窗秒数(默认 {DEFAULT_QUIET})")
     pw.set_defaults(func=cmd_wait)
 
-    pc = sub.add_parser("collect", help="导出当前 head 全部四 bot 意见为结构化 Markdown")
+    pc = sub.add_parser("collect", help="导出当前 head 全部五 bot 意见为结构化 Markdown")
     pc.add_argument("pr", type=int, help="PR 号")
     pc.add_argument("-o", "--output", help="输出文件(默认 stdout)")
     pc.add_argument("--quiet", type=int, default=DEFAULT_QUIET,
                     help=f"静默窗秒数(默认 {DEFAULT_QUIET})")
     pc.set_defaults(func=cmd_collect)
+
+    preply = sub.add_parser("reply",
+                            help="按处置结果 JSON 逐条答复意见(阶段 4 闭环,生产调用路径)")
+    preply.add_argument("pr", type=int, help="PR 号")
+    preply.add_argument("-f", "--file", required=True,
+                        help="处置结果 JSON 文件(数组,每条含 path/line/id/conclusion/reason/evidence)")
+    preply.set_defaults(func=cmd_reply)
 
     pst = sub.add_parser("selftest",
                          help="离线自检: fake gh 注入故障,验证重试/快速失败/降级契约")
