@@ -546,6 +546,10 @@ PYEOF
                 if grep -qE 'Critical.*(Asserted|asserted)' "$evf"; then
                     ! paused_for sel && set_pause sel "SEL Critical 事件（粘性：需人工调查后 rm PAUSE）: $(head -1 "$evf")"
                 fi
+            else
+                # 本窗口无新 SEL 事件：sel5m 归零（否则该列永远停在最后一个
+                # 有事件的窗口，"近5min窗口"语义失真——10min 汇总同受影响）
+                SEL5M_CARRY=0
             fi
             last_sel_id=$lastid
             echo "$lastid" > "$SEL_BASELINE_FILE" 2>/dev/null
