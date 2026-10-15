@@ -101,8 +101,9 @@ static int arm0102_kreg_select_sve_init(struct test *test) {
     const int slack = svcntw();   /* asm ldr z 尾批松弛, 见文件头注释 */
     const size_t total = (size_t)(ARM0102_KREG_SELECT_SVE_COUNT + slack) * sizeof(uint32_t);
     auto *data = static_cast<Arm0102KregSelectSveData *>(malloc(sizeof(Arm0102KregSelectSveData)));
-    /* safe: total = (1024 + svcntw())*4 任意 VL 下都不是 64 的倍数,
-     * 原生 aligned_alloc 违反 C11 size 倍数前提, 新 libasan abort (issue #252) */
+    /* safe: total = (1024 + svcntw())*4 在部分 VL 下不是 64 的倍数
+     * (VL=128 -> 4112, VL=256 -> 4128 违规; VL=512 -> 4160 恰为倍数),
+     * 违规时原生 aligned_alloc 违反 C11 size 倍数前提, 新 libasan abort (issue #252) */
     data->srcA = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->srcB = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->expected = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
