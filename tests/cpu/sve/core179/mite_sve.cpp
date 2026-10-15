@@ -12,6 +12,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -31,9 +32,40 @@ static constexpr uint32_t MITE_CONST1 = 0x12345678u;
 static constexpr uint32_t MITE_CONST2 = 0x9ABCDEF0u;
 static constexpr uint32_t MITE_CONST3 = 0x55555555u;
 
+/* 元素数 count (u32 元素) — 运行时可配置, 统一优先级链:
+ *   1. -O mite_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_MITE_SVE_COUNT
+ *   3. 设计默认 1024 (1024 元素 = 4KB/缓冲)
+ * （core179 诊断探针: 未配置时默认 = 原硬编码设计几何, 不做内存
+ *   自适应 — 缓冲几何本身是激发参数; 显式配置 clamp 到
+ *   [1024, 1<<20]。非 16 的倍数 log_warning + 向下取整, 保持 u32
+ *   缓冲字节数的 64B cache-line 对齐。） */
+static size_t mite_sve_count(struct test *test)
+{
+    const int64_t dflt = MITE_SVE_ITERATIONS;
+    const int64_t hi = 1ll << 20;
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, dflt, hi);
+    if (v == 0 && sdc_env_knob_int(test->id, "count", &v)
+        && (v < dflt || v > hi)) {
+        int64_t c = (v < dflt) ? dflt : hi;
+        log_warning("%s: count=%ld 越界 (有效 %ld..%ld), 已 clamp 为 %ld",
+                    test->id, (long)v, (long)dflt, (long)hi, (long)c);
+        v = c;
+    }
+    if (v <= 0)
+        v = dflt;
+    if (v % 16 != 0) {
+        log_warning("%s: count=%ld 非 16 的倍数, 向下取整为 %ld (保持 64B 缓冲对齐)",
+                    test->id, (long)v, (long)(v - v % 16));
+        v -= v % 16;
+    }
+    return (size_t)v;
+}
+
 struct MiteSveData {
     uint32_t *input;
     uint32_t *expected;
+    size_t count;
 };
 
 /* 标量参考 (golden, 与原版 process_value 同语义) */
@@ -59,10 +91,11 @@ static int mite_sve_init(struct test *test)
     }
 #endif
     auto *data = (MiteSveData *)malloc(sizeof(MiteSveData));
-    data->input = (uint32_t *)aligned_alloc_safe(64, MITE_SVE_ITERATIONS * sizeof(uint32_t));
-    data->expected = (uint32_t *)aligned_alloc_safe(64, MITE_SVE_ITERATIONS * sizeof(uint32_t));
-    memset_random(data->input, MITE_SVE_ITERATIONS * sizeof(uint32_t));
-    for (int i = 0; i < MITE_SVE_ITERATIONS; ++i)
+    data->count = mite_sve_count(test);
+    data->input = (uint32_t *)aligned_alloc_safe(64, data->count * sizeof(uint32_t));
+    data->expected = (uint32_t *)aligned_alloc_safe(64, data->count * sizeof(uint32_t));
+    memset_random(data->input, data->count * sizeof(uint32_t));
+    for (size_t i = 0; i < data->count; ++i)
         data->expected[i] = process_value_ref(data->input[i]);
     test->data = data;
     return EXIT_SUCCESS;
@@ -73,12 +106,12 @@ static int mite_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *data = (MiteSveData *)test->data;
-    uint32_t *dst = (uint32_t *)aligned_alloc(64, MITE_SVE_ITERATIONS * sizeof(uint32_t));
+    uint32_t *dst = (uint32_t *)aligned_alloc(64, data->count * sizeof(uint32_t));
     const int lanes = svcntw();
 
     TEST_LOOP(test, 1 << 13) {
-        for (size_t base = 0; base < MITE_SVE_ITERATIONS; base += lanes) {
-            int n = (MITE_SVE_ITERATIONS - base < (size_t)lanes) ? (int)(MITE_SVE_ITERATIONS - base) : lanes;
+        for (size_t base = 0; base < data->count; base += lanes) {
+            int n = (data->count - base < (size_t)lanes) ? (int)(data->count - base) : lanes;
             svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)n);
             svuint32_t v = svld1_u32(pg, data->input + base);
 
@@ -97,12 +130,12 @@ static int mite_sve_run(struct test *test, int cpu)
 
             svst1_u32(pg, dst + base, v);
         }
-        if (memcmp(dst, data->expected, MITE_SVE_ITERATIONS * sizeof(uint32_t)) != 0) {
+        if (memcmp(dst, data->expected, data->count * sizeof(uint32_t)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(MITE_SVE_ITERATIONS); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < data->count; ++_dump_j) {
                     if (dst[_dump_j] != data->expected[_dump_j]) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
@@ -115,9 +148,10 @@ static int mite_sve_run(struct test *test, int cpu)
                         }
                     }
                 }
-                log_error("mite_sve: total mismatched elements: %zu / %d",
-                          _dump_bad, MITE_SVE_ITERATIONS);
+                log_error("mite_sve: total mismatched elements: %zu / %zu",
+                          _dump_bad, data->count);
             }
+
             report_fail_msg("mite_sve data miscompare");
         }
     }

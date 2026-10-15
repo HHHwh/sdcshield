@@ -30,6 +30,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -51,6 +52,40 @@
 
 #define MRN_RMW_DIFF_64K_SVE_COUNT 8192    /* 64 KB == L1D (thrash edge) */
 #define MRN_RMW_DIFF_1M_SVE_COUNT 131072   /* 1 MB == 16x L1D */
+
+/* 基准实例元素数 base_count — 运行时可配置, 统一优先级链:
+ *   1. -O <testid>.base_count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_<TESTID>_BASE_COUNT
+ *   3. 设计默认 8192 (64KB, L1D 容量/抖动边缘)
+ * （core179 诊断探针: 未配置时默认 = 原硬编码设计几何, 不做内存
+ *   自适应 — 缓冲几何本身是激发参数; 显式配置 clamp 到
+ *   [8192, 1<<22]。）
+ * ×16 比率是本对比实验的本体: mrn_rmw_diff_64k_sve 用 base_count,
+ * mrn_rmw_diff_1m_sve 用 base_count*16 (默认 8192/131072 =
+ * 64KB/1MB = L1D 边缘 vs 16x L1D) — 显式配置时比率保持不变。
+ * 非 8 的倍数 log_warning + 向下取整 (u64 缓冲字节数保持 64B
+ * cache-line 对齐; ×16 后仍为 8 的倍数)。 */
+static size_t mrn_rmw_diff_fp_base_count(struct test *test)
+{
+    const int64_t dflt = MRN_RMW_DIFF_64K_SVE_COUNT;
+    const int64_t hi = 1ll << 22;
+    int64_t v = sdc_knob_int_clamped(test, "base_count", 0, dflt, hi);
+    if (v == 0 && sdc_env_knob_int(test->id, "base_count", &v)
+        && (v < dflt || v > hi)) {
+        int64_t c = (v < dflt) ? dflt : hi;
+        log_warning("%s: base_count=%ld 越界 (有效 %ld..%ld), 已 clamp 为 %ld",
+                    test->id, (long)v, (long)dflt, (long)hi, (long)c);
+        v = c;
+    }
+    if (v <= 0)
+        v = dflt;
+    if (v % 8 != 0) {
+        log_warning("%s: base_count=%ld 非 8 的倍数, 向下取整为 %ld (保持 64B 缓冲对齐)",
+                    test->id, (long)v, (long)(v - v % 8));
+        v -= v % 8;
+    }
+    return (size_t)v;
+}
 
 struct MrnRmwDiffFpSveData {
     uint64_t *srcA;
@@ -99,7 +134,7 @@ static int mrn_rmw_diff_64k_sve_init(struct test *test)
         return EXIT_SKIP;
     }
 #endif
-    return mrn_rmw_diff_fp_sve_init_common(test, MRN_RMW_DIFF_64K_SVE_COUNT);
+    return mrn_rmw_diff_fp_sve_init_common(test, (int)mrn_rmw_diff_fp_base_count(test));
 }
 
 static int mrn_rmw_diff_1m_sve_init(struct test *test)
@@ -112,7 +147,9 @@ static int mrn_rmw_diff_1m_sve_init(struct test *test)
         return EXIT_SKIP;
     }
 #endif
-    return mrn_rmw_diff_fp_sve_init_common(test, MRN_RMW_DIFF_1M_SVE_COUNT);
+    /* 1MB 实例 = base*16: ×16 的 L1D-边缘-vs-L2 比率是实验本体 */
+    return mrn_rmw_diff_fp_sve_init_common(
+                test, (int)(mrn_rmw_diff_fp_base_count(test) * 16));
 }
 
 static int mrn_rmw_diff_fp_sve_cleanup(struct test *test)

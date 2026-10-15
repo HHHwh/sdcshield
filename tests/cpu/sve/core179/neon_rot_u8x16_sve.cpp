@@ -27,6 +27,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -58,10 +59,28 @@ struct NeonRotU8x16SveData {
     uint8_t *srcA;
     uint8_t *srcB;
     uint8_t *expected;
+    size_t buffer_bytes;   /* 运行时每缓冲字节数 (knob `buffer_bytes`, 默认设计值) */
 };
+
+#if defined(__aarch64__)
+
+/* 优先级: 1. -O neon_rot_u8x16_sve.buffer_bytes=N
+ *   2. SDC_NEON_ROT_U8X16_SVE_BUFFER_BYTES  3. 设计默认 16384
+ * （诊断探针: 默认保持设计几何, 显式配置才生效 — 槽距/行距模式是激发参数不动） */
+static size_t neon_rot_u8x16_sve_buffer_bytes(struct test *test)
+{
+    const int64_t dflt = NEON_ROT_U8X16_SVE_BYTES;
+    int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0, NEON_ROT_U8X16_SVE_BYTES, 256 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("neon_rot_u8x16_sve", "buffer_bytes", &v, NEON_ROT_U8X16_SVE_BYTES, 256 << 20);
+    return v > 0 ? (size_t)v : (size_t)dflt;
+}
+
+#endif
 
 static int neon_rot_u8x16_sve_init(struct test *test)
 {
+    size_t buffer_bytes = NEON_ROT_U8X16_SVE_BYTES;
 #if defined(__aarch64__)
     unsigned long hwcap = getauxval(AT_HWCAP);
     if ((hwcap & HWCAP_SVE) == 0) {
@@ -69,18 +88,34 @@ static int neon_rot_u8x16_sve_init(struct test *test)
                  "to be implemented (placeholder): ARM SVE required for neon_rot_u8x16_sve");
         return EXIT_SKIP;
     }
+    buffer_bytes = neon_rot_u8x16_sve_buffer_bytes(test);
+    /* 全 VL ldr/str 访问 + aligned_alloc(64,·) 尺寸约束 (原 16/64 对齐保留):
+     * 向下取整到 svcntb() 与 64 的公倍数 (均为 2 的幂, 取大者即公倍数) */
+    size_t align = (size_t)svcntb();
+    if (align < 64)
+        align = 64;
+    if (buffer_bytes % align != 0) {
+        const size_t rounded = buffer_bytes - buffer_bytes % align;
+        log_warning("neon_rot_u8x16_sve: buffer_bytes=%zu 不是 svcntb()=%d 与 64 的公倍数, "
+                    "向下取整为 %zu",
+                    buffer_bytes, (int)svcntb(), rounded);
+        buffer_bytes = rounded;
+    }
 #endif
     auto *data = static_cast<NeonRotU8x16SveData *>(malloc(sizeof(NeonRotU8x16SveData)));
-    data->srcA = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_ALLOC));
-    data->srcB = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_ALLOC));
-    data->expected = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
+    data->buffer_bytes = buffer_bytes;
+    /* 满 VL 无谓词 ldr z 的尾部松弛 (review 4249143905): 被读取的
+     * srcA/srcB/temp 各 +256B, 运行时尺寸 = buffer_bytes + slack */
+    data->srcA = static_cast<uint8_t *>(aligned_alloc(64, buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK));
+    data->srcB = static_cast<uint8_t *>(aligned_alloc(64, buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK));
+    data->expected = static_cast<uint8_t *>(aligned_alloc(64, buffer_bytes));
 
     /* 填满含松弛的整段, 使尾部全宽加载读到的松弛字节为已初始化值 */
-    memset_random(data->srcA, NEON_ROT_U8X16_SVE_ALLOC);
-    memset_random(data->srcB, NEON_ROT_U8X16_SVE_ALLOC);
+    memset_random(data->srcA, buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK);
+    memset_random(data->srcB, buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK);
 
     /* golden: 逐字节同旋转, 在相同 SVE 单元上预计算 */
-    for (int j = 0; j < NEON_ROT_U8X16_SVE_BYTES; j++) {
+    for (size_t j = 0; j < buffer_bytes; j++) {
         switch (j % 4) {
             case 0: data->expected[j] = data->srcA[j] + data->srcB[j]; break;
             case 1: data->expected[j] = data->srcA[j] ^ data->srcB[j]; break;
@@ -113,19 +148,19 @@ static int neon_rot_u8x16_sve_run(struct test *test, int cpu)
     (void)cpu;
     auto *data = static_cast<NeonRotU8x16SveData *>(test->data);
 
-    uint8_t *temp = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_ALLOC));
-    uint8_t *dst  = static_cast<uint8_t *>(aligned_alloc(64, NEON_ROT_U8X16_SVE_BYTES));
+    uint8_t *temp = static_cast<uint8_t *>(aligned_alloc(64, data->buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK));
+    uint8_t *dst  = static_cast<uint8_t *>(aligned_alloc(64, data->buffer_bytes));
     const int lanes = svcntb();   /* bytes per vector */
     /* temp 被满 VL ldr z 读取(含尾部松弛区), 先置 0 保证读取字节已初始化 */
-    memset(temp, 0, NEON_ROT_U8X16_SVE_ALLOC);
+    memset(temp, 0, data->buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK);
     /* SVE 架构最大 VL 2048bit → svcntb() ≤ 256 (movbe_slf_sweep
      * VL-portable 范式): n = min(bytes-base, svcntb()) 全 VL 覆盖 */
     uint8_t phase[SVE_MAX_VECTOR_BYTES];
 
     TEST_LOOP(test, 1 << 13) {
-        for (size_t base = 0; base < NEON_ROT_U8X16_SVE_BYTES; base += lanes) {
-            int n = (NEON_ROT_U8X16_SVE_BYTES - base < (size_t)lanes)
-                        ? (int)(NEON_ROT_U8X16_SVE_BYTES - base) : lanes;
+        for (size_t base = 0; base < data->buffer_bytes; base += lanes) {
+            int n = (data->buffer_bytes - base < (size_t)lanes)
+                        ? (int)(data->buffer_bytes - base) : lanes;
             svbool_t pgn = svwhilelt_b8((uint64_t)0, (uint64_t)n);
 
             svuint8_t a = load_vec_u8_sve(data->srcA + base);
@@ -145,12 +180,12 @@ static int neon_rot_u8x16_sve_run(struct test *test, int cpu)
             store_vec_u8_sve(pgn, dst + base, load_vec_u8_sve(temp + base));
         }
 
-        if (memcmp(dst, data->expected, NEON_ROT_U8X16_SVE_BYTES) != 0) {
+        if (memcmp(dst, data->expected, data->buffer_bytes) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(NEON_ROT_U8X16_SVE_BYTES); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < data->buffer_bytes; ++_dump_j) {
                     if (dst[_dump_j] != data->expected[_dump_j]) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
@@ -163,8 +198,8 @@ static int neon_rot_u8x16_sve_run(struct test *test, int cpu)
                         }
                     }
                 }
-                log_error("neon_rot_u8x16_sve: total mismatched elements: %zu / %d",
-                          _dump_bad, NEON_ROT_U8X16_SVE_BYTES);
+                log_error("neon_rot_u8x16_sve: total mismatched elements: %zu / %zu",
+                          _dump_bad, data->buffer_bytes);
             }
             report_fail_msg("neon_rot_u8x16_sve data miscompare");
         }

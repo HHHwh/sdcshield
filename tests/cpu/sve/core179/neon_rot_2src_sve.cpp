@@ -14,6 +14,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -33,6 +34,7 @@ struct NeonRot2srcSveData {
     uint64_t *srcA;
     uint64_t *srcB;
     uint64_t *expected;
+    size_t count;   /* 运行时元素数 (knob `count`, 默认设计值) */
 };
 
 #if defined(__aarch64__)
@@ -48,9 +50,22 @@ static inline svuint64_t load_vec_sve(const void *addr) {
     return res;
 }
 
+/* 优先级: 1. -O neon_rot_2src_sve.count=N  2. SDC_NEON_ROT_2SRC_SVE_COUNT
+ *   3. 设计默认 1024
+ * （诊断探针: 默认保持设计几何, 显式配置才生效 — 槽距/行距模式是激发参数不动） */
+static size_t neon_rot_2src_sve_count(struct test *test)
+{
+    const int64_t dflt = NEON_ROT_2SRC_SVE_COUNT;
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, NEON_ROT_2SRC_SVE_COUNT, 1 << 22);
+    if (v == 0)
+        sdc_env_knob_int_clamped("neon_rot_2src_sve", "count", &v, NEON_ROT_2SRC_SVE_COUNT, 1 << 22);
+    return v > 0 ? (size_t)v : (size_t)dflt;
+}
+
 #endif
 
 static int neon_rot_2src_sve_init(struct test *test) {
+    size_t count = NEON_ROT_2SRC_SVE_COUNT;
 #if defined(__aarch64__)
     unsigned long hwcap = getauxval(AT_HWCAP);
     if ((hwcap & HWCAP_SVE) == 0) {
@@ -58,17 +73,28 @@ static int neon_rot_2src_sve_init(struct test *test) {
                  "to be implemented (placeholder): ARM SVE required for neon_rot_2src_sve");
         return EXIT_SKIP;
     }
+    count = neon_rot_2src_sve_count(test);
+    /* asm ldr z/str z 全向量访问: count 向下取整到 svcntd() 的整倍数 (倍数约束保留) */
+    const size_t lanes = (size_t)svcntd();
+    const size_t rem = count - count / lanes * lanes;   /* % 表达式触发 GCC SVE ICE, 改用除法组合 */
+    if (rem != 0) {
+        const size_t rounded = count - rem;
+        log_warning("neon_rot_2src_sve: count=%zu 不是 svcntd()=%zu 的整倍数, 向下取整为 %zu",
+                    count, lanes, rounded);
+        count = rounded;
+    }
 #endif
     auto *data = static_cast<NeonRot2srcSveData *>(malloc(sizeof(NeonRot2srcSveData)));
-    data->srcA = static_cast<uint64_t *>(aligned_alloc(64, NEON_ROT_2SRC_SVE_COUNT * sizeof(uint64_t)));
-    data->srcB = static_cast<uint64_t *>(aligned_alloc(64, NEON_ROT_2SRC_SVE_COUNT * sizeof(uint64_t)));
-    data->expected = static_cast<uint64_t *>(aligned_alloc(64, NEON_ROT_2SRC_SVE_COUNT * sizeof(uint64_t)));
+    data->count = count;
+    data->srcA = static_cast<uint64_t *>(aligned_alloc(64, count * sizeof(uint64_t)));
+    data->srcB = static_cast<uint64_t *>(aligned_alloc(64, count * sizeof(uint64_t)));
+    data->expected = static_cast<uint64_t *>(aligned_alloc(64, count * sizeof(uint64_t)));
 
-    memset_random(data->srcA, NEON_ROT_2SRC_SVE_COUNT * sizeof(uint64_t));
-    memset_random(data->srcB, NEON_ROT_2SRC_SVE_COUNT * sizeof(uint64_t));
+    memset_random(data->srcA, count * sizeof(uint64_t));
+    memset_random(data->srcB, count * sizeof(uint64_t));
 
     /* golden: same rotating composition, computed on the same SVE units */
-    for (int i = 0; i < NEON_ROT_2SRC_SVE_COUNT; i++) {
+    for (size_t i = 0; i < count; i++) {
         switch (i % 4) {
             case 0: data->expected[i] = data->srcA[i] + data->srcB[i]; break;
             case 1: data->expected[i] = data->srcA[i] ^ data->srcB[i]; break;
@@ -86,13 +112,13 @@ static int neon_rot_2src_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<NeonRot2srcSveData *>(test->data);
 
-    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, NEON_ROT_2SRC_SVE_COUNT * sizeof(uint64_t)));
-    uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, NEON_ROT_2SRC_SVE_COUNT * sizeof(uint64_t)));
+    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
+    uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
     const int lanes = svcntd();
     svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)lanes);
 
     TEST_LOOP(test, 1 << 13) {
-        for (size_t base = 0; base < NEON_ROT_2SRC_SVE_COUNT; base += lanes) {
+        for (size_t base = 0; base < data->count; base += lanes) {
             /* 2 源加载: asm 保证的 ldr z */
             svuint64_t a = load_vec_sve(data->srcA + base);
             svuint64_t b = load_vec_sve(data->srcB + base);
@@ -105,7 +131,7 @@ static int neon_rot_2src_sve_run(struct test *test, int cpu) {
                 svuint64_t r_and = svand_u64_x(pg, a, b);
                 svuint64_t r_orr = svorr_u64_x(pg, a, b);
                 uint64_t phase[8];
-                int n = (NEON_ROT_2SRC_SVE_COUNT - base < (size_t)lanes) ? (int)(NEON_ROT_2SRC_SVE_COUNT - base) : lanes;
+                int n = (data->count - base < (size_t)lanes) ? (int)(data->count - base) : lanes;
                 for (int k = 0; k < n; ++k) phase[k] = (base + k) % 4;
                 svbool_t pgn = svwhilelt_b64((uint64_t)0, (uint64_t)n);
                 svuint64_t vphase = svld1_u64(pgn, phase);
@@ -119,12 +145,12 @@ static int neon_rot_2src_sve_run(struct test *test, int cpu) {
             store_vec_sve(dst + base, load_vec_sve(temp + base));
         }
 
-        if (memcmp(dst, data->expected, NEON_ROT_2SRC_SVE_COUNT * sizeof(uint64_t)) != 0) {
+        if (memcmp(dst, data->expected, data->count * sizeof(uint64_t)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(NEON_ROT_2SRC_SVE_COUNT); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < data->count; ++_dump_j) {
                     if (dst[_dump_j] != data->expected[_dump_j]) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
@@ -137,8 +163,8 @@ static int neon_rot_2src_sve_run(struct test *test, int cpu) {
                         }
                     }
                 }
-                log_error("neon_rot_2src_sve: total mismatched elements: %zu / %d",
-                          _dump_bad, NEON_ROT_2SRC_SVE_COUNT);
+                log_error("neon_rot_2src_sve: total mismatched elements: %zu / %zu",
+                          _dump_bad, data->count);
             }
             report_fail_msg("neon_rot_2src_sve data miscompare");
         }

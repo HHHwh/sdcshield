@@ -27,6 +27,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -48,6 +49,7 @@ struct NeonRotLdrAtTopMlaSveData {
     uint32_t *scratch;
     uint32_t *expected;
     int lanes;
+    int slots;   /* 运行时向量槽数 (knob `slots`, 默认设计值) */
 };
 
 #if defined(__aarch64__)
@@ -62,6 +64,18 @@ static inline svuint32_t load_vec_sve(const void *addr) {
     return res;
 }
 
+/* 优先级: 1. -O neon_rot_ldr_at_top_mla_sve.slots=N
+ *   2. SDC_NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS  3. 设计默认 1024
+ * （诊断探针: 默认保持设计几何, 显式配置才生效 — 槽距/行距模式是激发参数不动） */
+static size_t neon_rot_ldr_at_top_mla_sve_slots(struct test *test)
+{
+    const int64_t dflt = NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS;
+    int64_t v = sdc_knob_int_clamped(test, "slots", 0, NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS, 1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("neon_rot_ldr_at_top_mla_sve", "slots", &v, NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS, 1 << 20);
+    return v > 0 ? (size_t)v : (size_t)dflt;
+}
+
 #endif
 
 static int neon_rot_ldr_at_top_mla_sve_init(struct test *test) {
@@ -74,10 +88,12 @@ static int neon_rot_ldr_at_top_mla_sve_init(struct test *test) {
     }
 
     const int lanes = (int)svcntw();
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS * lanes;
+    const size_t slots = neon_rot_ldr_at_top_mla_sve_slots(test);
+    const size_t elems = slots * (size_t)lanes;
 
     auto *data = static_cast<NeonRotLdrAtTopMlaSveData *>(malloc(sizeof(NeonRotLdrAtTopMlaSveData)));
     data->lanes = lanes;
+    data->slots = (int)slots;
     data->srcA = static_cast<uint32_t *>(aligned_alloc(64, elems * sizeof(uint32_t)));
     data->srcB = static_cast<uint32_t *>(aligned_alloc(64, elems * sizeof(uint32_t)));
     data->scratch = static_cast<uint32_t *>(aligned_alloc(64, elems * sizeof(uint32_t)));
@@ -90,7 +106,7 @@ static int neon_rot_ldr_at_top_mla_sve_init(struct test *test) {
     /* 收窄持久化 + golden: mul / mla式(a+a*b) / mls式(b-a*b) / eor, 同 SVE 单元 */
     svbool_t pg = svptrue_b32();
     svuint32_t vmask = svdup_u32(0x00007fffu);
-    for (int i = 0; i < NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS; i++) {
+    for (int i = 0; i < data->slots; i++) {
         const size_t off = (size_t)i * lanes;
         svuint32_t a = svand_u32_x(pg, svld1_u32(pg, data->srcA + off), vmask);
         svuint32_t b = svand_u32_x(pg, svld1_u32(pg, data->srcB + off), vmask);
@@ -129,12 +145,12 @@ static int neon_rot_ldr_at_top_mla_sve_run(struct test *test, int cpu) {
         report_fail_msg("neon_rot_ldr_at_top_mla_sve: vector length changed between init and run");
     }
 
-    const size_t elems = (size_t)NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS * data->lanes;
+    const size_t elems = (size_t)data->slots * data->lanes;
     uint32_t *temp = static_cast<uint32_t *>(aligned_alloc(64, elems * sizeof(uint32_t)));
     uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc(64, elems * sizeof(uint32_t)));
 
     TEST_LOOP(test, 1 << 13) {
-        for (int i = 0; i < NEON_ROT_LDR_AT_TOP_MLA_SVE_SLOTS; i++) {
+        for (int i = 0; i < data->slots; i++) {
             const size_t off = (size_t)i * data->lanes;
 
             svuint32_t unused_x = load_vec_sve(data->scratch + off);
