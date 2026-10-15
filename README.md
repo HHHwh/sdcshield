@@ -99,11 +99,12 @@ sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断�
 事件取证 + 定向复测，断点续跑）。M2 事件栈（root-helper/eventd/controller/ring）
 为单板相关人工步骤，按 [运维手册](docs/sdc-excite-reproduce/operations-runbook.md) 拉起。
 
-**三工具路由**：
+**四工具路由**：
 
 | 场景 | 命令 |
 |---|---|
 | 快速检测（检出即停） | `bash scripts/run/sdc_detect.sh` |
+| 逐核定位扫描（core×test 矩阵 + 失败确认复测） | `bash scripts/run/sdc-run.sh scan [--cores all\|0-31\|…] [--tests …] [--t 10s] [--par 32]` |
 | 24h 自包含定位（自动失败分类 + 逐核二分） | `bash scripts/run/run_sdc_campaign.sh` |
 | 7×24 最大激发（工程化战役 + 事件闭环） | `sudo bash scripts/sdc-excite-reproduce/excite.sh` |
 
