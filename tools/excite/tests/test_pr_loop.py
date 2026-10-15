@@ -366,7 +366,8 @@ def test_format_reply_rejects_accept_without_sha_and_reject_without_evidence():
 
 def test_reply_subcommand_has_production_entry(monkeypatch, tmp_path):
     """reply_to_findings 现在有生产入口: CLI 可解析 reply 命令,cmd_reply 读
-    处置 JSON 后调 reply_to_findings(阶段 4 处置后闭环段)。"""
+    处置 JSON 后先 fetch_pr + verify_reply_completeness 再调 reply_to_findings
+    (阶段 4 处置后闭环段)。"""
     disp = tmp_path / "dispositions.json"
     disp.write_text(json.dumps([
         {"path": "a.c", "line": 1, "id": 101, "conclusion": "采纳",
@@ -381,15 +382,74 @@ def test_reply_subcommand_has_production_entry(monkeypatch, tmp_path):
         captured["findings"] = findings
         captured["replies"] = replies
 
+    def fake_verify(pr, findings, replies):
+        captured["verified"] = (pr, findings, replies)
+
     monkeypatch.setattr(pr_loop, "reply_to_findings", fake_reply)
+    monkeypatch.setattr(pr_loop, "verify_reply_completeness", fake_verify)
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    fake_pr = object()
+    monkeypatch.setattr(pr_loop, "fetch_pr", lambda slug, num: fake_pr)
 
     args = pr_loop.build_parser().parse_args(["reply", "9", "-f", str(disp)])
     assert pr_loop.cmd_reply(args) == 0
     assert captured["pr"] == 9
+    # 答复前先 fetch 真实 PR 并做完整性校验(不再只比自产数组长度,C1)
+    assert captured["verified"][0] is fake_pr
     assert captured["findings"] == [{"path": "a.c", "line": 1, "id": 101},
                                     {"path": "d.c", "line": None, "id": None}]
     assert captured["replies"][0]["conclusion"] == "采纳"
     assert captured["replies"][1]["conclusion"] == "驳回"
+
+
+def test_reply_verifies_completeness_against_real_opinions(monkeypatch, tmp_path):
+    """C1: 闭环完整性校验必须对照 GitHub 真实待处置意见集,而非同一份 JSON 平行
+    拆出的两个数组长度(恒等)。真实意见 3 条(2 行级 + 1 body JSON 段)、处置
+    JSON 只 2 条(漏 1 条 body)→ 抛 GhError,不结案。"""
+    head = "d" * 40
+    marker = pr_loop.LOCAL_CLAUDE_MARKER
+    pr = pr_loop.PRData(
+        number=9, title="t", state="open", draft=False, fork=False,
+        head_sha=head, head_ref="feat/x", base_ref="main",
+        head_time=pr_loop.parse_ts("2026-10-15T00:00:00Z"),
+        url="https://example.invalid/9", author="wangxumarshall",
+        reviews=[
+            # 1 条 body JSON 段 finding(line=None)
+            {"id": 3, "user": {"login": "wangxumarshall"},
+             "state": "COMMENTED", "commit_id": head,
+             "submitted_at": "2026-10-15T00:01:00Z",
+             "body": _local_review_body(1)},
+        ],
+        review_comments=[
+            {"id": 101, "user": {"login": "wangxumarshall"},
+             "body": f"{marker}\n**[Critical] 正确性**: x",
+             "created_at": "2026-10-15T00:02:00Z",
+             "original_commit_id": head, "commit_id": head,
+             "path": "tests/a.c", "line": 10},
+            {"id": 102, "user": {"login": "wangxumarshall"},
+             "body": f"{marker}\n**[Important] 性能**: y",
+             "created_at": "2026-10-15T00:02:00Z",
+             "original_commit_id": head, "commit_id": head,
+             "path": "tests/b.c", "line": 20},
+        ],
+        issue_comments=[],
+    )
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "fetch_pr", lambda slug, num: pr)
+    monkeypatch.setattr(pr_loop, "reply_to_findings",
+                        lambda pr_num, findings, replies: None)
+
+    # 处置 JSON 只含 2 条行级,漏掉 body JSON 段的那 1 条
+    disp = tmp_path / "disp.json"
+    disp.write_text(json.dumps([
+        {"path": "tests/a.c", "line": 10, "id": 101, "conclusion": "采纳",
+         "reason": "r", "evidence": "已修复于 commit " + "f" * 40},
+        {"path": "tests/b.c", "line": 20, "id": 102, "conclusion": "采纳",
+         "reason": "r", "evidence": "已修复于 commit " + "f" * 40},
+    ]))
+    args = pr_loop.build_parser().parse_args(["reply", "9", "-f", str(disp)])
+    with pytest.raises(pr_loop.GhError):
+        pr_loop.cmd_reply(args)
 
 
 def test_collect_entries_include_local_claude_and_id():

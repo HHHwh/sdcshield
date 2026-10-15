@@ -758,6 +758,98 @@ def _format_reply(reply) -> str:
     return str(reply)
 
 
+def _real_opinion_inventory(pr: PRData) -> tuple:
+    """从 PRData 提取当前 head 的真实待处置意见集(与 fetch_pr 的意见计数同口径:
+    双锚定 + 双条件判据):
+      inline     = {(path, line, id)}  行级 local-claude 评论(逐条可 reply 的载体);
+      body_count = local-claude review body JSON 段 findings 总数。
+    供 verify_reply_completeness 做双向集合差——真实数据,不是自产数组。
+    """
+    anchor = pr.push_time or pr.head_time
+    inline = set()
+    body_count = 0
+    for c in pr.review_comments:
+        bot = bot_of(c)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
+        if bot is None:
+            continue
+        if not (is_after_head(c, "created_at", anchor)
+                and commit_anchored(c, ("original_commit_id", "commit_id"),
+                                    pr.head_sha)):
+            continue
+        path = c.get("path") or ""
+        line = c.get("line")
+        if line is None:
+            line = c.get("original_line")
+        inline.add((path, line, c.get("id")))
+    for r in pr.reviews:
+        raw_body = r.get("body") or ""
+        bot = bot_of(r)
+        if bot is None and local_claude_comment(
+                (r.get("user") or {}).get("login") or "", raw_body):
+            bot = "local-claude"
+        if bot != "local-claude" or r.get("state") not in REVIEW_OPINION_STATES:
+            continue
+        if not (is_after_head(r, "submitted_at", anchor)
+                and commit_anchored(r, ("commit_id",), pr.head_sha)):
+            continue
+        body_count += len(_local_claude_body_findings(raw_body))
+    return inline, body_count
+
+
+def verify_reply_completeness(pr: PRData, findings: list, replies: list) -> None:
+    """闭环完整性校验(真实数据口径,替换旧的自指空校验——C1)。
+
+    旧实现在 reply_to_findings 里只比 `len(findings) != len(replies)`,而两者由
+    cmd_reply 从同一份 JSON 数组平行拆出、长度恒等,漏答生产路径永不报错。
+    此处把处置结果与 GitHub 上**当前 head 的真实待处置意见集**做双向集合差:
+    漏答(真实有、处置没有)/ 多答(处置有、真实没有)/ id 不匹配(同 (path,line)
+    双方都有但评论 id 不同)/ body JSON 段条数不符分别报 GhError——诚实性,
+    反目标 3(闭环答复漏答/错答即失败)。
+    """
+    if len(findings) != len(replies):
+        raise GhError(
+            f"答复条数({len(replies)})与待处置意见数({len(findings)})不一致"
+            "——漏答/多答,拒绝结案(闭环必须逐条答复)")
+    inline_real, body_count_real = _real_opinion_inventory(pr)
+
+    inline_disp = set()
+    body_count_disp = 0
+    for f in findings:
+        path = f.get("path")
+        if path and f.get("line") is not None:
+            inline_disp.add((path, f.get("line"), f.get("id")))
+        else:
+            body_count_disp += 1
+
+    # id 不匹配: 同一 (path,line) 双方都存在,但评论 id 不同(处置错绑到别的评论)
+    real_by_loc = {(p, l): i for p, l, i in inline_real}
+    id_mismatch = sorted(
+        f"{p}:{l}(真实 id={real_by_loc[(p, l)]},处置 id={i})"
+        for p, l, i in inline_disp
+        if (p, l) in real_by_loc and real_by_loc[(p, l)] != i)
+    if id_mismatch:
+        raise GhError("闭环行级评论 id 不匹配: " + "; ".join(id_mismatch))
+
+    # 漏答: 真实行级评论有、处置 JSON 没覆盖
+    missed = inline_real - inline_disp
+    if missed:
+        locs = ", ".join(f"{p}:{l}" for p, l, _ in sorted(missed))
+        raise GhError(f"闭环漏答 {len(missed)} 条行级意见: {locs}")
+    # 多答: 处置 JSON 有、真实行级评论不存在
+    extra = inline_disp - inline_real
+    if extra:
+        locs = ", ".join(f"{p}:{l}(id={i})" for p, l, i in sorted(extra))
+        raise GhError(f"闭环多答/定位不匹配 {len(extra)} 条: {locs}")
+
+    if body_count_real != body_count_disp:
+        raise GhError(
+            f"闭环 body JSON 段 finding 数不符: 真实 {body_count_real} 条,"
+            f"处置 {body_count_disp} 条——漏答/多答,拒绝结案")
+
+
 def reply_to_findings(pr_number: int, findings: list, replies: list) -> None:
     """对给定 findings 逐条在 GitHub 答复(设计文档 §8 闭环完整答复)。
 
@@ -765,8 +857,8 @@ def reply_to_findings(pr_number: int, findings: list, replies: list) -> None:
       comment(finding 需带该评论的 id);
     - 挂不上 diff 行的 body JSON 段 finding → 汇总成一条 issue comment,
       每条答复独立成段;
-    - 完整性校验: len(findings) == len(replies),漏答/多答抛 GhError——诚实性,
-      反目标 3(闭环答复漏答/错答即失败)。
+    - 条数一致性校验: len(findings) == len(replies)——与真实意见集的完整性
+      比对在 verify_reply_completeness 完成(cmd_reply 生产路径先调它)。
     """
     if len(findings) != len(replies):
         raise GhError(
@@ -1159,11 +1251,14 @@ def cmd_reply(args: argparse.Namespace) -> int:
     """阶段 4 处置结果的闭环逐条答复(production 调用路径)。
 
     读一份处置结果 JSON(数组,每条一个 finding 的处置:path/line/id 定位 +
-    conclusion/reason/evidence 结论),拆成 findings 与 replies 两平行列表后调
-    reply_to_findings——行级 finding 逐条 reply,body 段 finding 汇总成一条
-    issue comment。此前 reply_to_findings 无任何生产调用入口(仅测试引用),
-    本命令补上 CLI 闭环段。
+    conclusion/reason/evidence 结论),拆成 findings 与 replies 两平行列表;答复
+    前先 fetch_pr 拉当前 head 的真实意见集,经 verify_reply_completeness 做双向
+    集合差(漏答/多答/id 不匹配/body 条数不符分别报错),再调 reply_to_findings——
+    行级 finding 逐条 reply,body 段 finding 汇总成一条 issue comment。此前
+    reply_to_findings 无任何生产调用入口(仅测试引用),本命令补上 CLI 闭环段;
+    C1 起在此把完整性校验锚到 GitHub 真实意见,而非自产数组长度。
     """
+    slug = resolve_slug(args.repo)
     with open(args.file, encoding="utf-8") as fh:
         data = json.load(fh)
     if not isinstance(data, list):
@@ -1178,6 +1273,8 @@ def cmd_reply(args: argparse.Namespace) -> int:
         replies.append({"conclusion": entry.get("conclusion"),
                         "reason": entry.get("reason"),
                         "evidence": entry.get("evidence")})
+    pr = fetch_pr(slug, args.pr)
+    verify_reply_completeness(pr, findings, replies)
     reply_to_findings(args.pr, findings, replies)
     print(f"已逐条答复 PR #{args.pr} 的 {len(findings)} 条意见")
     return 0
