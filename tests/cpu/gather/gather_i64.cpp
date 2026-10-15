@@ -1,13 +1,35 @@
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #ifdef __aarch64__
 #include <arm_neon.h>          // NEON intrinsics (aarch64 only)
 #endif
 
 static constexpr int VECTOR_SIZE = 4;          // 4 个 int64
-static constexpr int DATA_SIZE = 1024;         // 源数据大小
+
+/*
+ * 源数据大小: 统一配置链:
+ *   1. -O gather_i64.data_size=N / 配置文件同名条目
+ *   2. 环境变量 SDC_GATHER_I64_DATA_SIZE
+ *   3. 自适应: 每线程 src(8B) + 索引(8B/4) ~ 10B/元素, 占物理内存
+ *      60%, clamp [1024, 16M]。历史硬编码 1024。
+ *      线性缓冲用 sdc_auto_linear_count（sqrt 缩放会欠缩放压力）。
+ * 放大后 gather 访问跨度加大, 随机索引命中 L2/LLC/DRAM 不同域。
+ */
+static int gather_data_size(struct test *test)
+{
+    /* hi 动态: 大内存机器按 60% 预算放开, 小内存机器保持 16M 收口 */
+    const int64_t hi = sdc_linear_hi(8, 1, 1.5, 600, thread_count(), 16 << 20);
+    int64_t v = sdc_knob_int_clamped(test, "data_size", 0, 1024, hi);
+    if (v == 0)
+        sdc_env_knob_int_clamped("gather_i64", "data_size", &v, 1024, hi);
+    if (v > 0)
+        return (int)v;
+    return (int)sdc_auto_linear_count(8, 1, 1.5, 600, thread_count(), 1024, hi, test->id, "data_size");
+}
 
 static int gather_i64_init(struct test *test) {
     (void)test;
@@ -17,12 +39,15 @@ static int gather_i64_init(struct test *test) {
 #ifdef __aarch64__
 static int gather_i64_run(struct test *test, int cpu) {
     (void)cpu;
-    // 每个线程独立分配数据
-    alignas(16) int64_t src[DATA_SIZE];
+    const int DATA_SIZE = gather_data_size(test);
+    // 每个线程独立分配数据 (堆分配, 支持运行时尺寸)
+    int64_t *src = (int64_t *)aligned_alloc(16, (size_t)DATA_SIZE * sizeof(int64_t));
+    if (!src)
+        return EXIT_FAILURE;
     int64_t indices[VECTOR_SIZE];
 
     auto int_dist = []() { return (int64_t)((-1000000LL) + (int64_t)(random64() % (uint64_t)((1000000LL) - (-1000000LL) + 1))); };
-    auto idx_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((DATA_SIZE - 1) - (0) + 1))); };
+    auto idx_dist = [&]() { return (int)((0) + (int64_t)(random64() % (uint64_t)((DATA_SIZE - 1) - (0) + 1))); };
 
     // 内层压载轮数（CodeRabbit 意见）：重掷 src 一次是 1024 次 RNG 调用，
     // 原单轮结构只做 2 个向量、4 次 vld1q_lane，时间几乎全花在 RNG 上，
@@ -97,12 +122,13 @@ static int gather_i64_run(struct test *test, int cpu) {
                 } else {
                     report_fail_msg("gather_i64: Gather mismatch or consistency failure");
                 }
+                free(src);
                 return EXIT_FAILURE;
             }
         }
-
     } while (test_time_condition(test));
 
+    free(src);
     return EXIT_SUCCESS;
 }
 #else
