@@ -14,10 +14,15 @@
  * (flags are a scalar concept; kept as the original's phase-2) and are
  * still run twice for non-determinism detection.
  * Golden = pure-C++ software reference with sw_clz/sw_rbit/sw_rev.
+ * The chain length (originally COMBO_STEPS=1024) is runtime
+ * configurable via -O iex_operand_combo_sve.steps=N /
+ * SDC_IEX_OPERAND_COMBO_SVE_STEPS, with a memory-adaptive default
+ * when unconfigured.
  * @endparblock
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -139,6 +144,7 @@ static inline uint64_t flag_csel_pick_cc(uint64_t b, uint64_t alt) {
 #endif
 
 struct IexComboSveData {
+    size_t steps;                    /* 运行时链长 */
     std::vector<uint64_t> op_a;
     std::vector<uint64_t> op_b;
     std::vector<int>      op_kind;
@@ -146,11 +152,31 @@ struct IexComboSveData {
     std::vector<uint64_t> flag_seed_alt;
 };
 
+/* 链长 COMBO_STEPS(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O iex_operand_combo_sve.steps=N / 配置文件同名条目
+ *   2. 环境变量 SDC_IEX_OPERAND_COMBO_SVE_STEPS
+ *   3. 自适应: op_a/op_b/flag_seed_b/flag_seed_alt 4×8B + op_kind
+ *      (int 4B) 共 5 份共享向量 (按规格 bytes_per_elem=8),
+ *      rss_ratio 1.0, 占物理内存 60%, clamp [1024, 1M]。
+ *      原 1024 为下限。HAMMING_TABLE/OP_CYCLE_LEN 不受影响。 */
+static size_t iex_operand_combo_sve_steps(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "steps", 0, COMBO_STEPS,
+                                     1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("iex_operand_combo_sve", "steps", &v,
+                                 COMBO_STEPS, 1 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(8, 5, 1.0, 600, thread_count(),
+                                         COMBO_STEPS, 1 << 20, test->id, "steps");
+}
+
 // Software reference (pure C++ golden, sw_* bit ops).
 static uint64_t combo_reference(const IexComboSveData *d, uint64_t seed)
 {
     uint64_t acc = seed;
-    for (size_t i = 0; i < COMBO_STEPS; ++i) {
+    for (size_t i = 0; i < d->steps; ++i) {
         uint64_t a = d->op_a[i];
         uint64_t b = d->op_b[i];
         switch (d->op_kind[i]) {
@@ -176,7 +202,7 @@ static uint64_t combo_reference(const IexComboSveData *d, uint64_t seed)
 static uint64_t combo_run_sve(const IexComboSveData *d, uint64_t seed)
 {
     uint64_t acc = seed;
-    for (size_t i = 0; i < COMBO_STEPS; ++i) {
+    for (size_t i = 0; i < d->steps; ++i) {
         uint64_t a = d->op_a[i];
         uint64_t b = d->op_b[i];
         switch (d->op_kind[i]) {
@@ -200,7 +226,7 @@ static uint64_t combo_run_sve(const IexComboSveData *d, uint64_t seed)
 static uint64_t flag_chain_run(const IexComboSveData *d, uint64_t seed)
 {
     uint64_t acc = seed;
-    for (size_t i = 0; i < COMBO_STEPS; ++i) {
+    for (size_t i = 0; i < d->steps; ++i) {
         uint64_t b   = d->flag_seed_b[i];
         uint64_t alt = d->flag_seed_alt[i];
         acc = flag_adcs_step(acc, b);
@@ -212,7 +238,7 @@ static uint64_t flag_chain_run(const IexComboSveData *d, uint64_t seed)
 static uint64_t flag_chain_run_sub(const IexComboSveData *d, uint64_t seed)
 {
     uint64_t acc = seed;
-    for (size_t i = 0; i < COMBO_STEPS; ++i) {
+    for (size_t i = 0; i < d->steps; ++i) {
         uint64_t b   = d->flag_seed_b[i];
         uint64_t alt = d->flag_seed_alt[i];
         acc = flag_sbcs_step(acc, b);
@@ -233,14 +259,16 @@ static int iex_operand_combo_sve_init(struct test *test)
         return EXIT_SKIP;
     }
 #endif
+    const size_t STEPS = iex_operand_combo_sve_steps(test);
     try {
         auto data = std::make_unique<IexComboSveData>();
-        data->op_a.resize(COMBO_STEPS);
-        data->op_b.resize(COMBO_STEPS);
-        data->op_kind.resize(COMBO_STEPS);
-        data->flag_seed_b.resize(COMBO_STEPS);
-        data->flag_seed_alt.resize(COMBO_STEPS);
-        for (size_t i = 0; i < COMBO_STEPS; ++i) {
+        data->steps = STEPS;
+        data->op_a.resize(STEPS);
+        data->op_b.resize(STEPS);
+        data->op_kind.resize(STEPS);
+        data->flag_seed_b.resize(STEPS);
+        data->flag_seed_alt.resize(STEPS);
+        for (size_t i = 0; i < STEPS; ++i) {
             data->op_a[i] = HAMMING_TABLE[i % HAMMING_TABLE_SIZE];
             data->op_b[i] = HAMMING_TABLE[(i + 1) % HAMMING_TABLE_SIZE];
             data->op_kind[i] = op_kind_for_step(i);

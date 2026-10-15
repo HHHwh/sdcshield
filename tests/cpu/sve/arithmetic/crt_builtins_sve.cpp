@@ -18,10 +18,15 @@
  * routines touch many integer ALU resources (shifts, adds, compares)
  * while producing a deterministic result, any mismatch indicates a
  * silent corruption in the integer execution path.
+ * The operand-pair count (originally CRT_COUNT=4096) is runtime
+ * configurable via -O crt_builtins_sve.count=N /
+ * SDC_CRT_BUILTINS_SVE_COUNT, with a memory-adaptive default when
+ * unconfigured.
  * @endparblock
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #if defined(__aarch64__)
 #include <arm_sve.h>
 #include <sys/auxv.h>
@@ -49,10 +54,29 @@ struct crt_data {
     float *golden_add;
     float *golden_mul;
     float *golden_div;
+    size_t count;   /* 运行时操作数对数 */
 };
 }
 
 #define CAST(_x) static_cast<struct crt_data *>(_x)
+
+/* 操作数对数 CRT_COUNT(4096) — 运行时可配置, 统一优先级链:
+ *   1. -O crt_builtins_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_CRT_BUILTINS_SVE_COUNT
+ *   3. 自适应: a/b/golden_add/golden_mul/golden_div 共 5 份共享 float
+ *      数组 (实际 5×4B=20B/对, 按任务规格以 bytes_per_elem=8 保守
+ *      2× 均摊), rss_ratio 1.0, 占物理内存 60%, clamp [4096, 64M]。
+ *      原 4096 为下限。 */
+static size_t crt_builtins_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, CRT_COUNT, 64 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("crt_builtins_sve", "count", &v, CRT_COUNT, 64 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(8, 5, 1.0, 600, thread_count(),
+                                         CRT_COUNT, 64 << 20, test->id, "count");
+}
 
 static int crt_builtins_sve_init(struct test *test)
 {
@@ -65,13 +89,15 @@ static int crt_builtins_sve_init(struct test *test)
     }
 #endif
     crt_data *data = new crt_data;
-    data->a          = (float *)aligned_alloc_safe(64, CRT_COUNT * sizeof(float));
-    data->b          = (float *)aligned_alloc_safe(64, CRT_COUNT * sizeof(float));
-    data->golden_add = (float *)aligned_alloc_safe(64, CRT_COUNT * sizeof(float));
-    data->golden_mul = (float *)aligned_alloc_safe(64, CRT_COUNT * sizeof(float));
-    data->golden_div = (float *)aligned_alloc_safe(64, CRT_COUNT * sizeof(float));
+    const size_t CRT_N = crt_builtins_sve_count(test);
+    data->count = CRT_N;
+    data->a          = (float *)aligned_alloc_safe(64, CRT_N * sizeof(float));
+    data->b          = (float *)aligned_alloc_safe(64, CRT_N * sizeof(float));
+    data->golden_add = (float *)aligned_alloc_safe(64, CRT_N * sizeof(float));
+    data->golden_mul = (float *)aligned_alloc_safe(64, CRT_N * sizeof(float));
+    data->golden_div = (float *)aligned_alloc_safe(64, CRT_N * sizeof(float));
 
-    for (size_t i = 0; i < CRT_COUNT; ++i) {
+    for (size_t i = 0; i < CRT_N; ++i) {
         /* avoid divisors near zero: pick b from a safe non-zero range */
         data->a[i] = (float)((int32_t)random32()) / (float)(1u << 24);
         float bv;
@@ -91,7 +117,7 @@ static int crt_builtins_sve_run(struct test *test, int cpu)
 {
     auto data = CAST(test->data);
     do {
-        for (size_t i = 0; i < CRT_COUNT; ++i) {
+        for (size_t i = 0; i < data->count; ++i) {
             float add = __addsf3(data->a[i], data->b[i]);
             float mul = __mulsf3(data->a[i], data->b[i]);
             float div = __divsf3(data->a[i], data->b[i]);
