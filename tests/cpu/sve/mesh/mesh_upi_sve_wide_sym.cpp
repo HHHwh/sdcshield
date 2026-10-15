@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_sve.h>
 #include <sys/auxv.h>
@@ -28,8 +27,14 @@ struct TestData {
     std::atomic<uint64_t> global_sum;   // 未使用，但保留（与原版一致）
     std::atomic<uint32_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
-    std::atomic<uint32_t> round_done;
-    std::atomic<uint64_t> iter;
+    /* sense-reversal barrier (B1-001 fix, ported from NEON-side 2731971d):
+     * the original iter/round_done protocol deadlocked from round 1
+     * (round_done was only reset, never used as a release signal that any
+     * thread could observe before phase 3; iter only advanced after a
+     * completed round), so the verification never executed and the test
+     * passed vacuously. */
+    std::atomic<uint32_t> arrived;
+    std::atomic<uint32_t> epoch;
 };
 
 static int mesh_upi_sve_wide_sym_init(struct test *test) {
@@ -56,8 +61,8 @@ static int mesh_upi_sve_wide_sym_init(struct test *test) {
     td->global_sum.store(0, std::memory_order_relaxed);
     td->allocated_blocks.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->round_done.store(0, std::memory_order_relaxed);
-    td->iter.store(0, std::memory_order_relaxed);
+    td->arrived.store(0, std::memory_order_relaxed);
+    td->epoch.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -82,26 +87,19 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
         return EXIT_SKIP;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1000.0f, 1000.0f);
+    /* randomization hardening (B1-002, aligned with 2731971d): framework
+     * RNG (per-thread stream, -s reproducible) replaces std::mt19937;
+     * range [-1000, 1000). */
+    auto dist = []() { return frandomf_scale(2000.0f) - 1000.0f; };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
     #define RESET "\033[0m"
 
+    uint32_t my_epoch = 0;
     do {
-        uint64_t current_iter = td->iter.load(std::memory_order_acquire);
-        while ((td->round_done.load(std::memory_order_seq_cst) != 0 ||
-                td->iter.load(std::memory_order_acquire) == current_iter) &&
-               test_time_condition(test)) {
-            __asm__ volatile("yield");
-        }
-        if (!test_time_condition(test)) break;
-
-        td->global_sum.store(0, std::memory_order_seq_cst);
-        td->next_block.store(0, std::memory_order_seq_cst);
-        td->allocated_blocks.store(0, std::memory_order_seq_cst);
-        td->round_done.store(0, std::memory_order_seq_cst);
+        // ---------- 阶段 1：所有线程共同填充数据 ----------
+        // （本轮状态已由上一轮 sense-reversal 屏障的最后到达线程重置）
 
         // 所有线程竞争分配块并写入
         while (true) {
@@ -111,7 +109,7 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
             float vals[BLOCK_ELEMENTS];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
-                vals[j] = dist(rng);
+                vals[j] = dist();
                 local_sum += (double)vals[j];
             }
             // 使用 4 个向量存储 16 个元素（SVE 谓词分批）
@@ -170,11 +168,23 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
             td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
         }
 
-        while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
-               test_time_condition(test)) {
-            __asm__ volatile("yield");
+        /* 等待所有线程完成写入：与阶段 3 屏障等待同款 131072 一档节流
+         * 预算检查（CodeRabbit 意见，先例 mesh_upi_sve_asymm_distrib_int
+         * 的 epoch 等待）：每次自旋都调 test_time_condition 会迅速耗尽
+         * inner_loop_count 预算（默认 40 次），把等待压成提前退出、
+         * 跳过阶段 2 校验及屏障；预算耗尽走 out_of_budget 干净退出，
+         * 不再在循环外重复消耗一次预算。等待条件本身每自旋都查，
+         * 响应不受影响。 */
+        {
+            uint32_t spin = 0;
+            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
+                if ((++spin & 131071u) == 0) {
+                    if (!test_time_condition(test)) goto out_of_budget;
+                } else {
+                    __asm__ volatile("yield");
+                }
+            }
         }
-        if (!test_time_condition(test)) break;
 
         __sync_synchronize();
 
@@ -254,21 +264,38 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
             return EXIT_FAILURE;
         }
 
-        // 阶段 3：最后一个完成读取的线程重置状态并增加轮次
-        uint32_t done = td->round_done.fetch_add(1, std::memory_order_seq_cst) + 1;
+        // ---------- 阶段 3：sense-reversal 屏障进入下一轮 ----------
+        // 最后到达的线程在此重置下一轮状态（global_sum/next_block/
+        // allocated_blocks）：fetch_add(acq_rel) 的到达顺序保证所有线程
+        // 都已离开阶段 2 的校验，epoch 的 release 存储保证重置先于任何
+        // 线程的下一轮填充可见 —— 这正是原协议想做而没做对的轮次隔离。
+        uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (done == total_threads) {
-            td->round_done.store(0, std::memory_order_seq_cst);
-            td->iter.fetch_add(1, std::memory_order_release);
+            td->global_sum.store(0, std::memory_order_seq_cst);
+            td->next_block.store(0, std::memory_order_seq_cst);
+            td->allocated_blocks.store(0, std::memory_order_seq_cst);
+            td->arrived.store(0, std::memory_order_relaxed);
+            td->epoch.store(my_epoch + 1, std::memory_order_release);
         } else {
-            while (td->round_done.load(std::memory_order_seq_cst) != 0 &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
+            /* 自旋按 131072 一档节流预算检查（CodeRabbit 意见，先例
+             * mesh_upi_sve_asymm_distrib_int）：每次自旋都调
+             * test_time_condition 会迅速耗尽 inner_loop_count 预算
+             * （默认 40 次），把屏障等待压成 vacuous 退出；等待条件
+             * 本身每自旋都查，响应不受影响。 */
+            uint32_t spin = 0;
+            while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
+                if ((++spin & 131071u) == 0) {
+                    if (!test_time_condition(test)) goto out_of_budget;
+                } else {
+                    __asm__ volatile("yield");
+                }
             }
-            if (!test_time_condition(test)) break;
         }
+        ++my_epoch;
 
     } while (test_time_condition(test));
 
+out_of_budget:
     return EXIT_SUCCESS;
 
     #undef GREEN

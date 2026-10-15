@@ -222,6 +222,10 @@ void usage(char **argv)
 Common command-line options are:
  -F, --fatal-errors
      Stop execution after first failure; do not continue to run tests.
+ --fatal-skips
+     Treat skipped tests as failures when computing the program exit status.
+     Intended for automation/CI where a silently skipped test must not be
+     reported as a pass.
  -T <time>, --total-time=<time>
      Specify the minimum run time for the program. A special value for <time> of
      "forever" causes the program to loop indefinitely. The default units for

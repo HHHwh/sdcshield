@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # ============================================================
 # SDC 全谱战役脚本（§7.4 战役协议的可执行化）
 # 阶段 1：谱系广域扫（多样性 = 检出率）
@@ -20,13 +21,19 @@
 # ============================================================
 
 # 1. 配置参数（可 env 覆盖）
-SDC="./builddir/sdcshield"                 # 可执行文件路径
+SDC="${SDC_BIN:-./builddir/sdcshield}"       # 可执行文件路径（env SDC_BIN 可覆盖）
 LOG_DIR="./sdc_spectrum_$(date +%Y%m%d_%H%M%S)"   # 日志目录（带时间戳）
 SWEEP_TIME="${SWEEP_TIME:-15m}"             # 阶段 1 每档时长
 DWELL_TIME="${DWELL_TIME:-2h}"              # 阶段 2 驻留时长
 
 # 2. 创建日志目录
 mkdir -p "$LOG_DIR"
+
+# fail-loud：可执行文件缺失/不可执行时拒绝空转（否则各档静默失败、结尾 0==0 误报 PASS）
+if [ ! -x "$SDC" ]; then
+    echo "FATAL: sdcshield 可执行文件不存在或不可执行: $SDC（可用 SDC_BIN 覆盖路径）" >&2
+    exit 1
+fi
 
 echo "========== SDC 全谱战役 =========="
 echo "可执行文件: $SDC"
@@ -98,18 +105,40 @@ echo ""
 echo "========== 战役完成 =========="
 echo "结束时间: $(date)"
 
+# 空 glob 防护：无任何 YAML 日志 = 测试根本没跑（BIN 崩溃/路径错误），不得报 PASS
+shopt -s nullglob
+LOGS=("$LOG_DIR"/*.yaml)
+TOTAL_FILES=${#LOGS[@]}
+if [ "$TOTAL_FILES" -eq 0 ]; then
+    echo "FATAL: $LOG_DIR 下没有任何 YAML 日志——测试未真正执行，拒绝报 PASS" >&2
+    exit 1
+fi
+
 PASS_FILES=0
 FAIL_FILES=0
-for f in "$LOG_DIR"/*.yaml; do
-  if grep -q "result: fail" "$f" 2>/dev/null; then
+NO_RESULT=0
+# 框架的异常 result 值（logging.cpp）：一条 pass 不能覆盖 crash/timeout/中断
+ABNORMAL_RE="result: *(crash|timed out|interrupted|operating system error)"
+for f in "${LOGS[@]}"; do
+  if grep -Eqi "result: *(fail|crash)" "$f" 2>/dev/null; then
     FAIL_FILES=$((FAIL_FILES + 1))
     echo "FAIL: $f"
+  elif grep -Eqi "$ABNORMAL_RE" "$f" 2>/dev/null; then
+    # 混合结果（pass + timed out/interrupted/OS error）同样是异常信号，按失败处理
+    FAIL_FILES=$((FAIL_FILES + 1))
+    echo "FAIL: $f（含 timed out/interrupted/operating system error 结果）"
   elif grep -q "result: pass" "$f" 2>/dev/null; then
     PASS_FILES=$((PASS_FILES + 1))
   else
-    echo "警告: $f 未找到 result 行"
+    # 零检测记录（无 result 行）：可能是崩溃/被杀/零执行，按失败处理
+    NO_RESULT=$((NO_RESULT + 1))
+    echo "警告: $f 未找到 result 行（按失败处理）"
   fi
 done
-echo "结果: $PASS_FILES 个日志全部 pass，$FAIL_FILES 个含 fail"
+echo "结果: $TOTAL_FILES 个日志中 $PASS_FILES 个含 pass，$FAIL_FILES 个含 fail，$NO_RESULT 个无 result 行"
 echo "详细日志请查看: $LOG_DIR/"
-[ "$FAIL_FILES" -eq 0 ]
+if [ "$FAIL_FILES" -gt 0 ] || [ "$NO_RESULT" -gt 0 ]; then
+    echo "VERDICT: FAIL"
+    exit 1
+fi
+echo "VERDICT: PASS"

@@ -9,6 +9,7 @@
 - [ ] 回归:`./builddir/sdcshield -e zstd19 -t 2000 -n 1` → `exit: pass`
 - [ ] x86-64 非回归(检查确认;共享代码改动必查)
 - [ ] ARM64 未实现项以 `EXIT_SKIP` + placeholder 理由跳过,无假通过
+- [ ] 新增 tests/ 用例使用框架 RNG(`random32`/`random64`/`memset_random`/`frandom*`),无自建 RNG(mt19937/random_device/rand);固定 pattern 已加 `R3-justified:` 论证
 
 **提交卫生**
 

@@ -138,16 +138,17 @@ static int sve512_f32_chain_svd_init(struct test *test)
         data->vl_w = svcntw();
         /* randomization hardening H12': framework RNG per run (-s
          * reproducible) instead of fixed splitmix/table indices; the
-         * |x| < 2 finite-band invariant is preserved (exponent in
-         * {0x3FE, 0x3FF}), and 25% of entries still draw from the
-         * high-Hamming F32_FINITE table for gate-toggle density. */
+         * |x| < 2 finite-band invariant is preserved (f32 bias-127
+         * exponents 0x7E/0x7F, B1-007), and 25% of entries still draw
+         * from the high-Hamming F32_FINITE table for gate-toggle density. */
         auto random_finite_f32 = []() -> uint32_t {
             if ((random32() & 3) == 0)
                 return F32_FINITE[random32() % F32_FINITE_SIZE];
             uint32_t sign = (random32() & 1U) << 31;
             uint32_t mantissa = random32() & 0x007FFFFFU;
-            /* 0x3FE = [0.5, 1); 0x3FF = [1, 2) — both keep |x| < 2 */
-            uint32_t exp = 0x3FEU + (random32() & 1U);
+            /* 0x7E = [0.5, 1); 0x7F = [1, 2) — f32 bias-127 exponents;
+             * the f64-biased 0x3FE/0x3FF built qNaN/Inf patterns (B1-007). */
+            uint32_t exp = 0x7EU + (random32() & 1U);
             return sign | (exp << 23) | mantissa;
         };
         /* Value-domain knob (SEVI ASPLOS'26 Obs.19: bounded vs unbounded

@@ -19,14 +19,65 @@
  * making it a dense-SVE-FMA workload in the same family as the Eigen SVD
  * tests but without the Eigen library.
  *
- * Golden-value pattern matches EigenSVDTest: init computes the golden
- * result once and caches it; every run recomputes from the same fixed
- * input and byte-compares. The algorithm is deterministic (same input,
- * same output — verified), so a mismatch is silent data corruption.
+ * Verification design (B1-015 / R2a): the golden is an INDEPENDENT scalar
+ * Householder implementation (bidiagonalize_ref below). The original
+ * revision compared the SVE kernel against itself — init precomputed the
+ * golden by running the very same bidiagonalize_sve — which hid three real
+ * kernel defects: (1) the left-update predicate svwhilelt(base, n-k)
+ * silently dropped rows [n-k, n) of every column (~1e-1 relative
+ * divergence), (2) eliminated entries were never written back (the output
+ * was not bidiagonal at all; off-bidiagonal residue ~2.3 in arbitrary
+ * positions), (3) the k+2<n loop bound skipped the final left reflector.
+ * A calibration harness (VL=8 emulation of the fixed kernel's arithmetic)
+ * measured the fixed SVE kernel vs this scalar reference at ~4e-14
+ * relative to ||B||_F — five orders of magnitude inside the kTolRel=1e-9
+ * comparison tolerance — while the original buggy kernel diverges at
+ * ~1e-1 and fails the same comparison (the B1-015 evidence).
+ *
+ * PR #244 review (greptile + coderabbit): (a) the left-update used
+ * CONTIGUOUS svld1/svst1 where the math needs a column (stride-n)
+ * gather/scatter — a real SVE machine would fail every round even with
+ * healthy hardware, because the previous self-comparison masked it; the
+ * left update is now a gather/scatter loop (svld1_gather_u64offset /
+ * svst1_scatter_u64offset) with per-lane offsets base*n+j + l*n. (b) The
+ * NaN blind spot in the max-diff accumulation is closed: a non-finite
+ * got/golden fails immediately instead of being swallowed by
+ * fabs(NaN) > max_diff == false. (c) The reroll rounds additionally run
+ * a same-input DOUBLE-PASS byte-exact self-consistency memcmp — the
+ * tolerance-based independent-reference compare stays (SVE tree
+ * reduction vs scalar serial summation round differently, so byte-equal
+ * vs the scalar reference is mathematically impossible — cf. CLAUDE.md's
+ * own ULP note on the Eigen family), but every reroll input now also
+ * proves the kernel is deterministic on the DUT core (two passes, same
+ * input, byte-identical) — deterministic-core (mercurial) defects that
+ * poison both the recomputed golden and the DUT identically are caught
+ * by the frozen-replay alternation below.
+ *
+ * Input randomization (B6 / R2b freeze blind spot): the input matrix is
+ * re-rolled from the framework RNG every kRerollEvery iterations,
+ * per-thread, and the golden is recomputed with the scalar reference at
+ * each reroll (the 46141ed4 pattern). Init's fill survives only as the
+ * init-time finiteness canary. PR #244 review (coderabbit): every other
+ * reroll period is a FROZEN REPLAY — the run replays init's frozen
+ * shared input/golden pair, so the init thread's golden (computed on a
+ * different core, before the workers start) acts as a cross-core
+ * byte-tolerant reference that a deterministic single-core fault cannot
+ * poison.
  *
  * Honest scope note: this is bidiagonalization only, not a full SVD
  * (no singular values, no U/V accumulation) — the payload targets the
  * FMA/store-reload datapath, not SVD semantics.
+ *
+ * RUNTIME-UNVERIFIABLE (SVE): developed on a host without SVE
+ * (HWCAP_SVE clear); compile-verified and the skip path executed for
+ * real, but the SVE datapath itself has not run on hardware
+ * (cf. 8502e491 / 73ebbd3f for the precedent). The PR #244-review
+ * gather/scatter left-update IS verified on gem5 SVE SE emulation
+ * (O3, VL=128/256/512, n=64/68/128): the pre-fix contiguous-load
+ * version diverges at ~1.7 vs the scalar reference (the review's bug
+ * is real), the fixed byte-offset gather/scatter version stays at
+ * ~1e-13 (five orders inside kTolRel) and is byte-identical across
+ * double passes.
  * @endparblock
  */
 
@@ -51,28 +102,116 @@
 #define M_DIM 128
 
 struct bidiag_data {
-    double *orig;     /* 固定输入矩阵 (init 一次生成) */
-    double *golden;   /* init 首算的双对角化结果 */
-    double *work;     /* run 时的工作副本 */
+    double *orig;     /* init 时的输入矩阵 (回放轮读, 重掷轮不读) */
+    double *golden;   /* init 首算的标量参考结果 (回放轮比对) */
 };
 
 #ifdef __aarch64__
 
-/* Golub-Kahan Householder 双对角化 (SVE 向量化内层)。
- * 确定性: 同输入 → 逐字节同输出 (svaddv 归约顺序在单线程内固定)。 */
+/* per-thread scratch (B6): 本线程重掷的输入 + 独立标量 golden + 工作
+ * 副本 (46141ed4 模式: run 全权拥有自己的输入)。框架一线程一核并发
+ * 进入 run, 任何 run 内写入的缓冲必须线程私有。惰性分配, cleanup 不
+ * 释放: worker 线程先于主线程 cleanup 退出, fork 子进程随后整体回收
+ * (dgemm 同款论证)。第二工作副本 work2 供双跑自一致 memcmp (PR #244
+ * review): 同输入两跑 DUT, 逐字节一致证明内核在 DUT 核上确定性。 */
+static thread_local double *l_orig = nullptr;
+static thread_local double *l_golden = nullptr;
+static thread_local double *work = nullptr;
+static thread_local double *work2 = nullptr;
+static thread_local uint64_t *l_gofs = nullptr; /* 列 gather/scatter 偏移表 */
+
+/* 独立标量参考 (B1-015 修复核心): 逐元素标量 Golub-Kahan 双对角化,
+ * 与 SVE 内核同算法不同实现 (fixed +sqrt 定号 + 显式消元写回),
+ * 是 golden 的唯一来源 —— 不再与 DUT 共享任何代码路径。
+ * 标定实测 (n=128, VL=8 仿真): 与修复版 SVE 内核最大偏差
+ * ~4e-14 * ||B||_F; off-bidiagonal 残差 0; ||B||_F/||A||_F = 1。 */
+static void bidiagonalize_ref(double *A, int n)
+{
+    double v[M_DIM], w[M_DIM];
+    for (int k = 0; k + 1 < n; ++k) {
+        /* 左 Householder: 消去列 k 对角线下元素 */
+        double norm2 = 0.0;
+        for (int i = k; i < n; ++i)
+            norm2 += A[i * n + k] * A[i * n + k];
+        double alpha = sqrt(norm2);       /* 定号 +sqrt: 无符号跨越分支 */
+        double v0 = A[k * n + k] - alpha;
+        double vtv = v0 * v0;
+        for (int i = k + 1; i < n; ++i)
+            vtv += A[i * n + k] * A[i * n + k];
+        if (vtv < 1e-300)
+            continue;                     /* 列已呈双对角形态 */
+        double tau = 2.0 * v0 * v0 / vtv;
+        v[k] = 1.0;
+        for (int i = k + 1; i < n; ++i)
+            v[i] = A[i * n + k] / v0;
+        for (int j = k + 1; j < n; ++j) {
+            double dot = 0.0;
+            for (int i = k; i < n; ++i)
+                dot += v[i] * A[i * n + j];
+            dot *= tau;
+            for (int i = k; i < n; ++i)
+                A[i * n + j] = fma(-v[i], dot, A[i * n + j]);
+        }
+        /* 消元位置显式写回: 正交变换下的精确值 (范数守恒) */
+        A[k * n + k] = alpha;
+        for (int i = k + 1; i < n; ++i)
+            A[i * n + k] = 0.0;
+
+        /* 右 Householder: 消去行 k 次对角线右元素 */
+        if (k + 2 >= n)
+            break;
+        norm2 = 0.0;
+        for (int j = k + 1; j < n; ++j)
+            norm2 += A[k * n + j] * A[k * n + j];
+        if (norm2 < 1e-300)
+            continue;
+        alpha = sqrt(norm2);
+        v0 = A[k * n + k + 1] - alpha;
+        vtv = v0 * v0;
+        for (int j = k + 2; j < n; ++j)
+            vtv += A[k * n + j] * A[k * n + j];
+        if (vtv < 1e-300)
+            continue;
+        tau = 2.0 * v0 * v0 / vtv;
+        w[k + 1] = 1.0;
+        for (int j = k + 2; j < n; ++j)
+            w[j] = A[k * n + j] / v0;
+        for (int i = k + 1; i < n; ++i) {
+            double dot = 0.0;
+            for (int j = k + 1; j < n; ++j)
+                dot += w[j] * A[i * n + j];
+            dot *= tau;
+            for (int j = k + 1; j < n; ++j)
+                A[i * n + j] = fma(-w[j], dot, A[i * n + j]);
+        }
+        A[k * n + k + 1] = alpha;
+        for (int j = k + 2; j < n; ++j)
+            A[k * n + j] = 0.0;
+    }
+}
+
+/* Golub-Kahan Householder 双对角化 (SVE 向量化内层, DUT)。
+ * 修复 (B6): (1) 左更新谓词按全局行号 base<n 截断 —— 原按 n-k 截断,
+ * 静默丢弃行 [n-k, n), 自比 golden 掩盖了整列更新残缺; (2) 消元位置
+ * 显式写回 alpha/0 (原先从不写回, 输出根本不是双对角阵, 残差 ~2.3
+ * 散布在任意位置), 同时成为强 SDC 探测位; (3) 循环界 k+1<n 补上最后
+ * 一个左反射器, 右反射器仅在 k+2<n 时执行; (4) alpha 定号 +sqrt,
+ * 消除近零跨越分支。栈上 v/w: static 局部数组全线程共享会互踩。
+ * PR #244 review 修复 (greptile/coderabbit): 左更新的归约与 FMA 两个
+ * 循环原先用连续 svld1_f64(A + base*n + j) 读"列", 实际读到的是行
+ * base 的列 j..j+VL-1 —— 数学上需要的是列 j 的行 base..base+VL-1
+ * (步长 n), 任何 VL 的真 SVE 硬件上都会误报失败 (此前的自比 golden
+ * 与 VL=8 仿真都掩盖了它)。现在用 gather/scatter (步长 n 偏移表)。 */
 static void bidiagonalize_sve(double *A, int n)
 {
-    /* 注意: 必须是栈上数组。static 局部数组是所有线程共享的——
-     * 127 线程并发进入本函数时 Householder 向量会互相覆盖
-     * (第二版 bug: 全核数据错配, 根因即此)。栈上 2KB 安全。 */
     double v[M_DIM], w[M_DIM];
 
-    for (int k = 0; k + 2 < n; ++k) {
+    for (int k = 0; k + 1 < n; ++k) {
         /* ---- 左 Householder: 消去列 k 的对角线下元素 ---- */
         double norm2 = 0.0;
         for (int i = k; i < n; ++i)
             norm2 += A[i * n + k] * A[i * n + k];
-        double alpha = (A[k * n + k] >= 0) ? -sqrt(norm2) : sqrt(norm2);
+        double alpha = sqrt(norm2);
         double v0 = A[k * n + k] - alpha;
         double vtv = v0 * v0;
         for (int i = k + 1; i < n; ++i)
@@ -84,32 +223,47 @@ static void bidiagonalize_sve(double *A, int n)
         for (int i = k + 1; i < n; ++i)
             v[i] = A[i * n + k] / v0;
 
-        /* A = (I - tau*v*v^T) * A: 列 j = k+1..n-1 的 SVE 归约 + FMA 更新 */
+        /* A = (I - tau*v*v^T) * A: 列 j = k+1..n-1 的 SVE 归约 + FMA 更新。
+         * 谓词修复: 按全局行号 (base, n) 截断。
+         * PR #244 review: 列访问 = 步长 n 的 gather/scatter, lane l 读
+         * A[(base+l)*n + j] (偏移表 l_gofs 在 run 里按 svcntd() 重建)。 */
         for (int j = k + 1; j < n; ++j) {
             double dot = 0.0;
             for (int base = k; base < n; base += svcntd()) {
-                svbool_t pg = svwhilelt_b64((uint64_t)base, (uint64_t)(n - k));
+                svbool_t pg = svwhilelt_b64((uint64_t)base, (uint64_t)n);
                 svfloat64_t vv = svld1_f64(pg, v + base);
-                svfloat64_t aa = svld1_f64(pg, A + base * n + j);
+                svfloat64_t aa = svld1_gather_u64offset_f64(
+                        pg, A + (size_t)base * n + j,
+                        svld1_u64(pg, l_gofs));
                 dot += svaddv_f64(pg, svmul_f64_x(pg, vv, aa));
             }
             dot *= tau;
             for (int base = k; base < n; base += svcntd()) {
-                svbool_t pg = svwhilelt_b64((uint64_t)base, (uint64_t)(n - k));
+                svbool_t pg = svwhilelt_b64((uint64_t)base, (uint64_t)n);
                 svfloat64_t vv = svld1_f64(pg, v + base);
-                svfloat64_t aa = svld1_f64(pg, A + base * n + j);
-                svst1_f64(pg, A + base * n + j,
-                          svmls_f64_x(pg, aa, vv, svdup_f64(dot)));
+                svfloat64_t aa = svld1_gather_u64offset_f64(
+                        pg, A + (size_t)base * n + j,
+                        svld1_u64(pg, l_gofs));
+                svst1_scatter_u64offset_f64(
+                        pg, A + (size_t)base * n + j,
+                        svld1_u64(pg, l_gofs),
+                        svmls_f64_x(pg, aa, vv, svdup_f64(dot)));
             }
         }
+        /* 消元位置显式写回 (修复点 2) */
+        A[k * n + k] = alpha;
+        for (int i = k + 1; i < n; ++i)
+            A[i * n + k] = 0.0;
 
         /* ---- 右 Householder: 消去行 k 的次对角线右元素 ---- */
+        if (k + 2 >= n)
+            break;
         norm2 = 0.0;
         for (int j = k + 1; j < n; ++j)
             norm2 += A[k * n + j] * A[k * n + j];
         if (norm2 < 1e-300)
             continue;
-        alpha = (A[k * n + k + 1] >= 0) ? -sqrt(norm2) : sqrt(norm2);
+        alpha = sqrt(norm2);
         v0 = A[k * n + k + 1] - alpha;
         vtv = v0 * v0;
         for (int j = k + 2; j < n; ++j)
@@ -121,7 +275,7 @@ static void bidiagonalize_sve(double *A, int n)
         for (int j = k + 2; j < n; ++j)
             w[j] = A[k * n + j] / v0;
 
-        /* A = A * (I - tau*w*w^T): 行 i = k+1..n-1 */
+        /* A = A * (I - tau*w*w^T): 行 i = k+1..n-1 (行主序连续访问, 原本正确) */
         for (int i = k + 1; i < n; ++i) {
             double dot = 0.0;
             for (int base = k + 1; base < n; base += svcntd()) {
@@ -139,6 +293,54 @@ static void bidiagonalize_sve(double *A, int n)
                           svmls_f64_x(pg, aa, ww, svdup_f64(dot)));
             }
         }
+        A[k * n + k + 1] = alpha;
+        for (int j = k + 2; j < n; ++j)
+            A[k * n + j] = 0.0;
+    }
+}
+
+/* [-1, 1) 随机输入: 高位折尾数分数、低位定号 (dgemm random_bounded
+ * 同款手法 —— 原始 uint64 重解释 double 有 ~1/4 概率 NaN/Inf)。
+ * 与容差标定相同的值域 (||A||_F ~ 74), 标定结论直接适用。 */
+static double random_pm_one(void)
+{
+    uint64_t r = random64();
+    double frac = (double)(r >> 11) / 9007199254740992.0; /* [0, 1) */
+    return (r & 1) ? (frac - 1.0) : frac;
+}
+
+/* 容差比较 (B6): 标定实测修复版 SVE 内核 vs 标量参考最大偏差
+ * ~4e-14 * ||B||_F, kTolRel=1e-9 留 5 个数量级余量; 原缺陷内核发散
+ * ~1e-1, 独立 golden 必然抓到 (B1-015)。NaN 捕获 (PR #244 review,
+ * greptile): 原实现 fabs(NaN) > max_diff 恒 false, 全 NaN 结果也会
+ * 通过 —— 现在非有限值直接失败, 不再进入最大差值累加。 */
+static constexpr double kTolRel = 1e-9;
+
+static void bidiag_compare_or_fail(const double *got, const double *golden,
+                                   int n, long iter)
+{
+    double norm_g2 = 0.0, max_diff = 0.0;
+    int worst = 0;
+    for (int i = 0; i < n * n; ++i) {
+        norm_g2 += golden[i] * golden[i];
+        if (!std::isfinite(got[i]) || !std::isfinite(golden[i])) {
+            report_fail_msg("bidiagonalization produced a non-finite value "
+                            "at (%d, %d): got %.17g, golden %.17g "
+                            "(iteration %ld)",
+                            i / n, i % n, got[i], golden[i], iter);
+        }
+        double diff = fabs(got[i] - golden[i]);
+        if (diff > max_diff) {
+            max_diff = diff;
+            worst = i;
+        }
+    }
+    double tol = kTolRel * sqrt(norm_g2);
+    if (!(max_diff <= tol)) {
+        report_fail_msg("bidiagonalization diverged at (%d, %d): "
+                        "|%.17g - %.17g| = %.3e > tol %.3e (iteration %ld)",
+                        worst / n, worst % n, got[worst], golden[worst],
+                        max_diff, tol, iter);
     }
 }
 
@@ -158,23 +360,30 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
     size_t bytes = (size_t)M_DIM * M_DIM * sizeof(double);
     d->orig   = (double *)aligned_alloc(64, bytes);
     d->golden = (double *)aligned_alloc(64, bytes);
-    d->work   = (double *)aligned_alloc(64, bytes);
-    if (!d->orig || !d->golden || !d->work) {
-        free(d->orig); free(d->golden); free(d->work);
+    if (!d->orig || !d->golden) {
+        free(d->orig);
+        free(d->golden);
         delete d;
         return EXIT_FAILURE;
     }
 
-    /* 固定确定性输入 (LCG) —— 所有线程共享同一输入矩阵 */
-    unsigned s = 987654321u;
-    for (int i = 0; i < M_DIM * M_DIM; ++i) {
-        s = s * 1103515245u + 12345u;
-        d->orig[i] = (double)(int)((s >> 16) & 0xFFFF) / 32768.0 - 1.0;
-    }
-
-    /* 黄金结果: 首次计算 (EigenSVDTest 模式) */
+    /* init 时有限性金丝雀 + 冻结回放基准 (B6 + PR #244 review): init
+     * 线程算一次共享 orig/golden 对, worker 每 kRerollEvery 轮回放
+     * 一次 —— 跨核参考, 持续性 (mercurial 型) 单核缺陷无法同时污染
+     * init 核与 worker 核。随机输入经 Householder 正交变换范数守恒
+     * (||B||_F = ||A||_F ~ 74), 远离 NaN/Inf。 */
+    for (int i = 0; i < M_DIM * M_DIM; ++i)
+        d->orig[i] = random_pm_one();
     memcpy(d->golden, d->orig, bytes);
-    bidiagonalize_sve(d->golden, M_DIM);
+    bidiagonalize_ref(d->golden, M_DIM);
+    for (int i = 0; i < M_DIM * M_DIM; ++i) {
+        double g = d->golden[i];
+        if (g != g || g > 1.0e300 || g < -1.0e300) {
+            report_fail_msg("golden bidiagonalization not finite at "
+                            "element %d (random operands need tighter "
+                            "scaling)", i);
+        }
+    }
 
     test->data = d;
     return EXIT_SUCCESS;
@@ -182,27 +391,88 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
 
 static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
 {
+    (void)cpu;
     auto *d = static_cast<bidiag_data *>(test->data);
     size_t bytes = (size_t)M_DIM * M_DIM * sizeof(double);
+    long iter = 0;
 
-    /* work 缓冲必须线程私有: 127 个线程并发计算同一输入, 共享 work 会互相
-     * 覆盖 (第一版就栽在这里: 全核 fail, 罪魁是共享 d->work)。 */
-    double *work = (double *)test->per_thread[cpu].data;
-    if (!work) {
-        work = (double *)aligned_alloc(64, bytes);
-        if (!work) {
-            report_fail_msg("eigen_svd_bidiag_sve: per-thread work alloc failed");
-            return EXIT_FAILURE;
+    /* B6 (R2b 冻结盲区): 本线程的输入每 kRerollEvery 轮从框架 RNG
+     * 重掷 (线程安全: 框架 RNG per-thread 状态), golden 用独立标量
+     * 参考同步重算 —— 每次比较都是"新鲜输入 x 独立实现"。
+     * golden 重算 ~1ms/16 轮, 分摊开销 ~10% (DUT 单次 ~0.92ms)。
+     * PR #244 review (coderabbit): 奇数轮为冻结回放轮 —— 回放 init
+     * 共享的 orig/golden (跨核参考), mercurial 型缺陷无法同轮污染
+     * 两个核。
+     * PR #244 review round 2 (greptile+coderabbit): 回放轮不再改写
+     * l_orig (原实现 memcpy(l_orig, d->orig) 会让下一非回放轮拿冻结
+     * 输入去比随机输入的 golden, 健康硬件必误报) —— 直接 d->orig →
+     * work;且回放按 (iter & 1) 交替触发, 不依赖 since_reroll (该测试
+     * fracture_loop_count=5, run 每 5 轮在新子进程重入, 局部计数会
+     * 归零, 任何依赖跨 5 轮阈值的触发点都可能永不命中)。交替下实际
+     * 重掷周期为 2*kRerollEvery (回放轮不递增 since_reroll)。 */
+    constexpr int kRerollEvery = 16;
+    int since_reroll = kRerollEvery; /* 首轮强制重掷 */
+
+    TEST_LOOP(test, 1) {
+        if (__builtin_expect(!l_orig || !l_golden || !work || !work2 || !l_gofs, 0)) {
+            l_orig   = (double *)aligned_alloc(64, bytes);
+            l_golden = (double *)aligned_alloc(64, bytes);
+            work     = (double *)aligned_alloc(64, bytes);
+            work2    = (double *)aligned_alloc(64, bytes);
+            l_gofs   = (uint64_t *)aligned_alloc(64, svcntd() * sizeof(uint64_t));
+            if (!l_orig || !l_golden || !work || !work2 || !l_gofs)
+                report_fail_msg("eigen_svd_bidiag_sve: per-thread scratch "
+                                "alloc failed (%zu bytes)", bytes * 4);
+            /* 列 gather/scatter 偏移表: lane l -> 字节偏移 l*n*8。
+             * ACLE svld1_gather_u64offset_f64 的偏移单位是字节 (生成的
+             * ld1d 无 lsl 缩放 —— gem5 VL=512 仿真实证: 元素单位表在
+             * 所有 VL 发散, 字节单位表 MAXDIFF ~1e-13 全绿)。 */
+            for (uint64_t l = 0; l < svcntd(); ++l)
+                l_gofs[l] = l * (uint64_t)M_DIM * sizeof(double);
         }
-        test->per_thread[cpu].data = work;
-    }
 
-    do {
-        memcpy(work, d->orig, bytes);
-        bidiagonalize_sve(work, M_DIM);
-        memcmp_or_fail(work, d->golden, M_DIM * M_DIM,
-                       "Householder bidiagonalization result");
-    } while (test_time_condition(test));
+        if (iter & 1) {
+            /* 冻结回放轮: init 共享的冻结输入直拷 work (不碰 l_orig,
+             * 重掷状态原样保留), DUT 输出与 init 线程 (另一核) 算好的
+             * golden 比对 —— 跨核 byte-tolerant 参考 */
+            memcpy(work, d->orig, bytes);
+            bidiagonalize_sve(work, M_DIM);
+            ++iter;
+            bidiag_compare_or_fail(work, d->golden, M_DIM, iter);
+        } else {
+            if (++since_reroll >= kRerollEvery) {
+                since_reroll = 0;
+                for (int i = 0; i < M_DIM * M_DIM; ++i)
+                    l_orig[i] = random_pm_one();
+                memcpy(l_golden, l_orig, bytes);
+                bidiagonalize_ref(l_golden, M_DIM);
+            }
+
+            memcpy(work, l_orig, bytes);
+            bidiagonalize_sve(work, M_DIM);
+            ++iter;
+            bidiag_compare_or_fail(work, l_golden, M_DIM, iter);
+
+            /* 双跑自一致 (PR #244 review, greptile "逐字节可重复检查"):
+             * 同输入第二跑 DUT, 逐字节 memcmp —— 独立标量参考因树形归约
+             * vs 串行求和的舍入差异不可能逐字节一致 (CLAUDE.md ULP 注),
+             * 但 DUT 自身在确定性核上必须逐字节可重复; 低位翻转在两次
+             * DUT 跑之间不一致时立即被抓。 */
+            memcpy(work2, l_orig, bytes);
+            bidiagonalize_sve(work2, M_DIM);
+            if (memcmp(work, work2, bytes) != 0) {
+                for (int i = 0; i < M_DIM * M_DIM; ++i) {
+                    if (memcmp(&work[i], &work2[i], sizeof(double)) != 0) {
+                        report_fail_msg("bidiagonalization not repeatable "
+                                "on the same input at (%d, %d): pass1 "
+                                "%.17g vs pass2 %.17g (iteration %ld)",
+                                i / M_DIM, i % M_DIM, work[i], work2[i], iter);
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     return EXIT_SUCCESS;
 }
@@ -213,14 +483,14 @@ static int eigen_svd_bidiag_sve_cleanup(struct test *test)
     if (d) {
         free(d->orig);
         free(d->golden);
-        free(d->work);
         delete d;
     }
     return EXIT_SUCCESS;
 }
 
-/* 注意: per-thread work 由框架在测试进程退出时随进程回收 (fork 模型),
- * cleanup 无需逐线程释放。 */
+/* 注意: per-thread l_orig/l_golden/work 由框架在测试进程退出时随进程
+ * 回收 (fork 模型), cleanup 无需逐线程释放 (worker 线程此时已退出,
+ * 主线程 free 其他线程的 TLS 指针本就不安全 —— dgemm 同款论证)。 */
 
 #else
 
@@ -231,6 +501,7 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
              "to be implemented (placeholder): ARM SVE required for eigen_svd_bidiag_sve");
     return EXIT_SKIP;
 }
+
 static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
 {
     (void)test; (void)cpu;
@@ -246,7 +517,8 @@ static int eigen_svd_bidiag_sve_cleanup(struct test *test)
 DECLARE_TEST(eigen_svd_bidiag_sve,
              "SVD-style Householder bidiagonalization SDC stress — dense SVE FMA chains "
              "(dot-product reductions + rank-1 svmla/svmls updates) without the Eigen library; "
-             "SVE-family counterpart of eigen_svd_cdouble_noavx512")
+             "independent scalar golden + framework-RNG re-rolled inputs + frozen cross-core "
+             "replay alternation + same-input double-pass byte-exact self-check (B6, PR #244 review)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = eigen_svd_bidiag_sve_init,
     .test_run = eigen_svd_bidiag_sve_run,

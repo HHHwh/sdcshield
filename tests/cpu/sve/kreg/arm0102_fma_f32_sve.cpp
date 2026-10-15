@@ -94,10 +94,10 @@ static int arm0102_fma_f32_sve_init(struct test *test) {
     const int slack = svcntw();   /* asm ldr z 尾批松弛, 见文件头注释 */
     const size_t total = (size_t)(ARM0102_FMA_F32_SVE_COUNT + slack) * sizeof(float);
     auto *data = static_cast<Arm0102FmaF32SveData *>(malloc(sizeof(Arm0102FmaF32SveData)));
-    data->srcA = static_cast<float *>(aligned_alloc(64, total));
-    data->srcB = static_cast<float *>(aligned_alloc(64, total));
-    data->srcC = static_cast<float *>(aligned_alloc(64, total));
-    data->expected = static_cast<float *>(aligned_alloc(64, total));
+    data->srcA = static_cast<float *>(aligned_alloc_safe(64, total));
+    data->srcB = static_cast<float *>(aligned_alloc_safe(64, total));
+    data->srcC = static_cast<float *>(aligned_alloc_safe(64, total));
+    data->expected = static_cast<float *>(aligned_alloc_safe(64, total));
 
     /* 逐 lane 缩放随机 (raw bits 会出 NaN/Inf — 原版语义) */
     for (int i = 0; i < ARM0102_FMA_F32_SVE_COUNT; i++) {
@@ -145,8 +145,8 @@ static int arm0102_fma_f32_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<Arm0102FmaF32SveData *>(test->data);
 
-    float *temp = static_cast<float *>(aligned_alloc(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + svcntw()) * sizeof(float)));
-    float *dst  = static_cast<float *>(aligned_alloc(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + svcntw()) * sizeof(float)));
+    float *temp = static_cast<float *>(aligned_alloc_safe(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + svcntw()) * sizeof(float)));
+    float *dst  = static_cast<float *>(aligned_alloc_safe(64, (size_t)(ARM0102_FMA_F32_SVE_COUNT + svcntw()) * sizeof(float)));
 
     TEST_LOOP(test, 1 << 13) {
         for (int base = 0; base < ARM0102_FMA_F32_SVE_COUNT; base += svcntw()) {

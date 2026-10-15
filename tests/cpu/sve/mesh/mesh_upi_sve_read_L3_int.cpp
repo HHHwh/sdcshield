@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_sve.h>
 #include <sys/auxv.h>
@@ -40,11 +39,13 @@ static int mesh_upi_sve_read_L3_int_init(struct test *test) {
     }
 
     // 生成随机 int32 数据并计算参考累加和
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening (B1-002, aligned with 2731971d): framework
+     * RNG (init-time stream, -s reproducible) replaces std::mt19937;
+     * range [-1000000, 1000000]. */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
     uint64_t sum = 0;
     for (size_t i = 0; i < ARRAY_SIZE; ++i) {
-        td->data[i] = dist(rng);
+        td->data[i] = dist();
         sum += (uint64_t)td->data[i];
     }
     td->golden_sum = sum;

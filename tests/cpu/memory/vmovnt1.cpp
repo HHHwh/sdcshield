@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #endif
@@ -60,14 +59,16 @@ static int vmovnt1_run(struct test *test, int cpu) {
     alignas(16) double store_f64_512[8];
     alignas(16) double reload_f64_512[8];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> fdist(-1.0f, 1.0f);
-    std::uniform_real_distribution<double> ddist(-1.0, 1.0);
+    /* randomization hardening (B3-007): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; ranges [-1.0f, 1.0f) and
+     * [-1.0, 1.0) mapped from frandom's [0,1). */
+    auto fdist = []() { return frandomf_scale((float)(1.0f) - (float)(-1.0f)) + (float)(-1.0f); };
+    auto ddist = []() { return frandom_scale((double)(1.0) - (double)(-1.0)) + (double)(-1.0); };
 
     do {
         // ---- 生成随机数据（256 位） ----
-        for (int i = 0; i < 8; ++i) src_f32[i] = fdist(rng);
-        for (int i = 0; i < 4; ++i) src_f64[i] = ddist(rng);
+        for (int i = 0; i < 8; ++i) src_f32[i] = fdist();
+        for (int i = 0; i < 4; ++i) src_f64[i] = ddist();
 
         // ---- 测试 256-bit 单精度（两个 128 位向量） ----
         float32x4_t vf0 = vld1q_f32(src_f32);
@@ -124,8 +125,8 @@ static int vmovnt1_run(struct test *test, int cpu) {
 
         // ---- 测试 512-bit 版本（4 个 128 位向量） ----
         // 生成 512 位数据
-        for (int i = 0; i < 16; ++i) src_f32_512[i] = fdist(rng);
-        for (int i = 0; i < 8; ++i) src_f64_512[i] = ddist(rng);
+        for (int i = 0; i < 16; ++i) src_f32_512[i] = fdist();
+        for (int i = 0; i < 8; ++i) src_f64_512[i] = ddist();
 
         // 单精度 512-bit
         float32x4_t vf512[4];

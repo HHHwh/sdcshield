@@ -41,15 +41,23 @@ for ((core=83; core<TOTAL_CORES; core++)); do
     PID_STRESS=$!
 
     # 等待两个任务完成
-    wait $PID_OPENDCDIAG
-    wait $PID_STRESS
+    wait $PID_OPENDCDIAG; TEST_RC=$?
+    wait $PID_STRESS; STRESS_RC=$?
 
-    # 检查日志中是否包含 FAIL（不区分大小写）
-    if grep -qi "result: fail" "$LOG_FILE"; then
+    # 完整判定：进程退出码非 0 / fail/crash / 零 result / pass 之外的软失败结果均不通过
+    # （fail 块内部含独立 "seed:" 行，只统计 "result:" 行，避免误计）
+    RESULT_CNT=$(grep -Eci "result: *(pass|fail|crash|skip|timed out|interrupted|operating system error)" "$LOG_FILE")
+    PASS_CNT=$(grep -c "result: pass" "$LOG_FILE")
+    if grep -Eqi "result: *(fail|crash)" "$LOG_FILE"; then
         echo -e "\033[31m❌ FAIL\033[0m (日志已保留)"
+    elif [ $TEST_RC -ne 0 ] || [ $STRESS_RC -ne 0 ]; then
+        echo -e "\033[31m❌ FAIL（sdcshield rc=$TEST_RC, stress-ng rc=$STRESS_RC）——日志保留: $LOG_FILE\033[0m"
+    elif [ "$RESULT_CNT" -eq 0 ] || [ "$PASS_CNT" -ne "$RESULT_CNT" ]; then
+        # 零 result 行（崩溃/被杀/零执行）或存在 pass 之外的软失败结果——一律保留
+        echo -e "\033[31m⚠️ 结果不完整或异常（pass=$PASS_CNT/结果数=$RESULT_CNT）——日志保留: $LOG_FILE\033[0m"
     else
         echo -e "\033[32m✅ PASS\033[0m (日志已删除)"
-        rm -f "$LOG_FILE"   # 删除 PASS 日志
+        rm -f "$LOG_FILE"   # 删除确认通过的日志
     fi
 done
 

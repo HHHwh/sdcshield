@@ -29,6 +29,26 @@
  * bit-identical reruns, identical results on healthy cores — fixed per
  * the report's follow-up item 7.1.)
  *
+ * Two shapes per TEST_LOOP round (B6 / R2b freeze blind spot):
+ *   - Shape A (randomized integers): per-fragment random small
+ *     integers with the fixed 0.125 coefficients, verified bit-exactly
+ *     against the scalar reference — breaks the frozen per-round replay
+ *     while keeping exact-1/8-grid verification (PR #234 review,
+ *     greptile 4254737399; PR #237 review, coderabbit).
+ *   - Shape B (fully randomized): per-thread grid and coefficients
+ *     re-rolled from the framework RNG every round, run through the
+ *     very same axis_generic_16x2 hot path, then compared against an
+ *     INDEPENDENT scalar std::fma chain that mirrors the kernel's
+ *     r=1..6 up-then-down order. Shape A varies only the grid per
+ *     fragment; shape B re-rolls both the grid and the coefficients
+ *     every round, making every round a fresh sample even within one
+ *     fragment. The scalar reference and the SVE svmla are both
+ *     single-rounded IEEE fma on bitwise-identical operands, so the two
+ *     are expected to agree bit-exactly; kTolRel is a safety margin for
+ *     implementation-level micro-differences only (worst 1-ulp-per-step
+ *     accumulation over kRandIters is ~8e-13 relative, an order inside
+ *     the tolerance).
+ *
  * Framework adaptations (each forced by the harness, structure-neutral):
  *   - main() -> test_init/test_run/test_cleanup; src and s_base are set
  *     up once in init and shared read-only across CPU threads;
@@ -48,6 +68,11 @@
  * layout offsets scale at runtime; out-of-range VLs return a clean
  * EXIT_SKIP, non-SVE CPUs are skipped by the framework's
  * compiler-feature gate. Built only on aarch64.
+ *
+ * RUNTIME-UNVERIFIABLE (512-bit SVE): developed on a host without SVE
+ * (HWCAP_SVE clear); compile-verified and the skip path executed for
+ * real, but the SVE datapath itself has not run on hardware
+ * (cf. 8502e491 / 73ebbd3f for the precedent).
  * @endparblock
  */
 
@@ -56,6 +81,7 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstddef>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -84,11 +110,28 @@ static constexpr size_t extent = 56;
 static constexpr size_t stride = 64;
 static constexpr size_t iterations = 100'000'000;
 
+// Shape B (B6): random-shape iteration depth and comparison tolerance.
+// kRandIters keeps the scalar reference chain cheap (~1.6M fma, ~1ms per
+// reroll — negligible next to shape A's 100M-iteration round); kTolRel
+// only guards implementation-level micro-differences (see header).
+static constexpr size_t kRandIters = 8192;
+static constexpr double kTolRel = 1e-11;
+
 // Memory-resident loop counter, as in the original (file-scope, so it is
 // not register-allocated). thread_local because the framework runs one
 // test_run per CPU concurrently — a plain global would race across
 // threads; TLS preserves the memory-resident property per thread.
 static thread_local size_t j;
+
+// Shape B per-thread state (B6): this thread's re-rolled random grid and
+// coefficients plus the scalar-reference expectation/error bound. The
+// grid is lazily allocated and intentionally not freed in cleanup: the
+// worker threads are gone when the main thread runs test_cleanup and the
+// forked child exits right after (dgemm-style argument).
+static thread_local double *r_grid = nullptr;
+static thread_local double r_coeff[RADIUS + 1];
+static thread_local double r_expected[B_TILE];
+static thread_local double r_bound[B_TILE];
 
 struct SveStencilAxisData {
     // Tile width in f64 lanes = 2*svcntd() at the runtime VL (4..32).
@@ -134,6 +177,21 @@ inline void axis_generic_16x2(
             res1 = svmla_x(ptrue, res1, svld1(ptrue, n + lanes), c);
         }
     }
+}
+
+// Framework-RNG helpers (B6): fold a random uint64 into a bounded
+// fraction (a raw reinterpret would hit the NaN/Inf exponent field about
+// a quarter of the time).
+static double stencil_random_frac()
+{
+    uint64_t r = random64();
+    return static_cast<double>(r >> 11) / 9007199254740992.0; /* [0, 1) */
+}
+static double stencil_random_pm_one()
+{
+    uint64_t r = random64();
+    double frac = static_cast<double>(r >> 11) / 9007199254740992.0;
+    return (r & 1) ? (frac - 1.0) : frac; /* [-1, 1) */
 }
 
 static int sve512_stencil_axis_arm_init(struct test *test)
@@ -248,13 +306,20 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
         expected[j] *= static_cast<double>(iterations);
 
     do {
-        svfloat64_t res0 = svdup_f64(0.0);
-        svfloat64_t res1 = svdup_f64(0.0);
+        /* ---- 形态 A: 随机整数格点 (main, per-fragment) ----
+         * 固定 0.125 系数 + init 期随机小整数 src, 对照 run 顶部的标量
+         * 参考, 位模式精确比较。 */
+        {
+            svfloat64_t res0 = svdup_f64(0.0);
+            svfloat64_t res1 = svdup_f64(0.0);
 
-        for (j = 0; j < iterations; ++j) {
-            if ((reinterpret_cast<std::uintptr_t>(&res0)) & 0xFFFF000000000000ull) {
-                log_warning("sve512_stencil_axis: iteration=%zu, &res0=%p",
-                            j, static_cast<void *>(&res0));
+            for (j = 0; j < iterations; ++j) {
+                if ((reinterpret_cast<std::uintptr_t>(&res0)) & 0xFFFF000000000000ull) {
+                    log_warning("sve512_stencil_axis: iteration=%zu, &res0=%p",
+                                j, static_cast<void *>(&res0));
+                }
+                axis_generic_16x2(
+                    s_base, coord, extent, stride, ptrue, coeff, res0, res1);
             }
             axis_generic_16x2(
                 s_base, coord, extent, stride, ptrue, coeff, bt, res0, res1);
@@ -280,10 +345,87 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
             }
         }
 
-        if (!ok) {
-            report_fail_msg(
-                "sve512_stencil_axis_arm: stencil axis kernel SDC detected");
-            return EXIT_FAILURE;
+        /* ---- 形态 B: 全随机第二形态 (B6 / R2b 冻结盲区) ----
+         * 同一热路径 (axis_generic_16x2 原样), 输入换成框架 RNG 每轮重掷
+         * 的随机格点/系数 (per-thread); 期望由独立标量 std::fma 链式参考
+         * 按内核顺序 (r=1..6, 每半径先上后下) 计算 —— 形态 A 仅按
+         * fragment 变化格点, 形态 B 每轮连系数一起重掷。 */
+        {
+            if (__builtin_expect(!r_grid, 0)) {
+                r_grid = new (std::nothrow) double[extent * stride * B_TILE];
+                if (!r_grid) {
+                    report_fail_msg("sve512_stencil_axis_arm: per-thread "
+                                    "random grid alloc failed (%zu bytes)",
+                                    extent * stride * B_TILE *
+                                        sizeof(double));
+                }
+            }
+
+            for (size_t i = 0; i < extent * stride * B_TILE; ++i)
+                r_grid[i] = stencil_random_pm_one();
+            for (size_t r = 1; r <= RADIUS; ++r)
+                r_coeff[r] = 0.25 + 0.75 * stencil_random_frac();
+
+            const double *r_base = r_grid + coord * stride * B_TILE;
+
+            /* 独立标量参考。几何常量 (coord=10, extent=56, RADIUS=6) 下
+             * 双向条件恒真, 与内核的 if 分支一一对应。r_bound 是逐步增量
+             * 绝对值之和 (舍入误差幅度的上界基准): |acc_final| <= bound,
+             * 最坏逐步 1-ulp 舍入累积 <= kRandIters * eps * bound ——
+             * kTolRel 余量 10 倍以上。 */
+            {
+                const double *up[RADIUS + 1], *dn[RADIUS + 1];
+                for (size_t r = 1; r <= RADIUS; ++r) {
+                    up[r] = r_base - static_cast<ptrdiff_t>(r * stride) * B_TILE;
+                    dn[r] = r_base + static_cast<ptrdiff_t>(r * stride) * B_TILE;
+                }
+                for (size_t l = 0; l < B_TILE; ++l) {
+                    r_expected[l] = 0.0;
+                    double inc = 0.0;
+                    for (size_t r = 1; r <= RADIUS; ++r)
+                        inc += std::fabs(r_coeff[r]) *
+                               (std::fabs(up[r][l]) + std::fabs(dn[r][l]));
+                    r_bound[l] = static_cast<double>(kRandIters) * inc;
+                }
+                for (size_t it = 0; it < kRandIters; ++it)
+                    for (size_t r = 1; r <= RADIUS; ++r)
+                        for (size_t l = 0; l < B_TILE; ++l) {
+                            r_expected[l] = std::fma(up[r][l], r_coeff[r],
+                                                     r_expected[l]);
+                            r_expected[l] = std::fma(dn[r][l], r_coeff[r],
+                                                     r_expected[l]);
+                        }
+            }
+
+            svfloat64_t b_res0 = svdup_f64(0.0);
+            svfloat64_t b_res1 = svdup_f64(0.0);
+
+            for (j = 0; j < kRandIters; ++j) {
+                if ((reinterpret_cast<std::uintptr_t>(&b_res0)) & 0xFFFF000000000000ull) {
+                    log_warning("sve512_stencil_axis (random shape): "
+                                "iteration=%zu, &b_res0=%p",
+                                j, static_cast<void *>(&b_res0));
+                }
+                axis_generic_16x2(
+                    r_base, coord, extent, stride, ptrue, r_coeff,
+                    b_res0, b_res1);
+            }
+
+            double b_result[B_TILE];
+            svst1(ptrue, b_result, b_res0);
+            svst1(ptrue, b_result + 8, b_res1);
+
+            for (size_t l = 0; l < B_TILE; ++l) {
+                double diff = std::fabs(b_result[l] - r_expected[l]);
+                double tol = kTolRel * (r_bound[l] + 1e-300);
+                /* !(<=) 形式一并捕获 NaN */
+                if (!(diff <= tol)) {
+                    report_fail_msg(
+                        "sve512_stencil_axis_arm: random shape diverged at "
+                        "lane %2zu: |%.17g - %.17g| = %.3e > tol %.3e",
+                        l, b_result[l], r_expected[l], diff, tol);
+                }
+            }
         }
     } while (test_time_condition(test));
 
@@ -304,7 +446,10 @@ DECLARE_TEST(sve512_stencil_axis_arm,
              "svmla_x chain with svdup_f64 coefficients (ld1rd codegen), "
              "memory-resident loop counter and a per-iteration VA[63:48] "
              "accumulator-address canary; per-fragment randomized inputs "
-             "with exact-integer per-lane verification")
+             "with exact-integer per-lane bit-pattern verification, plus "
+             "a framework-RNG random second shape (re-rolled grid and "
+             "coefficients every round) against an independent scalar "
+             "fma reference (B6)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_stencil_axis_arm_init,
     .test_run = sve512_stencil_axis_arm_run,

@@ -3,7 +3,6 @@
 #include <cstdint>              // uint8_t
 #include <cstddef>              // size_t
 #include <cstdio>               // snprintf, fprintf
-#include <random>               // std::mt19937, std::random_device, std::uniform_int_distribution
 
 static constexpr size_t BLOCK_SIZE = 256;
 
@@ -15,14 +14,15 @@ static int memcpy1_init(struct test *test) {
 static int memcpy1_run(struct test *test, int cpu) {
     uint8_t src[BLOCK_SIZE];
     uint8_t dst[BLOCK_SIZE];
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> dist(0, 255);
+    /* randomization hardening (B3-007): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; range [0, 255]. */
+    auto dist = []() { return (uint8_t)((0) + (int64_t)(random64() % (uint64_t)((255) - (0) + 1))); };
     unsigned long iteration = 0;
 
     do {
         // 生成随机数据
         for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            src[i] = dist(rng);
+            src[i] = dist();
         }
 
         // 执行复制

@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>          // NEON intrinsics (aarch64 only)
 #endif
@@ -18,8 +17,9 @@ static int load_port_init(struct test *test) {
 #ifdef __aarch64__
 static int load_port_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFF);
+    /* randomization hardening (B3-008): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937. */
+    auto dist = []() { return random32(); };  /* full [0, 2^32) */
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -29,7 +29,7 @@ static int load_port_run(struct test *test, int cpu) {
         alignas(16) uint32_t src[DATA_SIZE];
         alignas(16) uint32_t dst[DATA_SIZE];
         for (int i = 0; i < DATA_SIZE; ++i) {
-            src[i] = dist(rng);
+            src[i] = dist();
         }
 
         // 使用 NEON 加载指令（128 位）和标量加载混合，模拟多端口压力

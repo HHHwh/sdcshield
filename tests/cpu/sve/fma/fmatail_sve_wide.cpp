@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #include <cmath>
 
 #ifdef __aarch64__
@@ -32,9 +31,11 @@ static int fmatail_sve_wide_init(struct test *test) {
 #ifdef __aarch64__
 static int fmatail_sve_wide_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(std::random_device{}());
     // 使用更大范围的随机数，并包含一些特殊值（与 fmatail_avx512 一致）
-    std::uniform_real_distribution<double> dist(-1e10, 1e10);
+    /* randomization hardening H9'/P12: framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; range [-1e10, 1e10) mapped
+     * from frandom's [0,1). */
+    auto dist = []() { return frandom_scale((double)(1e10) - (double)(-1e10)) + (double)(-1e10); };
     static std::atomic<uint64_t> iter{0};
 
     do {
@@ -45,9 +46,9 @@ static int fmatail_sve_wide_run(struct test *test, int cpu) {
         double sw_ref[VECTOR_SIZE];
 
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            a[i] = dist(rng);
-            b[i] = dist(rng);
-            c[i] = dist(rng);
+            a[i] = dist();
+            b[i] = dist();
+            c[i] = dist();
             // 随机加入一些特殊值（0, 1, -1）——注入模式与原版逐字一致
             if (i % 4 == 0) {
                 switch (i % 3) {

@@ -14,6 +14,12 @@
  * dumps its row/col, golden, actual, IEEE-754 bit xor, and a per-byte
  * breakdown, so an SDC bit-flip in the product can be located. Mirrors the
  * movbe_dump / mrn_rmw_dump design: no extra hot-path reads or snapshots.
+ * Operand freshness (B2-007, R2b freeze blind spot): like the non-dump
+ * gemm files (46141ed4), the run loop keeps per-thread lhs/rhs re-rolled
+ * from the framework RNG every 16 iterations with the golden recomputed
+ * the same batch; once per fracture (round 3 of every 4) a frozen-replay
+ * round runs on init's shared Mat::Random draw, so the init-time golden
+ * is actually re-compared instead of never being replayed.
  *
  * @note Although the test should run fine on a single thread, it is
  * only expected to catch defects if run on at least 2 cores.
@@ -31,8 +37,11 @@ using namespace Eigen;
 // Matrix dimension. Historically hardcoded to 256. Now configurable via
 // the GEMM_K_DIM environment variable (default 256 = original baseline) so
 // the fault-propagation-vs-k-dimension hypothesis can be tested without
-// touching random-generation / tolerance / report logic. Nothing else
-// changes: Mat::Random seeding and report_fail behavior are untouched.
+// touching the dump/report logic. Random generation: the run loop re-rolls
+// its own per-thread operands from the framework RNG every 16 iterations
+// (B2-007, same as the non-dump gemm files), with one frozen-replay round
+// at each cycle's midpoint restoring init's Mat::Random draw;
+// report_fail behavior unchanged.
 static int gemm_k_dim() {
     static int dim = -1;
     if (dim < 0) {
@@ -72,13 +81,57 @@ static int eigen_gemm_float_dynamic_square_init(struct test *test) {
 }
 
 static int eigen_gemm_float_dynamic_square_run(struct test *test, int cpu) {
+    auto d = CAST(test->data);
+    /* Operand freshness (B2-007, R2b freeze blind spot): per-thread
+     * operands re-rolled from the framework RNG every kRerollEvery
+     * iterations, [-1, 1) bounded like Mat::Random, with the golden
+     * recomputed the same batch (46141ed4 non-dump gemm pattern); once
+     * per fracture (round 3 of every 4) a frozen-replay round instead
+     * runs init's shared lhs/rhs through the very same hot path and
+     * compares against init's prod, so the init-time golden is actually
+     * re-compared. */
+    constexpr int kRerollEvery = 16;
+    auto fill_rand = [](Mat &m) {
+        for (int r = 0; r < m.rows(); ++r)
+            for (int c = 0; c < m.cols(); ++c)
+                m(r, c) = frandomf_scale(2.0f) - 1.0f;
+    };
+    Mat l_lhs, l_rhs, l_prod;
+    l_lhs.resize(M_DIM, M_DIM);
+    l_rhs.resize(M_DIM, M_DIM);
+    l_prod.resize(M_DIM, M_DIM);
+    fill_rand(l_lhs);
+    fill_rand(l_rhs);
+    l_prod = l_lhs * l_rhs;
+    int since_reroll = 0;
+    long iter = 0;
+
     do {
-        auto testdata = CAST(test->data);
+        /* PR #244 review round 2 (greptile): `since_reroll` is a run()
+         * local, but the framework's fracture loop re-enters test_run in
+         * a FRESH child process after a bounded number of
+         * test_time_condition() rounds, resetting all locals, so a
+         * "midpoint == 8" replay could easily never fire (and with a
+         * short fracture it never does). The frozen replay now triggers
+         * on an in-fracture round position (round 3 of every 4; any
+         * 4-round window contains exactly one) and does NOT touch the
+         * l_lhs/l_rhs/l_prod reroll state — Eigen's operator* reads its
+         * operands and writes only the destination, so init's shared
+         * matrices can be fed to the very same hot path directly (init
+         * itself computed prod = lhs * rhs with it), and the comparison
+         * selects init's prod as the golden. The reroll state survives
+         * the replay round intact for the next non-replay round. */
+        const bool frozen_replay = (iter & 3) == 2;
+        /* replay rounds feed init's shared operands straight into the
+         * same operator* (it reads its operands, writes only the
+         * destination); the l_* reroll state is never written */
+        const Mat &lhs = frozen_replay ? d->lhs : l_lhs;
+        const Mat &rhs = frozen_replay ? d->rhs : l_rhs;
         Mat x;
-        x = testdata->lhs * testdata->rhs;          // FMA hot path: unchanged
+        x = lhs * rhs;                          // FMA hot path: unchanged
 
         const float *xd = x.data();
-        const float *pd = testdata->prod.data();
+        const float *pd = (frozen_replay ? d->prod : l_prod).data();
         // Element-wise byte-exact compare (same semantics as the original
         // memcmp_or_fail). On the first mismatch, dump golden/actual + the
         // IEEE-754 bit xor and per-byte breakdown, then fail. All of this
@@ -110,6 +163,25 @@ static int eigen_gemm_float_dynamic_square_run(struct test *test, int cpu) {
             }
         }
         (void)ok;
+        /* Frozen replay (PR #244 review, coderabbit): round 3 of every 4
+         * runs init's shared operands through the same hot path and
+         * compares against init's golden — init computed it on a
+         * different core before the workers started, so this round's
+         * compare is a CROSS-CORE reference. The reroll's golden
+         * recompute runs on this very same core, so a mercurial
+         * deterministic core defect would reproduce identically on both
+         * sides and never trip the compare — replaying init's frozen
+         * golden closes that blind spot. The replay round does not
+         * touch l_lhs/l_rhs/l_prod, so the reroll state survives it;
+         * replay rounds do not advance the reroll counter either (the
+         * state stays valid across the replay). */
+        if (!frozen_replay && ++since_reroll >= kRerollEvery) {
+            since_reroll = 0;
+            fill_rand(l_lhs);
+            fill_rand(l_rhs);
+            l_prod = l_lhs * l_rhs;
+        }
+        ++iter;
     } while (test_time_condition(test));
     return EXIT_SUCCESS;
 }

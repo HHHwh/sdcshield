@@ -1,7 +1,9 @@
 #!/bin/bash
 # SDC 狩猎 v3（all-128 法）— 2026-09-24 用户指定（选项 2）：
 #   全部 128 核（含故障核 122 = MPIDR 0x0900060200，已降频封顶 1.45 GHz）逐个运行
-#   sve 清单测试各 30 分钟；fail → 保留日志，确认 pass 后 → 删除日志。
+#   sve 清单测试各 30 分钟；fail → 保留日志；pass → 日志同样保留
+#   （2026-10-13 审查修复 D-009 同改：原"确认 pass 后删除日志"改为全保留，
+#    与 --fatal-skips 配合——skip/异常不可静默吞掉，事后可审计）。
 #
 # 相比 v2（scripts/run/run-sdc-hunt-30min-cpu10-127.sh，10-127 法，未运行）的改动：
 #   1. --cpuset 0..127 全核（122 降频后全核 60s 冒烟已通过，0-9 闲置不再必要；
@@ -147,8 +149,9 @@ for T in $(grep . "$LIST_FILE"); do
     rm -f "$LOG" "$CONSOLE"   # 仅在真正要跑时清残留（被隔离测试的残留不删——那是死亡窗口证据）
 
     # 30 分钟，全核 0-127（含降频封顶的 122），yaml 显式命名；40 分钟 wall-clock 兜底；行缓冲 console
+    # --fatal-skips：skip 也算失败（D-009 同改——狩猎窗口内 skip 不可静默通过）
     timeout -k 60 "$GUARD_SECS" stdbuf -oL -eL "$BIN" \
-        -e "$T" -t "$PER_TEST_MS" --cpuset="$CPU_LIST" -o "$LOG" > "$CONSOLE" 2>&1
+        -e "$T" -t "$PER_TEST_MS" --fatal-skips --cpuset="$CPU_LIST" -o "$LOG" > "$CONSOLE" 2>&1
     RC=$?
     END=$(date '+%Y-%m-%d %H:%M:%S')
 
@@ -162,6 +165,11 @@ for T in $(grep . "$LIST_FILE"); do
         grep -qE "^exit: (fail|crash)" "$LOG" && HAS_SDC=1
     fi
 
+    # 红队修复: RC=0 但日志含 SDC 记录时 result 列不可写 pass——否则同一行
+    # "pass,1" 自相矛盾, "grep ,pass," 统计会误判; 记为 sdc_log。
+    # RC!=0 时保留 nonzero_exit(rc) 不覆盖(退出码信息更有价值)
+    [ "$HAS_SDC" -eq 1 ] && [ $RC -eq 0 ] && RESULT="sdc_log"
+
     if [ "$HAS_SDC" -eq 1 ] || [ $RC -ne 0 ]; then
         # 立即提取关键归因信息（批次 2 教训：先提取，再谈日志去留）
         {
@@ -173,12 +181,11 @@ for T in $(grep . "$LIST_FILE"); do
         sync "$RESULTS_CSV"
         echo "  [$IDX/$TOTAL] ★★ $T: 信号 (rc=$RC, sdc=$HAS_SDC) → 日志保留 $LOG"
     else
-        # 双保险均无 → 确认最终结果后删除（用户规则）
-        rm -f "$LOG" "$CONSOLE"
-        log_sync "END $T pass deleted $END"
-        echo "$T,$START,$END,pass,0,(deleted)" >> "$RESULTS_CSV"
+        # 双保险均无 → pass；日志一律保留（D-009 同改：不删，供事后审计）
+        log_sync "END $T pass kept $END"
+        echo "$T,$START,$END,pass,0,$LOG" >> "$RESULTS_CSV"
         sync "$RESULTS_CSV"
-        echo "  [$IDX/$TOTAL] ✓ $T: 无 SDC → 日志已删除"
+        echo "  [$IDX/$TOTAL] ✓ $T: 无 SDC → 日志保留 $LOG"
     fi
 
     # 磁盘余量复查
@@ -195,6 +202,7 @@ echo "=============================================="
 echo " SDC 狩猎 v3（all-128）全部完成  $(date '+%F %T')"
 echo " 汇总: $RESULTS_CSV"
 echo " 有信号条目:"
-grep -v ",pass,0,(deleted)" "$RESULTS_CSV" | tail -n +2 || echo "  (无)"
+# tail rc 恒 0 使 || 永不触发——补 grep . 让"全 pass 无信号"时也能打出 (无)
+grep -vE ",pass,0," "$RESULTS_CSV" | tail -n +2 | grep . || echo "  (无)"
 echo " 死亡嫌疑: $(grep -c . "$SUSPECTS" 2>/dev/null || echo 0) 条（$SUSPECTS）"
 echo "=============================================="

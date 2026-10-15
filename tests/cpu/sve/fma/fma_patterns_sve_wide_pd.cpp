@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #include <cmath>
 
 #ifdef __aarch64__
@@ -32,8 +31,10 @@ static int fma_patterns_sve_wide_pd_init(struct test *test) {
 #ifdef __aarch64__
 static int fma_patterns_sve_wide_pd_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<double> dist(-1e6, 1e6);
+    /* randomization hardening H9'/P12: framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; range [-1e6, 1e6) mapped
+     * from frandom's [0,1). */
+    auto dist = []() { return frandom_scale((double)(1e6) - (double)(-1e6)) + (double)(-1e6); };
     static std::atomic<uint64_t> iter{0};
 
     do {
@@ -44,9 +45,9 @@ static int fma_patterns_sve_wide_pd_run(struct test *test, int cpu) {
         double sw_ref[VECTOR_SIZE];
 
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            a[i] = dist(rng);
-            b[i] = dist(rng);
-            c[i] = dist(rng);
+            a[i] = dist();
+            b[i] = dist();
+            c[i] = dist();
         }
 
         // ---- 硬件 FMA 计算 (SVE)：等价于原 NEON 版 4 × float64x2_t ----
