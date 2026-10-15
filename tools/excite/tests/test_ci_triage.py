@@ -122,6 +122,24 @@
  31 test_lane_b_dispatch_keeps_bot_fix(回归锚): 车道 B(increment_rounds=
     True)派发成功 → 条目 BOT_FIX,rounds+1、attempts 不动——不因
     dispatch 内统一置状态而回归 ISSUED/DIAGNOSING。
+
+用例口径（终审 fix wave,5 例: final-review-findings C1/I1/M1/M2/M7。
+  全部离线,口径同前）:
+ 32 test_check_agent_outcome_marks_beat_clock_and_authfail(C1): 判定序
+    done → escalated → auth_fail → timeout → dead → running——done 标记 +
+    超窗(>3600s)→ success(非 timeout);done 标记 + tail 含 403 → success
+    (非 auth_fail);escalated 标记 + 超窗 → escalated_reported(非 timeout);
+ 33 test_reap_success_transitions_to_pr_open(I1-①): FakeGh(prs=[…匹配
+    fix 分支…])→ PR_OPEN + pr_number + agent_pid=None + streak 归零 +
+    issue 状态评论(spec §8 PR 链接简报)——车道 A 通向车道 B 的唯一铰链;
+ 34 test_lane_b_closed_pr_summarizes_and_closes(I1-②): classify CLOSED →
+    总结评论 + 关 issue + DONE(spec §6.2/§8 结案契约);
+ 35 test_escalate_dry_run_spares_agent_and_bannered_comment(M1+M7):
+    dry_run 升级路径零击杀(活 sleep 子进程存活、引用不动、零评论);
+    真升级评论含 UNTRUSTED_BANNER(日志摘录是不可信 agent 产物);
+ 36 test_kill_agent_if_alive_guards_pid_zero(M2): agent_pid=0 → 零
+    os.kill 调用(不杀 scan 自身进程组)、引用照常清;非零 PID 路径
+    仍正常击杀(守卫不误伤)。
 """
 import argparse
 import os, shlex, signal, subprocess, sys, time
@@ -1494,3 +1512,194 @@ def test_lane_b_dispatch_keeps_bot_fix(monkeypatch, tmp_path):
     assert entry.status == "BOT_FIX"             # 车道 B 派发即置 BOT_FIX
     assert entry.rounds == 2                     # rounds+1(车道 B 记账)
     assert entry.attempts == 2                   # 不动车道 A 的 attempts
+
+
+# ===========================================================================
+# 终审 fix wave(final-review-findings): C1 判定序 / I1 两条状态转移锚定 /
+# M1 dry-run kill / M2 pid=0 守卫 / M7 升级评论横幅。口径同前: 全部离线,
+# fake gh / fake pr_loop / monkeypatch 探活缝,绝不触网、绝不真实派 claude。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 用例 32(C1): 判定序重排——日志结束语标记优先于 timeout 与 auth_fail。
+# 晚收割场景(tick 间隔 >60min,本机 2026-10-15 重启实证): 已 done 的 agent
+# 若被超窗早返回误判 timeout → attempts+1 重派重复 agent 或假 ESCALATED,
+# 成功修复的 PR 永不进车道 B。诚实自报 escalated 同理(③)。
+
+def test_check_agent_outcome_marks_beat_clock_and_authfail(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    now = datetime.now(timezone.utc)
+
+    def _iso(dt):
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _log(name, text):
+        p = tmp_path / name
+        p.write_text(text, encoding="utf-8")
+        return str(p)
+
+    over = _iso(now - timedelta(seconds=ct.AGENT_TIMEOUT_SEC + 1800))
+
+    # ① done 标记 + started_at 超窗(>3600s)→ success(非 timeout)
+    done_late = _sample_entry(
+        status="DIAGNOSING", agent_pid=999999901,
+        agent_started_at=over,
+        agent_log=_log("done-late.log", "修复完成\nci-triage: done fix/ci-71\n"))
+    assert ct.check_agent_outcome(done_late) == "success"
+
+    # ② done 标记 + tail 含 403 → success(非 auth_fail——结束语契约是
+    # agent 对整段工作的最终结论,晚于途中任何 API 报错)
+    done_authy = _sample_entry(
+        status="DIAGNOSING", agent_pid=999999902,
+        agent_started_at=_iso(now),
+        agent_log=_log("done-authy.log",
+                       "中间一次 gh API Error: 403 Not logged in,重试成功\n"
+                       "ci-triage: done fix/ci-72\n"))
+    assert ct.check_agent_outcome(done_authy) == "success"
+
+    # ③ escalated 标记 + 超窗 → escalated_reported(非 timeout)
+    esc_late = _sample_entry(
+        status="DIAGNOSING", agent_pid=999999903,
+        agent_started_at=over,
+        agent_log=_log("esc-late.log",
+                       "工作 3590s 仍未复现\n"
+                       "ci-triage: escalated 无法在本机复现失败\n"))
+    assert ct.check_agent_outcome(esc_late) == "escalated_reported"
+
+
+# ---------------------------------------------------------------------------
+# 用例 33(I1-①): reap success → PR_OPEN 正路径——查到 PR → pr_number +
+# PR_OPEN + agent_pid 清空 + streak 归零 + issue 状态评论(spec §8「每次
+# 状态转换在 issue 贴一条简报(PR 链接)」)。车道 A 通向车道 B 的唯一铰链。
+
+def test_reap_success_transitions_to_pr_open(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh(prs=[{"number": 250, "headRefName": "fix/ci-81",
+                        "url": "https://github.com/example/sdcshield/pull/250"}])
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+
+    log = tmp_path / "agent-81.log"
+    log.write_text("修复完成\nci-triage: done fix/ci-81\n", encoding="utf-8")
+    entry = _sample_entry(workflow="Sanitizer", run_id=81, status="DIAGNOSING",
+                          issue_number=77, fix_branch="fix/ci-81",
+                          agent_pid=999999901, attempts=1,
+                          agent_started_at=datetime.now(
+                              timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          agent_log=str(log), extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 2}
+
+    ct.reap_or_advance(state)
+
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "PR_OPEN"                  # 车道 A → 车道 B 铰链
+    assert e.pr_number == 250                     # PR 号入账
+    assert e.agent_pid is None                    # 单飞配额归还
+    assert state["auth_failure_streak"] == 0      # gh 核实成功,凭据活着归零
+    # 状态评论(spec §8): issue #77 收到一条含 PR 链接的简报
+    assert len(fake.comments) == 1
+    assert fake.comments[0][0] == 77
+    assert "250" in fake.comments[0][1]           # PR 链接/编号进简报
+
+
+# ---------------------------------------------------------------------------
+# 用例 34(I1-②): classify CLOSED → 总结评论 + 关 issue + DONE(spec §6.2/
+# §8 结案契约,controller 裁定 5)。
+
+def test_lane_b_closed_pr_summarizes_and_closes(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=82, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=2,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    _fake_pr_loop(monkeypatch, _fake_pr(), "CLOSED")
+    ct.lane_b_advance(state, dry_run=False)
+
+    # 总结评论: 贴到跟踪 issue、提及 PR 已关闭/合并
+    assert len(fake.comments) == 1
+    assert fake.comments[0][0] == 77
+    assert "88" in fake.comments[0][1]
+    assert "关闭" in fake.comments[0][1] or "合并" in fake.comments[0][1]
+    # 关 issue + 条目 DONE + 零派发
+    assert fake.closed_issues == [77]
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "DONE"
+    assert bg.calls == []
+
+
+# ---------------------------------------------------------------------------
+# 用例 35(M1+M7): _escalate 的 dry-run 零击杀(只读演练不真杀活 agent)
+# + 非 dry-run 升级评论含 UNTRUSTED_BANNER(日志摘录是不可信 agent 产物)。
+
+def test_escalate_dry_run_spares_agent_and_bannered_comment(
+        monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+
+    log = tmp_path / "agent-83.log"
+    log.write_text("诊断中 API Error: 403\n", encoding="utf-8")
+
+    # 场景 1(M1): dry_run 升级——真活 agent(sleep 子进程)不被杀
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    entry = _sample_entry(workflow="Sanitizer", run_id=83, status="DIAGNOSING",
+                          issue_number=77, agent_pid=proc.pid, attempts=3,
+                          agent_started_at=datetime.now(
+                              timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          agent_log=str(log), extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+    ct._escalate(entry, state, "attempts 超限", "人工接手", dry_run=True)
+
+    assert entry.status == "ESCALATED"            # 内存状态照常推进(预演语义)
+    assert entry.agent_pid == proc.pid            # 引用不动(dry-run 零击杀)
+    assert proc.poll() is None                    # 活 agent 未被杀
+    assert fake.comments == []                    # 只读演练零评论
+    proc.kill()
+    proc.wait()
+
+    # 场景 2(M7): 真升级——评论内嵌日志摘录必须带 UNTRUSTED_BANNER
+    ct._escalate(entry, state, "attempts 超限", "人工接手", dry_run=False)
+    assert len(fake.comments) == 1
+    assert ct.UNTRUSTED_BANNER in fake.comments[0][1]
+    assert "403" in fake.comments[0][1]           # 失败现场摘录仍在(留存不丢)
+
+
+# ---------------------------------------------------------------------------
+# 用例 36(M2): state 被外部改成 agent_pid=0 时 _kill_agent_if_alive 不得
+# os.kill(0, SIGKILL)——那会杀掉 scan 自身整个进程组(fake_kill 只记录
+# SIGKILL 级信号,探活 sig 0 无害不记)。0 被守卫为「无 agent」。
+
+def test_kill_agent_if_alive_guards_pid_zero(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+
+    kills = []
+
+    def fake_kill(pid, sig):
+        if sig == 0:
+            return                    # 探活(sig 0): 无害,不记录
+        kills.append((pid, sig))      # 真实击杀信号才记录
+
+    monkeypatch.setattr(os, "kill", fake_kill)
+    entry = _sample_entry(workflow="Sanitizer", run_id=84,
+                          status="DIAGNOSING", agent_pid=0, extra_runs=[])
+    ct._kill_agent_if_alive(entry)
+
+    assert kills == []                            # pid=0 绝不进 kill
+
+    # 对照: 真实非零 PID 路径仍会尝试击杀(守卫不误伤正常清引用)
+    entry2 = _sample_entry(workflow="Sanitizer", run_id=85,
+                           status="DIAGNOSING", agent_pid=999999905,
+                           extra_runs=[])
+    ct._kill_agent_if_alive(entry2)
+    assert kills == [(999999905, signal.SIGKILL)]
+    assert entry.agent_pid is None                # 引用照常清
+    assert entry2.agent_pid is None

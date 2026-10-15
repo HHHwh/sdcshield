@@ -713,9 +713,11 @@ def _kill_agent_if_alive(entry: Entry) -> None:
     引用不击杀,单飞判定立即失明——下一个 cron tick 会对同一克隆再派一
     个 agent,两个 agent 互相踩工作区。此处 agent 已被判档为终局(auth_fail/
     escalate),宁可补一刀 SIGKILL 也不留无主活进程。
+    pid=0 守卫(M2): state 被外部改写成 agent_pid:0 时,os.kill(0, SIGKILL)
+    会杀掉 scan 自身整个进程组——0 视为「无 agent」,直接清引用。
     """
     pid = entry.agent_pid
-    if pid is not None and agent_alive(pid):
+    if pid and agent_alive(pid):
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -800,22 +802,24 @@ def check_agent_outcome(entry: Entry) -> str:
     """判定 agent 结局:
       "running"|"success"|"escalated_reported"|"auth_fail"|"dead"|"timeout"。
 
-    判定顺序(先具体后兜底):
-      timeout            — started_at + AGENT_TIMEOUT_SEC 已过(超时强杀优先判);
-      auth_fail          — 日志尾部 4000 字符匹配 API Error|403|Not logged in;
+    判定顺序(先具体后兜底;终审 C1 重排——结束语标记最优先):
       success            — 日志含结束语契约 `ci-triage: done`;
       escalated_reported — 日志含结束语契约 `ci-triage: escalated`(agent 按
                            契约自报升级;须在 PID 判死之前——诚实升级的
                            agent 输出结束语后可能仍短暂存活,不能当成
                            dead/running 重派);
+      auth_fail          — 日志尾部 4000 字符匹配 API Error|403|Not logged in;
+      timeout            — started_at + AGENT_TIMEOUT_SEC 已过;
       dead               — PID 已死且无上述特征;
       running            — 其余(PID 活着、尚无结论特征)。
+
+    标记先于时钟的理由(终审 C1): cron tick 间隔可远大于 agent 时限(本机
+    2026-10-15 重启实证多小时 tick 间断)——已 done/escalated 的 agent 晚
+    收割时,若超窗先判会把成功修复误判 timeout(attempts+1 重派重复 agent,
+    或假 ESCALATED 让 PR 永不进车道 B)、把诚实自报升级误判 timeout。
+    谎报 done 由 reap 的 gh pr list 核实兜底(spec §9 信任但核实);每次
+    派发日志独立文件(agent-<runid>-<时间戳>.log)无陈旧标记污染。
     """
-    started = _parse_created_at(entry.agent_started_at or "")
-    if started is not None and \
-            datetime.now(timezone.utc) - started > timedelta(
-                seconds=AGENT_TIMEOUT_SEC):
-        return "timeout"
     tail = ""
     if entry.agent_log:
         try:
@@ -826,12 +830,17 @@ def check_agent_outcome(entry: Entry) -> str:
                 tail = f.read().decode("utf-8", errors="replace")
         except OSError:
             tail = ""    # 日志缺失/不可读: 视为无特征,交给后续判档
-    if AUTH_FAIL_PATTERN.search(tail):
-        return "auth_fail"
     if AGENT_DONE_MARK in tail:
         return "success"
     if AGENT_ESCALATED_MARK in tail:
         return "escalated_reported"
+    if AUTH_FAIL_PATTERN.search(tail):
+        return "auth_fail"
+    started = _parse_created_at(entry.agent_started_at or "")
+    if started is not None and \
+            datetime.now(timezone.utc) - started > timedelta(
+                seconds=AGENT_TIMEOUT_SEC):
+        return "timeout"
     if not agent_alive(entry.agent_pid):
         return "dead"
     return "running"
@@ -875,16 +884,16 @@ def _escalate(entry: Entry, state: dict, reason: str,
               next_step: str, dry_run: bool) -> None:
     """条目升级人工: 状态 ESCALATED + 一条 @wangxumarshall 评论。"""
     entry.status = "ESCALATED"
+    body = (f"@wangxumarshall ci-triage 升级：{reason}。"
+            f"证据：{_log_tail(entry.agent_log)}。"
+            f"建议人工介入：{next_step}。\n\n{UNTRUSTED_BANNER}")
+    if dry_run:
+        print(f"[dry-run] 将评论 issue #{entry.issue_number}: {body[:120]}…")
+        return          # 只读演练零击杀(M1): dry-run 不得真杀活 agent
     # 升级即终局: 清引用前先击杀仍存活的 agent(误判/竞态下单飞不漏
     # 无主活进程——见 _kill_agent_if_alive)
     _kill_agent_if_alive(entry)
     entry.updated_at = _now_iso()
-    body = (f"@wangxumarshall ci-triage 升级：{reason}。"
-            f"证据：{_log_tail(entry.agent_log)}。"
-            f"建议人工介入：{next_step}。")
-    if dry_run:
-        print(f"[dry-run] 将评论 issue #{entry.issue_number}: {body[:120]}…")
-        return
     if entry.issue_number is not None:
         comment_on_issue(entry.issue_number, body)
     print(f"[escalate] run {entry.run_id} → ESCALATED({reason})")
@@ -980,6 +989,15 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                 entry.status = "PR_OPEN"
                 entry.agent_pid = None    # 归还单飞配额
                 state["auth_failure_streak"] = 0    # gh 凭据活着,归零
+                # 状态评论(spec §8: 每次状态转换在 issue 贴一条简报,
+                # PR 链接是其中之一)——车道 A 通向车道 B 的唯一铰链,
+                # issue 侧无此简报则 watch 用户对 PR 建立毫不知情
+                if not dry_run and entry.issue_number is not None:
+                    comment_on_issue(
+                        entry.issue_number,
+                        f"修复 agent 完成,已核实 open PR #{entry.pr_number}"
+                        f"({pr['url']},分支 {entry.fix_branch})——"
+                        f"条目转入车道 B 跟踪四 bot 检视。")
                 print(f"[reap] run {entry.run_id}: agent 成功 → PR "
                       f"#{entry.pr_number}({entry.fix_branch})")
             else:
