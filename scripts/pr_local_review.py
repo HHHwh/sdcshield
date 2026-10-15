@@ -483,7 +483,7 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
     # diff 失败不得阻断第 5 bot 的 marker-only 信号发布。
     if any((f.get("path") or "").strip() and f.get("line") is not None
            for f in findings):
-        diff = _gh(["pr", "diff", str(pr_number)])
+        diff = _fetch_pr_diff(pr_number, head_sha)
         positions = _diff_new_positions(diff)
         for f in findings:
             path = _norm_diff_path(f.get("path") or "")
