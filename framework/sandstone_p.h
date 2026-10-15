@@ -250,6 +250,7 @@ struct TestConfig
     bool ud_on_failure = false;
     bool use_strict_runtime = false;
     RescheduleMode reschedule_mode = RescheduleMode::unset;
+    bool quick_run = false;     // --quick: each test runs a single iteration; tests should shrink adaptive worksets
 
     // logging parameters
     LogLevelVerbosity verbosity = LogLevelVerbosity::Error;

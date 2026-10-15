@@ -1754,6 +1754,7 @@ TestResult run_one_test(const test_cfg_info &test_cfg, PerThreadFailures &per_th
         );
     }
 
+    sApp->shmem->cfg.quick_run = sApp->max_test_loop_count == 1;
     if (sApp->max_test_loop_count) {
         sApp->shmem->current_max_loop_count = sApp->max_test_loop_count;
     } else if (test->desired_duration == -1) {

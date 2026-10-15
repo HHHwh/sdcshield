@@ -52,6 +52,16 @@
 #ifdef __cplusplus
 extern "C++" {
 
+/*
+ * quick 模式(--quick: max_test_loop_count==1) 检测, 供三个自适应函数把
+ * 规模收缩到 lo 下限(CI 冒烟用, 内存自适应的大工作集在 CI 限时内跑不完)。
+ * 公共 API quick_run() 由框架提供(sandstone.h)。
+ */
+static inline bool sdc_quick_run(void)
+{
+    return quick_run();
+}
+
 /* ------------------------------------------------------------------ */
 /* 环境探测: 物理内存 / CPU 数                                         */
 /* ------------------------------------------------------------------ */
@@ -251,6 +261,13 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
                                       const char *test_id = nullptr,
                                       const char *knob = nullptr)
 {
+    /* quick 模式(CI 冒烟): 1 轮迭代要在 CI 限时内跑完, 直接用安全下限 */
+    if (sdc_quick_run()) {
+        if (test_id && knob)
+            log_warning("[压力映射] %s.%s = %ld (来源: quick 模式收缩, 取 lo 下限)",
+                        test_id, knob, (long)lo);
+        return lo;
+    }
     /* 预算按全机并发线程分摊: nthreads 入参只是本 slice 的线程数,
      * 框架并行 fork 的 N 个 slice 会各自调用本函数, 若按 slice 数分摊
      * 全机预算, 合计足迹 = N × 预算。 */
@@ -315,6 +332,13 @@ static inline int64_t sdc_auto_linear_count(int64_t bytes_per_elem,
                                             const char *test_id = nullptr,
                                             const char *knob = nullptr)
 {
+    /* quick 模式(CI 冒烟): 同 sdc_auto_square_dim */
+    if (sdc_quick_run()) {
+        if (test_id && knob)
+            log_warning("[压力映射] %s.%s = %ld (来源: quick 模式收缩, 取 lo 下限)",
+                        test_id, knob, (long)lo);
+        return lo;
+    }
     /* 预算按全机并发线程分摊(同 sdc_auto_square_dim, 防 N slice 叠加越界) */
     int total = sdc_total_threads();
     if (total > nthreads)
@@ -373,6 +397,13 @@ static inline uint64_t sdc_target_workset_bytes(int mem_fraction_permille,
                                                 const char *knob = nullptr)
 {
     const double gib = 1073741824.0;
+    /* quick 模式(CI 冒烟): 工作集收缩到 16 MiB, 1 轮迭代快速完成 */
+    if (sdc_quick_run()) {
+        if (test_id && knob)
+            log_warning("[压力映射] %s.%s = 16 MiB (来源: quick 模式收缩工作集)",
+                        test_id, knob);
+        return 16u << 20;
+    }
     if (env_override) {
         char *end = nullptr;
         unsigned long long v = strtoull(env_override, &end, 10);

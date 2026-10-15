@@ -639,6 +639,13 @@ int thread_count() __attribute__((pure));
 /// once per slice multiplies the total footprint by the number of slices.
 int total_thread_count() __attribute__((pure));
 
+/// Returns true when the run is a quick smoke run (--quick, i.e. the maximum
+/// inner-loop count is forced to 1).  Tests with memory-adaptive worksets
+/// should shrink their sizes so a single iteration completes within the CI
+/// time budget.  Explicit knob configuration still overrides any shrinking
+/// done by adaptive defaults.
+bool quick_run() __attribute__((pure));
+
 /// Returns the number of devices (CPUs or GPUs) available to a test.
 /// Normally equal to thread_count(), but tracked separately.
 int device_count() __attribute__((pure));
