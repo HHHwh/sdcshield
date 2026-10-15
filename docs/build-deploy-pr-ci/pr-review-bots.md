@@ -262,7 +262,7 @@ Python3 标准库 + `gh`/`claude` 子进程，零第三方依赖；claude 凭据
 
 第 5 bot 的检视信号判定为**双条件**，缺一不可：
 
-- 作者 login == `wangxumarshall`（gh CLI 以当前登录用户身份发 review）；
+- 作者 login == `wangxumarshall`（gh CLI 以当前登录用户身份发 review；第 5 bot 展示名 `wangxumarshall(claude and glm)`，claude+glm 双模型对抗审查）；
 - 正文含标记 `<!-- local-claude-review -->`（review body 与每条行级评论正文首行均带）。
 
 双条件（而非纯作者映射）是为了避免把用户本人的普通评论误判为第 5 bot——与 pr-agent
