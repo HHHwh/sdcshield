@@ -154,10 +154,10 @@ END_DECLARE_TEST
   `docs/sdcshield-cpu.schema.json`; **provenance/compliance**:
   `docs/coding/OPEN_SOURCE_PROVENANCE.md`.
 - **Process artifacts**: `docs/superpowers/` (plans/, specs/, inventory/).
-- **PR review-fix loop** (agent-driven: five bots — four external SaaS + local
-  headless claude adversarial review — → subagent critical triage →
+- **PR review-fix loop** (agent-driven: five bots (four external SaaS + the local
+  headless claude adversarial reviewer) → subagent critical triage →
   fix → loop → human merge; never auto-merge): `docs/build-deploy-pr-ci/pr-loop.md`;
-  engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（第 5 bot）; `/pr-loop` command
+  engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot）; `/pr-loop` command
   (`.claude/commands/`) and Trae rule (`.trae/rules/`) are content-twins.
 - **CI 无人值守分诊**（cron/双车道/熔断/kill switch 运维手册）:
   `docs/build-deploy-pr-ci/ci-triage.md`; engine `scripts/ci_triage.py`（pr_loop 姊妹件,
