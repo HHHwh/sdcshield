@@ -130,8 +130,8 @@ static thread_local size_t j;
 // forked child exits right after (dgemm-style argument).
 static thread_local double *r_grid = nullptr;
 static thread_local double r_coeff[RADIUS + 1];
-static thread_local double r_expected[B_TILE];
-static thread_local double r_bound[B_TILE];
+static thread_local double r_expected[kTileMax];
+static thread_local double r_bound[kTileMax];
 
 struct SveStencilAxisData {
     // Tile width in f64 lanes = 2*svcntd() at the runtime VL (4..32).
@@ -309,17 +309,13 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
         /* ---- 形态 A: 随机整数格点 (main, per-fragment) ----
          * 固定 0.125 系数 + init 期随机小整数 src, 对照 run 顶部的标量
          * 参考, 位模式精确比较。 */
-        {
-            svfloat64_t res0 = svdup_f64(0.0);
-            svfloat64_t res1 = svdup_f64(0.0);
+        svfloat64_t res0 = svdup_f64(0.0);
+        svfloat64_t res1 = svdup_f64(0.0);
 
-            for (j = 0; j < iterations; ++j) {
-                if ((reinterpret_cast<std::uintptr_t>(&res0)) & 0xFFFF000000000000ull) {
-                    log_warning("sve512_stencil_axis: iteration=%zu, &res0=%p",
-                                j, static_cast<void *>(&res0));
-                }
-                axis_generic_16x2(
-                    s_base, coord, extent, stride, ptrue, coeff, res0, res1);
+        for (j = 0; j < iterations; ++j) {
+            if ((reinterpret_cast<std::uintptr_t>(&res0)) & 0xFFFF000000000000ull) {
+                log_warning("sve512_stencil_axis: iteration=%zu, &res0=%p",
+                            j, static_cast<void *>(&res0));
             }
             axis_generic_16x2(
                 s_base, coord, extent, stride, ptrue, coeff, bt, res0, res1);
@@ -345,6 +341,12 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
             }
         }
 
+        if (!ok) {
+            report_fail_msg(
+                "sve512_stencil_axis_arm: stencil axis kernel SDC detected");
+            return EXIT_FAILURE;
+        }
+
         /* ---- 形态 B: 全随机第二形态 (B6 / R2b 冻结盲区) ----
          * 同一热路径 (axis_generic_16x2 原样), 输入换成框架 RNG 每轮重掷
          * 的随机格点/系数 (per-thread); 期望由独立标量 std::fma 链式参考
@@ -352,21 +354,21 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
          * fragment 变化格点, 形态 B 每轮连系数一起重掷。 */
         {
             if (__builtin_expect(!r_grid, 0)) {
-                r_grid = new (std::nothrow) double[extent * stride * B_TILE];
+                r_grid = new (std::nothrow) double[extent * stride * bt];
                 if (!r_grid) {
                     report_fail_msg("sve512_stencil_axis_arm: per-thread "
                                     "random grid alloc failed (%zu bytes)",
-                                    extent * stride * B_TILE *
+                                    extent * stride * bt *
                                         sizeof(double));
                 }
             }
 
-            for (size_t i = 0; i < extent * stride * B_TILE; ++i)
+            for (size_t i = 0; i < extent * stride * bt; ++i)
                 r_grid[i] = stencil_random_pm_one();
             for (size_t r = 1; r <= RADIUS; ++r)
                 r_coeff[r] = 0.25 + 0.75 * stencil_random_frac();
 
-            const double *r_base = r_grid + coord * stride * B_TILE;
+            const double *r_base = r_grid + coord * stride * bt;
 
             /* 独立标量参考。几何常量 (coord=10, extent=56, RADIUS=6) 下
              * 双向条件恒真, 与内核的 if 分支一一对应。r_bound 是逐步增量
@@ -376,10 +378,10 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
             {
                 const double *up[RADIUS + 1], *dn[RADIUS + 1];
                 for (size_t r = 1; r <= RADIUS; ++r) {
-                    up[r] = r_base - static_cast<ptrdiff_t>(r * stride) * B_TILE;
-                    dn[r] = r_base + static_cast<ptrdiff_t>(r * stride) * B_TILE;
+                    up[r] = r_base - static_cast<ptrdiff_t>(r * stride) * bt;
+                    dn[r] = r_base + static_cast<ptrdiff_t>(r * stride) * bt;
                 }
-                for (size_t l = 0; l < B_TILE; ++l) {
+                for (size_t l = 0; l < bt; ++l) {
                     r_expected[l] = 0.0;
                     double inc = 0.0;
                     for (size_t r = 1; r <= RADIUS; ++r)
@@ -389,7 +391,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                 }
                 for (size_t it = 0; it < kRandIters; ++it)
                     for (size_t r = 1; r <= RADIUS; ++r)
-                        for (size_t l = 0; l < B_TILE; ++l) {
+                        for (size_t l = 0; l < bt; ++l) {
                             r_expected[l] = std::fma(up[r][l], r_coeff[r],
                                                      r_expected[l]);
                             r_expected[l] = std::fma(dn[r][l], r_coeff[r],
@@ -408,14 +410,14 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                 }
                 axis_generic_16x2(
                     r_base, coord, extent, stride, ptrue, r_coeff,
-                    b_res0, b_res1);
+                    bt, b_res0, b_res1);
             }
 
-            double b_result[B_TILE];
+            double b_result[kTileMax];
             svst1(ptrue, b_result, b_res0);
-            svst1(ptrue, b_result + 8, b_res1);
+            svst1(ptrue, b_result + lanes, b_res1);
 
-            for (size_t l = 0; l < B_TILE; ++l) {
+            for (size_t l = 0; l < bt; ++l) {
                 double diff = std::fabs(b_result[l] - r_expected[l]);
                 double tol = kTolRel * (r_bound[l] + 1e-300);
                 /* !(<=) 形式一并捕获 NaN */
