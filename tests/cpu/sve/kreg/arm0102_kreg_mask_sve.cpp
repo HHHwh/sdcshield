@@ -14,10 +14,15 @@
  * expansion (the real SVE equivalent of the kreg semantics), and
  * back-to-back str z → ldr z → str z as the amplifier.
  * Golden precomputed in init on the same SVE units; memcmp in cold path.
+ * The element count (originally ARM0102_KREG_MASK_SVE_COUNT=1024) is
+ * runtime configurable via -O arm0102_kreg_mask_sve.count=N /
+ * SDC_ARM0102_KREG_MASK_SVE_COUNT, with a memory-adaptive default
+ * when unconfigured.
  * @endparblock
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -37,9 +42,26 @@ struct Arm0102KregMaskSveData {
     uint32_t *srcA;
     uint32_t *srcB;
     uint32_t *expected;
+    int count;                /* 运行时元素数 (≤64M, int 足够) */
 };
 
 #if defined(__aarch64__)
+
+/* 元素数 ARM0102_KREG_MASK_SVE_COUNT(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O arm0102_kreg_mask_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_ARM0102_KREG_MASK_SVE_COUNT
+ *   3. 自适应: srcA/srcB/expected(共享)+每线程 temp/dst, 5×4B,
+ *      占物理内存 60%, clamp [1024, 64M]。pg4 子块/相位不变。 */
+static size_t arm0102_kreg_mask_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, ARM0102_KREG_MASK_SVE_COUNT, 64 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("arm0102_kreg_mask_sve", "count", &v, ARM0102_KREG_MASK_SVE_COUNT, 64 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(4, 5, 1.0, 600, thread_count(),
+                                         ARM0102_KREG_MASK_SVE_COUNT, 64 << 20, test->id, "count");
+}
 
 /* 4-lane (16B) 语义的存/取 —— 与子块谓词 pg4 严格一致。
  * 注意不能用 svptrue_b32(): VL=256 时它是 8 lane/32B, 会越界写
@@ -93,18 +115,20 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
     }
 
     auto *data = static_cast<Arm0102KregMaskSveData *>(malloc(sizeof(Arm0102KregMaskSveData)));
-    data->srcA = static_cast<uint32_t *>(aligned_alloc(64, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t)));
-    data->srcB = static_cast<uint32_t *>(aligned_alloc(64, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t)));
-    data->expected = static_cast<uint32_t *>(aligned_alloc(64, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t)));
+    const int count = (int)arm0102_kreg_mask_sve_count(test);
+    data->count = count;
+    data->srcA = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
+    data->srcB = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
+    data->expected = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
 
-    memset_random(data->srcA, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t));
-    memset_random(data->srcB, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t));
+    memset_random(data->srcA, (size_t)count * sizeof(uint32_t));
+    memset_random(data->srcB, (size_t)count * sizeof(uint32_t));
 
     /* golden: 同一旋转组合, 在相同 SVE 单元上预计算 */
     [[maybe_unused]] svbool_t pg = svptrue_b32();
     const int lanes = svcntw();
-    for (int base = 0; base < ARM0102_KREG_MASK_SVE_COUNT; base += lanes) {
-        int n = (ARM0102_KREG_MASK_SVE_COUNT - base < lanes) ? (ARM0102_KREG_MASK_SVE_COUNT - base) : lanes;
+    for (int base = 0; base < count; base += lanes) {
+        int n = (count - base < lanes) ? (count - base) : lanes;
         [[maybe_unused]] svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
         /* 与 run 完全相同的 4 元素子块结构 + 相位 (base+sub)%4 */
         for (int sub = 0; sub < n; sub += 4) {
@@ -130,15 +154,16 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
 
 static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
     auto *data = static_cast<Arm0102KregMaskSveData *>(test->data);
+    const int count = data->count;
 
-    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc(64, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t)));
-    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc(64, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t)));
+    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
+    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
 
     TEST_LOOP(test, 1 << 13) {
         /* 与 golden 完全相同的 4 元素子块结构: 每 SVE 向量批内按 4 元素子块,
          * 相位 = (base+sub) % 4 (与 init 的 golden 循环逐字一致) */
-        for (int base = 0; base < ARM0102_KREG_MASK_SVE_COUNT; base += svcntw()) {
-            int n = (ARM0102_KREG_MASK_SVE_COUNT - base < svcntw()) ? (ARM0102_KREG_MASK_SVE_COUNT - base) : svcntw();
+        for (int base = 0; base < count; base += svcntw()) {
+            int n = (count - base < svcntw()) ? (count - base) : svcntw();
             for (int sub = 0; sub < n; sub += 4) {
                 /* 2 源加载: asm 保证的 ldr z (SVE 版配方核心) */
                 svuint32_t a = load_vec_sve(data->srcA + base + sub);   /* ldr z — source 1 */
@@ -154,12 +179,12 @@ static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
             }
         }
 
-        if (memcmp(dst, data->expected, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t)) != 0) {
+        if (memcmp(dst, data->expected, (size_t)count * sizeof(uint32_t)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(ARM0102_KREG_MASK_SVE_COUNT); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < (size_t)(count); ++_dump_j) {
                     if (dst[_dump_j] != data->expected[_dump_j]) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
@@ -171,7 +196,7 @@ static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
                     }
                 }
                 log_error("arm0102_kreg_mask_sve: total mismatched elements: %zu / %d", _dump_bad,
-                          ARM0102_KREG_MASK_SVE_COUNT);
+                          count);
             }
             report_fail_msg("arm0102_kreg_mask_sve data miscompare");
         }

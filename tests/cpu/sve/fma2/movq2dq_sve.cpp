@@ -9,10 +9,14 @@
  * the low element plus that the remaining lanes follow the broadcast /
  * zero semantics observed via svst1 (the SVE analogue of the original's
  * fmov d0, x0 channel where the upper half is zeroed).
+ * The workload element count (originally MOVQ2DQ_SVE_COUNT=1024) is
+ * runtime configurable via -O movq2dq_sve.count=N /
+ * SDC_MOVQ2DQ_SVE_COUNT, with a memory-adaptive default when unconfigured.
  * @endparblock
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -28,8 +32,25 @@
 
 #define MOVQ2DQ_SVE_COUNT 1024
 
+/* 元素数 MOVQ2DQ_SVE_COUNT(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O movq2dq_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_MOVQ2DQ_SVE_COUNT
+ *   3. 自适应: 1×8B 随机源(共享), 占物理内存 60%,
+ *      clamp [1024, 64M]。原 1024 为下限。 */
+static size_t movq2dq_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, MOVQ2DQ_SVE_COUNT, 64 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("movq2dq_sve", "count", &v, MOVQ2DQ_SVE_COUNT, 64 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(8, 1, 1.0, 600, thread_count(),
+                                         MOVQ2DQ_SVE_COUNT, 64 << 20, test->id, "count");
+}
+
 struct Movq2dqSveData {
     uint64_t *values;
+    size_t count;
 };
 
 static int movq2dq_sve_init(struct test *test)
@@ -44,8 +65,10 @@ static int movq2dq_sve_init(struct test *test)
 #endif
 
     auto *data = static_cast<Movq2dqSveData *>(malloc(sizeof(Movq2dqSveData)));
-    data->values = static_cast<uint64_t *>(malloc(MOVQ2DQ_SVE_COUNT * sizeof(uint64_t)));
-    memset_random(data->values, MOVQ2DQ_SVE_COUNT * sizeof(uint64_t));
+    const size_t count = movq2dq_sve_count(test);
+    data->count = count;
+    data->values = static_cast<uint64_t *>(malloc(count * sizeof(uint64_t)));
+    memset_random(data->values, count * sizeof(uint64_t));
     test->data = data;
     return EXIT_SUCCESS;
 }
@@ -55,9 +78,10 @@ static int movq2dq_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *data = static_cast<Movq2dqSveData *>(test->data);
+    const size_t count = data->count;
 
     TEST_LOOP(test, 1 << 13) {
-        for (int i = 0; i < MOVQ2DQ_SVE_COUNT; i++) {
+        for (size_t i = 0; i < count; i++) {
             /* GPR → SVE 向量: svdup 广播 */
             svuint64_t v = svdup_u64(data->values[i]);
             /* 读回: 存到栈再比对 (低 lane + 广播语义) */
@@ -67,7 +91,7 @@ static int movq2dq_sve_run(struct test *test, int cpu)
 
             if (out[0] != data->values[i]) {
                 report_fail_msg(
-                    "movq2dq_sve low 64-bit mismatch at index %d: "
+                    "movq2dq_sve low 64-bit mismatch at index %zu: "
                     "expected 0x%llx got 0x%llx",
                     i,
                     static_cast<unsigned long long>(data->values[i]),

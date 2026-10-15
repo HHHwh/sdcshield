@@ -24,10 +24,15 @@
  * bug). Buffers carry svcntw() elements (runtime VL) of slack so the asm
  * full-VL ldr z at the final sub-block cannot overread (deviation from
  * the mask_sve template, documented).
+ * The element count (originally ARM0102_KREG_SELECT_SVE_COUNT=1024) is
+ * runtime configurable via -O arm0102_kreg_select_sve.count=N /
+ * SDC_ARM0102_KREG_SELECT_SVE_COUNT, with a memory-adaptive default
+ * when unconfigured.
  * @endparblock
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -50,9 +55,26 @@ struct Arm0102KregSelectSveData {
     uint32_t *srcA;
     uint32_t *srcB;
     uint32_t *expected;
+    int count;                /* 运行时元素数 (≤64M, int 足够) */
 };
 
 #if defined(__aarch64__)
+
+/* 元素数 ARM0102_KREG_SELECT_SVE_COUNT(1024) — 运行时可配置, 统一优先级链:
+ *   1. -O arm0102_kreg_select_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_ARM0102_KREG_SELECT_SVE_COUNT
+ *   3. 自适应: srcA/srcB/expected(共享)+每线程 temp/dst, 5×4B,
+ *      占物理内存 60%, clamp [1024, 64M]。pg4 子块/相位/尾部松弛不变。 */
+static size_t arm0102_kreg_select_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, ARM0102_KREG_SELECT_SVE_COUNT, 64 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("arm0102_kreg_select_sve", "count", &v, ARM0102_KREG_SELECT_SVE_COUNT, 64 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(4, 5, 1.0, 600, thread_count(),
+                                         ARM0102_KREG_SELECT_SVE_COUNT, 64 << 20, test->id, "count");
+}
 
 #define KSEL_SVE_SUBLANES 4
 
@@ -99,11 +121,13 @@ static int arm0102_kreg_select_sve_init(struct test *test) {
     }
 
     const int slack = svcntw();   /* asm ldr z 尾批松弛, 见文件头注释 */
-    const size_t total = (size_t)(ARM0102_KREG_SELECT_SVE_COUNT + slack) * sizeof(uint32_t);
+    const int count = (int)arm0102_kreg_select_sve_count(test);
+    const size_t total = (size_t)(count + slack) * sizeof(uint32_t);
     auto *data = static_cast<Arm0102KregSelectSveData *>(malloc(sizeof(Arm0102KregSelectSveData)));
-    /* safe: total = (1024 + svcntw())*4 在部分 VL 下不是 64 的倍数
+    /* safe: total = (count + svcntw())*4 在部分 VL/运行时 count 下不是 64 的倍数
      * (VL=128 -> 4112, VL=256 -> 4128 违规; VL=512 -> 4160 恰为倍数),
      * 违规时原生 aligned_alloc 违反 C11 size 倍数前提, 新 libasan abort (issue #252) */
+    data->count = count;
     data->srcA = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->srcB = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->expected = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
@@ -116,9 +140,9 @@ static int arm0102_kreg_select_sve_init(struct test *test) {
      * 恒为 0 (base 是 svcntw() 倍数、sub 是 4 的倍数), 旋转失效 */
     const int lanes = svcntw();
     svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)KSEL_SVE_SUBLANES);
-    for (int base = 0; base < ARM0102_KREG_SELECT_SVE_COUNT; base += lanes) {
-        const int n = (ARM0102_KREG_SELECT_SVE_COUNT - base < lanes)
-                          ? ARM0102_KREG_SELECT_SVE_COUNT - base : lanes;
+    for (int base = 0; base < count; base += lanes) {
+        const int n = (count - base < lanes)
+                          ? count - base : lanes;
         for (int sub = 0; sub < n; sub += KSEL_SVE_SUBLANES) {
             const int phase = (base + sub) / KSEL_SVE_SUBLANES;
             uint32_t av[8], bv[8], ov[8];
@@ -148,15 +172,16 @@ static int arm0102_kreg_select_sve_init(struct test *test) {
 static int arm0102_kreg_select_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<Arm0102KregSelectSveData *>(test->data);
+    const int count = data->count;
 
-    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(ARM0102_KREG_SELECT_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
-    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(ARM0102_KREG_SELECT_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
+    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
+    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
 
     TEST_LOOP(test, 1 << 13) {
         /* 与 golden 逐字一致的子块结构: 相位 = 子块序号 (base+sub)/KSEL_SVE_SUBLANES */
-        for (int base = 0; base < ARM0102_KREG_SELECT_SVE_COUNT; base += svcntw()) {
-            const int n = (ARM0102_KREG_SELECT_SVE_COUNT - base < svcntw())
-                              ? ARM0102_KREG_SELECT_SVE_COUNT - base : svcntw();
+        for (int base = 0; base < count; base += svcntw()) {
+            const int n = (count - base < svcntw())
+                              ? count - base : svcntw();
             for (int sub = 0; sub < n; sub += KSEL_SVE_SUBLANES) {
                 /* 2 源加载: asm 保证的 ldr z */
                 svuint32_t a = load_vec_sve(data->srcA + base + sub);
@@ -171,12 +196,12 @@ static int arm0102_kreg_select_sve_run(struct test *test, int cpu) {
             }
         }
 
-        if (memcmp(dst, data->expected, (size_t)ARM0102_KREG_SELECT_SVE_COUNT * sizeof(uint32_t)) != 0) {
+        if (memcmp(dst, data->expected, (size_t)count * sizeof(uint32_t)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(ARM0102_KREG_SELECT_SVE_COUNT); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < (size_t)(count); ++_dump_j) {
                     if (dst[_dump_j] != data->expected[_dump_j]) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
@@ -188,7 +213,7 @@ static int arm0102_kreg_select_sve_run(struct test *test, int cpu) {
                     }
                 }
                 log_error("arm0102_kreg_select_sve: total mismatched elements: %zu / %d", _dump_bad,
-                          ARM0102_KREG_SELECT_SVE_COUNT);
+                          count);
             }
             report_fail_msg("arm0102_kreg_select_sve data miscompare");
         }

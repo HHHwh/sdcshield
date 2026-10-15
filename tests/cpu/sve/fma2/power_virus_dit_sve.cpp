@@ -10,10 +10,16 @@
  * alternating high-Hamming operand pairs, and a byte-exact per-lane
  * accumulator check against the identical fmaf software sequence. The FMA
  * burst runs on svmla_f32_x across all SVE lanes instead of NEON vfmaq.
+ * The burst/stall inner iteration counts (originally 2048 each) are
+ * runtime scalable via -O power_virus_dit_sve.scale=N /
+ * SDC_POWER_VIRUS_DIT_SVE_SCALE — a single factor applied to both
+ * burst and stall (paired proportional scaling preserves the 1:1 duty
+ * cycle); unconfigured = original design default (scale 1).
  * @endparblock
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -38,9 +44,30 @@ static inline uint32_t bits_of(float f)
 static constexpr int BURST_INNER = 2048;
 static constexpr int STALL_INNER = 2048;
 
+struct PowerVirusDitSveData {
+    int burst_inner;
+    int stall_inner;
+};
+
+/* di/dt 等比缩放因子 scale — 激发参数, 未配置 = 原设计默认 (不自适应):
+ *   1. -O power_virus_dit_sve.scale=N / 配置文件同名条目
+ *   2. 环境变量 SDC_POWER_VIRUS_DIT_SVE_SCALE
+ *   3. 缺省 1 (=原值 burst=stall=2048)
+ * burst_inner = BURST_INNER*scale, stall_inner = STALL_INNER*scale
+ * 成对等比缩放, 保持 1:1 占空比语义; clamp [1, 256]。
+ * 操作数 A0/A1/B0/B1/C 常量不动。 */
+static int power_virus_dit_sve_scale(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "scale", 0, 1, 256);
+    if (v == 0)
+        sdc_env_knob_int_clamped("power_virus_dit_sve", "scale", &v, 1, 256);
+    if (v > 0)
+        return (int)v;
+    return 1;
+}
+
 static int power_virus_dit_sve_init(struct test *test)
 {
-    (void)test;
 #ifdef __aarch64__
     unsigned long hwcap = getauxval(AT_HWCAP);
     if ((hwcap & HWCAP_SVE) == 0) {
@@ -49,6 +76,13 @@ static int power_virus_dit_sve_init(struct test *test)
         return EXIT_SKIP;
     }
 #endif
+    auto *d = static_cast<PowerVirusDitSveData *>(malloc(sizeof(PowerVirusDitSveData)));
+    if (!d)
+        return EXIT_FAILURE;
+    const int scale = power_virus_dit_sve_scale(test);
+    d->burst_inner = BURST_INNER * scale;
+    d->stall_inner = STALL_INNER * scale;
+    test->data = d;
     return EXIT_SUCCESS;
 }
 
@@ -99,9 +133,11 @@ static inline void stall_yield(int n)
 static int power_virus_dit_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
-    (void)test;
+    auto *d = static_cast<PowerVirusDitSveData *>(test->data);
+    if (!d)
+        return EXIT_FAILURE;
 
-    float sw_ref = burst_fma_reference(BURST_INNER);
+    float sw_ref = burst_fma_reference(d->burst_inner);
     svfloat32_t vref = svdup_f32(sw_ref);
     svbool_t pg = svptrue_b32();
     const int lanes = svcntw();
@@ -112,7 +148,7 @@ static int power_virus_dit_sve_run(struct test *test, int cpu)
 
         for (int cycle = 0; cycle < 8; ++cycle) {
             /* ---- BURST: dependent SVE FMA chain, alternating operands ---- */
-            svfloat32_t acc = burst_fma_chain_sve(BURST_INNER);
+            svfloat32_t acc = burst_fma_chain_sve(d->burst_inner);
 
             /* Byte-exact compare of ALL SVE lanes against the software ref */
             svbool_t cmp = svcmpeq_f32(pg, acc, vref);
@@ -128,7 +164,7 @@ static int power_virus_dit_sve_run(struct test *test, int cpu)
             }
 
             /* ---- STALL: near-zero activity ---- */
-            stall_yield(STALL_INNER);
+            stall_yield(d->stall_inner);
         }
 
         if (!all_passed) {
@@ -158,7 +194,8 @@ static int power_virus_dit_sve_run(struct test *test, int cpu)
 
 static int power_virus_dit_sve_finish(struct test *test)
 {
-    (void)test;
+    free(test->data);
+    test->data = nullptr;
     return EXIT_SUCCESS;
 }
 
