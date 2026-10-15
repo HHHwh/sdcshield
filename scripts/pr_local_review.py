@@ -181,7 +181,7 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
     """
     if not force and already_reviewed(pr_number, head_sha):
         return []
-    diff = _gh(["pr", "diff", str(pr_number)]).strip()
+    diff = _fetch_pr_diff(pr_number, head_sha)
     meta_raw = _gh(["pr", "view", str(pr_number), "--json", "title,body"])
     try:
         meta = json.loads(meta_raw)
@@ -224,6 +224,37 @@ def _gh(argv: list) -> str:
         err = " ".join(proc.stderr.strip().split())[:300]
         raise GhError(f"gh {' '.join(argv[:3])}… 失败(exit {proc.returncode}): {err}")
     return proc.stdout
+
+
+def _fetch_pr_diff(pr_number: int, head_sha: str) -> str:
+    """拉 PR 完整 diff。gh pr diff 走 GitHub .diff API,超过 20000 行返回
+    HTTP 406 too_large(真机 #258 实证);此时回退本地 git diff(先 fetch,
+    merge-base 到 head),绕过行数上限。"""
+    try:
+        return _gh(["pr", "diff", str(pr_number)]).strip()
+    except GhError as exc:
+        if "406" not in str(exc) and "too_large" not in str(exc):
+            raise
+        base = "main"
+        try:
+            base_raw = _gh(["pr", "view", str(pr_number), "--json", "baseRefName"])
+            base = json.loads(base_raw).get("baseRefName", "main")
+        except (GhError, json.JSONDecodeError):
+            pass
+
+        def _git(argv):
+            proc = subprocess.run(["git", *argv], capture_output=True,
+                                  text=True, timeout=GH_TIMEOUT)
+            if proc.returncode != 0:
+                err = " ".join((proc.stderr or "").strip().split())[:200]
+                raise GhError(f"git {' '.join(argv[:2])}… 失败: {err}")
+            return proc.stdout
+
+        _git(["fetch", "origin", base, head_sha])
+        mb = _git(["merge-base", f"origin/{base}", head_sha]).strip()
+        if not mb:
+            raise GhError(f"git merge-base 无共同祖先: origin/{base} {head_sha[:12]}")
+        return _git(["diff", mb, head_sha]).strip()
 
 
 def _worktree_add(head_sha: str) -> str:
@@ -452,7 +483,7 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
     # diff 失败不得阻断第 5 bot 的 marker-only 信号发布。
     if any((f.get("path") or "").strip() and f.get("line") is not None
            for f in findings):
-        diff = _gh(["pr", "diff", str(pr_number)])
+        diff = _fetch_pr_diff(pr_number, head_sha)
         positions = _diff_new_positions(diff)
         for f in findings:
             path = _norm_diff_path(f.get("path") or "")
