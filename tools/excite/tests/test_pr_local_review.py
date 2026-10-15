@@ -143,6 +143,9 @@ def test_publish_review_posts_marker_and_inline(monkeypatch):
     inline = payload["comments"][0]
     assert inline["path"] == "tests/sve/fma_sve.c"
     assert inline["line"] == 42
+    # 行级评论正文首行也必须带唯一标记——review_comments 判定靠双条件,
+    # 一旦有人去掉首行标记,行级 bot 信号判定会静默失准(此处兜底守护)。
+    assert inline["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
     assert "近似比对是 SDC 盲区" in inline["body"]
 
     # 挂不上 diff 行的 finding 收进 body JSON 段(结论与 evidence 均在)

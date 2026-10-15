@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # pr_loop.py — Agent 驱动的 PR 检视闭环工具(会话驱动,仓库自闭环)。
 #
-# 在 trae / claude code 会话内完成「实现 push → 等四 bot 检视 → 导出意见 →
+# 在 trae / claude code 会话内完成「实现 push → 等五 bot 检视 → 导出意见 →
 # subagent 批判性处置修复 → 循环 → 提醒人工 merge」,全程不切换工具。
 # 六阶段流程定义见 .claude/commands/pr-loop.md 与 .trae/rules/pr-loop.md,
 # 端到端手册见 docs/build-deploy-pr-ci/pr-loop.md。
 #
 # 子命令:
-#   status [<pr>]  open PR 的四 bot 完成度总览 / 单 PR 详情 + 下一步行动建议
-#   wait <pr>      阻塞轮询,直到四 bot 对当前 head 全部发信号且过静默窗
-#   collect <pr>   导出当前 head 的全部四 bot 意见为结构化 Markdown(供 subagent)
+#   status [<pr>]  open PR 的五 bot 完成度总览 / 单 PR 详情 + 下一步行动建议
+#   wait <pr>      阻塞轮询,直到五 bot 对当前 head 全部发信号且过静默窗
+#   collect <pr>   导出当前 head 的全部五 bot 意见为结构化 Markdown(供 subagent)
 #
 # 依赖: Python3 标准库 + gh CLI(GitHub 凭据全权交给 gh,本脚本不管理 token)。
 #   自检: gh --version && gh auth status
 #
-# 四 bot 判据与 .github/workflows/bot-coverage.yml 逐字一致(两处需同步维护):
+# 五 bot 判据(前四外部 bot 与 .github/workflows/bot-coverage.yml 逐字一致,两处需同步维护):
 #   codex       = 作者 chatgpt-codex-connector[bot]
 #   coderabbit  = 作者 coderabbitai[bot] 或 check-run 名 "CodeRabbit"
 #   pr-agent    = check-run 名 "pr-agent"; 检视评论另须作者 github-actions[bot] 且
@@ -69,7 +69,7 @@ from typing import Any, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pr_local_review import LOCAL_CLAUDE_MARKER  # noqa: E402
 
-# ============ 四 bot 判据(与 .github/workflows/bot-coverage.yml 同步维护) ============
+# ============ 五 bot 判据(前四外部 bot 与 .github/workflows/bot-coverage.yml 同步维护) ============
 # bot-coverage.yml 用 `grep -Fxq`(固定字符串整行精确匹配)判定,此处用精确等值。
 CODEX_LOGIN = "chatgpt-codex-connector[bot]"   # codex: 评论/review 作者
 CODERABBIT_LOGIN = "coderabbitai[bot]"         # coderabbit: 作者 …
@@ -129,14 +129,14 @@ UNTRUSTED_BANNER = (
 )
 
 SUGGESTIONS = {
-    "DRAFT": "草稿 PR,四 bot 通常不检视——完成开发后标记 ready for review 再走本流程",
+    "DRAFT": "草稿 PR,五 bot 通常不检视——完成开发后标记 ready for review 再走本流程",
     "FORK": "来自 fork 的 PR——本流程只处理同仓库分支,跳过",
     "CLOSED": "PR 已关闭/合并,无需处理",
-    "WAITING_BOTS": "运行 `scripts/pr_loop.py wait <PR>` 阻塞等待四 bot 完成",
-    "QUIET_WINDOW": "四 bot 已对当前 head 发信号,静默窗内——稍候片刻后复查 status",
+    "WAITING_BOTS": "运行 `scripts/pr_loop.py wait <PR>` 阻塞等待五 bot 完成",
+    "QUIET_WINDOW": "五 bot 已对当前 head 发信号,静默窗内——稍候片刻后复查 status",
     "READY_TO_FIX": "运行 `scripts/pr_loop.py collect <PR>` 导出意见,按 /pr-loop 第 4 阶段"
                     "派上下文隔离 subagent 批判性处置",
-    "READY_TO_MERGE": "四 bot 完成、当前 head 无待处置意见——请人工 merge"
+    "READY_TO_MERGE": "五 bot 完成、当前 head 无待处置意见——请人工 merge"
                       "(本工具绝不自动 merge、不自动 resolve review threads)",
 }
 SUGGEST_ORDER = ["READY_TO_FIX", "READY_TO_MERGE", "QUIET_WINDOW",
@@ -248,7 +248,7 @@ class CheckRun:
     head_sha: Optional[str]
     completed_at: Optional[datetime]
     html_url: Optional[str]
-    matched_bot: Optional[str]   # 命中四 bot 判据者(coderabbit / pr-agent / greptile)
+    matched_bot: Optional[str]   # 命中四外部 bot 判据者(coderabbit / pr-agent / greptile)
     counted: bool                # matched 且 head_sha 匹配且 completed
     output: dict = field(default_factory=dict)   # API 原始 output(title/summary/text)
     annotations: list = field(default_factory=list)
@@ -301,7 +301,7 @@ def fmt_ts(dt: Optional[datetime]) -> str:
 
 
 def bot_of(item: dict) -> Optional[str]:
-    """条目(user.login)命中四 bot 作者判据 → bot 名,否则 None。"""
+    """条目(user.login)命中四外部 bot 作者判据 → bot 名,否则 None。"""
     return LOGIN_TO_BOT.get((item.get("user") or {}).get("login") or "")
 
 
@@ -431,7 +431,7 @@ def fetch_push_time(slug: str, branch: str, head_sha: str) -> Optional[datetime]
 
 
 def fetch_pr(slug: str, number: int) -> PRData:
-    """拉取单个 PR 的全部检视信号并完成四 bot 判定。"""
+    """拉取单个 PR 的全部检视信号并完成五 bot 判定。"""
     pr = gh_api(f"repos/{slug}/pulls/{number}")
     if not isinstance(pr, dict) or "number" not in pr:
         raise GhError(f"PR #{number}: 返回数据异常")
@@ -753,7 +753,7 @@ def cmd_wait(args: argparse.Namespace) -> int:
     pr = fetch_pr(slug, args.pr)
     if pr.draft or pr.fork:
         why = "草稿(DRAFT)" if pr.draft else "fork(FORK)"
-        print(f"PR #{args.pr} 为{why} PR——四 bot 检视流程不覆盖,退出。", file=sys.stderr)
+        print(f"PR #{args.pr} 为{why} PR——五 bot 检视流程不覆盖,退出。", file=sys.stderr)
         return 1
     if pr.state != "open":
         print(f"PR #{args.pr} 状态为 {pr.state}(非 open),等待无意义,退出。", file=sys.stderr)
@@ -774,7 +774,7 @@ def cmd_wait(args: argparse.Namespace) -> int:
         waited = int(time.monotonic() - start)
         if state in ("READY_TO_FIX", "READY_TO_MERGE"):
             print()
-            print(f"== 四 bot 检视完成(PR #{pr.number},head {pr.head_sha[:8]})==")
+            print(f"== 五 bot 检视完成(PR #{pr.number},head {pr.head_sha[:8]})==")
             print_timeline(pr)
             print_opinions(pr)
             print(f"  状态: {state}")
@@ -787,7 +787,7 @@ def cmd_wait(args: argparse.Namespace) -> int:
             return 1
         if state == "QUIET_WINDOW":
             remain = int(args.quiet - (now - pr.latest_signal).total_seconds())
-            print(f"[{now:%H:%M:%S}] 已等待 {waited}s: 四 bot 完成,静默窗剩 {remain}s"
+            print(f"[{now:%H:%M:%S}] 已等待 {waited}s: 五 bot 完成,静默窗剩 {remain}s"
                   f"(head={pr.head_sha[:8]})", flush=True)
         else:
             missing = ",".join(b for b in BOT_ORDER if pr.bot_done.get(b) is None)
@@ -804,7 +804,7 @@ def cmd_wait(args: argparse.Namespace) -> int:
                 else:
                     print(f"    {bot:<11} ✗ 未对当前 head 发信号")
             if state == "QUIET_WINDOW":
-                print("  四 bot 已全部完成,仅静默窗未过——重跑 wait 或增大 --quiet/--timeout。")
+                print("  五 bot 已全部完成,仅静默窗未过——重跑 wait 或增大 --quiet/--timeout。")
             else:
                 missing = [b for b in BOT_ORDER if pr.bot_done.get(b) is None]
                 print(f"  缺失信号的 bot: {', '.join(missing)}")
@@ -905,7 +905,7 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
     if pr.annotations_fetch_failed:
         A("- 注意: 部分 annotations 拉取失败,annotations 计数可能低估")
     A("")
-    A("## 四 bot 完成度(当前 head)")
+    A("## 五 bot 完成度(当前 head)")
     for bot in BOT_ORDER:
         done = pr.bot_done.get(bot)
         A(f"- {bot}: " + (f"✓ 首个信号 {fmt_ts(done)}" if done else "✗ 未发信号"))
@@ -913,7 +913,7 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
     A("## 意见明细(按时间排序; 正文缩进为代码块,其中 markdown 不渲染)")
     entries = _collect_entries(pr)
     if not entries:
-        A("(四 bot 在本 PR 无任何 review/评论)")
+        A("(五 bot 在本 PR 无任何 review/评论)")
     for i, (ts, title, body) in enumerate(entries, 1):
         A("")
         A(f"### {i}. {title}")
@@ -1139,21 +1139,21 @@ def build_parser() -> argparse.ArgumentParser:
             示例:
               scripts/pr_loop.py status                # 所有 open PR 总览
               scripts/pr_loop.py status 242            # 单 PR 详情 + 行动建议
-              scripts/pr_loop.py wait 242              # 等四 bot 完成(默认 2h 超时)
+              scripts/pr_loop.py wait 242              # 等五 bot 完成(默认 2h 超时)
               scripts/pr_loop.py wait 242 --timeout 900 --interval 30
               scripts/pr_loop.py collect 242 -o /tmp/pr242.md
         """))
     p.add_argument("--repo", help="目标仓库 owner/repo(默认取 gh 上下文仓库)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    ps = sub.add_parser("status", help="open PR 的四 bot 完成度总览 / 单 PR 详情 + 行动建议")
+    ps = sub.add_parser("status", help="open PR 的五 bot 完成度总览 / 单 PR 详情 + 行动建议")
     ps.add_argument("pr", nargs="?", type=int, help="PR 号(省略 = 全部 open PR 总览)")
     ps.add_argument("--quiet", type=int, default=DEFAULT_QUIET,
                     help=f"静默窗秒数(默认 {DEFAULT_QUIET})")
     ps.set_defaults(func=cmd_status)
 
     pw = sub.add_parser("wait",
-                        help="阻塞轮询直到四 bot 完成 + 过静默窗(完成 exit 0 / 超时 exit 1)")
+                        help="阻塞轮询直到五 bot 完成 + 过静默窗(完成 exit 0 / 超时 exit 1)")
     pw.add_argument("pr", type=int, help="PR 号")
     pw.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
                     help=f"总超时秒数(默认 {DEFAULT_TIMEOUT})")
@@ -1163,7 +1163,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"静默窗秒数(默认 {DEFAULT_QUIET})")
     pw.set_defaults(func=cmd_wait)
 
-    pc = sub.add_parser("collect", help="导出当前 head 全部四 bot 意见为结构化 Markdown")
+    pc = sub.add_parser("collect", help="导出当前 head 全部五 bot 意见为结构化 Markdown")
     pc.add_argument("pr", type=int, help="PR 号")
     pc.add_argument("-o", "--output", help="输出文件(默认 stdout)")
     pc.add_argument("--quiet", type=int, default=DEFAULT_QUIET,
