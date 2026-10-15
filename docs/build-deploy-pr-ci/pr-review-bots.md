@@ -1,13 +1,15 @@
 # PR 代码检视机器人（聚焦 SDC 激发）
 
-本文件汇总 SDCShield 仓库接入的四个 PR 代码检视机器人（codex / CodeRabbit /
-PR-Agent / Greptile）、各自的配置文件与触发方式、机器人生效的核查方法，以及四份
-配置共同内嵌的「SDC 激发专属检视要点」。所有账号/标识与配置路径均以仓库实际状态
-为准；Greptile 已于 2026-10-13 完成安装授权并实测生效（首次产出见 PR #238），详见第 3 节与第 7 节。
+本文件汇总 SDCShield 仓库接入的四个外部 SaaS 检视机器人（codex / CodeRabbit /
+PR-Agent / Greptile）与第 5 个本地检视机器人（本地无头 claude code，对抗性检视，
+见第 8 节），各自的配置/引擎与触发方式、机器人生效的核查方法，以及四份配置共同
+内嵌的「SDC 激发专属检视要点」。所有账号/标识与配置路径均以仓库实际状态为准；
+Greptile 已于 2026-10-13 完成安装授权并实测生效（首次产出见 PR #238），详见第 3 节与第 7 节。
 
 ## 1. 概述
 
-四个检视机器人及其在 PR 上使用的账号/标识、触发载体与配置文件：
+四个外部检视机器人及其在 PR 上使用的账号/标识、触发载体与配置文件（第 5 个本地
+bot 见第 8 节）：
 
 | 机器人 | PR 上的账号 / 标识 | 触发载体 | 仓库配置文件 | 读取内容 |
 | --- | --- | --- | --- | --- |
@@ -247,7 +249,86 @@ GitHub 天然保证「同一 head 分支 → 同一 base 分支**只能有 1 个
 > 备选方案：长期/团队场景可用 GitHub App token（`actions/create-github-app-token`）
 > 替代 PAT，权限更细、不受个人账号过期影响。
 
-## 8. 延伸阅读
+## 8. 第 5 bot：本地 claude 对抗检视
+
+前四 bot 均由 GitHub 托管（App / workflow）触发；第 5 bot 是**本地无头 claude
+code**，以对抗性渗透测试者身份检视 PR，意见上 GitHub 后与四 bot **同等对待**（计入
+`pr_loop` 的 wait 信号、collect 导出、闭环逐条处置）。引擎
+[`scripts/pr_local_review.py`](../../scripts/pr_local_review.py)（`pr_loop` 姊妹件，
+Python3 标准库 + `gh`/`claude` 子进程，零第三方依赖；claude 凭据 `source
+~/.local/state/sdcshield-ci-triage/agent.env`）。
+
+### 8.1 判据（双条件）
+
+第 5 bot 的检视信号判定为**双条件**，缺一不可：
+
+- 作者 login == `wangxumarshall`（gh CLI 以当前登录用户身份发 review）；
+- 正文含标记 `<!-- local-claude-review -->`（review body 与每条行级评论正文首行均带）。
+
+双条件（而非纯作者映射）是为了避免把用户本人的普通评论误判为第 5 bot——与 pr-agent
+的「作者 `github-actions[bot]` 且正文含 `<!-- pr-agent:review:full -->`」同构。
+`pr_loop.py` 的 `BOT_ORDER` 已扩展为 `("codex","coderabbit","pr-agent","greptile",
+"local-claude")`，第 5 bot 是**硬门槛**：五 bot 等齐才闭环，缺第 5 bot 即
+`WAITING_BOTS`。
+
+### 8.2 两条触发线
+
+| 触发线 | 载体 | 说明 |
+| --- | --- | --- |
+| 事件线 | `pr_loop.py wait` 内 `ensure_local_review()`；`ci_triage.py` 车道 B reap 后 | 进入阻塞轮询 / 派发修复 agent 前，先确保该 head 已有第 5 bot 信号（未审则同步跑一次并发布） |
+| 时间线 | cron `*/30 * * * *` 跑 `scripts/pr_local_review.py --all-open` | 枚举全部 open PR，对尚无第 5 bot 信号的 head 跑一次对抗审查并发布，兜底补漏 |
+
+同 head 幂等：`already_reviewed`（body 含标记且 `commit_id` 锚定当前 head）为真即
+跳过——事件线 + 时间线撞车只审一次。第 5 bot 是辅助触发线，**非硬前置**：触发失败
+（gh 失败 / claude 未装 / agent.env 缺失 / head 未 fetch / 输出非 JSON）仅告警降级，
+不阻塞轮询（等齐五 bot 的等待继续）。
+
+### 8.3 对抗性检视方法论（五要素 + SDC 语境核查）
+
+prompt 由 `build_adversarial_prompt()` 构造，五要素：
+
+1. **pentester framing**：以对抗性渗透测试者身份审视 diff——只找「如何被利用 / 被
+   绕过 / 触发缺陷」，宁可过度怀疑，不产出「友好改进建议」。
+2. **多批判镜头（按 diff 大小缩放）**：镜头库恒含 Skeptic（怀疑论者，挑战每处假设
+   与边界）/ Architect（架构师，审视结构、耦合、抽象泄漏）/ Minimalist（极简主义者，
+   审视复杂度与过度设计）；按 diff 行数缩放须采用的镜头数——<50 行 1 镜头、50–200
+   行 2 镜头、>200 行 3 镜头。
+3. **结构化证据锚定（硬性输出契约）**：每条 finding 必须给出 file:line + 具体证据
+   （引用代码片段 / 构建 / 测试真实输出 / golden 比对结果）+ 严重级（Critical /
+   Important / Minor 三者取一）+ 分类（正确性 / 安全 / 并发 / 内存 / 性能 / 可维护性
+   取其一）；禁止「可能有问题」「建议改进」「LGTM」类空泛句。
+4. **意图镜（intent lens）**：对照 PR 标题 / 描述 / 关联 issue 的目标，抓 scope
+   creep（超出目标的改动）与 drift（逐行都对、整体跑偏）。
+5. **差分审查顺序**：先看「删除」（安全回归——被删代码是否曾因 security/fix/CVE
+   引入却在此误删）→ 再查「新增」（新攻击面）→ 最后验证「影响链」（改动如何影响
+   所有调用点）。
+
+外加 **SDC 仓库语境核查**（对照 `AGENTS.md`「SDC 激发能力」）：golden 比对必须字节级
+`memcmp`（禁止近似/容差）；向量校验必须 per-lane 独立比对（禁止跨 lane 聚合）；
+`TEST_LOOP` 必须定时持续压测（非固定迭代次数）；浮点结果必须逐位可复现（FP 可复现）。
+
+### 8.4 意见形态
+
+- 行级 finding（`path` 且 `line` 非 None）→ 挂 diff 行的**行级评论**（可逐条 reply、
+  逐条计数，coderabbit 式）；
+- 挂不上 diff 行的（`line` 为 None 或无 `path`）→ 收进 review body 的 ```json 段
+  （pr-agent 式）；
+- review body 与每条行级评论正文首行均带 `<!-- local-claude-review -->`；
+- `commit_id` 锚定当前 head，供 `pr_loop` 的 commit 锚定过滤。
+
+意见计数：`pr_loop` 对第 5 bot 的计数 = body JSON 段 findings 数 + 行级评论数
+（`count_local_claude_findings`）。
+
+### 8.5 判据分裂（已知不变量破例）
+
+`.github/workflows/bot-coverage.yml` **保持四 bot 不变**——它是 GitHub-hosted
+workflow，触发不了本地 claude（本地审查只能由本机 gh 身份跑，workflow 无法调用本机
+claude）。由此产生「pr_loop 等五 bot、bot-coverage 校验四 bot」的判据分裂，作为
+**已知不变量破例**显式记录：bot-coverage 报告的「汇总 4/4」仅指四个外部 SaaS bot，
+不代表第 5 bot 已检视；第 5 bot 的完成度以 `pr_loop status` 的第 5 位（local-claude）
+为准。
+
+## 9. 延伸阅读
 
 - [代码检视代理仓库上下文 `AGENTS.md`](../../AGENTS.md)
 - [CodeRabbit 配置 `.coderabbit.yaml`](../../.coderabbit.yaml)
