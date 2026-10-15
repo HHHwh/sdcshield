@@ -22,11 +22,26 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <Eigen/Core>
 using namespace Eigen;
 
-#define M_DIM 256
+/* 矩阵维度: 优先级链同 eigen_gemm_double_dynamic_square
+ * (-O eigen_gemm_double14.mdim=N / 配置文件 / 环境变量 / 自适应)。 */
+static int gemm_mdim(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
+    if (v == 0) {
+        int64_t envv = 0;
+        if (sdc_env_knob_int("eigen_gemm_double14", "mdim", &envv))
+            v = (envv < 16) ? 16 : (envv > 4096 ? 4096 : envv);
+    }
+    if (v > 0)
+        return (int)v;
+    return sdc_auto_square_dim(8, 4, 6.0, 850, thread_count(), 16, 4096, test->id, "mdim");
+}
+#define M_DIM gemm_mdim(test)
 
 typedef Matrix < double, Dynamic, Dynamic > Mat;
 
@@ -62,10 +77,11 @@ static int eigen_gemm_double14_run(struct test *test, int cpu) {
             for (int c = 0; c < m.cols(); ++c)
                 m(r, c) = frandom_scale(2.0) - 1.0;
     };
+    const int dim = gemm_mdim(test);
     Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(M_DIM, M_DIM);
-    l_rhs.resize(M_DIM, M_DIM);
-    l_prod.resize(M_DIM, M_DIM);
+    l_lhs.resize(dim, dim);
+    l_rhs.resize(dim, dim);
+    l_prod.resize(dim, dim);
     fill_rand(l_lhs);
     fill_rand(l_rhs);
     l_prod = l_lhs * l_rhs;
@@ -82,17 +98,17 @@ static int eigen_gemm_double14_run(struct test *test, int cpu) {
         if (!_x.isApprox(l_lhs)) {
                 report_fail_msg("_x.isApprox failed");
         }
-        memcmp_or_fail(_x.data(), l_lhs.data(), M_DIM * M_DIM);
+        memcmp_or_fail(_x.data(), l_lhs.data(), dim * dim);
 
         if (!_y.isApprox(l_rhs)) {
                 report_fail_msg("_y.isApprox failed");
         }
-        memcmp_or_fail(_y.data(), l_rhs.data(), M_DIM * M_DIM);
+        memcmp_or_fail(_y.data(), l_rhs.data(), dim * dim);
 
         if (!_prod.isApprox(l_prod)) {
                 report_fail_msg("_prod.isApprox failed");
         }
-        memcmp_or_fail(_prod.data(), l_prod.data(), M_DIM * M_DIM);
+        memcmp_or_fail(_prod.data(), l_prod.data(), dim * dim);
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;

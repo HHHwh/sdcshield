@@ -23,11 +23,29 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <Eigen/Core>
 using namespace Eigen;
 
-#define M_DIM 221 // weird dim on purpose
+/*
+ * 矩阵维度: 优先级链同 eigen_gemm_double_dynamic_square; complex<double>
+ * 元素 16 字节, 自适应按 16B/元素计算 (历史硬编码 221 是刻意的"怪"维度,
+ * 显式配置时保留任意值语义)。
+ */
+static int gemm_mdim(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
+    if (v == 0) {
+        int64_t envv = 0;
+        if (sdc_env_knob_int("eigen_gemm_cdouble_dynamic_square", "mdim", &envv))
+            v = (envv < 16) ? 16 : (envv > 4096 ? 4096 : envv);
+    }
+    if (v > 0)
+        return (int)v;
+    return sdc_auto_square_dim(16, 4, 6.0, 850, thread_count(), 16, 4096, test->id, "mdim");
+}
+#define M_DIM gemm_mdim(test)
 
 typedef Matrix < std::complex < double >, Dynamic, Dynamic > Mat;
 
@@ -65,10 +83,11 @@ static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
                     m(r, c) = std::complex<double>(frandom_scale(2.0) - 1.0,
                                                    frandom_scale(2.0) - 1.0);
         };
+    const int dim = gemm_mdim(test);
     Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(M_DIM, M_DIM);
-    l_rhs.resize(M_DIM, M_DIM);
-    l_prod.resize(M_DIM, M_DIM);
+    l_lhs.resize(dim, dim);
+    l_rhs.resize(dim, dim);
+    l_prod.resize(dim, dim);
     fill_rand(l_lhs);
     fill_rand(l_rhs);
     l_prod = l_lhs * l_rhs;
@@ -79,7 +98,7 @@ static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
         x = l_lhs * l_rhs;
 
         memcmp_or_fail(reinterpret_cast<double *>(x.data()),
-                       reinterpret_cast<double *>(l_prod.data()), 2 * M_DIM * M_DIM);
+                       reinterpret_cast<double *>(l_prod.data()), 2 * dim * dim);
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;

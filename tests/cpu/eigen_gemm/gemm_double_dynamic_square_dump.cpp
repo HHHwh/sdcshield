@@ -27,6 +27,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <Eigen/Core>
 #include <cstdlib>
@@ -34,27 +35,33 @@
 #include <cstring>
 using namespace Eigen;
 
-// Matrix dimension. Historically hardcoded to 256. Now configurable via
-// the GEMM_K_DIM environment variable (default 256 = original baseline) so
-// the fault-propagation-vs-k-dimension hypothesis can be tested without
-// touching the dump/report logic. Random generation: the run loop re-rolls
-// its own per-thread operands from the framework RNG every 16 iterations
-// (B2-007, same as the non-dump gemm files), with one frozen-replay round
-// at each cycle's midpoint restoring init's Mat::Random draw;
-// report_fail behavior unchanged.
-static int gemm_k_dim() {
+// Matrix dimension. Configurable without recompiling via the unified
+// priority chain (see sdc_stress_config.h):
+//   1. -O eigen_gemm_double_dynamic_square_dump.mdim=N (or the same key in
+//      sdc_stress.conf / $SDC_STRESS_CONFIG)
+//   2. legacy GEMM_K_DIM env var (kept for old scripts)
+//   3. environment-adaptive default (85% of RAM, 4 matrices/thread, 6x RSS)
+// Nothing else changes: Mat::Random seeding and report_fail behavior are
+// untouched.
+static int gemm_k_dim(struct test *test) {
     static int dim = -1;
     if (dim < 0) {
-        int d = 256;
-        if (const char *env = getenv("GEMM_K_DIM")) {
-            int parsed = atoi(env);
-            if (parsed > 0) d = parsed;
+        int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
+        if (v == 0) {
+            if (const char *env = getenv("GEMM_K_DIM")) {
+                int parsed = atoi(env);
+                if (parsed > 0) v = parsed;
+            }
         }
-        dim = d;
+        if (v > 0) {
+            dim = (int)(v < 16 ? 16 : (v > 4096 ? 4096 : v));
+        } else {
+            dim = sdc_auto_square_dim(8, 4, 6.0, 850, thread_count(), 16, 4096, test->id, "mdim");
+        }
     }
     return dim;
 }
-#define M_DIM gemm_k_dim()
+#define M_DIM gemm_k_dim(test)
 
 typedef Matrix < double, Dynamic, Dynamic > Mat;
 
