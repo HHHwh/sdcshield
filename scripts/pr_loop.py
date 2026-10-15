@@ -67,7 +67,12 @@ from typing import Any, List, Optional
 # 引用时它们已先行插入 scripts/。此处再显式插入一次,保证任意导入路径下
 # pr_local_review 可被顶层 import(与 ci_triage.py / pr_local_review.py 同策略)。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from pr_local_review import LOCAL_CLAUDE_MARKER  # noqa: E402
+from pr_local_review import (  # noqa: E402
+    LOCAL_CLAUDE_MARKER,
+    already_reviewed,
+    publish_review,
+    run_review,
+)
 
 # ============ 五 bot 判据(前四外部 bot 与 .github/workflows/bot-coverage.yml 同步维护) ============
 # bot-coverage.yml 用 `grep -Fxq`(固定字符串整行精确匹配)判定,此处用精确等值。
@@ -342,6 +347,20 @@ def local_claude_comment(author: str, body: str) -> bool:
     第 5 bot(设计文档反目标 2),与 pragent_comment 的「作者 + 内容标记」
     同构但不入 LOGIN_TO_BOT。"""
     return author == LOCAL_CLAUDE_LOGIN and LOCAL_CLAUDE_MARKER in (body or "")
+
+
+def ensure_local_review(pr_number: int, head_sha: str) -> None:
+    """事件线触发: 若第 5 bot 尚未对该 head 发过信号,跑一次本地对抗审查
+    并发布(设计文档 §6.1 wait 内主动触发)。
+
+    幂等: `already_reviewed` 为真(该 head 已有含标记的 review)直接返回——
+    事件线 + 时间线撞车只审一次。未审则 `run_review` 产出 findings 后经
+    `publish_review` 上 GitHub(作者 = 当前 gh 登录用户 wangxumarshall)。
+    """
+    if already_reviewed(pr_number, head_sha):
+        return
+    findings = run_review(pr_number, head_sha)
+    publish_review(pr_number, head_sha, findings)
 
 
 def pragent_state_json(body: str) -> Optional[dict]:
@@ -758,6 +777,10 @@ def cmd_wait(args: argparse.Namespace) -> int:
     if pr.state != "open":
         print(f"PR #{args.pr} 状态为 {pr.state}(非 open),等待无意义,退出。", file=sys.stderr)
         return 1
+    # 事件线主动触发(设计文档 §6.1): 进入阻塞轮询前,先确保第 5 bot(本地
+    # claude)已对该 head 发过检视信号——未审则同步跑一次并发布,再与四 bot
+    # 同等待遇计入完成判定。同 head 幂等(already_reviewed 门禁)。
+    ensure_local_review(args.pr, pr.head_sha)
     start = time.monotonic()
     deadline = start + args.timeout
     while True:

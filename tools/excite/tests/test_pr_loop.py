@@ -33,3 +33,84 @@ def test_local_claude_requires_author_and_marker():
     # wangxumarshall 有标记 → 算第 5 bot
     assert pr_loop.local_claude_comment(
         "wangxumarshall", f"{pr_loop.LOCAL_CLAUDE_MARKER}\n检视意见…") is True
+
+
+# ---------------------------------------------------------------------------
+# Task 3: wait 内主动触发第 5 bot 审查(事件线)+ 同 head 幂等。
+# 全部离线: fake resolve_slug/fetch_pr/classify_state/run_review/publish_review/
+# already_reviewed——绝不触网、绝不真实跑 claude。
+
+def _open_pr(number=9, head_sha="d" * 40):
+    """cmd_wait 轮询所需的最小 PRData(open、非 draft/fork,首轮即 READY_TO_MERGE)。"""
+    return pr_loop.PRData(
+        number=number, title="t", state="open", draft=False, fork=False,
+        head_sha=head_sha, head_ref="feat/x", base_ref="main",
+        head_time=pr_loop.now_utc(), url=f"https://example.invalid/{number}",
+        author="wangxumarshall",
+        opinion_breakdown={"review": 0, "review_comment": 0,
+                           "issue_comment": 0, "annotations": 0},
+    )
+
+
+def test_wait_triggers_local_review_once(monkeypatch):
+    pr = _open_pr()
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "fetch_pr", lambda slug, num: pr)
+    # 首轮即完成 → wait 立即返回,不 sleep,触网外零副作用
+    monkeypatch.setattr(pr_loop, "classify_state",
+                        lambda p, quiet, now: "READY_TO_MERGE")
+
+    calls = {"run": 0, "publish": 0}
+    reviewed = {"flag": False}
+    monkeypatch.setattr(pr_loop, "already_reviewed",
+                        lambda num, sha: reviewed["flag"])
+
+    def fake_run(num, sha):
+        calls["run"] += 1
+        return []
+
+    def fake_publish(num, sha, findings):
+        calls["publish"] += 1
+
+    monkeypatch.setattr(pr_loop, "run_review", fake_run)
+    monkeypatch.setattr(pr_loop, "publish_review", fake_publish)
+
+    args = pr_loop.build_parser().parse_args(
+        ["wait", "9", "--interval", "0", "--timeout", "1"])
+
+    # 未审(head 尚未发过第 5 bot 信号)→ wait 主动触发一次审查并发布
+    assert pr_loop.cmd_wait(args) == 0
+    assert calls == {"run": 1, "publish": 1}
+
+    # 已审(already_reviewed 真)→ wait 不再触发(同 head 幂等)
+    calls["run"] = calls["publish"] = 0
+    reviewed["flag"] = True
+    assert pr_loop.cmd_wait(args) == 0
+    assert calls == {"run": 0, "publish": 0}
+
+
+def test_ensure_local_review_idempotent_same_head(monkeypatch):
+    calls = {"run": 0, "publish": 0}
+    state = {"reviewed": False}
+
+    def fake_already_reviewed(num, sha):
+        return state["reviewed"]
+
+    def fake_run(num, sha):
+        calls["run"] += 1
+        return []
+
+    def fake_publish(num, sha, findings):
+        calls["publish"] += 1
+        state["reviewed"] = True   # 发布后同 head 即视为已审
+
+    monkeypatch.setattr(pr_loop, "already_reviewed", fake_already_reviewed)
+    monkeypatch.setattr(pr_loop, "run_review", fake_run)
+    monkeypatch.setattr(pr_loop, "publish_review", fake_publish)
+
+    head = "d" * 40
+    pr_loop.ensure_local_review(9, head)
+    pr_loop.ensure_local_review(9, head)
+
+    # 同 head 二次调用不触发(幂等去重——事件线 + 时间线撞车只审一次)
+    assert calls == {"run": 1, "publish": 1}

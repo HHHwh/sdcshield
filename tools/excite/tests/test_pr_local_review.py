@@ -16,6 +16,7 @@
     path+line、line 为 None 的 finding 收进 body JSON 段、commit_id 锚定
     head_sha。
 """
+import json
 import os
 import sys
 
@@ -153,3 +154,89 @@ def test_publish_review_posts_marker_and_inline(monkeypatch):
     assert "TEST_LOOP 用固定 100 次" in body
     # 行级 finding 不应混进 body JSON 段
     assert "近似比对是 SDC 盲区" not in body
+
+
+# ---------------------------------------------------------------------------
+# Task 3: run_review 真实现(拉 diff + source agent.env 跑 claude + 解析
+# findings)+ already_reviewed 同 head 幂等(查 review 标记 + commit 锚定)。
+# 全部离线: fake gh(返回 diff/title/body)、fake claude(返回结构化 findings)、
+# fake worktree(绝不真实 checkout / 绝不真实跑 claude)。
+
+def _reviews_json(items):
+    return json.dumps({"reviews": items})
+
+
+def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path):
+    # fake gh: `gh pr diff` 返回 diff,`gh pr view --json title,body` 返回元数据
+    def fake_gh(argv):
+        if argv[:3] == ["pr", "diff", "7"]:
+            return _memcmp_diff()
+        if argv[:2] == ["pr", "view"] and "title,body" in argv:
+            return json.dumps({"title": "FMA SVE 测试字节级比对",
+                               "body": "修复 golden 比对,防止误报"})
+        if argv[:2] == ["pr", "view"] and "reviews" in argv:
+            return json.dumps({"reviews": []})   # 幂等门禁: 尚未审过
+        raise AssertionError(f"意外 gh 调用: {argv}")
+
+    monkeypatch.setattr(plr, "_gh", fake_gh)
+
+    # fake worktree: 只记录 add/remove,绝不真实 git checkout
+    wt = tmp_path / "wt"
+    monkeypatch.setattr(plr, "_worktree_add", lambda head_sha: str(wt))
+    removed = []
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: removed.append(path))
+
+    captured = {}
+
+    def fake_claude(cmd, cwd):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return json.dumps([
+            {"path": "tests/sve/fma_sve.c", "line": 42,
+             "severity": "Critical", "category": "正确性",
+             "message": "近似比对是 SDC 盲区",
+             "evidence": "第 42 行用容差而非 memcmp"},
+        ])
+
+    monkeypatch.setattr(plr, "_run_claude", fake_claude)
+
+    findings = plr.run_review(7, "d" * 40)
+
+    # claude 命令必须 source agent.env + 危险许可旁路
+    assert "source" in captured["cmd"]
+    assert "agent.env" in captured["cmd"]
+    assert "--dangerously-skip-permissions" in captured["cmd"]
+    # claude 的 cwd 指向独立只读 worktree(读完整源码,不碰用户工作区)
+    assert captured["cwd"] == str(wt)
+    # 审查结束 worktree 已清理
+    assert removed == [str(wt)]
+    # 解析出结构化 findings(6 字段契约)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f == {"path": "tests/sve/fma_sve.c", "line": 42,
+                 "severity": "Critical", "category": "正确性",
+                 "message": "近似比对是 SDC 盲区",
+                 "evidence": "第 42 行用容差而非 memcmp"}
+
+
+def test_already_reviewed_true_when_marker_present(monkeypatch):
+    head_sha = "d" * 40
+    marker = plr.LOCAL_CLAUDE_MARKER
+
+    # 含标记且 commit_id 匹配当前 head → 已审
+    monkeypatch.setattr(plr, "_gh", lambda argv: _reviews_json([
+        {"body": f"{marker}\n检视意见", "commit_id": head_sha},
+    ]))
+    assert plr.already_reviewed(7, head_sha) is True
+
+    # 无标记(用户本人普通 review)→ 未审
+    monkeypatch.setattr(plr, "_gh", lambda argv: _reviews_json([
+        {"body": "普通人工 review", "commit_id": head_sha},
+    ]))
+    assert plr.already_reviewed(7, head_sha) is False
+
+    # 有标记但 commit_id 不匹配当前 head(旧 head 检视)→ 未审(commit 锚定)
+    monkeypatch.setattr(plr, "_gh", lambda argv: _reviews_json([
+        {"body": f"{marker}\n旧 head 检视", "commit_id": "c" * 40},
+    ]))
+    assert plr.already_reviewed(7, head_sha) is False

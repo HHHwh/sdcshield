@@ -7,9 +7,9 @@
 # .superpowers/sdd/2026-10-15-local-claude-5th-review-bot/,计划见
 # docs/superpowers/plans/2026-10-15-local-claude-5th-review-bot.md。
 #
-# 本文件当前为骨架: 落地对抗性 prompt 引擎(build_adversarial_prompt)+ 常量 +
-# 幂等检查骨架(already_reviewed)+ 检视骨架(run_review)。真正拉 diff、跑
-# claude、发布意见上 GitHub 与 pr_loop 判据扩展在后续 Task 落地。
+# 已落地: 对抗性 prompt 引擎(build_adversarial_prompt)+ 同 head 幂等检查
+# (already_reviewed)+ 检视引擎(run_review: 拉 diff + 跑 claude + 解析 findings)
+# + 意见发布(publish_review)。pr_loop 判据扩展与 wait 内触发见 pr_loop.py。
 #
 # 依赖: Python 3 标准库 + gh/claude 子进程,零第三方运行时依赖(与 pr_loop.py
 # 同策略,本脚本不管理 token;claude 凭据 source
@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 
 # 把 scripts/ 目录放进 sys.path,供后续 Task `import pr_loop`(复用其 gh 封装、
 # 不可信数据横幅与 commit 锚定)时按兄弟模块引用——与 ci_triage.py 同策略。
@@ -139,40 +142,177 @@ def build_adversarial_prompt(diff: str, pr_context: dict) -> str:
 
 
 def already_reviewed(pr_number: int, head_sha: str) -> bool:
-    """同 head 幂等检查骨架: 判断第 5 bot 是否已对该 head 发过检视信号。
+    """同 head 幂等检查: 该 head 是否已有第 5 bot 的 review。
 
-    后续 Task 落地: 查已发布的 review body(首行含 LOCAL_CLAUDE_MARKER)且
-    锚定 commit 匹配 head_sha(仿 pr_loop 的 commit 锚定——review 的
-    commit_id 须匹配当前 head),避免事件线 + 时间线对同一 head 重复审查。
-    本 Task 仅搭骨架,恒返回 False(视为「未审查」);真实查询接入后由调用方
-    启用去重。
+    经 `gh pr view <pr> --json reviews` 拉全部 review,判定「body 含
+    LOCAL_CLAUDE_MARKER 且 commit_id == head_sha」(commit 锚定)——事件线 +
+    时间线撞车只审一次。body 含标记但锚定旧 head 的 review 不算已审。
     """
-    return False
+    raw = _gh(["pr", "view", str(pr_number), "--json", "reviews"])
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise GhError(f"gh pr view --json reviews 返回非 JSON: {exc}")
+    if not isinstance(data, dict):
+        return False
+    reviews = data.get("reviews") or []
+    if not isinstance(reviews, list):
+        return False
+    return any(LOCAL_CLAUDE_MARKER in (r.get("body") or "")
+               and r.get("commit_id") == head_sha
+               for r in reviews)
 
 
 def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]:
     """对 PR #pr_number 的当前 head 跑一次对抗性检视,返回结构化 findings。
 
-    完整流程(后续 Task 落地,本 Task 只搭骨架):
-      1. 幂等检查: 未 force 且 already_reviewed(pr_number, head_sha) 为真 →
-         直接返回 [],不重复审查(设计文档 §6 同 head 幂等去重)。
-      2. 拉 diff: `gh pr diff <pr_number>`,连同 PR 标题/描述/关联 issue 组装
-         pr_context。
-      3. 独立只读 worktree: `git worktree add <tmp>/review-<pr> <head_sha>` 到
-         临时目录读完整源码(审查需完整文件上下文,不只 diff 片段),结束后
-         `git worktree remove` ——绝不碰用户主工作区、绝不碰 ci_triage 修复
-         agent 的 autoci clone(设计文档 §9)。
-      4. 组装对抗性 prompt: build_adversarial_prompt(diff, pr_context)。
-      5. 跑 claude: 认证 source agent.env 后 `claude -p <prompt>
-         --dangerously-skip-permissions`,解析其 JSON 输出为 findings。
-      6. 每条 finding 形如 {{path, line, severity, category, message, evidence}}。
-
-    本 Task 未实现 2–5(跑 claude、发布意见在后续 Task 落地),恒返回空列表;
-    骨架保留幂等门禁,供后续 Task 直接填充。
+    流程:
+      1. 幂等门禁: 未 force 且 already_reviewed → 直接返回 [](同 head 去重)。
+      2. `gh pr diff <pr>` 拉 diff + `gh pr view <pr> --json title,body` 拉
+         PR 元数据组装 pr_context(标题/描述作意图镜对照)。
+      3. 独立只读 worktree 读完整源码(`_worktree_add`,结束 `_worktree_remove`),
+         不碰用户主工作区、不抢 autoci clone(设计文档 §9)。
+      4. build_adversarial_prompt(diff, pr_context) 组对抗性 prompt。
+      5. `source agent.env && claude -p <prompt> --dangerously-skip-permissions`
+         跑 claude(cwd = worktree),解析输出为 findings。
     """
     if not force and already_reviewed(pr_number, head_sha):
         return []
-    return []
+    diff = _gh(["pr", "diff", str(pr_number)]).strip()
+    meta_raw = _gh(["pr", "view", str(pr_number), "--json", "title,body"])
+    try:
+        meta = json.loads(meta_raw)
+    except json.JSONDecodeError as exc:
+        raise GhError(f"gh pr view --json title,body 返回非 JSON: {exc}")
+    if not isinstance(meta, dict):
+        meta = {}
+    pr_context = {"title": meta.get("title"), "body": meta.get("body"),
+                  "issue": None}
+    prompt = build_adversarial_prompt(diff, pr_context)
+    worktree = _worktree_add(head_sha)
+    try:
+        output = _run_claude(build_claude_command(prompt), cwd=worktree)
+    finally:
+        _worktree_remove(worktree)
+    return _parse_findings(output)
+
+
+# ============ 检视引擎子进程缝(测试 monkeypatch 离线替身,不触网/不真跑 claude) ============
+
+# claude headless 认证环境(与 ci_triage 共用 agent.env,见设计文档 C1/C3)
+AGENT_ENV_PATH = os.path.expanduser("~/.local/state/sdcshield-ci-triage/agent.env")
+# claude 检视最长运行时间(秒,与 ci_triage.AGENT_TIMEOUT_SEC 一致)
+CLAUDE_TIMEOUT = 3600
+
+
+def _gh(argv: list) -> str:
+    """跑一次 `gh <argv...>` 并返回 stdout 原文。失败抛 GhError。
+
+    模块级子进程出口(测试 monkeypatch 的 gh 缝,离线 fake gh 不触网)。
+    """
+    try:
+        proc = subprocess.run(["gh", *argv], capture_output=True, text=True,
+                              timeout=GH_TIMEOUT)
+    except FileNotFoundError:
+        raise GhError("找不到 gh CLI——请安装并认证: gh auth login")
+    except subprocess.TimeoutExpired:
+        raise GhError(f"gh {' '.join(argv[:3])}… 超时({GH_TIMEOUT}s)")
+    if proc.returncode != 0:
+        err = " ".join(proc.stderr.strip().split())[:300]
+        raise GhError(f"gh {' '.join(argv[:3])}… 失败(exit {proc.returncode}): {err}")
+    return proc.stdout
+
+
+def _worktree_add(head_sha: str) -> str:
+    """在临时目录 checkout head_sha 的独立只读 worktree,返回其路径。
+
+    审查需读完整文件上下文(不只 diff 片段)——独立 worktree 既不碰用户主
+    工作区,也不抢 ci_triage 修复 agent 的 autoci clone(设计文档 §9)。
+    """
+    tmp = tempfile.mkdtemp(prefix="local-claude-review-")
+    path = os.path.join(tmp, "wt")
+    try:
+        subprocess.run(["git", "worktree", "add", "--detach", path, head_sha],
+                       capture_output=True, text=True, timeout=GH_TIMEOUT,
+                       check=True)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise GhError(f"git worktree add 失败: {exc}")
+    except subprocess.CalledProcessError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        err = " ".join((exc.stderr or "").strip().split())[:300]
+        raise GhError(f"git worktree add 失败: {err}")
+    return path
+
+
+def _worktree_remove(path: str) -> None:
+    """git worktree remove --force;清理失败不炸主流程(尽力而为)。"""
+    try:
+        subprocess.run(["git", "worktree", "remove", "--force", path],
+                       capture_output=True, text=True, timeout=GH_TIMEOUT)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+
+
+def build_claude_command(prompt: str) -> str:
+    """组 claude 子进程 shell 命令: source agent.env(认证)+ claude -p +
+    --dangerously-skip-permissions(无头非交互)。prompt 经 shlex.quote 注入,
+    规避 argv 注入面(与 ci_triage.dispatch_agent 同策略)。"""
+    return (f"source {shlex.quote(AGENT_ENV_PATH)} && "
+            f"claude -p {shlex.quote(prompt)} --dangerously-skip-permissions")
+
+
+def _run_claude(cmd: str, cwd: str) -> str:
+    """跑 claude 子进程(bash -c cmd,cwd=只读 worktree),返回 stdout。
+
+    模块级子进程出口(测试 monkeypatch 的 claude 缝,离线 fake claude 不真跑)。
+    """
+    try:
+        proc = subprocess.run(["bash", "-c", cmd], capture_output=True,
+                              text=True, timeout=CLAUDE_TIMEOUT, cwd=cwd)
+    except FileNotFoundError:
+        raise GhError("找不到 bash/claude——请安装 claude CLI 并配置 agent.env")
+    except subprocess.TimeoutExpired:
+        raise GhError(f"claude 检视超时({CLAUDE_TIMEOUT}s)")
+    if proc.returncode != 0:
+        err = " ".join(proc.stderr.strip().split())[:300]
+        raise GhError(f"claude 检视失败(exit {proc.returncode}): {err}")
+    return proc.stdout
+
+
+def _parse_findings(output: str) -> list[dict]:
+    """把 claude 输出解析为结构化 findings 列表,每条 {path, line, severity,
+    category, message, evidence}。输出契约是 JSON 数组;容忍 claude 把它包在
+    markdown 代码围栏里的情形(取首个 [ ... ] 段)。"""
+    text = (output or "").strip()
+    if not text:
+        return []
+    data = None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("[")
+        end = text.rfind("]")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                data = None
+    if not isinstance(data, list):
+        raise GhError("claude 检视输出非 JSON 数组——无法解析 findings")
+    return [
+        {
+            "path": item.get("path"),
+            "line": item.get("line"),
+            "severity": item.get("severity"),
+            "category": item.get("category"),
+            "message": item.get("message"),
+            "evidence": item.get("evidence"),
+        }
+        for item in data
+        if isinstance(item, dict)
+    ]
 
 
 # ============ 意见发布(第 5 bot 身份 = wangxumarshall + 唯一标记) ============
