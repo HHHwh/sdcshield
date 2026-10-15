@@ -79,8 +79,11 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   `evidence`），逐条在 GitHub 答复：行级 finding（`path` 且 `line` 非 None）经 `gh api`
   逐条 reply 到对应 review comment；挂不上 diff 行的 body JSON 段 finding 汇总成一条
   issue comment 逐条列出。答复正文固定「结论（采纳/变通/驳回）+ 理由 + 证据」；轻量
-  校验——采纳缺修复 SHA / 驳回缺实证抛 `GhError` 拒绝答复；完整性校验——`len(findings)
-  == len(replies)`，漏答/多答抛 `GhError`（闭环必须逐条答复，见反目标 3）。
+  校验——采纳缺修复 SHA / 驳回缺实证抛 `GhError` 拒绝答复；完整性校验——答复前先
+  `fetch_pr` 拉当前 head 的真实待处置意见集，与处置 JSON 做双向集合差（行级意见按
+  `(path, line, id)` 三元组精确比对；body 意见按条数比对，覆盖五 bot 的 reviews body
+  findings + 待处置 issue 评论 + check annotations 的 failure/warning 级），漏答 / 多答
+  / id 错绑 / body 条数不符分别抛 `GhError`（闭环必须逐条答复，见反目标 3）。
 - **五 bot 判据**：前四 bot 与 [bot-coverage.yml](../../.github/workflows/bot-coverage.yml) 一致
   （同步维护）——codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]`
   作者或 `CodeRabbit` check（精确等值）；pr-agent = `pr-agent` check（精确等值），或

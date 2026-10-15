@@ -1150,9 +1150,10 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         print("[lane-b] 车道 B 无条目(无 PR_OPEN / BOT_FIX 条目)")
         return
     slug = repo_slug()
-    # I2 缺位告警记账(车道 B 拉到的 PR 是否普遍缺 local-claude 信号)
+    # I2 缺位告警记账(车道 B 本轮拉到的 PR 是否全部缺 local-claude 信号——
+    # 单个 PR 缺位不升级,只有「全部缺」才意味着第 5 bot 全局停摆/凭据配额问题)
     any_fetched = False
-    any_missing_local = False
+    all_missing_local = True
     for entry in entries:
         if entry.status == "BOT_FIX":
             if entry.agent_pid is not None and agent_alive(entry.agent_pid):
@@ -1204,8 +1205,8 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
                           f"PR 失败,用 stale 数据继续判定: {exc}")
         any_fetched = True
         bot_done = getattr(pr, "bot_done", None) or {}
-        if bot_done.get("local-claude") is None:
-            any_missing_local = True
+        if bot_done.get("local-claude") is not None:
+            all_missing_local = False
         pr_state = pr_loop.classify_state(
             pr, pr_loop.DEFAULT_QUIET, datetime.now(timezone.utc))
 
@@ -1305,12 +1306,12 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
     state["entries"] = [e.to_dict() for e in entries]
 
     # I2: 第 5 bot 连续缺位告警。车道 B 本轮实际拉到了 PR(any_fetched)且全部
-    # 缺 local-claude 信号(any_missing_local)→ streak+1;出现任一 local-claude
+    # 缺 local-claude 信号(all_missing_local)→ streak+1;出现任一 local-claude
     # 信号则归零(恢复)。连续达到阈值时升级告警(认证失效/配额耗尽会让无人值守
     # fix/ci PR 永久 WAITING_BOTS 且静默)。只告警、不把本地 bot 降为非阻塞——
     # 硬门槛是用户确认项,不得在本工具内削弱。
     if not dry_run and any_fetched:
-        if any_missing_local:
+        if all_missing_local:
             state["local_claude_missing_ticks"] = \
                 state.get("local_claude_missing_ticks", 0) + 1
         else:

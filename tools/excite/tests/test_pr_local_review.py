@@ -255,6 +255,35 @@ def test_publish_review_422_falls_back_to_marker_only(monkeypatch):
     assert "近似比对是 SDC 盲区" in second[1]["body"]
 
 
+def test_publish_review_empty_findings_skips_diff(monkeypatch):
+    """修残余(Low): 空 findings(marker-only 信号)不拉 `gh pr diff`——diff 失败
+    不得阻断第 5 bot 的 marker-only 信号发布。"""
+    import pr_loop
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    calls = {"diff": 0}
+
+    def fake_gh(argv):
+        if argv[:2] == ["pr", "diff"]:
+            calls["diff"] += 1
+        raise AssertionError(f"意外 gh 调用(空 findings 不应拉 diff): {argv}")
+
+    monkeypatch.setattr(plr, "_gh", fake_gh)
+    posted = {}
+
+    def fake_post(path, payload):
+        posted["path"] = path
+        posted["payload"] = payload
+
+    monkeypatch.setattr(plr, "_gh_api_post", fake_post)
+
+    plr.publish_review(7, "c" * 40, [])
+
+    assert calls["diff"] == 0                 # 空 findings 零 diff 调用
+    assert posted["path"] == "repos/test/repo/pulls/7/reviews"
+    assert posted["payload"]["comments"] == []
+    assert posted["payload"]["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
+
+
 def test_review_all_open_single_pr_failure_isolated(monkeypatch, capsys):
     """I1: 时间线单 PR 审查失败(GhError)只记日志、继续其余 PR,不炸整段循环。"""
     def fake_gh(argv):

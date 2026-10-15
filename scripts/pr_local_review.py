@@ -442,19 +442,26 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
       回退重发一次 marker-only review + 全部 findings 收进 body JSON 段(零
       inline 无 422 风险),保住第 5 bot 信号(C2)。
     """
-    diff = _gh(["pr", "diff", str(pr_number)])
-    positions = _diff_new_positions(diff)
     inline, body_findings = [], []
-    for f in findings:
-        path = _norm_diff_path(f.get("path") or "")
-        try:
-            line = int(f.get("line")) if f.get("line") is not None else None
-        except (TypeError, ValueError):
-            line = None
-        if path and line is not None and (path, line) in positions:
-            inline.append(f)
-        else:
-            body_findings.append(f)
+    # 仅在确有行级 finding 候选(path 且 line 非 None)时才拉 diff 做行号校验;
+    # 空 findings / 纯 body finding 直接发 marker-only review,不拉 diff——
+    # diff 失败不得阻断第 5 bot 的 marker-only 信号发布。
+    if any((f.get("path") or "").strip() and f.get("line") is not None
+           for f in findings):
+        diff = _gh(["pr", "diff", str(pr_number)])
+        positions = _diff_new_positions(diff)
+        for f in findings:
+            path = _norm_diff_path(f.get("path") or "")
+            try:
+                line = int(f.get("line")) if f.get("line") is not None else None
+            except (TypeError, ValueError):
+                line = None
+            if path and line is not None and (path, line) in positions:
+                inline.append(f)
+            else:
+                body_findings.append(f)
+    else:
+        body_findings = list(findings)
 
     body = LOCAL_CLAUDE_MARKER + "\n"
     if body_findings:

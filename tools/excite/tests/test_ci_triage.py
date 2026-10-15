@@ -1848,3 +1848,46 @@ def test_lane_b_alerts_on_prolonged_local_claude_absence(
     assert "agent.env" in err
     # 缺位只告警,不得派发 bot 处置 agent(WAITING_BOTS 不动)
     assert len(bg.calls) == 0
+
+
+def test_lane_b_missing_streak_resets_when_any_pr_has_local_claude(
+        monkeypatch, tmp_path):
+    """修残余(Low): 缺位告警语义对齐注释——「全部缺」才 streak+1,出现任一
+    local-claude 信号即归零(单个持续缺位 PR 不再让告警永久递增,不误报为
+    凭据/配额全局问题)。"""
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+
+    pr_ok = _fake_pr(number=88, head_sha="b" * 40)
+    pr_ok.bot_done = {"local-claude": datetime.now(timezone.utc)}
+    pr_missing = _fake_pr(number=89, head_sha="c" * 40)  # 无 bot_done → 缺位
+
+    def fake_fetch(slug, num):
+        return pr_ok if num == 88 else pr_missing
+
+    monkeypatch.setattr(ct.pr_loop, "fetch_pr", fake_fetch)
+    monkeypatch.setattr(ct.pr_loop, "classify_state",
+                        lambda p, quiet, now: "WAITING_BOTS")
+    monkeypatch.setattr(ct.pr_loop, "render_collect",
+                        lambda p, slug, quiet: "# collect(fake)\n")
+    monkeypatch.setattr(ct.pr_loop, "ensure_local_review", lambda n, s: None)
+
+    e1 = _sample_entry(workflow="Sanitizer", run_id=97, status="PR_OPEN",
+                       issue_number=77, pr_number=88, rounds=0,
+                       agent_pid=None, agent_started_at=None, agent_log=None,
+                       last_dispatched_head=None, extra_runs=[])
+    e2 = _sample_entry(workflow="CodeQL", run_id=98, status="PR_OPEN",
+                       issue_number=78, pr_number=89, rounds=0,
+                       agent_pid=None, agent_started_at=None, agent_log=None,
+                       last_dispatched_head=None, extra_runs=[])
+    state = {"entries": [e1.to_dict(), e2.to_dict()],
+             "auth_failure_streak": 0, "local_claude_missing_ticks": 2}
+
+    ct.lane_b_advance(state, dry_run=False)
+
+    # PR #88 有 local-claude 信号 → 全部缺不成立,streak 归零(不再永久递增)
+    assert state["local_claude_missing_ticks"] == 0
+    assert len(bg.calls) == 0                 # WAITING_BOTS 零派发

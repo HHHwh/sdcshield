@@ -452,6 +452,118 @@ def test_reply_verifies_completeness_against_real_opinions(monkeypatch, tmp_path
         pr_loop.cmd_reply(args)
 
 
+def test_reply_verifies_completeness_multi_bot_mixed(monkeypatch, tmp_path):
+    """C1 修残余(Important): body 口径对齐 fetch_pr 的 opinion_count——覆盖五 bot
+    全部非行级待处置意见。真实意见 = local-claude body finding(1)+ coderabbit
+    行级(1)+ pr-agent ACTIVE issue 评论(1);处置 JSON 全答 3 条 → 通过;漏 1 条
+    body → 抛 GhError。"""
+    head = "d" * 40
+    pragent_body = (
+        "<!-- pr-agent:review:full -->\n"
+        "检视意见\n"
+        "<!-- pr-agent-review-state:v1 "
+        '{"last_run": {"head_sha": "' + head + '"}, '
+        '"findings": [{"state": "ACTIVE", "description": "outside-diff"}]}'
+        " -->"
+    )
+    pr = pr_loop.PRData(
+        number=9, title="t", state="open", draft=False, fork=False,
+        head_sha=head, head_ref="feat/x", base_ref="main",
+        head_time=pr_loop.parse_ts("2026-10-15T00:00:00Z"),
+        url="https://example.invalid/9", author="wangxumarshall",
+        reviews=[
+            {"id": 3, "user": {"login": "wangxumarshall"},
+             "state": "COMMENTED", "commit_id": head,
+             "submitted_at": "2026-10-15T00:01:00Z",
+             "body": _local_review_body(1)},
+        ],
+        review_comments=[
+            {"id": 201, "user": {"login": "coderabbitai[bot]"},
+             "body": "行级意见",
+             "created_at": "2026-10-15T00:02:00Z",
+             "original_commit_id": head, "commit_id": head,
+             "path": "tests/a.c", "line": 10},
+        ],
+        issue_comments=[
+            {"id": 999, "user": {"login": "github-actions[bot]"},
+             "body": pragent_body,
+             "created_at": "2026-10-15T00:03:00Z"},
+        ],
+    )
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "fetch_pr", lambda slug, num: pr)
+    monkeypatch.setattr(pr_loop, "reply_to_findings",
+                        lambda pr_num, findings, replies: None)
+
+    # 全答: 1 行级(coderabbit)+ 2 body(local-claude / pr-agent ACTIVE)
+    sha = "f" * 40
+    disp = tmp_path / "disp.json"
+    disp.write_text(json.dumps([
+        {"path": "tests/a.c", "line": 10, "id": 201, "conclusion": "采纳",
+         "reason": "r", "evidence": "已修复于 commit " + sha},
+        {"path": "tests/sve/fma_sve.c", "line": None, "conclusion": "驳回",
+         "reason": "误报", "evidence": "实证: ninja 零警告"},
+        {"path": "tests/pr-agent.c", "line": None, "conclusion": "驳回",
+         "reason": "误报", "evidence": "实证: ninja 零警告"},
+    ]))
+    args = pr_loop.build_parser().parse_args(["reply", "9", "-f", str(disp)])
+    assert pr_loop.cmd_reply(args) == 0
+
+    # 漏 1 条 body(pr-agent ACTIVE 未答)→ body 条数不符,抛错
+    disp2 = tmp_path / "disp2.json"
+    disp2.write_text(json.dumps([
+        {"path": "tests/a.c", "line": 10, "id": 201, "conclusion": "采纳",
+         "reason": "r", "evidence": "已修复于 commit " + sha},
+        {"path": "tests/sve/fma_sve.c", "line": None, "conclusion": "驳回",
+         "reason": "误报", "evidence": "实证: ninja 零警告"},
+    ]))
+    args2 = pr_loop.build_parser().parse_args(["reply", "9", "-f", str(disp2)])
+    with pytest.raises(pr_loop.GhError):
+        pr_loop.cmd_reply(args2)
+
+
+def test_reply_verifies_completeness_same_line_two_bots(monkeypatch):
+    """修残余(Low): 同 (path,line) 两条不同 bot 的行级评论,处置 JSON 精确覆盖
+    两条 id 时不误判「id 不匹配」(旧 real_by_loc 只保留一行一 id);错绑 id 仍被
+    三元组集合差拒绝。"""
+    head = "d" * 40
+    pr = pr_loop.PRData(
+        number=9, title="t", state="open", draft=False, fork=False,
+        head_sha=head, head_ref="feat/x", base_ref="main",
+        head_time=pr_loop.parse_ts("2026-10-15T00:00:00Z"),
+        url="https://example.invalid/9", author="wangxumarshall",
+        review_comments=[
+            {"id": 301, "user": {"login": "coderabbitai[bot]"},
+             "body": "coderabbit 意见",
+             "created_at": "2026-10-15T00:02:00Z",
+             "original_commit_id": head, "commit_id": head,
+             "path": "tests/a.c", "line": 10},
+            {"id": 302, "user": {"login": "chatgpt-codex-connector[bot]"},
+             "body": "codex 意见",
+             "created_at": "2026-10-15T00:02:00Z",
+             "original_commit_id": head, "commit_id": head,
+             "path": "tests/a.c", "line": 10},
+        ],
+    )
+    sha = "f" * 40
+    findings = [
+        {"path": "tests/a.c", "line": 10, "id": 301},
+        {"path": "tests/a.c", "line": 10, "id": 302},
+    ]
+    replies = [{"conclusion": "采纳", "reason": "r",
+                "evidence": f"已修复于 commit {sha}"} for _ in range(2)]
+    # 精确覆盖两条 id → 不抛错(旧 real_by_loc 会误判 id 不匹配)
+    pr_loop.verify_reply_completeness(pr, findings, replies)
+
+    # 错绑: 第二条 id 写成不存在的 303 → 三元组集合差仍拒绝
+    bad = [
+        {"path": "tests/a.c", "line": 10, "id": 301},
+        {"path": "tests/a.c", "line": 10, "id": 303},
+    ]
+    with pytest.raises(pr_loop.GhError):
+        pr_loop.verify_reply_completeness(pr, bad, replies)
+
+
 def test_collect_entries_include_local_claude_and_id():
     """collect 导出不认 local-claude 的缺陷(Important 2): reviews/行级评论/
     issue 评论三处改用与计数一致的 local_claude_comment 双条件;行级评论附 id
