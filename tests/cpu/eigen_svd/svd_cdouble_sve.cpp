@@ -34,6 +34,7 @@
  */
 
 #include "sandstone_eigen_common.h"
+#include "sdc_stress_config.h"
 
 #if defined(__aarch64__)
 
@@ -102,9 +103,15 @@ static int size_matrix(struct test *test, int *out_nthreads, double *out_gb_per_
                                 : 0.0;
     if (out_gb_per_worker) *out_gb_per_worker = ram_per_worker / (1 << 30);
 
-    int64_t knob = get_testspecific_knob_value_int(test, "mdim", 0);
+    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
+    if (knob == 0) {
+        int64_t envv = 0;
+        if (sdc_env_knob_int("eigen_svd_cdouble_sve", "mdim", &envv))
+            knob = (envv < MDIM_MIN) ? MDIM_MIN
+                  : (envv > MDIM_MAX ? MDIM_MAX : envv);
+    }
     if (knob > 0)
-        return (int)(knob < MDIM_MIN ? MDIM_MIN : (knob > MDIM_MAX ? MDIM_MAX : knob));
+        return (int)knob;
 
     /* memory-limited N: 12 * 16 * N^2 <= per-worker RAM  =>
      * N <= sqrt(ram_bytes_per_worker / 192) */

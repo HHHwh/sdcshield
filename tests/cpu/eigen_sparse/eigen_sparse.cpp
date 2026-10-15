@@ -25,22 +25,43 @@
 #include <memory>
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <Eigen/Sparse>
 
+/*
+ * 问题规模 n: 统一配置链:
+ *   1. -O eigen_sparse.n=N / 配置文件 (sdc_stress.conf) 同名条目
+ *   2. 环境变量 SDC_EIGEN_SPARSE_N
+ *   3. 自适应: 稀疏矩阵 ~10% 密度, Cholesky 分解 RSS ~ 4*n^2*8B/线程,
+ *      占物理内存 70%, clamp [64, 8192]。历史硬编码 256。
+ */
+static size_t sparse_n(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "n", 0, 64, 8192);
+    if (v == 0)
+        sdc_env_knob_int_clamped("eigen_sparse", "n", &v, 64, 8192);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_square_dim(8, 4, 4.0, 700, thread_count(), 64, 8192, test->id, "n");
+}
 
-constexpr size_t n=256;
 namespace {
 struct EigenSparseTestData {
-    Eigen::SparseMatrix<double> A{n,n};
-    Eigen::VectorXd b{n};
-    Eigen::VectorXd golden{n};
+    size_t n;
+    Eigen::SparseMatrix<double> A;   /* 运行时构造, 见 init */
+    Eigen::VectorXd b;
+    Eigen::VectorXd golden;
 };
 }
 
 static int initialize_problem(EigenSparseTestData *d)
 {
+    const size_t n = d->n;
     try {
+        d->A.resize(n, n);
+        d->b.resize(n);
+        d->golden.resize(n);
         std::vector<Eigen::Triplet<double>> trip;
         for(size_t i=0; i<n; ++i) {
             for(size_t j=i+1; j<n; ++j) {
@@ -74,6 +95,7 @@ static int initialize_problem(EigenSparseTestData *d)
 
 static int eigen_sparse_init(struct test *test) {
     auto d = std::make_unique<EigenSparseTestData>();
+    d->n = sparse_n(test);
     int ret = initialize_problem(d.get());
     if (ret)
         return ret;

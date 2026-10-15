@@ -30,22 +30,23 @@
  */
 
 #include "eigen_svd/sandstone_eigen_common.h"
+#include "sdc_stress_config.h"
 
 using namespace Eigen;
 
 typedef Matrix < float, Dynamic, Dynamic > Mat;
 typedef Eigen::JacobiSVD < Mat > SVD;
 
-#define M_DIM 512
-
-using eigen_svd_jacobi_fvectors_test = EigenSVDTest<SVD, M_DIM>;
+/* 运行时维度模式, 统一配置链。历史硬编码 512。 */
+using eigen_svd_jacobi_fvectors_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
 static int eigen_svd_jacobi_fvectors_init(struct test *test) {
-    /* H11'' (PR #147 review): run() primes per-thread matrices itself and
-     * never reads eigen_test_data's matrices — the init-time
-     * interesting-vector matrix + golden SVD that used to live here was
-     * dead since the per-thread re-roll landed. Removed. */
     auto d = new eigen_svd_jacobi_fvectors_test::eigen_test_data;
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
+    if (v == 0)
+        sdc_env_knob_int_clamped("eigen_svd_jacobi_fvectors", "mdim", &v, 64, 2048);
+    d->dim = (v > 0) ? (int)v
+                     : sdc_auto_square_dim(4, 6, 8.0, 650, thread_count(), 64, 2048, test->id, "mdim");
     test->data = d;
     return EXIT_SUCCESS;
 }

@@ -27,30 +27,56 @@
  */
 
 #include "sandstone_eigen_common.h"
+#include "sdc_stress_config.h"
 
 using namespace Eigen;
 
 typedef Matrix < double, Dynamic, Dynamic > Mat;
 typedef Eigen::BDCSVD < Mat > SVD;
 
-#define M_DIM 256
+/*
+ * 运行时维度模式, 统一配置链 (-O mdim / 配置文件 / 环境变量 / 自适应):
+ * double BDCSVD RSS ~12x, 6 矩阵/线程, 占物理内存 65%。
+ * 时间上限: 实测 BDCSVD double N=2048 数分钟级, hi 取 2048。
+ * eigen_svd_double 历史硬编码 256; eigen_svd_double2 历史硬编码 128。
+ */
+using eigen_svd_double_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
-using eigen_svd_double_test = EigenSVDTest<SVD, M_DIM>;
+static int eigen_svd_double_init_common(struct test *test, const char *test_id)
+{
+    auto d = new eigen_svd_double_test::eigen_test_data;
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
+    if (v == 0)
+        sdc_env_knob_int_clamped(test_id, "mdim", &v, 64, 2048);
+    d->dim = (v > 0) ? (int)v
+                     : sdc_auto_square_dim(8, 6, 12.0, 650, thread_count(), 64, 2048, test->id, "mdim");
+    test->data = d;
+    return EXIT_SUCCESS;
+}
+
+static int eigen_svd_double_init(struct test *test)
+{
+    return eigen_svd_double_init_common(test, "eigen_svd_double");
+}
+
 DECLARE_TEST(eigen_svd_double, "Eigen SVD (Singular Value Decomposition) solving payload,  which issues a bunch of matrix multiplies underneath, now operating on doubles")
   .groups = DECLARE_TEST_GROUPS(&group_math),
-  .test_init = eigen_svd_double_test::init,
+  .test_init = eigen_svd_double_init,
   .test_run = eigen_svd_double_test::run,
   .test_cleanup = eigen_svd_double_test::cleanup,
   .fracture_loop_count = 5,
   .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST
 
-#define M_DIM2 128
+static int eigen_svd_double2_init(struct test *test)
+{
+    return eigen_svd_double_init_common(test, "eigen_svd_double2");
+}
 
-using eigen_svd_double2_test = EigenSVDTest<SVD, M_DIM2>;
+using eigen_svd_double2_test = eigen_svd_double_test;
 DECLARE_TEST(eigen_svd_double2, "Eigen SVD (Singular Value Decomposition) solving payload,  which issues a bunch of matrix multiplies underneath, now operating on doubles")
   .groups = DECLARE_TEST_GROUPS(&group_math),
-  .test_init = eigen_svd_double2_test::init,
+  .test_init = eigen_svd_double2_init,
   .test_run = eigen_svd_double2_test::run,
   .test_cleanup = eigen_svd_double2_test::cleanup,
   .fracture_loop_count = 5,
