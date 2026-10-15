@@ -23,7 +23,7 @@
  * loop steps
  * by svcntd()/svcntw() with svwhilelt tail truncation, which makes the
  * loop indices and tails exact at the compiled-for VL=128 (and keeps a
- * larger runtime VL from walking past ELEMS — defensive only). This is
+ * larger runtime VL from walking past nelems — defensive only). This is
  * NOT a correctness promise for arbitrary vector lengths: the TU is
  * compiled with a fixed 128-bit VL and the toolchain generates code for
  * that VL only (ACLE ties the supported runtime VL to the intersection
@@ -39,6 +39,17 @@
  * -msve-vector-bits=128) so the SVE instructions never leak into the
  * NEON baseline build.
  *
+ * The per-family element count is runtime-configurable through the
+ * unified stress-config chain: "-O sleef_sve.nelems=N" or a config-file
+ * entry (128..64M, multiples of 4 — out-of-range values warn and clamp,
+ * non-multiples of 4 warn and round down), the SDC_SLEEF_SVE_NELEMS
+ * environment variable, or a memory-adaptive default (18 shared arrays
+ * + 2 per-thread scratch buffers, modeled as ~20 double-sized linear
+ * buffers per thread at 60% of physical memory) when neither is set.
+ * Configuring nelems=1024 reproduces the historical compile-time
+ * ELEMS=1024 behavior exactly (same RNG consumption order,
+ * byte-identical inputs/goldens).
+ *
  * Runtime gate: silicon without SVE (e.g. Kunpeng 920) skips cleanly
  * (CpuNotSupported / EXIT_SKIP). Real execution requires SVE hardware
  * (Kunpeng 930 / Neoverse) — documented limitation of this development
@@ -47,6 +58,7 @@
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <sleef.h>
 
@@ -56,11 +68,13 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Elements per family. Every SVE loop in this TU steps by svcntd()/
- * svcntw() and builds its load/store predicate with
- * svwhilelt_b64/b32(i, ELEMS) inside the loop, so the loop indices and
+/* Elements per family — a RUNTIME knob resolved through the unified
+ * stress-config chain (see sleef_sve_nelems below): every loop bound
+ * and buffer size in this TU derives from it. Every SVE loop steps by
+ * svcntd()/svcntw() and builds its load/store predicate with
+ * svwhilelt_b64/b32(i, nelems) inside the loop, so the loop indices and
  * tails are exact at the compiled-for VL=128 and a longer runtime VL
- * can never walk the tail past ELEMS (defensive; a shorter one only
+ * can never walk the tail past nelems (defensive; a shorter one only
  * shortens the vectors). That is the full extent of the claim: the TU
  * is compiled for the fixed 128-bit VL (-msve-vector-bits=128, matching
  * the tests_sve build block), and the toolchain generates code for that
@@ -68,14 +82,24 @@
  * comment is not a correctness promise for arbitrary vector lengths.
  * On the compiled-for VL, svcntd()==2, svcntw()==4 and every full
  * iteration's svwhilelt is all-true, so the generality costs nothing. */
-#define ELEMS 1024   /* elements per family (divisible by any sane lane count) */
+#define ELEMS_MIN 128        /* multiple of 4 — keeps every predicate fully active at VL=128 (double tier steps 2 lanes, float tier 4) */
+#define ELEMS_MAX (64 << 20) /* per-family element ceiling of the nelems knob */
 
 namespace {
 struct sleef_test_data {
+    /* elements per family, from the unified config chain (see
+     * sleef_sve_nelems): every loop bound and buffer size below derives
+     * from it, so the whole working set (the 18 shared arrays + the
+     * per-thread od/of scratch) scales with the knob — run threads share
+     * test->data, so the value is resolved once in init, never per
+     * thread */
+    int nelems;
     /* per-domain inputs; the run loop keeps its OWN per-thread re-rolled
      * copy (B2-006) — the shared arrays are filled and golden-checked
      * once in init as the finiteness canary, then replayed once per
-     * fracture by the run loop's frozen-replay round */
+     * fracture by the run loop's frozen-replay round (each family keeps
+     * its own array so the run loop can replay exactly the inputs the
+     * golden values were computed from) */
     double *xd_trig, *xd_exp, *xd_log;
     float  *xf_trig, *xf_exp, *xf_log;
     /* golden outputs, u10 tier, double & float (same canary role) */
@@ -89,6 +113,37 @@ struct sleef_test_data {
 }
 
 #define CAST(_x) static_cast<struct sleef_test_data *>(_x)
+
+/* 每家族元素数 nelems — 统一配置链:
+ *   1. -O sleef_sve.nelems=N / 配置文件同名条目 (128..64M, 越界告警并 clamp)
+ *   2. 环境变量 SDC_SLEEF_SVE_NELEMS
+ *   3. 自适应默认: 18 个全局共享数组 + 每线程 od/of 2 个 scratch, 按
+ *      double 8B/元素 × 20 个线性缓冲/线程计, 占物理内存 60%,
+ *      clamp [128, 64M]。线性缓冲用 sdc_auto_linear_count (误用方阵版
+ *      会把压力欠缩放 sqrt(n) 倍)。
+ * 任何显式值必须是 4 的倍数 (VL=128 svptrue 全活跃谓词按 4 元素步进,
+ * 见上), 非 4 倍数 log_warning 并向下对齐; 自适应值静默对齐 (其下限
+ * 128 本身是 4 的倍数, 对齐不会跌破)。 */
+static size_t sleef_sve_nelems(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "nelems", 0, ELEMS_MIN, ELEMS_MAX);
+    if (v == 0)
+        sdc_env_knob_int_clamped("sleef_sve", "nelems", &v, ELEMS_MIN, ELEMS_MAX);
+    if (v > 0) {
+        if (v % 4 != 0) {
+            log_warning("sleef_sve: nelems=%ld is not a multiple of 4 "
+                        "(fixed VL=128 svptrue full-predicate stride) — "
+                        "rounding down to %ld",
+                        (long)v, (long)(v - v % 4));
+            v -= v % 4;
+        }
+        if (v < ELEMS_MIN)
+            v = ELEMS_MIN;
+        return (size_t)v;
+    }
+    return (size_t)(sdc_auto_linear_count(8, 20, 1.0, 600, thread_count(),
+                                          ELEMS_MIN, ELEMS_MAX, test->id, "nelems") & ~(int64_t)3);
+}
 
 /* Scratch output buffers are per-thread: the framework runs one worker
  * thread per core and they all share test->data, so anything written during
@@ -159,19 +214,19 @@ static double uniform01(void)
 /* Fill one sleef_test_data's input arrays with fresh domain-mapped
  * framework-RNG randoms. Shared by init and the run-loop reroll (B2-006),
  * so the mapping and the boundary analysis above are guaranteed identical
- * in both places. */
+ * in both places. Element count from the struct's nelems knob. */
 static void sleef_fill_inputs(struct sleef_test_data *p)
 {
     /* double inputs, per domain (same mappings and boundary analysis as sleef_neon) */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < p->nelems; ++i) {
         double u = uniform01();
         p->xd_trig[i] = (u * 2.0 - 1.0) * 3.141592653589793;   /* [-pi, pi] */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < p->nelems; ++i) {
         double u = uniform01();
         p->xd_exp[i] = (u * 2.0 - 1.0) * 20.0;                 /* [-20, 20) */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < p->nelems; ++i) {
         double u = uniform01();
         p->xd_log[i] = (u + 1.0e-300) * 1.0e10;                /* positive */
     }
@@ -183,15 +238,15 @@ static void sleef_fill_inputs(struct sleef_test_data *p)
      * the whole input domain, determinism never depends on accuracy (the
      * golden values come from the very same kernel), and the init finiteness
      * tripwire backstops the rest. */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < p->nelems; ++i) {
         float u = (float)uniform01();
         p->xf_trig[i] = (u * 2.0f - 1.0f) * 3.14159265f;       /* [-pi, pi] */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < p->nelems; ++i) {
         float u = (float)uniform01();
         p->xf_exp[i] = (u * 2.0f - 1.0f) * 20.0f;              /* [-20, 20) */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < p->nelems; ++i) {
         float u = (float)uniform01();
         p->xf_log[i] = (u + 1.0e-30f) * 1.0e10f;               /* positive */
     }
@@ -201,12 +256,12 @@ static void sleef_fill_inputs(struct sleef_test_data *p)
  * kernels the run loop verifies against — the shared-helper structure is
  * what keeps the byte-exact comparison valid across rerolls. Steps by
  * svcntd()/svcntw() with svwhilelt tail-truncated predicates, exact at
- * the compiled-for VL=128 and tail-safe at larger VLs (see the ELEMS
+ * the compiled-for VL=128 and tail-safe at larger VLs (see the nelems
  * comment above for the fixed-VL caveat). */
 static void sleef_compute_goldens(struct sleef_test_data *p)
 {
-    for (int i = 0; i < ELEMS; i += svcntd()) {
-        const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+    for (int i = 0; i < p->nelems; i += svcntd()) {
+        const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)p->nelems);
         svfloat64_t x = svld1_f64(pg, &p->xd_trig[i]);
         svst1_f64(pg, &p->gd_sin[i], Sleef_sindx_u10sve(x));
         svst1_f64(pg, &p->gd_cos[i], Sleef_cosdx_u10sve(x));
@@ -221,8 +276,8 @@ static void sleef_compute_goldens(struct sleef_test_data *p)
         /* u35 has NO exp — exp2 is the independent-chain stand-in */
         svst1_f64(pg, &p->gd_exp2_35[i], Sleef_exp2dx_u35sve(svld1_f64(pg, &p->xd_exp[i])));
     }
-    for (int i = 0; i < ELEMS; i += svcntw()) {
-        const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
+    for (int i = 0; i < p->nelems; i += svcntw()) {
+        const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)p->nelems);
         svfloat32_t x = svld1_f32(pgf, &p->xf_trig[i]);
         svst1_f32(pgf, &p->gf_sin[i], Sleef_sinfx_u10sve(x));
         svst1_f32(pgf, &p->gf_cos[i], Sleef_cosfx_u10sve(x));
@@ -255,25 +310,26 @@ static int sleef_sve_init(struct test *test)
 
     auto d = new(sleef_test_data);
     test->data = d;
-    d->xd_trig = (double *)malloc(ELEMS * sizeof(double));
-    d->xd_exp  = (double *)malloc(ELEMS * sizeof(double));
-    d->xd_log  = (double *)malloc(ELEMS * sizeof(double));
-    d->xf_trig = (float  *)malloc(ELEMS * sizeof(float));
-    d->xf_exp  = (float  *)malloc(ELEMS * sizeof(float));
-    d->xf_log  = (float  *)malloc(ELEMS * sizeof(float));
-    d->gd_sin = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_cos = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_exp = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_log = (double *)malloc(ELEMS * sizeof(double));
-    d->gf_sin = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_cos = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_exp = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_log = (float  *)malloc(ELEMS * sizeof(float));
+    d->nelems = (int)sleef_sve_nelems(test);
+    d->xd_trig = (double *)malloc(d->nelems * sizeof(double));
+    d->xd_exp  = (double *)malloc(d->nelems * sizeof(double));
+    d->xd_log  = (double *)malloc(d->nelems * sizeof(double));
+    d->xf_trig = (float  *)malloc(d->nelems * sizeof(float));
+    d->xf_exp  = (float  *)malloc(d->nelems * sizeof(float));
+    d->xf_log  = (float  *)malloc(d->nelems * sizeof(float));
+    d->gd_sin = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_cos = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_exp = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_log = (double *)malloc(d->nelems * sizeof(double));
+    d->gf_sin = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_cos = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_exp = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_log = (float  *)malloc(d->nelems * sizeof(float));
     /* u35 tier golden outputs */
-    d->gd_sin35 = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_cos35 = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_log35 = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_exp2_35 = (double *)malloc(ELEMS * sizeof(double));
+    d->gd_sin35 = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_cos35 = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_log35 = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_exp2_35 = (double *)malloc(d->nelems * sizeof(double));
     if (!d->xd_trig || !d->xd_exp || !d->xd_log ||
         !d->xf_trig || !d->xf_exp || !d->xf_log ||
         !d->gd_sin || !d->gd_cos || !d->gd_exp || !d->gd_log ||
@@ -282,16 +338,17 @@ static int sleef_sve_init(struct test *test)
         report_fail_msg("OOM in sleef_sve init");
     }
 
-    /* fill inputs through the shared helper — init's pass stays only as
-     * the init-time finiteness canary (B2-006); the run loop re-rolls its
-     * own per-thread copy every kRerollEvery iterations */
+    /* fill inputs through the shared helper (bounded by d->nelems) —
+     * init's pass stays only as the init-time finiteness canary
+     * (B2-006); the run loop re-rolls its own per-thread copy every
+     * kRerollEvery iterations */
     sleef_fill_inputs(d);
 
     /* golden outputs from the very same SVE kernels, once; any non-finite
      * result would poison the byte-exact comparison (NaN != NaN), so fail
      * loudly at the source instead (same tripwire as sleef_neon) */
     sleef_compute_goldens(d);
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double gs = d->gd_sin[i], gc = d->gd_cos[i];
         double ge = d->gd_exp[i], gl = d->gd_log[i];
         if (gs != gs || gs > 1.0 || gs < -1.0 || gc != gc || gc > 1.0 || gc < -1.0 ||
@@ -301,7 +358,7 @@ static int sleef_sve_init(struct test *test)
                             "(domain mapping needs tighter scaling)", i);
         }
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float gs = d->gf_sin[i], gc = d->gf_cos[i];
         float ge = d->gf_exp[i], gl = d->gf_log[i];
         if (gs != gs || gs > 1.0f || gs < -1.0f || gc != gc || gc > 1.0f || gc < -1.0f ||
@@ -314,7 +371,7 @@ static int sleef_sve_init(struct test *test)
     /* finiteness sentinels, u35 tier. exp2(20) ~ 1.05e6 so the bound is
      * 1e7 (an order of headroom); sin/cos stay in [-1,1]; log shares the
      * original log range. */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double gs = d->gd_sin35[i], gc = d->gd_cos35[i];
         double gl = d->gd_log35[i], ge = d->gd_exp2_35[i];
         if (gs != gs || gs > 1.0 || gs < -1.0 || gc != gc || gc > 1.0 || gc < -1.0 ||
@@ -337,30 +394,31 @@ static int sleef_sve_run(struct test *test, int cpu)
         /* lazily allocate this thread's scratch output buffers and its own
          * sleef_test_data (B2-006: run owns its re-rolled copy; the shared
          * test->data is read only by the once-per-fracture frozen-replay
-         * round) */
+         * round); sizes come from the shared d->nelems knob */
         if (__builtin_expect(!od || !of || !l, 0)) {
-            od = (double *)calloc(1, ELEMS * sizeof(double));
-            of = (float  *)calloc(1, ELEMS * sizeof(float));
+            od = (double *)calloc(1, (size_t)d->nelems * sizeof(double));
+            of = (float  *)calloc(1, (size_t)d->nelems * sizeof(float));
             l = (struct sleef_test_data *)malloc(sizeof(*l));
             if (l) {
-                l->xd_trig = (double *)malloc(ELEMS * sizeof(double));
-                l->xd_exp  = (double *)malloc(ELEMS * sizeof(double));
-                l->xd_log  = (double *)malloc(ELEMS * sizeof(double));
-                l->xf_trig = (float  *)malloc(ELEMS * sizeof(float));
-                l->xf_exp  = (float  *)malloc(ELEMS * sizeof(float));
-                l->xf_log  = (float  *)malloc(ELEMS * sizeof(float));
-                l->gd_sin = (double *)malloc(ELEMS * sizeof(double));
-                l->gd_cos = (double *)malloc(ELEMS * sizeof(double));
-                l->gd_exp = (double *)malloc(ELEMS * sizeof(double));
-                l->gd_log = (double *)malloc(ELEMS * sizeof(double));
-                l->gf_sin = (float  *)malloc(ELEMS * sizeof(float));
-                l->gf_cos = (float  *)malloc(ELEMS * sizeof(float));
-                l->gf_exp = (float  *)malloc(ELEMS * sizeof(float));
-                l->gf_log = (float  *)malloc(ELEMS * sizeof(float));
-                l->gd_sin35 = (double *)malloc(ELEMS * sizeof(double));
-                l->gd_cos35 = (double *)malloc(ELEMS * sizeof(double));
-                l->gd_log35 = (double *)malloc(ELEMS * sizeof(double));
-                l->gd_exp2_35 = (double *)malloc(ELEMS * sizeof(double));
+                l->nelems = d->nelems;
+                l->xd_trig = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->xd_exp  = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->xd_log  = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->xf_trig = (float  *)malloc((size_t)d->nelems * sizeof(float));
+                l->xf_exp  = (float  *)malloc((size_t)d->nelems * sizeof(float));
+                l->xf_log  = (float  *)malloc((size_t)d->nelems * sizeof(float));
+                l->gd_sin = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->gd_cos = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->gd_exp = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->gd_log = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->gf_sin = (float  *)malloc((size_t)d->nelems * sizeof(float));
+                l->gf_cos = (float  *)malloc((size_t)d->nelems * sizeof(float));
+                l->gf_exp = (float  *)malloc((size_t)d->nelems * sizeof(float));
+                l->gf_log = (float  *)malloc((size_t)d->nelems * sizeof(float));
+                l->gd_sin35 = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->gd_cos35 = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->gd_log35 = (double *)malloc((size_t)d->nelems * sizeof(double));
+                l->gd_exp2_35 = (double *)malloc((size_t)d->nelems * sizeof(double));
             }
             /* short-circuit || leaves the l-> member checks unevaluated
              * when l itself failed to allocate; report_fail_msg is
@@ -372,7 +430,7 @@ static int sleef_sve_run(struct test *test, int cpu)
                 !l->gf_sin || !l->gf_cos || !l->gf_exp || !l->gf_log ||
                 !l->gd_sin35 || !l->gd_cos35 || !l->gd_log35 || !l->gd_exp2_35) {
                 report_fail_msg("OOM allocating thread data (%zu bytes)",
-                                (size_t)ELEMS * (11 * sizeof(double) + 7 * sizeof(float) +
+                                (size_t)d->nelems * (11 * sizeof(double) + 7 * sizeof(float) +
                                                  sizeof(double) + sizeof(float)) +
                                 sizeof(*l));
             }
@@ -414,92 +472,92 @@ static int sleef_sve_run(struct test *test, int cpu)
          * (re-rolled or the frozen-replay snapshot) through the same SVE
          * kernels and lands in the thread-private scratch; the loops
          * step by svcntd()/svcntw() with svwhilelt predicates (see the
-         * ELEMS comment), so the tail never walks past ELEMS even at a
-         * longer runtime VL (fixed-VL caveat there) */
-        for (int i = 0; i < ELEMS; i += svcntd()) {
-            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+         * nelems comment), so the tail never walks past d->nelems even
+         * at a longer runtime VL (fixed-VL caveat there) */
+        for (int i = 0; i < d->nelems; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_trig[i]);
             svst1_f64(pg, &od[i], Sleef_sindx_u10sve(x));
         }
-        memcmp_or_fail(od, src->gd_sin, ELEMS, "sin double sve");
+        memcmp_or_fail(od, src->gd_sin, d->nelems, "sin double sve");
 
-        for (int i = 0; i < ELEMS; i += svcntd()) {
-            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_trig[i]);
             svst1_f64(pg, &od[i], Sleef_cosdx_u10sve(x));
         }
-        memcmp_or_fail(od, src->gd_cos, ELEMS, "cos double sve");
+        memcmp_or_fail(od, src->gd_cos, d->nelems, "cos double sve");
 
-        for (int i = 0; i < ELEMS; i += svcntd()) {
-            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_exp[i]);
             svst1_f64(pg, &od[i], Sleef_expdx_u10sve(x));
         }
-        memcmp_or_fail(od, src->gd_exp, ELEMS, "exp double sve");
+        memcmp_or_fail(od, src->gd_exp, d->nelems, "exp double sve");
 
-        for (int i = 0; i < ELEMS; i += svcntd()) {
-            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_log[i]);
             svst1_f64(pg, &od[i], Sleef_logdx_u10sve(x));
         }
-        memcmp_or_fail(od, src->gd_log, ELEMS, "log double sve");
+        memcmp_or_fail(od, src->gd_log, d->nelems, "log double sve");
 
-        for (int i = 0; i < ELEMS; i += svcntw()) {
-            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntw()) {
+            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)d->nelems);
             svfloat32_t x = svld1_f32(pgf, &src->xf_trig[i]);
             svst1_f32(pgf, &of[i], Sleef_sinfx_u10sve(x));
         }
-        memcmp_or_fail(of, src->gf_sin, ELEMS, "sin float sve");
+        memcmp_or_fail(of, src->gf_sin, d->nelems, "sin float sve");
 
-        for (int i = 0; i < ELEMS; i += svcntw()) {
-            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntw()) {
+            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)d->nelems);
             svfloat32_t x = svld1_f32(pgf, &src->xf_trig[i]);
             svst1_f32(pgf, &of[i], Sleef_cosfx_u10sve(x));
         }
-        memcmp_or_fail(of, src->gf_cos, ELEMS, "cos float sve");
+        memcmp_or_fail(of, src->gf_cos, d->nelems, "cos float sve");
 
-        for (int i = 0; i < ELEMS; i += svcntw()) {
-            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntw()) {
+            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)d->nelems);
             svfloat32_t x = svld1_f32(pgf, &src->xf_exp[i]);
             svst1_f32(pgf, &of[i], Sleef_expfx_u10sve(x));
         }
-        memcmp_or_fail(of, src->gf_exp, ELEMS, "exp float sve");
+        memcmp_or_fail(of, src->gf_exp, d->nelems, "exp float sve");
 
-        for (int i = 0; i < ELEMS; i += svcntw()) {
-            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntw()) {
+            const svbool_t pgf = svwhilelt_b32((uint64_t)i, (uint64_t)d->nelems);
             svfloat32_t x = svld1_f32(pgf, &src->xf_log[i]);
             svst1_f32(pgf, &of[i], Sleef_logfx_u10sve(x));
         }
-        memcmp_or_fail(of, src->gf_log, ELEMS, "log float sve");
+        memcmp_or_fail(of, src->gf_log, d->nelems, "log float sve");
 
         /* u35 second-accuracy tier: same inputs, other polynomial chain */
-        for (int i = 0; i < ELEMS; i += svcntd()) {
-            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_trig[i]);
             svst1_f64(pg, &od[i], Sleef_sindx_u35sve(x));
         }
-        memcmp_or_fail(od, src->gd_sin35, ELEMS, "sin35 double sve");
+        memcmp_or_fail(od, src->gd_sin35, d->nelems, "sin35 double sve");
 
-        for (int i = 0; i < ELEMS; i += svcntd()) {
-            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_trig[i]);
             svst1_f64(pg, &od[i], Sleef_cosdx_u35sve(x));
         }
-        memcmp_or_fail(od, src->gd_cos35, ELEMS, "cos35 double sve");
+        memcmp_or_fail(od, src->gd_cos35, d->nelems, "cos35 double sve");
 
-        for (int i = 0; i < ELEMS; i += svcntd()) {
-            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_log[i]);
             svst1_f64(pg, &od[i], Sleef_logdx_u35sve(x));
         }
-        memcmp_or_fail(od, src->gd_log35, ELEMS, "log35 double sve");
+        memcmp_or_fail(od, src->gd_log35, d->nelems, "log35 double sve");
 
-        for (int i = 0; i < ELEMS; i += svcntd()) {
-            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)ELEMS);
+        for (int i = 0; i < d->nelems; i += svcntd()) {
+            const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_exp[i]);
             svst1_f64(pg, &od[i], Sleef_exp2dx_u35sve(x));
         }
-        memcmp_or_fail(od, src->gd_exp2_35, ELEMS, "exp2_35 double sve");
+        memcmp_or_fail(od, src->gd_exp2_35, d->nelems, "exp2_35 double sve");
         ++iter;
     }
     return EXIT_SUCCESS;

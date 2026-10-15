@@ -29,22 +29,28 @@
  * instructions fail most in their first arch gen) — the advsimd u10
  * codepaths are SLEEF's newest NEON implementations.
  *
- * The per-family element count is a runtime footprint knob:
- * "-O sleef_neon.nelems=N" (128..262144 in multiples of 4, default 1024;
- * the test-id prefix is required — a bare "nelems=N" is silently
- * ignored). It sweeps the replay working set across the cache hierarchy
- * (default 1024: a double segment's input+golden+scratch = 24KB stays
- * L1D-resident; 16384: ~384KB -> L2; 262144: 2MB per double buffer ->
- * LLC/DRAM; see the ELEMS_DEFAULT comment for the numbers), because
- * different cache structures hold different ACE residency. Omitting the
- * knob keeps the historical default element count (the init canary pass
- * consumes RNG in the historical order; the run loop's per-thread rerolls
- * draw fresh values from the framework RNG every kRerollEvery iterations
- * — B2-006).
+ * The per-family element count is a runtime footprint knob resolved
+ * through the unified stress-config chain (priority order): "-O
+ * sleef_neon.nelems=N" or a config-file entry (128..64M in multiples
+ * of 4 — out-of-range values warn and clamp, non-multiples of 4 warn
+ * and round down; the test-id prefix is required — a bare "nelems=N"
+ * is silently ignored), the SDC_SLEEF_NEON_NELEMS environment
+ * variable, or a memory-adaptive default (~32 double-equivalent linear
+ * buffers per thread at 60% of physical memory) when neither is set.
+ * It sweeps the replay working set across the cache hierarchy (1024:
+ * a double segment's input+golden+scratch = 24KB stays L1D-resident;
+ * 16384: ~384KB -> L2; 262144: 2MB per double buffer -> LLC/DRAM; see
+ * the ELEMS_MIN comment for the numbers), because different cache
+ * structures hold different ACE residency. Configuring nelems=1024
+ * reproduces the historical compile-time ELEMS=1024 behavior exactly:
+ * same RNG consumption order, byte-identical inputs/goldens; the run
+ * loop's per-thread rerolls draw fresh values from the framework RNG
+ * every kRerollEvery iterations — B2-006.
  * @endparblock
  */
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <sleef.h>
 
@@ -52,10 +58,12 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Elements per family — a RUNTIME knob, not a compile-time constant:
- * "-O sleef_neon.nelems=N". The default reproduces the historical
- * ELEMS=1024 exactly (identical RNG consumption order, byte-identical
- * inputs/goldens). Footprint tiers on Kunpeng 920 (TSV110 core):
+/* Elements per family — a RUNTIME knob resolved through the unified
+ * stress-config chain (see sleef_neon_nelems): -O sleef_neon.nelems /
+ * config file / SDC_SLEEF_NEON_NELEMS / memory-adaptive default.
+ * Configuring 1024 reproduces the historical ELEMS=1024 exactly
+ * (identical RNG consumption order, byte-identical inputs/goldens).
+ * Footprint tiers on Kunpeng 920 (TSV110 core):
  *   1024   — a double replay segment touches input+golden+scratch
  *            3 x 8KB = 24KB, resident in L1D (64KB)
  *   16384  — 3 x 128KB = 384KB per double segment -> L2 (512KB)
@@ -66,23 +74,26 @@
  * every accepted value must be a multiple of 4: the float halves advance
  * in float32x4_t stride-4 steps (double stride 2 divides 4), and a
  * non-multiple would make the last vector iteration overrun its buffer
- * (validated loudly in init). Per-thread data ceiling at ELEMS_MAX
- * (B2-006: inputs/goldens are per-thread now, not shared): 22 double +
- * 22 float arrays plus od/of scratch = 276 B/element, ~72MB per worker
- * at the knob maximum; 192-core worst case ~ 14GB — the server-class
- * hosts that carry that many cores carry the RAM, and the default 1024
- * stays ~276KB per worker. */
-#define ELEMS_DEFAULT 1024  /* elements per family: 512 float64x2 vectors (double half) + 256 float32x4 vectors (float half) */
-#define ELEMS_MIN 128       /* multiple of 4 — float32x4_t stride (see above) */
-#define ELEMS_MAX 262144    /* per-thread scratch ceiling ~3MB/worker (see above) */
+ * (out-of-range and non-multiple-of-4 values now warn and are
+ * clamped/aligned instead of failing fatally, so one bad entry cannot
+ * abort a whole capture campaign). Per-thread data (B2-006:
+ * inputs/goldens are per-thread now, not shared): 22 double + 22 float
+ * arrays plus od/of scratch = 276 B/element; large explicit values
+ * (od 512MB double + of 256MB float scratch per worker at the new
+ * ELEMS_MAX) are for big-memory campaign hosts — the memory-adaptive
+ * default stays bounded by construction. */
+#define ELEMS_MIN 128        /* multiple of 4 — float32x4_t stride (see above) */
+#define ELEMS_MAX (64 << 20) /* per-family element ceiling of the nelems knob */
 
 namespace {
 struct sleef_test_data {
-    /* elements per family, from the -O sleef_neon.nelems=N knob
-     * (ELEMS_MIN..ELEMS_MAX, default ELEMS_DEFAULT): every loop bound and
-     * buffer size below derives from it, so the whole working set (inputs
-     * + goldens + per-thread scratch) scales with the knob — see the
-     * ELEMS_DEFAULT comment above for the L1/L2/LLC/DRAM tier rationale */
+    /* elements per family, from the unified config chain (see
+     * sleef_neon_nelems: -O sleef_neon.nelems / config file /
+     * SDC_SLEEF_NEON_NELEMS / memory-adaptive default): every loop
+     * bound and buffer size below derives from it, so the whole working
+     * set (inputs + goldens + per-thread scratch) scales with the knob —
+     * see the ELEMS_MIN comment above for the L1/L2/LLC/DRAM tier
+     * rationale */
     int nelems;
     /* per-domain inputs; the run loop keeps its OWN per-thread re-rolled
      * copy (B2-006) — the shared arrays are filled and golden-checked
@@ -114,6 +125,37 @@ struct sleef_test_data {
 }
 
 #define CAST(_x) static_cast<struct sleef_test_data *>(_x)
+
+/* 每家族元素数 nelems — 统一配置链 (旧式 get_testspecific_knob_value_int
+ * + 致命校验的迁移版, knob 名不变, 向后兼容既有脚本):
+ *   1. -O sleef_neon.nelems=N / 配置文件同名条目 (128..64M, 越界告警并
+ *      clamp — 旧版致命失败改为非致命)
+ *   2. 环境变量 SDC_SLEEF_NEON_NELEMS
+ *   3. 自适应默认: 44 个全局共享数组 (22 double + 22 float, 折合约 33 个
+ *      double 当量) + 每线程 od/of scratch, 按 double 8B/元素 × 32 个
+ *      线性缓冲/线程计, 占物理内存 60%, clamp [128, 64M]。线性缓冲用
+ *      sdc_auto_linear_count (误用方阵版会把压力欠缩放 sqrt(n) 倍)。
+ * 任何显式值必须是 4 的倍数 (float32x4_t 步进, 见上), 非 4 倍数
+ * log_warning 并向下对齐; 自适应值静默对齐 (下限 128 是 4 的倍数)。 */
+static size_t sleef_neon_nelems(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "nelems", 0, ELEMS_MIN, ELEMS_MAX);
+    if (v == 0)
+        sdc_env_knob_int_clamped("sleef_neon", "nelems", &v, ELEMS_MIN, ELEMS_MAX);
+    if (v > 0) {
+        if (v % 4 != 0) {
+            log_warning("sleef_neon: nelems=%ld is not a multiple of 4 "
+                        "(float32x4_t stride) — rounding down to %ld",
+                        (long)v, (long)(v - v % 4));
+            v -= v % 4;
+        }
+        if (v < ELEMS_MIN)
+            v = ELEMS_MIN;
+        return (size_t)v;
+    }
+    return (size_t)(sdc_auto_linear_count(8, 32, 1.0, 600, thread_count(),
+                                          ELEMS_MIN, ELEMS_MAX, test->id, "nelems") & ~(int64_t)3);
+}
 
 /* Scratch output buffers are per-thread: the framework runs one worker
  * thread per core and they all share test->data, so anything written during
@@ -356,20 +398,13 @@ static int sleef_neon_init(struct test *test)
 {
     auto d = new(sleef_test_data);
     test->data = d;
-    /* footprint knob, mdim precedent: read once, fail loudly on bad
-     * values — a silent clamp would run a different campaign than the
-     * operator asked for, and a non-multiple-of-4 would overrun the
-     * float32x4 stride-4 vector loops (last iteration past the buffer) */
-    int64_t knob = get_testspecific_knob_value_int(test, "nelems", ELEMS_DEFAULT);
-    if (knob < ELEMS_MIN || knob > ELEMS_MAX) {
-        report_fail_msg("nelems knob out of range: %ld (valid %d..%d, default %d)",
-                        (long)knob, ELEMS_MIN, ELEMS_MAX, ELEMS_DEFAULT);
-    }
-    if (knob % 4 != 0) {
-        report_fail_msg("nelems knob must be a multiple of 4 (float32x4_t stride): %ld",
-                        (long)knob);
-    }
-    d->nelems = (int)knob;
+    /* footprint knob via the unified config chain (see sleef_neon_nelems):
+     * resolved once here and shared through test->data — run threads must
+     * not re-derive it. Out-of-range and non-multiple-of-4 values warn and
+     * are clamped/aligned instead of failing fatally (a non-multiple-of-4
+     * would otherwise overrun the float32x4 stride-4 vector loops, last
+     * iteration past the buffer) */
+    d->nelems = (int)sleef_neon_nelems(test);
     d->xd_trig = (double *)malloc(d->nelems * sizeof(double));
     d->xd_exp  = (double *)malloc(d->nelems * sizeof(double));
     d->xd_log  = (double *)malloc(d->nelems * sizeof(double));
@@ -854,7 +889,7 @@ static int sleef_neon_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(sleef_neon, "SLEEF vectorized transcendentals (NEON polynomial FMA chains, sin/cos/exp/log + u35 tier (exp2) + asin/atan/cbrt/log10/sinh/tanh/pow, double+float; footprint knob -O sleef_neon.nelems=N, 128..262144, default 1024)")
+DECLARE_TEST(sleef_neon, "SLEEF vectorized transcendentals (NEON polynomial FMA chains, sin/cos/exp/log + u35 tier (exp2) + asin/atan/cbrt/log10/sinh/tanh/pow, double+float; footprint knob -O sleef_neon.nelems=N, 128..64M, default memory-adaptive)")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_init = sleef_neon_init,
   .test_run = sleef_neon_run,
