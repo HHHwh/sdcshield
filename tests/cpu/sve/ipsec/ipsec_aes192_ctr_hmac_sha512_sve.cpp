@@ -184,6 +184,32 @@ static int aes192_ctr_hmac_sha512_sve_run(struct test *test, int cpu) {
      * this thread's stack). */
     struct aes192_ctr_hmac_sha512_sve_data local_d;
     memcpy(&local_d, d, sizeof(local_d));
+    /* plaintext/golden_ciphertext/variant_msg 是指针, 浅拷贝会让 local_d
+     * 与共享 d 指向同一缓冲; re-roll 的 memset_random/compute_golden 会
+     * 破坏 d 的冻结输入与 golden, 使下一轮 frozen replay 误比较。独立分配隔离。 */
+    local_d.plaintext = (uint8_t *)malloc(d->data_size);
+    local_d.golden_ciphertext = (uint8_t *)malloc(d->data_size);
+    if (!local_d.plaintext || !local_d.golden_ciphertext) {
+        free(local_d.plaintext);
+        free(local_d.golden_ciphertext);
+        free(ciphertext);
+        free(decrypted);
+        free(variant_msg);
+        return EXIT_FAILURE;
+    }
+    for (int s = 0; s < NSTREAM - 1; ++s) {
+        local_d.variant_msg[s] = (uint8_t *)malloc(d->data_size);
+        if (!local_d.variant_msg[s]) {
+            free(local_d.plaintext);
+            free(local_d.golden_ciphertext);
+            for (int t = 0; t < s; ++t)
+                free(local_d.variant_msg[t]);
+            free(ciphertext);
+            free(decrypted);
+            free(variant_msg);
+            return EXIT_FAILURE;
+        }
+    }
     long iter = 0;
     TEST_LOOP(test, 256) {
         if (iter & 1) {
@@ -253,6 +279,10 @@ static int aes192_ctr_hmac_sha512_sve_run(struct test *test, int cpu) {
     free(ciphertext);
     free(decrypted);
     free(variant_msg);
+    for (int s = 0; s < NSTREAM - 1; ++s)
+        free(local_d.variant_msg[s]);
+    free(local_d.plaintext);
+    free(local_d.golden_ciphertext);
     return EXIT_SUCCESS;
 }
 

@@ -183,6 +183,19 @@ static int aes_xcbc_avx_run(struct test *test, int cpu) {
      * thread's stack; keys/IV ride along as identical values). */
     struct aes_xcbc_avx_data local_d;
     memcpy(&local_d, d, sizeof(local_d));
+    /* plaintext/golden_ciphertext 是指针, 浅拷贝会让 local_d 与共享 d
+     * 指向同一缓冲; re-roll 的 memset_random/compute_golden 会破坏 d 的
+     * 冻结输入与 golden, 使下一轮 frozen replay 误比较。独立分配隔离。 */
+    local_d.plaintext = (uint8_t *)malloc(d->data_size);
+    local_d.golden_ciphertext = (uint8_t *)malloc(d->data_size);
+    if (!local_d.plaintext || !local_d.golden_ciphertext) {
+        free(local_d.plaintext);
+        free(local_d.golden_ciphertext);
+        free(ciphertext);
+        free(decrypted);
+        free(full_mac);
+        return EXIT_FAILURE;
+    }
     long iter = 0;
     TEST_LOOP(test, 256) {
         if (iter & 1) {
@@ -220,6 +233,8 @@ static int aes_xcbc_avx_run(struct test *test, int cpu) {
     free(ciphertext);
     free(decrypted);
     free(full_mac);
+    free(local_d.plaintext);
+    free(local_d.golden_ciphertext);
     return EXIT_SUCCESS;
 }
 
