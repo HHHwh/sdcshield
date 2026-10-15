@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 即可整体替换,零触网。import 失败即进程失败(诚实报错,不吞错静默跳过
 # 车道 B——scan 会顶层崩溃退出而非半盲运行)。
 import pr_loop  # noqa: E402
-from pr_loop import UNTRUSTED_BANNER  # noqa: E402
+from pr_loop import GhError, UNTRUSTED_BANNER  # noqa: E402
 
 # ============ 常量(监控范围与节奏,spec §2/§14) ============
 
@@ -258,9 +258,10 @@ class StateStore:
 
 
 # ============ gh CLI 封装(凭据全权交给 gh,与 pr_loop 同策略) ============
-
-class GhError(RuntimeError):
-    """gh CLI 调用失败(未认证/网络/端点不存在等)。"""
+# GhError 统一从 pr_loop 导入(= pr_local_review.GhError,全仓唯一异常类)。
+# 本文件不再定义独立的 GhError——否则 lane_b 的 `except GhError` 捕获的是
+# 本地类,而 pr_loop.fetch_pr 抛的是 pr_local_review.GhError,拉 PR 失败会裸
+# traceback 崩掉 scan(单条目降级容错形同虚设)。
 
 
 def gh_json(args: list[str], input_text: Optional[str] = None):
@@ -1167,12 +1168,24 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             continue
         try:
             pr = pr_loop.fetch_pr(slug, entry.pr_number)
-            pr_state = pr_loop.classify_state(
-                pr, pr_loop.DEFAULT_QUIET, datetime.now(timezone.utc))
         except GhError as exc:
             print(f"[lane-b] run {entry.run_id}: fetch PR #{entry.pr_number}"
                   f" 失败,跳过该条目: {exc}")
             continue
+        # 硬门槛规避(Task 5): 无人值守的 fix/ci PR 缺会话触发第 5 bot(本地
+        # claude),判定前先主动补第 5 bot 信号——否则 classify_state 永远
+        # WAITING_BOTS,车道 B 永久死锁。ensure_local_review 幂等(同 head 已审
+        # 即返回)。dry_run 零写零触网,跳过真实审查;审查失败仅告警降级、继续
+        # 判定(与 pr_loop.cmd_wait 的事件线触发同口径——第 5 bot 是辅助触发
+        # 线,非硬前置)。
+        if not dry_run:
+            try:
+                pr_loop.ensure_local_review(entry.pr_number, pr.head_sha)
+            except GhError as exc:
+                print(f"[lane-b] run {entry.run_id}: 第 5 bot 审查失败,"
+                      f"按缺信号继续判定: {exc}")
+        pr_state = pr_loop.classify_state(
+            pr, pr_loop.DEFAULT_QUIET, datetime.now(timezone.utc))
 
         if pr_state in ("WAITING_BOTS", "QUIET_WINDOW"):
             print(f"[lane-b] run {entry.run_id}: PR #{entry.pr_number} "

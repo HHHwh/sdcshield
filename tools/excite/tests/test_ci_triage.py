@@ -869,12 +869,16 @@ def _fake_pr_loop(monkeypatch, pr, state="READY_TO_FIX"):
     """三件套替换: fetch_pr / classify_state / render_collect 全走 fake。
 
     classify_state 可由后续用例覆写;render_collect 返回固定导出文本。
+    ensure_local_review 亦替换为 no-op(Task 5 起 lane_b 在判定前主动触发
+    第 5 bot——离线测试不得触网;需锚定触发时序的用例另行覆写)。
     """
     monkeypatch.setattr(ct.pr_loop, "fetch_pr", lambda slug, num: pr)
     monkeypatch.setattr(ct.pr_loop, "classify_state",
                         lambda p, quiet, now: state)
     monkeypatch.setattr(ct.pr_loop, "render_collect",
                         lambda p, slug, quiet: "# collect 导出(fake)\n")
+    monkeypatch.setattr(ct.pr_loop, "ensure_local_review",
+                        lambda num, sha: None)
 
 
 # ---------------------------------------------------------------------------
@@ -1703,3 +1707,59 @@ def test_kill_agent_if_alive_guards_pid_zero(monkeypatch, tmp_path):
     assert kills == [(999999905, signal.SIGKILL)]
     assert entry.agent_pid is None                # 引用照常清
     assert entry2.agent_pid is None
+
+
+# ===========================================================================
+# Task 5: 车道 B 主动触发第 5 bot(硬门槛死锁规避)
+# 口径同前: 全部离线——fake gh / fake pr_loop / fake run_background,
+# 绝不触网、绝不真实跑 claude。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 用例 37(车道 B 主动触发): PR_OPEN 条目在派发 bot 处置 agent 前,先调
+# ensure_local_review(Task 3 交付)补第 5 bot 信号——无人值守的 fix/ci PR
+# 缺会话触发本地 claude 审查,否则 classify 永远 WAITING_BOTS 硬门槛死锁。
+# 顺序锚定: review 信号必须发生在 dispatch_agent 之前。
+
+def test_lane_b_triggers_local_review_before_dispatch(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+
+    pr = _fake_pr(head_sha="b" * 40)
+    _fake_pr_loop(monkeypatch, pr, "READY_TO_FIX")
+
+    order = []
+    review_calls = []
+
+    def fake_ensure(n, s):
+        order.append("review")
+        review_calls.append((n, s))
+
+    monkeypatch.setattr(ct.pr_loop, "ensure_local_review", fake_ensure)
+
+    bg = FakeBg()
+
+    def bg_record(cmd, cwd, log):
+        order.append("dispatch")
+        return bg(cmd, cwd, log)
+
+    monkeypatch.setattr(ct, "run_background", bg_record)
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=91, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=0,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, last_dispatched_head=None,
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+
+    ct.lane_b_advance(state, dry_run=False)
+
+    # 第 5 bot 信号补触发: 以正确的 (pr_number, head_sha) 调用
+    assert review_calls == [(88, "b" * 40)]
+    # 顺序契约: 先补第 5 bot 信号,后派发 bot 处置 agent
+    assert order.index("review") < order.index("dispatch")
+    # 且确实派发了一次(READY_TO_FIX 主路径不被触发逻辑破坏)
+    assert len(bg.calls) == 1
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "BOT_FIX"

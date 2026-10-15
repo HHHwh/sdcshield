@@ -18,6 +18,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shlex
@@ -25,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Optional
 
 # 把 scripts/ 目录放进 sys.path,供后续 Task `import pr_loop`(复用其 gh 封装、
 # 不可信数据横幅与 commit 锚定)时按兄弟模块引用——与 ci_triage.py 同策略。
@@ -406,3 +408,97 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
     import pr_loop
     slug = pr_loop.resolve_slug(None)
     _gh_api_post(f"repos/{slug}/pulls/{pr_number}/reviews", payload)
+
+
+# ============ CLI 入口(Task 5: 单 PR + --all-open 时间触发线) ============
+
+def _open_pr_heads() -> list:
+    """`gh pr list --state open --json number,headRefOid` → [(number, head_sha)]。
+
+    headRefOid 是 PR head 分支头部的 SHA(gh pr list 的 JSON 字段名)。空 head
+    sha 的条目(数据异常)跳过,不审查——无 head 锚定谈不上「同 head 幂等」。
+    """
+    raw = _gh(["pr", "list", "--state", "open",
+               "--json", "number,headRefOid"])
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise GhError(f"gh pr list --json 返回非 JSON: {exc}")
+    if not isinstance(data, list):
+        raise GhError("gh pr list --json 返回非 list")
+    out = []
+    for it in data:
+        if not isinstance(it, dict):
+            continue
+        number = it.get("number")
+        sha = it.get("headRefOid") or ""
+        if number is not None and sha:
+            out.append((int(number), sha))
+    return out
+
+
+def _pr_head_sha(pr_number: int) -> str:
+    """`gh pr view <pr> --json headRefOid` → 当前 head SHA(单 PR 审查锚)。"""
+    raw = _gh(["pr", "view", str(pr_number), "--json", "headRefOid"])
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise GhError(f"gh pr view --json headRefOid 返回非 JSON: {exc}")
+    if not isinstance(data, dict) or not (data.get("headRefOid") or ""):
+        raise GhError(f"PR #{pr_number}: 无 head sha(数据异常)")
+    return data["headRefOid"]
+
+
+def review_one_pr(pr_number: int) -> None:
+    """单 PR 审查: run_review + publish_review(run_review 内已做同 head 幂等门禁)。"""
+    head_sha = _pr_head_sha(pr_number)
+    findings = run_review(pr_number, head_sha)
+    publish_review(pr_number, head_sha, findings)
+
+
+def review_all_open() -> None:
+    """枚举全部 open PR,对「already_reviewed 为假」的 head 跑审查并发布。
+
+    幂等: 同 head 已有含 LOCAL_CLAUDE_MARKER 的 review 的 PR 跳过(不重审、
+    不重发)——事件线 + 时间线撞车只审一次。
+    """
+    for number, head_sha in _open_pr_heads():
+        if already_reviewed(number, head_sha):
+            print(f"[skip] PR #{number}(head {head_sha[:8]})已有第 5 bot "
+                  f"review,跳过")
+            continue
+        findings = run_review(number, head_sha)
+        publish_review(number, head_sha, findings)
+        print(f"[review] PR #{number}(head {head_sha[:8]})已审查并发布")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="pr_local_review.py",
+        description="本地无头 claude 作为第 5 个 review bot 的对抗性检视引擎"
+                    "命令行入口(pr_loop 的姊妹件)。")
+    p.add_argument(
+        "--all-open", action="store_true",
+        help="枚举仓库全部 open PR,对尚无第 5 bot 信号的 head 跑审查"
+             "(幂等: 同 head 已审跳过)")
+    p.add_argument(
+        "pr", nargs="?", type=int,
+        help="单个 PR 编号——只审查该 PR 当前 head")
+    return p
+
+
+def main(argv: Optional[list] = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.all_open:
+        review_all_open()
+        return 0
+    if args.pr is None:
+        build_parser().print_usage(sys.stderr)
+        print("错误: 需指定 <PR> 位置参数或 --all-open", file=sys.stderr)
+        return 2
+    review_one_pr(args.pr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

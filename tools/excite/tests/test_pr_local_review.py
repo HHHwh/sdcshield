@@ -261,3 +261,33 @@ def test_parse_findings_skips_malformed():
     findings = plr._parse_findings(out)
     assert len(findings) == 1
     assert findings[0]["message"] == "近似比对是 SDC 盲区"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: CLI 入口(--all-open 枚举 open PR,只审查未审 head,已审跳过;
+# 幂等: 同 head 已审不重审、不重发)
+
+def test_cli_all_open_reviews_unreviewed_prs(monkeypatch):
+    # fake gh: gh pr list --state open --json number,headRefOid 返回 3 个 PR
+    def fake_gh(argv):
+        assert argv[:2] == ["pr", "list"]
+        return json.dumps([
+            {"number": 1, "headRefOid": "a" * 40},
+            {"number": 2, "headRefOid": "b" * 40},
+            {"number": 3, "headRefOid": "c" * 40},
+        ])
+
+    monkeypatch.setattr(plr, "_gh", fake_gh)
+    # PR #2 已审(同 head 幂等)→ 跳过;PR #1/#3 未审 → 审查 + 发布
+    monkeypatch.setattr(plr, "already_reviewed", lambda n, s: n == 2)
+    reviewed = []
+    monkeypatch.setattr(plr, "run_review",
+                        lambda n, s: (reviewed.append((n, s)) or []))
+    published = []
+    monkeypatch.setattr(plr, "publish_review",
+                        lambda n, s, f: published.append((n, s, f)))
+
+    plr.review_all_open()
+
+    assert reviewed == [(1, "a" * 40), (3, "c" * 40)]
+    assert [(n, s) for n, s, _ in published] == [(1, "a" * 40), (3, "c" * 40)]
