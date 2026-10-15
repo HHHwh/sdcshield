@@ -194,7 +194,8 @@ def test_reply_all_findings_no_miss(monkeypatch):
         {"path": "e.c", "line": None, "severity": "Minor",
          "category": "可维护性", "message": "m5", "evidence": "e5"},
     ]
-    replies = [{"conclusion": "采纳", "reason": "r", "evidence": "e"}
+    replies = [{"conclusion": "采纳", "reason": "r",
+                "evidence": f"已修复于 commit {'f' * 40}"}
                for _ in range(5)]
 
     pr_loop.reply_to_findings(9, findings, replies)
@@ -324,3 +325,105 @@ def test_local_claude_opinion_counted_not_ready_to_merge(monkeypatch):
     # 有意见 → READY_TO_FIX,绝不 READY_TO_MERGE
     assert state == "READY_TO_FIX"
     assert state != "READY_TO_MERGE"
+
+
+def test_local_claude_body_findings_tolerates_triple_backtick():
+    """evidence 含三反引号代码块时,结束围栏不应被其提前截断——body JSON 段
+    仍能完整解析(findings 一条不少),修复 Important 3(首个 ``` 提前截断)。"""
+    finding = {"path": "tests/sve/fma_sve.c", "line": None,
+               "severity": "Critical", "category": "正确性",
+               "message": "近似比对是 SDC 盲区",
+               "evidence": "证据含代码块:\n```\nint x = 1;\n```\n"}
+    body = (pr_loop.LOCAL_CLAUDE_MARKER
+            + "\n\n```json\n"
+            + json.dumps([finding], ensure_ascii=False, indent=2)
+            + "\n```\n")
+    parsed = pr_loop._local_claude_body_findings(body)
+    assert len(parsed) == 1
+    assert parsed[0]["message"] == "近似比对是 SDC 盲区"
+    assert "```" in parsed[0]["evidence"]
+    assert "\n" in parsed[0]["evidence"]
+
+
+def test_format_reply_rejects_accept_without_sha_and_reject_without_evidence():
+    # 采纳缺 commit SHA → 抛错(证据须含 7-40 位十六进制 SHA)
+    with pytest.raises(pr_loop.GhError):
+        pr_loop._format_reply({"conclusion": "采纳", "reason": "r",
+                               "evidence": "已修复,但没写 SHA"})
+    # 驳回缺实证 → 抛错(证据不能为空)
+    with pytest.raises(pr_loop.GhError):
+        pr_loop._format_reply({"conclusion": "驳回", "reason": "误报",
+                               "evidence": ""})
+    # 合法: 采纳带 SHA / 驳回带实证
+    sha = "a" * 40
+    ok_accept = pr_loop._format_reply({"conclusion": "采纳", "reason": "r",
+                                       "evidence": f"已修复于 commit {sha}"})
+    assert "采纳" in ok_accept and sha in ok_accept
+    ok_reject = pr_loop._format_reply({"conclusion": "驳回", "reason": "误报",
+                                       "evidence": "实证: ninja -C builddir 零新警告"})
+    assert "驳回" in ok_reject and "实证" in ok_reject
+
+
+def test_reply_subcommand_has_production_entry(monkeypatch, tmp_path):
+    """reply_to_findings 现在有生产入口: CLI 可解析 reply 命令,cmd_reply 读
+    处置 JSON 后调 reply_to_findings(阶段 4 处置后闭环段)。"""
+    disp = tmp_path / "dispositions.json"
+    disp.write_text(json.dumps([
+        {"path": "a.c", "line": 1, "id": 101, "conclusion": "采纳",
+         "reason": "r", "evidence": "已修复于 commit " + "f" * 40},
+        {"path": "d.c", "line": None, "conclusion": "驳回",
+         "reason": "误报", "evidence": "实证: ninja 零警告"},
+    ]))
+    captured = {}
+
+    def fake_reply(pr, findings, replies):
+        captured["pr"] = pr
+        captured["findings"] = findings
+        captured["replies"] = replies
+
+    monkeypatch.setattr(pr_loop, "reply_to_findings", fake_reply)
+
+    args = pr_loop.build_parser().parse_args(["reply", "9", "-f", str(disp)])
+    assert pr_loop.cmd_reply(args) == 0
+    assert captured["pr"] == 9
+    assert captured["findings"] == [{"path": "a.c", "line": 1, "id": 101},
+                                    {"path": "d.c", "line": None, "id": None}]
+    assert captured["replies"][0]["conclusion"] == "采纳"
+    assert captured["replies"][1]["conclusion"] == "驳回"
+
+
+def test_collect_entries_include_local_claude_and_id():
+    """collect 导出不认 local-claude 的缺陷(Important 2): reviews/行级评论/
+    issue 评论三处改用与计数一致的 local_claude_comment 双条件;行级评论附 id
+    供 reply_to_findings 逐条 reply 定位。"""
+    head = "a" * 40
+    marker = pr_loop.LOCAL_CLAUDE_MARKER
+    pr = pr_loop.PRData(
+        number=9, title="t", state="open", draft=False, fork=False,
+        head_sha=head, head_ref="feat/x", base_ref="main",
+        head_time=pr_loop.parse_ts("2026-10-15T00:00:00Z"),
+        url="https://example.invalid/9", author="wangxumarshall",
+        reviews=[
+            {"id": 1, "user": {"login": "wangxumarshall"},
+             "state": "COMMENTED", "commit_id": head,
+             "submitted_at": "2026-10-15T00:01:00Z",
+             "body": _local_review_body(2)},
+        ],
+        review_comments=[
+            {"id": 12345, "user": {"login": "wangxumarshall"},
+             "body": f"{marker}\n**[Critical] 正确性**: x",
+             "created_at": "2026-10-15T00:02:00Z",
+             "original_commit_id": head, "commit_id": head,
+             "path": "tests/sve/fma_sve.c", "line": 42},
+        ],
+        issue_comments=[
+            {"id": 999, "user": {"login": "wangxumarshall"},
+             "body": f"{marker}\n检视意见",
+             "created_at": "2026-10-15T00:03:00Z"},
+        ],
+    )
+    entries = pr_loop._collect_entries(pr)
+    titles = " | ".join(t for _, t, _ in entries)
+    assert "[local-claude] Review" in titles
+    assert "[local-claude] 行级评论" in titles and "id=12345" in titles
+    assert "[local-claude] PR 评论" in titles

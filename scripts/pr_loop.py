@@ -10,6 +10,7 @@
 #   status [<pr>]  open PR 的五 bot 完成度总览 / 单 PR 详情 + 下一步行动建议
 #   wait <pr>      阻塞轮询,直到五 bot 对当前 head 全部发信号且过静默窗
 #   collect <pr>   导出当前 head 的全部五 bot 意见为结构化 Markdown(供 subagent)
+#   reply <pr>     按处置结果 JSON 逐条答复意见(阶段 4 处置后的闭环段)
 #
 # 依赖: Python3 标准库 + gh CLI(GitHub 凭据全权交给 gh,本脚本不管理 token)。
 #   自检: gh --version && gh auth status
@@ -363,7 +364,14 @@ def _local_claude_body_findings(body: str) -> list:
     if start < 0:
         return []
     start += len("```json")
-    end = text.find("```", start)
+    # 结束围栏须是收尾的 ```(独立成行,前有换行)——finding 的 message/evidence
+    # 可能贴含 ``` 的代码块,若以首个 ``` 作结束围栏会提前截断致 json.loads 失败
+    # 而静默返回 [](意见被静默丢弃)。收尾围栏前必有实际换行,而 JSON 字符串内
+    # 的换行被 json.dumps 转义为字面 \n,故 "\n```" 不会命中 JSON 内部的 ```。
+    end = text.find("\n```", start)
+    if end < 0:
+        # 围栏未独立成行(正文以 ``` 结尾且无前置换行)的畸形情形,rfind 兜底
+        end = text.rfind("```", start)
     if end < 0:
         return []
     try:
@@ -653,7 +661,10 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot == "local-claude":
             # 第 5 bot review 按 body JSON 段的 findings 数计(行级评论由
             # n_rcomment 另行计入,不重复)——挂不上 diff 行的 finding 只在正文。
-            n_review += len(_local_claude_body_findings(raw_body))
+            # 复用 count_local_claude_findings 的 body 口径(单一真源,避免与
+            # _local_claude_body_findings 两处漂移);list reviews 端点不返回
+            # comments,此处即 body findings 数。
+            n_review += count_local_claude_findings(r)
         else:
             n_review += 1
     n_rcomment = 0
@@ -720,14 +731,24 @@ def classify_state(pr: PRData, quiet: int, now: datetime) -> str:
 
 # ============ 闭环逐条答复(设计文档 §8) ============
 
+# 答复轻量校验: 采纳须给修复 commit SHA(7-40 位十六进制),驳回须给实证依据。
+# 防「答复无证据」蒙混结案(CLAUDE.md 规则 2: 无实证不提交)。
+_REPLY_SHA_RE = re.compile(r"\b[0-9a-fA-F]{7,40}\b")
+
+
 def _format_reply(reply) -> str:
     """把一条处置结论格式化为固定结构正文: 结论(采纳/变通/驳回) + 理由 +
     证据。采纳的证据 = 修复 commit SHA;驳回的证据 = 实证依据(CLAUDE.md 规则 2:
-    ninja 零警告 / 真实输出 / 定向回归 / x86 非回归)。"""
+    ninja 零警告 / 真实输出 / 定向回归 / x86 非回归)。轻量校验: 采纳缺 SHA /
+    驳回缺实证 → 抛 GhError 拒绝答复(诚实性,反目标 3)。"""
     if isinstance(reply, dict):
         conclusion = reply.get("conclusion") or "?"
         reason = (reply.get("reason") or "").strip()
         evidence = (reply.get("evidence") or "").strip()
+        if conclusion == "采纳" and not _REPLY_SHA_RE.search(evidence):
+            raise GhError("采纳类答复缺修复 commit SHA——证据须含 7-40 位十六进制 SHA")
+        if conclusion == "驳回" and not evidence:
+            raise GhError("驳回类答复缺实证依据——证据不能为空,须引用构建/回归真实输出")
         lines = [f"结论: {conclusion}"]
         if reason:
             lines.append(f"理由: {reason}")
@@ -973,6 +994,9 @@ def _collect_entries(pr: PRData) -> list:
 
     for r in pr.reviews:
         bot = bot_of(r)
+        if bot is None and local_claude_comment(
+                (r.get("user") or {}).get("login") or "", r.get("body") or ""):
+            bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
@@ -987,23 +1011,31 @@ def _collect_entries(pr: PRData) -> list:
                         (r.get("body") or "").strip() or "(无正文)"))
     for c in pr.review_comments:
         bot = bot_of(c)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
         if ts is None:
             continue
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
+        cid = c.get("id")
+        id_suffix = f" (id={cid})" if cid is not None else ""
         extra = ""
         oid = c.get("original_commit_id") or c.get("commit_id")
         if oid and oid != pr.head_sha:
             extra = f" — 评论锚定 head {oid[:8]}(非当前 head)"
         entries.append((ts,
-                        f"[{bot}] 行级评论 {loc} — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
+                        f"[{bot}] 行级评论 {loc}{id_suffix} — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
                         (c.get("body") or "").strip() or "(无正文)"))
     for c in pr.issue_comments:
         bot = bot_of(c)
         if bot is None and pragent_comment(c):
             bot = "pr-agent"   # 收录一切 pr-agent 检视输出(含旧 head,靠锚定标注甄别)
+        if bot is None and local_claude_comment(
+                (c.get("user") or {}).get("login") or "", c.get("body") or ""):
+            bot = "local-claude"
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
@@ -1118,6 +1150,36 @@ def cmd_collect(args: argparse.Namespace) -> int:
               f"({len(md)} 字符,状态 {state},待处置意见 {pr.opinion_count} 条)")
     else:
         sys.stdout.write(md)
+    return 0
+
+
+# ============ 子命令: reply ============
+
+def cmd_reply(args: argparse.Namespace) -> int:
+    """阶段 4 处置结果的闭环逐条答复(production 调用路径)。
+
+    读一份处置结果 JSON(数组,每条一个 finding 的处置:path/line/id 定位 +
+    conclusion/reason/evidence 结论),拆成 findings 与 replies 两平行列表后调
+    reply_to_findings——行级 finding 逐条 reply,body 段 finding 汇总成一条
+    issue comment。此前 reply_to_findings 无任何生产调用入口(仅测试引用),
+    本命令补上 CLI 闭环段。
+    """
+    with open(args.file, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        raise GhError(f"处置结果 {args.file} 须为 JSON 数组(每条一条处置结论)")
+    findings: list = []
+    replies: list = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            raise GhError("处置结果数组元素须为 JSON 对象")
+        findings.append({"path": entry.get("path"), "line": entry.get("line"),
+                         "id": entry.get("id")})
+        replies.append({"conclusion": entry.get("conclusion"),
+                        "reason": entry.get("reason"),
+                        "evidence": entry.get("evidence")})
+    reply_to_findings(args.pr, findings, replies)
+    print(f"已逐条答复 PR #{args.pr} 的 {len(findings)} 条意见")
     return 0
 
 
@@ -1287,6 +1349,7 @@ def build_parser() -> argparse.ArgumentParser:
               scripts/pr_loop.py wait 242              # 等五 bot 完成(默认 2h 超时)
               scripts/pr_loop.py wait 242 --timeout 900 --interval 30
               scripts/pr_loop.py collect 242 -o /tmp/pr242.md
+              scripts/pr_loop.py reply 242 -f /tmp/dispositions.json
         """))
     p.add_argument("--repo", help="目标仓库 owner/repo(默认取 gh 上下文仓库)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1314,6 +1377,13 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("--quiet", type=int, default=DEFAULT_QUIET,
                     help=f"静默窗秒数(默认 {DEFAULT_QUIET})")
     pc.set_defaults(func=cmd_collect)
+
+    preply = sub.add_parser("reply",
+                            help="按处置结果 JSON 逐条答复意见(阶段 4 闭环,生产调用路径)")
+    preply.add_argument("pr", type=int, help="PR 号")
+    preply.add_argument("-f", "--file", required=True,
+                        help="处置结果 JSON 文件(数组,每条含 path/line/id/conclusion/reason/evidence)")
+    preply.set_defaults(func=cmd_reply)
 
     pst = sub.add_parser("selftest",
                          help="离线自检: fake gh 注入故障,验证重试/快速失败/降级契约")
