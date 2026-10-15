@@ -345,9 +345,10 @@ def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path)
 
     captured = {}
 
-    def fake_claude(cmd, cwd):
+    def fake_claude(cmd, cwd, prompt):
         captured["cmd"] = cmd
         captured["cwd"] = cwd
+        captured["prompt"] = prompt
         return json.dumps([
             {"path": "tests/sve/fma_sve.c", "line": 42,
              "severity": "Critical", "category": "正确性",
@@ -363,6 +364,8 @@ def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path)
     assert "source" in captured["cmd"]
     assert "agent.env" in captured["cmd"]
     assert "--dangerously-skip-permissions" in captured["cmd"]
+    # prompt 经 stdin 传入(不占命令行,大 diff 规避 ARG_MAX),且确实含 diff 内容
+    assert "memcmp" in captured["prompt"]
     # claude 的 cwd 指向隔离临时 worktree(读完整源码,不碰用户工作区)
     assert captured["cwd"] == str(wt)
     # 审查结束 worktree 已清理
