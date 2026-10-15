@@ -41,6 +41,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -50,7 +51,25 @@
 #include <arm_sve.h>
 #endif
 
-#define SVE_K7P_SLOTS 1024
+/* 每缓冲 VL 槽数(原 1024, 缓冲 = 槽数 × VL 字节) — 统一优先级链:
+ *   1. -O sve_rot_ldr_at_top_rowmajor_k7p_{zero,one,rand,hiham}.slots=N
+ *      / 配置文件同名条目 (4 个电池单元经 test->id 各自独立)
+ *   2. 环境变量 SDC_SVE_ROT_LDR_AT_TOP_ROWMAJOR_K7P_<CELL>_SLOTS
+ *   3. 自适应: 共享 srcA/srcB/scratch/expected 4 + 每线程 temp/dst 2,
+ *      共 6 个 VL 宽缓冲, 每槽一个 VL(128b VL 即 16B/槽), 占物理内存
+ *      60%, clamp [1024, 1M]。四个单元同一 hot loop, 槽数只决定
+ *      缓冲槽数; 模式填充随运行时槽数生成, golden 同口径。 */
+static size_t sve_k7p_slots(struct test *test, size_t vl_bytes)
+{
+    int64_t v = sdc_knob_int_clamped(test, "slots", 0, 1024, 1 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped(test->id, "slots", &v, 1024, 1 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count((int64_t)vl_bytes, 6, 1.0, 600,
+                                         thread_count(), 1024, 1 << 20, test->id, "slots");
+}
+
 #define SVE_K7P_DUMP_DIR "movbe_log/gps_rowmajor"
 
 enum SveK7Pattern {
@@ -127,7 +146,7 @@ static uint64_t sve_pattern_word(enum SveK7Pattern p, int which, uint64_t byte_o
 static int sve_k7p_init_common(struct test *test, enum SveK7Pattern p) {
     auto *data = static_cast<SveK7PData *>(malloc(sizeof(SveK7PData)));
     data->vl_bytes = svcntb();
-    data->vl_slots = SVE_K7P_SLOTS;
+    data->vl_slots = (int)sve_k7p_slots(test, data->vl_bytes);
 
     const size_t buf = (size_t)data->vl_slots * data->vl_bytes;
     data->srcA    = static_cast<uint8_t *>(aligned_alloc_safe(64, buf));
