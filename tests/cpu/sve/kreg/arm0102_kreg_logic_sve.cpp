@@ -83,9 +83,9 @@ static int arm0102_kreg_logic_sve_init(struct test *test) {
     const int slack = svcntw();   /* asm ldr z 尾批松弛, 见文件头注释 */
     const size_t total = (size_t)(ARM0102_KREG_LOGIC_SVE_COUNT + slack) * sizeof(uint32_t);
     auto *data = static_cast<Arm0102KregLogicSveData *>(malloc(sizeof(Arm0102KregLogicSveData)));
-    data->srcA = static_cast<uint32_t *>(aligned_alloc(64, total));
-    data->srcB = static_cast<uint32_t *>(aligned_alloc(64, total));
-    data->expected = static_cast<uint32_t *>(aligned_alloc(64, total));
+    data->srcA = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
+    data->srcB = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
+    data->expected = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
 
     memset_random(data->srcA, total);
     memset_random(data->srcB, total);
@@ -127,8 +127,8 @@ static int arm0102_kreg_logic_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<Arm0102KregLogicSveData *>(test->data);
 
-    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc(64, (size_t)(ARM0102_KREG_LOGIC_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
-    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc(64, (size_t)(ARM0102_KREG_LOGIC_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
+    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(ARM0102_KREG_LOGIC_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
+    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(ARM0102_KREG_LOGIC_SVE_COUNT + svcntw()) * sizeof(uint32_t)));
 
     TEST_LOOP(test, 1 << 13) {
         for (int base = 0; base < ARM0102_KREG_LOGIC_SVE_COUNT; base += svcntw()) {
