@@ -32,7 +32,10 @@ static int gather_data_size(struct test *test)
 }
 
 static int gather_i32_init(struct test *test) {
-    (void)test;
+    /* 预热 knob 缓存: data_size 在 run(worker线程)里经 sdc_knob_int_clamped
+     * 的缓存读取, 必须在 init(主线程)查询一次填充缓存, 否则 debug 构建下
+     * worker 线程查询 knob 触发 abort, 且显式配置会失效。 */
+    (void)gather_data_size(test);
     return EXIT_SUCCESS;
 }
 

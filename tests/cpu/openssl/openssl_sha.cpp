@@ -93,8 +93,14 @@ static void ssl_sha512(sha_elem *target)
     s_EVP_MD_CTX_free(mdctx);
 }
 
+static size_t sha_arena_bytes(struct test *test);
+
 static int ssl_sha_init(struct test* test)
 {
+    /* 预热 knob 缓存: arena_bytes 在 run(worker线程)里经 sdc_knob_int_clamped
+     * 的缓存读取, 必须在 init(主线程)查询一次填充缓存, 否则 debug 构建下
+     * worker 线程查询 knob 触发 abort, 且显式配置会失效。 */
+    (void)sha_arena_bytes(test);
     if (s_EVP_DigestInit_ex && s_EVP_DigestUpdate && s_EVP_DigestFinal_ex && s_EVP_get_digestbyname) {
         const size_t sha_offset = (random64() & 0x1ff) | 1;
         const size_t sha_arena_size = sha_offset + sizeof(sha_test);

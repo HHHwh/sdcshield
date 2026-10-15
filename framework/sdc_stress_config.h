@@ -47,6 +47,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <map>
+#include <string>
 #include <unistd.h>
 
 #ifdef __cplusplus
@@ -194,6 +196,24 @@ static inline int sdc_load_config_file(const char *path, char *errmsg, size_t er
 /* ------------------------------------------------------------------ */
 
 /*
+ * knob 值缓存: 框架约定 test option 只能在 test_init()(主线程,
+ * thread_num == -1)查询——在 worker 线程(test_run)调用
+ * get_testspecific_knob_value_int() 会触发 logging_mark_knob_used 的
+ * abort(debug 构建)。故 init 查询时把最终生效值缓存, run 里只读缓存。
+ * fork 模式下子进程写时复制继承主进程已填充的缓存。
+ */
+static inline std::string sdc_knob_cache_key(const struct test *test, const char *key)
+{
+    return std::string(test ? test->id : "(global)") + "." + key;
+}
+
+static inline std::map<std::string, int64_t> &sdc_knob_cache()
+{
+    static std::map<std::string, int64_t> cache;
+    return cache;
+}
+
+/*
  * 读取整型旋钮, clamp 到 [lo, hi]:
  *   - 未配置 => 返回 def;
  *   - 配置但越界 => report_fail_msg 报警(非致命, 便于 capture 战役不因
@@ -205,29 +225,43 @@ static inline int sdc_load_config_file(const char *path, char *errmsg, size_t er
 static inline int64_t sdc_knob_int_clamped(struct test *test, const char *key,
                                            int64_t def, int64_t lo, int64_t hi)
 {
+    const std::string cache_key = sdc_knob_cache_key(test, key);
+
+    /* worker 线程(test_run): 不查 knob, 直接读 init 预热过的缓存。
+     * 未命中说明该测试在 init 里没有查询过此 knob(测试 bug)——回退 def
+     * 走自适应, 与 init 侧的 def 路径语义一致, 避免 debug 构建 abort。 */
+    if (thread_num != -1) {
+        auto it = sdc_knob_cache().find(cache_key);
+        return it != sdc_knob_cache().end() ? it->second : def;
+    }
+
+    /* 主线程(test_init): 正常查询 + clamp + 缓存 */
     /* 只在显式配置时才需要校验; 用一个不可能的哨兵探测配置存在性 */
     int64_t sentinel = hi + 1;            /* sentinel 一定在 [lo,hi] 之外 */
     int64_t v = get_testspecific_knob_value_int(test, key, sentinel);
+    int64_t result;
     if (v == sentinel) {
         if (def == 0)                      /* 哨兵模式: 值由下级通道决定 */
             log_warning("[压力映射] %s.%s: 未显式配置 → 环境变量/内存自适应通道"
                         " (core179 诊断探针则为设计默认几何)",
                         test ? test->id : "(global)", key);
-        return def;                       /* 未配置 */
-    }
-    if (v < lo || v > hi) {
+        result = def;
+    } else if (v < lo || v > hi) {
         int64_t clamped = v < lo ? lo : hi;
         log_warning("%s: %s=%ld 越界 (有效 %ld..%ld), 已 clamp 为 %ld",
                     test ? test->id : "(global)", key, (long)v,
                     (long)lo, (long)hi, (long)clamped);
         log_warning("[压力映射] %s.%s = %ld (来源: 命令行/配置文件, 已越界 clamp)",
                     test ? test->id : "(global)", key, (long)clamped);
-        return clamped;
+        result = clamped;
+    } else {
+        log_warning("[压力映射] %s.%s = %ld (来源: 命令行/配置文件, 有效 %ld..%ld)",
+                    test ? test->id : "(global)", key, (long)v,
+                    (long)lo, (long)hi);
+        result = v;
     }
-    log_warning("[压力映射] %s.%s = %ld (来源: 命令行/配置文件, 有效 %ld..%ld)",
-                test ? test->id : "(global)", key, (long)v,
-                (long)lo, (long)hi);
-    return v;
+    sdc_knob_cache()[cache_key] = result;
+    return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -320,8 +354,14 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  * 的线性缓冲"用例专用。与方阵不同, 总内存对 n 是线性的, 直接除法即可
  * (误用 sdc_auto_square_dim 会把压力欠缩放 sqrt(n) 倍):
  *   n = phys_mem * mem_fraction / (bytes_per_elem * arrays_per_thread
- *                                  * rss_ratio * nthreads)
+ *                                  * rss_ratio * nthreads
+ *                                  + global_bytes_per_elem * slices)
  * clamp 到 [lo, hi]。hi 即安全上限, 供战役侧多实例并发时收口。
+ *
+ * global_bytes_per_elem (缺省 0): test_init 在共享 test->data 里按每元素
+ * 分配的全局数组字节数(sleef 类"init 期共享 + run 期每线程副本"结构)。
+ * 全局数组每个并行 slice 各实例化一份, 因此按 slice 数(total/nthreads,
+ * 向上取整)放大后并入分母; 不传即无全局项, 语义与旧版完全一致。
  */
 static inline int64_t sdc_auto_linear_count(int64_t bytes_per_elem,
                                             int arrays_per_thread,
@@ -330,7 +370,8 @@ static inline int64_t sdc_auto_linear_count(int64_t bytes_per_elem,
                                             int nthreads,
                                             int64_t lo, int64_t hi,
                                             const char *test_id = nullptr,
-                                            const char *knob = nullptr)
+                                            const char *knob = nullptr,
+                                            int64_t global_bytes_per_elem = 0)
 {
     /* quick 模式(CI 冒烟): 同 sdc_auto_square_dim */
     if (sdc_quick_run()) {
@@ -350,11 +391,20 @@ static inline int64_t sdc_auto_linear_count(int64_t bytes_per_elem,
     if (mem_fraction_permille > 1000)
         mem_fraction_permille = 1000;
 
+    /* 全局共享数组: 每 slice 实例化一份, 每元素 global_bytes_per_elem 字节,
+     * 与每线程部分(同样按元素计)一起构成总分母 (单位均为 B/元素) */
+    int slices = 1;
+    if (global_bytes_per_elem > 0) {
+        slices = (total + nthreads - 1) / nthreads;
+        if (slices < 1)
+            slices = 1;
+    }
     double budget = (double)sdc_phys_mem_bytes()
                     * (double)mem_fraction_permille / 1000.0;
     double per_elem = (double)bytes_per_elem
                       * (double)arrays_per_thread * rss_ratio
-                      * (double)nthreads;
+                      * (double)nthreads
+                      + (double)global_bytes_per_elem * slices;
     if (per_elem <= 0.0)
         return lo;
     int64_t raw = (int64_t)(budget / per_elem);
@@ -376,9 +426,10 @@ static inline int64_t sdc_auto_linear_count(int64_t bytes_per_elem,
                         "超出 %d‰ 预算 %.1f GiB — 线程过多或内存过小",
                         test_id, knob, (long)lo, expect / gib,
                         mem_fraction_permille, budget / gib);
-        log_warning("[压力映射] %s.%s = %ld (来源: 内存自适应 %d‰, 全机 %d 线程) → "
+        log_warning("[压力映射] %s.%s = %ld (来源: 内存自适应 %d‰, 全机 %d 线程%s) → "
                     "预期合计 ~%.1f GiB = 物理内存的 %.1f%%",
                     test_id, knob, (long)n, mem_fraction_permille, nthreads,
+                    global_bytes_per_elem > 0 ? ", 含全局共享数组" : "",
                     expect / gib, 100.0 * expect / phys);
     }
     return n;
