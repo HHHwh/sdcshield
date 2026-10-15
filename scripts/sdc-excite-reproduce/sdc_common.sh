@@ -134,8 +134,16 @@ cleanup_orphans() { # 清本用户 control 孤儿切片；-u 限定当前用户�
         local p; for p in ${SDC_ORPHAN_PIDS//,/ }; do kill -KILL "$p" 2>/dev/null; done
         return 0
     fi
-    pkill -KILL -x control -u "$(id -un)" 2>/dev/null
-    return 0        # pkill 无匹配 rc=1，此处无孤儿是常态，归零
+    # 只清「真孤儿」control 切片（父进程已死、被 init 收养 ppid==1），避免误杀仍在运行的
+    # 战役子进程（comm 同为 control 但 ppid 指向存活 sdcshield 主进程）。
+    # 2026-10-13 0202 板实测：pkill -x control 跨战役误杀四路 mesh/eigen/arm0102
+    # 定向战役子进程，产生伪 crash（code 9 Killed）——改 ppid==1 过滤后不再误伤。
+    local pid ppid
+    for pid in $(pgrep -x control -u "$(id -un)" 2>/dev/null); do
+        ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+        [ "$ppid" = "1" ] && kill -KILL "$pid" 2>/dev/null
+    done
+    return 0        # 无孤儿是常态，归零
 }
 
 _cur_memavail_kb() { mem_avail_kb; }   # 取数钩子：测试 monkeypatch 覆写以注入内存值
