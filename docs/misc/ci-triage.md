@@ -10,7 +10,7 @@
   标准库 + `gh` CLI，零第三方依赖；`import pr_loop` 复用 PR 判定）
 - 设计规格（会话产物，不入库）：主仓
   `docs/superpowers/specs/2026-10-13-unattended-ci-triage-design.md`
-- 测试：`tools/excite/tests/test_ci_triage.py`（28 用例，离线锚定全部关键语义）
+- 测试：`tools/excite/tests/test_ci_triage.py`（31 用例，离线锚定全部关键语义）
 
 ## 1. 架构一览
 
@@ -19,15 +19,16 @@ cron(每 30 分钟)
   └─ cd ~/operator/sdcshield-autoci && python3 scripts/ci_triage.py scan
        ├─ flock scan.lock(单实例;拿不到锁本轮退出)
        ├─ PAUSED 检查(存在→派发全停,观测照常)
+       ├─ 车道 A 收割(reap_or_advance): 先归一历史 ISSUED+PID 条目→DIAGNOSING,
+       │    再按结局推进(成功→PR_OPEN;失败→重派/超限→ESCALATED)
        ├─ heal: 无 agent 在跑时 fetch + 恢复干净的 main(自愈 agent 遗留脏树)
-       ├─ 车道 A: gh run list 扫 main 红 run
-       │    → 幂等开/复用 issue → ISSUED → 派 agent(单飞,60 min 预算)→ DIAGNOSING
-       │    → agent 结局收割: 成功(gh 核实 fix 分支 PR)→ PR_OPEN;失败重派≤2 次;
-       │      超限/自报升级 → ESCALATED(@wangxumarshall)
+       ├─ 车道 A 派发扫: gh run list 扫 main 红 run
+       │    → 幂等开/复用 issue → ISSUED → 派 agent(单飞,60 min 预算)
+       │    → dispatch 成功即置 DIAGNOSING(单一权威,9d6ba452)
        ├─ 车道 B: 对 PR_OPEN 条目 fetch_pr + classify_state(复用 pr_loop)
        │    WAITING_BOTS/QUIET_WINDOW → 不动;READY_TO_FIX → collect 导出+派
-       │    bot 处置 agent(rounds≤4,同 head 只派一次);READY_TO_MERGE/CLOSED →
-       │    @人工 + 关 issue + DONE
+       │    bot 处置 agent(rounds≤4,同 head 只派一次,派发即置 BOT_FIX);
+       │    READY_TO_MERGE/CLOSED → @人工 + 关 issue + DONE
        └─ state.json 原子落盘(先写 .tmp 再 os.replace)
 ```
 
@@ -38,8 +39,10 @@ main、回看 3 天、conclusion = failure。
 关键约束（全部由单测锚定）：全局同时最多 **1 个 agent**（车道 A/B 共槽）；
 同 workflow 有活跃条目时新红 run 只追加评论不开新 issue（同根因收敛）；
 认证失效连续 ≥3 次全局熔断。
-（单飞约束在生产首跑中被证实存在未锚定路径——车道 A 派发后状态未转
-DIAGNOSING 导致单飞失明，见 §3 已知缺陷与 §8 A3。）
+（单飞约束曾存在未锚定路径——车道 A 派发后状态未转 DIAGNOSING 导致
+单飞失明，生产首跑暴露；**已于 9d6ba452 修复**：dispatch 派发成功统一置
+DIAGNOSING（车道 A）/BOT_FIX（车道 B），历史 ISSUED+PID 条目由 reap
+归一收割，单测 29–31 锚定。首跑现场与后续演进见 §8 A3。）
 
 ## 2. 部署（一次性）
 
@@ -61,7 +64,8 @@ autoci 克隆的 main 在该分支 PR 合入前**没有此文件**——期间 c
 `~/.local/state/sdcshield-ci-triage/agent.env`：agent 派发前 `source` 的
 环境快照——`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / 模型映射
 （`ANTHROPIC_DEFAULT_*_MODEL` / `CLAUDE_DEFAULT_MODEL`）/ `PATH`。权限
-**必须 600**。cron 裸 PATH 下没有它 claude 既找不到也认证不了（C1/C3）。
+**必须 600**。cron 裸 PATH 下没有它 claude 既找不到也认证不了（cron 环境
+只有 `/usr/bin:/bin` 量级裸 PATH + claude/gh 凭据需环境快照提供）。
 该文件是凭据文件，内容绝不进日志/issue/state.json。
 
 注意：env 快照可能随网关 key 轮换失效——失效症状 = agent 日志全体
@@ -91,11 +95,11 @@ touch ~/.local/state/sdcshield-ci-triage/PAUSED   # 保险:已在跑的 tick 也
 条目状态存于 `state.json` 的 `entries[]`（每条 = 一个红 run 主键 run_id；
 同 workflow 后续红 run 挂 `extra_runs` 收敛）。
 
-> **已知实现缺陷（2026-10-15 生产首跑暴露，待修复）**：下表与 §1 架构图
-> 描述的是设计语义；实码中 `dispatch_agent` 派发后**未**把条目置为
-> DIAGNOSING（车道 A 派发扫对 ISSUED 条目直接派发）——单飞判定与收割均
-> 以 `status ∈ {DIAGNOSING, BOT_FIX}` 为前提，故对 ISSUED 条目失明：
-> 同轮多派、agent 死后条目卡 ISSUED 不收割。详见 §8 A3。
+> **历史缺陷注记（已修复）**：生产首跑（2026-10-15）曾暴露 Critical 缺陷
+> ——`dispatch_agent` 派发后不把条目置为 DIAGNOSING，单飞/收割失明。**已于
+> 9d6ba452 修复**：dispatch 派发成功统一置 DIAGNOSING（车道 A）/BOT_FIX
+> （车道 B），历史 ISSUED+PID 条目由 reap 归一收割，单测 29–31 锚定。
+> 下表即当前实码语义。首跑现场与修复后的后续演进见 §8 A3。
 
 ### 3.1 车道 A（红 run → 修复 PR）
 
@@ -256,7 +260,9 @@ Sanitizer 38482214201 检出命中；三次复跑逐字节一致（diff 空输�
 ### A2 — 真实 scan 恰好开 4 个 issue，复跑无重复 ✅
 
 首次真实 scan（正式 state 目录 `~/.local/state/sdcshield-ci-triage/`，
-2026-10-14T20:38Z，gh 已认证）：
+2026-10-14T20:38Z，gh 已认证；**输出按 workflow 分组整理，行序非逐字**——
+动作与 state.json（`created_at`/`extra_runs`/`issue_number`）及现存
+cron.log 交叉印证）：
 
 ```console
 扫描到 8 个红 run(监控 main 分支,回看 3 天)
@@ -275,6 +281,12 @@ Sanitizer 38482214201 检出命中；三次复跑逐字节一致（diff 空输�
 [dispatch] run 38240202283 → agent PID 3847759,分支 fix/ci-38240202283,日志 …/agent-38240202283-20261014T203930Z.log
 [lane-b] 车道 B 无条目(无 PR_OPEN / BOT_FIX 条目)
 ```
+
+（原始输出按 run 时间倒序滚动——`gh run list` 返回序 38482214201 →
+38243398052 → 38242267210 → 38240202283，各根因的 `[merge]` 收敛行随其
+条目位置穿插，`[heal]`/`[dispatch]` 在末段；上块按 workflow 分组整理。
+派发段 4 行在现存 cron.log 的 03:00Z tick 中有对应行为印证——但**行为**
+不同：修复后单飞生效，仅 1 个 `[dispatch]` + 3 个 `[single-flight]` 拒绝。）
 
 （4 个新根因各开 1 个 issue = **#246–#249**（`gh issue list` 复核：4 个
 `[ci-triage]` 标题、全部 OPEN）；同 workflow 后续红 run 全部收敛进
@@ -304,12 +316,15 @@ A8 同根因收敛的真实验证。
 存在，凭据有效，60 min 预算，PID 3847751/3847753/3847756/3847759）。
 后续核实发现这**违反单飞约束**，且暴露出一个 Critical 缺陷：
 
-- **缺陷（Critical，Task 6 待修）**：`dispatch_agent` 派发后**不把条目状态
+- **缺陷（Critical，生产首跑暴露）**：`dispatch_agent` 派发后**不把条目状态
   从 ISSUED 置为 DIAGNOSING**，而单飞判定 `has_running_agent` 与收割
   `reap_or_advance` 均以 `status ∈ {DIAGNOSING, BOT_FIX}` 为前提——车道 A
   派发扫对 ISSUED 条目连续派发 4 个 agent（单飞失明）；agent 死后条目
   卡在 ISSUED 永不收割（收割失明）。单测未覆盖该路径（测试直接以
   `status="DIAGNOSING"` 构造条目，A 扫→DIAGNOSING 的转移无人锚定）。
+  **已于 9d6ba452 修复**：dispatch 派发成功统一置 DIAGNOSING（车道 A）/
+  BOT_FIX（车道 B），历史 ISSUED+PID 条目由 reap 归一收割，单测 29–31
+  锚定。
 - **真实结局**：4 个 agent 日志（`agent-<runid>-20261014T203930Z.log`）
   全部 **0 字节**——spawn 后机器于 2026-10-15 09:37 CST 重启，claude
   未及产出即被杀；state.json 条目停 ISSUED + agent_pid 已死 + attempts=1。
@@ -319,13 +334,24 @@ A8 同根因收敛的真实验证。
 - **现场留存**：state.json、4 个 0 字节 agent 日志、cron/scan 日志、issue
   #246–#249 全部保留；恢复干净的 main 时删除了克隆里 3 个空 fix 分支
   （均指向 origin/main，无任何 commit）。
+- **后续演进（修复 9d6ba452 合入后，生产 cron tick 实证）**：2026-10-15
+  03:00Z tick（现存 cron.log 与 state.json）对 4 条 legacy「ISSUED+PID」
+  条目全部走归一收割：`[reap] … ISSUED+PID(历史 state 形态,Task 4 R2 前
+  条目)归一为 DIAGNOSING 收割` ×4，state 演进为 DIAGNOSING、attempts
+  1→2（agent 超时）后触发重派排队（`[requeue] … attempts 2/2,待下一轮
+  重派(agent 超时)`），同轮单飞恢复生效（首个条目 38482214201 派发
+  PID 84354，其余 3 条被 `[single-flight] 已有 agent 在跑,拒绝派发` 挡下）。
+  当前 state.json：4 条目均 DIAGNOSING，attempts 3（38482214201，已再
+  经一次重派）/ 2（其余三条），agent_pid 仅 38482214201 持 PID 84354。
 
 ### A4 — 并发/锁互斥 ✅（单测用例 23）
 
 `test_scan_lock_excludes_concurrent`：占住 `scan.lock`（真实 flock）→
 `cmd_scan` 立即返回 0、零 gh 调用。生产环境同场佐证：上会话挂的临时
 每分钟 crontab 与手动 scan 碰撞时，后到者打印 `[lock] scan.lock 已被
-占用(并发 scan?),本轮退出` 并退出（2026-10-15 task5-scan.log 两处实证）。
+占用(并发 scan?),本轮退出` 并退出（时点性记录引 task5-scan.log，该文件
+已不在——现存佐证源为 cron.log 的 `[reap]`/`[requeue]`/`[dispatch]`/
+`[single-flight]` 行与 state.json 的 `agent_pid`/`updated_at` 字段）。
 
 ### A5 — kill switch 闸门 ✅（单测用例 21）
 
@@ -352,7 +378,7 @@ A8 同根因收敛的真实验证。
 ```console
 $ python3 -m py_compile scripts/ci_triage.py          # 零输出,退出码 0
 $ python3 -m pytest tools/excite/tests/test_ci_triage.py -v
-============================== 28 passed in 0.32s ==============================
+============================== 31 passed in 0.12s ==============================
 $ python3 scripts/ci_triage.py --help
 usage: ci_triage.py [-h] {scan,status,dry-run} ...
 
@@ -361,18 +387,22 @@ CI 无人值守分诊引擎(cron 驱动,pr_loop 的姊妹工具)。周期扫描 
 
 positional arguments:
   {scan,status,dry-run}
-    scan                扫描受监控分支的 CI 失败并更新状态(Task 2)
+    scan                扫描受监控分支 CI 失败并推进双车道状态机
     status              打印当前状态总览(Task 3)
-    dry-run             只读演练: 展示将执行的动作而不实际执行(Task 4)
+    dry-run             只读演练: 展示将执行的动作而不实际执行
 
 options:
   -h, --help            show this help message and exit
 ```
 
+（A7 时点性记录：原始验收跑为 28 passed；用例 29–31 由 Task 4 R2 修复
+9d6ba452 增补，当前全套 31 passed、py_compile 零输出——2026-10-15 03:43Z
+复验。）
+
 如实声明：`ci_triage.py` 是纯 Python 工具脚本（标准库 + `gh` 子进程），
 无构建系统改动、无 C/C++ 代码、无 x86-64 影响；`ninja` 构建面与本变更
 无关。`status` 子命令为占位（`NotImplementedError`），总览暂经 §4.3 内联
-脚本查看。**gem5-fi 不适用**：无芯片能力依赖、无受影响硬件行为。
+脚本查看（Task 5 检视后 `scan`/`dry-run` help 文案已去掉内部任务编号）。**gem5-fi 不适用**：无芯片能力依赖、无受影响硬件行为。
 
 ### A8 — 同根因收敛 ✅（单测用例 5 + A2 真实 run）
 

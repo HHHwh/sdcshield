@@ -1435,13 +1435,13 @@ def build_parser() -> argparse.ArgumentParser:
                     "PR 闭环。规格见 .superpowers/sdd/2026-10-13-unattended-ci-triage/。")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    ps = sub.add_parser("scan", help="扫描受监控分支的 CI 失败并更新状态(Task 2)")
+    ps = sub.add_parser("scan", help="扫描受监控分支 CI 失败并推进双车道状态机")
     ps.set_defaults(func=cmd_scan)
 
     pt = sub.add_parser("status", help="打印当前状态总览(Task 3)")
     pt.set_defaults(func=cmd_status)
 
-    pd = sub.add_parser("dry-run", help="只读演练: 展示将执行的动作而不实际执行(Task 4)")
+    pd = sub.add_parser("dry-run", help="只读演练: 展示将执行的动作而不实际执行")
     pd.set_defaults(func=cmd_dry_run)
     return p
 
