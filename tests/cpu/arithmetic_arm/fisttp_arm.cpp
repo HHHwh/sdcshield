@@ -45,8 +45,15 @@
  * ACL tensor 维度在 init 阶段 configure, 尺寸在 init 内解析一次。 */
 static size_t fisttp_num_elements(struct test *test)
 {
-    /* hi 动态: 大内存机器按 60% 预算放开, 小内存机器保持 16M 收口 */
-    const int64_t hi = sdc_linear_hi(20, 1, 1.0, 600, thread_count(), 16 << 20);
+    /* hi 动态: 大内存机器按 60% 预算放开, 小内存机器保持 16M 收口;
+     * 但每轮 run 对全缓冲做 生成+golden+cast+memcpy+memcmp 全量遍历,
+     * hi 再按"单轮遍历 <= ~240s (~2GB elem/s/线程)"封顶, 否则单轮
+     * 超过框架 hard timeout (5*duration+30s, >=300s) 会被判 timed out
+     * (376GB 机 -n 2 自适应 6.06e9 元素实测 327s 超时)。 */
+    int64_t hi = sdc_linear_hi(20, 1, 1.0, 600, thread_count(), 16 << 20);
+    const int64_t hi_time = 2000000000;   /* 单轮全量遍历时间安全上限 */
+    if (hi > hi_time)
+        hi = hi_time;
     int64_t v = sdc_knob_int_clamped(test, "num_elements", 0, 1024, hi);
     if (v == 0)
         sdc_env_knob_int_clamped("fisttp_arm", "num_elements", &v, 1024, hi);
@@ -96,7 +103,11 @@ static int fisttp_arm_init(struct test *test) {
     auto *shared_data = new (std::nothrow) SharedTestData;
     if (!shared_data) return EXIT_FAILURE;
 
-    int max_cpus = num_cpus();
+    /* ctx 数按实际并发线程数分配(非 num_cpus()): 内存自适应模型的预算按
+     * thread_count 分摊, 若按 num_cpus() 全机分配, -n 2 时实际驻留
+     * = 64/2 倍预算(本机 64 核实测 375s 超时/内存远超模型)。
+     * run() 的 cpu 索引 < thread_count, 线程数足够覆盖。 */
+    int max_cpus = thread_count();
     if (max_cpus <= 0) max_cpus = static_cast<int>(std::thread::hardware_concurrency());
     if (max_cpus <= 0) max_cpus = 256;
 
