@@ -2,6 +2,9 @@
 /local.md
 /sdcshield-*.log
 /sdcshield-*.yaml
+# sdcshield -o / --test-list-file runtime outputs (timestamped)
+/sdc-detect-*
+/sdc-detect-testlist-*
 /total_log_output.yaml
 # forever-patrol loop artifacts (test loop run artifacts, not source)
 /run-all-forever.log
