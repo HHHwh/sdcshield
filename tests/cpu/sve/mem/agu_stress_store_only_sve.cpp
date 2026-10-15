@@ -22,6 +22,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -41,9 +42,25 @@
 #endif
 #endif
 
-#define AGU_STORE_ONLY_SVE_COUNT 1024
+/* 每缓冲 u64 元素数(原 1024) — 统一优先级链:
+ *   1. -O agu_stress_store_only_sve.count=N / 配置文件同名条目
+ *   2. 环境变量 SDC_AGU_STORE_ONLY_SVE_COUNT
+ *   3. 自适应: 共享 srcA/srcB/expected 3 + 每线程 temp/dst 2, 共 5 个
+ *      8B/元素线性缓冲, 占物理内存 60%, clamp [1024, 32M]
+ *      (线性缓冲用 sdc_auto_linear_count, 方阵模型会欠缩放 sqrt 倍)。 */
+static size_t agu_store_only_sve_count(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "count", 0, 1024, 32 << 20);
+    if (v == 0)
+        sdc_env_knob_int_clamped("agu_stress_store_only_sve", "count", &v, 1024, 32 << 20);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_auto_linear_count(8, 5, 1.0, 600, thread_count(),
+                                         1024, 32 << 20, test->id, "count");
+}
 
 struct AguStoreOnlySveData {
+    size_t    count;      /* 每缓冲 u64 元素数(init 定容, 线程共享) */
     uint64_t *srcA;
     uint64_t *srcB;
     uint64_t *expected;
@@ -60,14 +77,15 @@ static int agu_stress_store_only_sve_init(struct test *test)
     }
 #endif
     auto *data = static_cast<AguStoreOnlySveData *>(malloc(sizeof(AguStoreOnlySveData)));
-    data->srcA = static_cast<uint64_t *>(aligned_alloc(64, AGU_STORE_ONLY_SVE_COUNT * sizeof(uint64_t)));
-    data->srcB = static_cast<uint64_t *>(aligned_alloc(64, AGU_STORE_ONLY_SVE_COUNT * sizeof(uint64_t)));
-    data->expected = static_cast<uint64_t *>(aligned_alloc(64, AGU_STORE_ONLY_SVE_COUNT * sizeof(uint64_t)));
+    data->count = agu_store_only_sve_count(test);
+    data->srcA = static_cast<uint64_t *>(aligned_alloc_safe(64, data->count * sizeof(uint64_t)));
+    data->srcB = static_cast<uint64_t *>(aligned_alloc_safe(64, data->count * sizeof(uint64_t)));
+    data->expected = static_cast<uint64_t *>(aligned_alloc_safe(64, data->count * sizeof(uint64_t)));
 
-    memset_random(data->srcA, AGU_STORE_ONLY_SVE_COUNT * sizeof(uint64_t));
-    memset_random(data->srcB, AGU_STORE_ONLY_SVE_COUNT * sizeof(uint64_t));
+    memset_random(data->srcA, data->count * sizeof(uint64_t));
+    memset_random(data->srcB, data->count * sizeof(uint64_t));
 
-    for (int i = 0; i < AGU_STORE_ONLY_SVE_COUNT; i++) {
+    for (size_t i = 0; i < data->count; i++) {
         switch (i % 4) {
             case 0: data->expected[i] = data->srcA[i] + data->srcB[i]; break;
             case 1: data->expected[i] = data->srcA[i] ^ data->srcB[i]; break;
@@ -86,14 +104,15 @@ static int agu_stress_store_only_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *data = static_cast<AguStoreOnlySveData *>(test->data);
-    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, AGU_STORE_ONLY_SVE_COUNT * sizeof(uint64_t)));
-    uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, AGU_STORE_ONLY_SVE_COUNT * sizeof(uint64_t)));
+    const size_t count = data->count;
+    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc_safe(64, count * sizeof(uint64_t)));
+    uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc_safe(64, count * sizeof(uint64_t)));
     const int lanes = svcntd();
 
     TEST_LOOP(test, 1 << 13) {
-        for (size_t base = 0; base < AGU_STORE_ONLY_SVE_COUNT; base += lanes) {
-            int n = (AGU_STORE_ONLY_SVE_COUNT - base < (size_t)lanes)
-                        ? (int)(AGU_STORE_ONLY_SVE_COUNT - base) : lanes;
+        for (size_t base = 0; base < count; base += lanes) {
+            int n = (count - base < (size_t)lanes)
+                        ? (int)(count - base) : lanes;
             svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)n);
 
             svuint64_t va = svld1_u64(pg, data->srcA + base);
@@ -116,12 +135,12 @@ static int agu_stress_store_only_sve_run(struct test *test, int cpu)
             svst1_u64(pg, dst + base, res);
         }
 
-        if (memcmp(dst, data->expected, AGU_STORE_ONLY_SVE_COUNT * sizeof(uint64_t)) != 0) {
+        if (memcmp(dst, data->expected, count * sizeof(uint64_t)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (golden/actual/xor) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < (size_t)(AGU_STORE_ONLY_SVE_COUNT); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < count; ++_dump_j) {
                     if (dst[_dump_j] != data->expected[_dump_j]) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
@@ -133,8 +152,8 @@ static int agu_stress_store_only_sve_run(struct test *test, int cpu)
                         }
                     }
                 }
-                log_error("agu_stress_store_only_sve: total mismatched elements: %zu / %d", _dump_bad,
-                          AGU_STORE_ONLY_SVE_COUNT);
+                log_error("agu_stress_store_only_sve: total mismatched elements: %zu / %zu", _dump_bad,
+                          count);
             }
             report_fail_msg("agu_stress_store_only_sve data miscompare");
         }

@@ -35,6 +35,7 @@
  */
 
 #include "sandstone.h"
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -48,10 +49,26 @@
 #endif
 #endif
 
-#define DISAMBIG_ALU_SVE_BUFFER_SIZE 4096
+/* 每线程消歧地址跨度(原 4096 字节) — 统一优先级链:
+ *   1. -O mem_disambig_alu_sve.buffer_bytes=N / 配置文件同名条目
+ *   2. 环境变量 SDC_MEM_DISAMBIG_ALU_SVE_BUFFER_BYTES
+ *   3. 自适应: 字节数直给(参照 mesh 模式), 占物理内存 60%,
+ *      2 个大内存消费者均摊。PATTERNS(地址模式数)与本旋钮无关,
+ *      保持常量。 */
+static size_t disambig_alu_sve_buffer_bytes(struct test *test)
+{
+    int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0, 4096, 1ll << 40);
+    if (v == 0)
+        sdc_env_knob_int_clamped("mem_disambig_alu_sve", "buffer_bytes", &v, 4096, 1ll << 40);
+    if (v > 0)
+        return (size_t)v;
+    return (size_t)sdc_target_workset_bytes(600, 2, nullptr);
+}
+
 #define DISAMBIG_ALU_SVE_PATTERNS 512
 
 struct MemDisambigAluSveData {
+    size_t    buffer_bytes;  /* 每线程消歧缓冲字节数(init 定容, 线程共享) */
     uint64_t *offsets;    /* byte offsets, 8-aligned, clamped to SIZE - lanes*8 */
     uint64_t *values;
     uint64_t *expected;
@@ -69,12 +86,13 @@ static int mem_disambig_alu_sve_init(struct test *test)
     }
 #endif
     auto *data = static_cast<MemDisambigAluSveData *>(malloc(sizeof(MemDisambigAluSveData)));
+    data->buffer_bytes = disambig_alu_sve_buffer_bytes(test);
     data->lanes = (int)svcntd();
     data->offsets = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));
     data->values = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));
     data->expected = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));
 
-    const uint64_t max_off = DISAMBIG_ALU_SVE_BUFFER_SIZE - (uint64_t)data->lanes * 8;
+    const uint64_t max_off = data->buffer_bytes - (uint64_t)data->lanes * 8;
     for (int i = 0; i < DISAMBIG_ALU_SVE_PATTERNS; i++) {
         data->offsets[i] = (random64() % max_off) & ~7ULL;
         data->values[i] = random64();
@@ -111,7 +129,7 @@ static int mem_disambig_alu_sve_run(struct test *test, int cpu)
         report_fail_msg("mem_disambig_alu_sve: vector length changed between init and run");
     }
 
-    uint8_t *buffer = static_cast<uint8_t *>(aligned_alloc(64, DISAMBIG_ALU_SVE_BUFFER_SIZE));
+    uint8_t *buffer = static_cast<uint8_t *>(aligned_alloc_safe(64, data->buffer_bytes));
     svbool_t pg = svptrue_b64();
 
     TEST_LOOP(test, 1 << 13) {
