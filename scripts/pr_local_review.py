@@ -194,7 +194,7 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
     prompt = build_adversarial_prompt(diff, pr_context)
     worktree = _worktree_add(head_sha)
     try:
-        output = _run_claude(build_claude_command(prompt), cwd=worktree)
+        output = _run_claude(build_claude_command(), cwd=worktree, prompt=prompt)
     finally:
         _worktree_remove(worktree)
     return _parse_findings(output)
@@ -278,22 +278,26 @@ def _worktree_remove(path: str) -> None:
     shutil.rmtree(os.path.dirname(path), ignore_errors=True)
 
 
-def build_claude_command(prompt: str) -> str:
+def build_claude_command() -> str:
     """组 claude 子进程 shell 命令: source agent.env(认证)+ claude -p +
-    --dangerously-skip-permissions(无头非交互)。prompt 经 shlex.quote 注入,
-    规避 argv 注入面(与 ci_triage.dispatch_agent 同策略)。"""
+    --dangerously-skip-permissions(无头非交互)。prompt 不放在命令行——大
+    diff 会超 execve ARG_MAX(Errno 7 Argument list too long),改由 _run_claude
+    经 stdin 传入(真机首跑 #258 实证)。"""
     return (f"source {shlex.quote(AGENT_ENV_PATH)} && "
-            f"claude -p {shlex.quote(prompt)} --dangerously-skip-permissions")
+            f"claude -p --dangerously-skip-permissions")
 
 
-def _run_claude(cmd: str, cwd: str) -> str:
+def _run_claude(cmd: str, cwd: str, prompt: str) -> str:
     """跑 claude 子进程(bash -c cmd,cwd=隔离 worktree),返回 stdout。
 
-    模块级子进程出口(测试 monkeypatch 的 claude 缝,离线 fake claude 不真跑)。
+    prompt 经 stdin 传入(不占命令行,规避大 diff 触发 Errno 7 Argument list
+    too long)。模块级子进程出口(测试 monkeypatch 的 claude 缝,离线 fake
+    claude 不真跑)。
     """
     try:
-        proc = subprocess.run(["bash", "-c", cmd], capture_output=True,
-                              text=True, timeout=CLAUDE_TIMEOUT, cwd=cwd)
+        proc = subprocess.run(["bash", "-c", cmd], input=prompt,
+                              capture_output=True, text=True,
+                              timeout=CLAUDE_TIMEOUT, cwd=cwd)
     except FileNotFoundError:
         raise GhError("找不到 bash/claude——请安装 claude CLI 并配置 agent.env")
     except subprocess.TimeoutExpired:
