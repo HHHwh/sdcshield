@@ -7,7 +7,7 @@ merge 永远在人**）。
 
 - 引擎：[`scripts/pr_loop.py`](../../scripts/pr_loop.py)（纯 Python3 标准库 + `gh` 子进程，无第三方依赖）
 - 入口：Claude Code `/pr-loop` 斜杠命令（[`.claude/commands/pr-loop.md`](../../.claude/commands/pr-loop.md)）；Trae 项目规则（[`.trae/rules/pr-loop.md`](../../.trae/rules/pr-loop.md)，触发词「pr-loop / 走 pr 流程 / 检视修复循环」）。两文件内容同源，双份维护——修改任一处须同步另一处。
-- 四 bot 检视配置与判据总览：[docs/misc/pr-review-bots.md](pr-review-bots.md)。
+- 四 bot 检视配置与判据总览：[docs/build-deploy-pr-ci/pr-review-bots.md](pr-review-bots.md)。
 
 ## 1. 前置条件与自检
 

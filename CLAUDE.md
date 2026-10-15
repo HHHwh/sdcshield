@@ -77,8 +77,8 @@ incl. undocumented options: `docs/research/usage.md`.
 
 ## Writing tests
 
-Guides: `docs/misc/writing_tests.md` (full); registration
-`docs/research/adding-tests.md`; style `docs/misc/coding_style_guide.md`
+Guides: `docs/coding/writing_tests.md` (full); registration
+`docs/research/adding-tests.md`; style `docs/coding/coding_style_guide.md`
 (C++20/C17, GCC-10, no warnings, naming, layout). Minimal pattern:
 
 ```c
@@ -120,13 +120,13 @@ END_DECLARE_TEST
   `forkfd`; tests are `struct test` instances in a special ELF `tests`
   section. **Read `docs/architecture.md` before touching `framework/`** (fork
   lifecycle, quality gates, feature detection, sysdeps, RAS, RNG).
-- **Writing tests / code style**: `docs/misc/writing_tests.md`,
-  `docs/research/adding-tests.md`, `docs/misc/coding_style_guide.md`.
+- **Writing tests / code style**: `docs/coding/writing_tests.md`,
+  `docs/research/adding-tests.md`, `docs/coding/coding_style_guide.md`.
 - **CLI beyond this file**: `docs/research/usage.md` (all options).
 - **Build/deploy/multi-OS**: README (quick start, 15-version build);
-  `docs/build-deploy-ci/` (design + usermanual + offline deps).
+  `docs/build-deploy-pr-ci/` (design + usermanual + offline deps).
 - **Agent full-automation design** (PR-loop lifecycle, bots, CI sentinel,
-  auto-repair PRs, human merge gate): `docs/build-deploy-ci/agent-full-automation.md`.
+  auto-repair PRs, human merge gate): `docs/build-deploy-pr-ci/agent-full-automation.md`.
 - **Session recovery** (machine may die anytime; persist conclusions to
   disk): `docs/research/progress-log.md`; fact card in
   `docs/research/README.md`.
@@ -152,12 +152,12 @@ END_DECLARE_TEST
   the 26/27 filename swap).
 - **Theory**: `docs/hypothesis/ARM64-SDC-uArch.md`; **output schema**:
   `docs/sdcshield-cpu.schema.json`; **provenance/compliance**:
-  `docs/misc/OPEN_SOURCE_PROVENANCE.md`.
+  `docs/coding/OPEN_SOURCE_PROVENANCE.md`.
 - **Process artifacts**: `docs/superpowers/` (plans/, specs/, inventory/).
 - **PR review-fix loop** (agent-driven: four bots → subagent critical triage →
-  fix → loop → human merge; never auto-merge): `docs/misc/pr-loop.md`; engine
+  fix → loop → human merge; never auto-merge): `docs/build-deploy-pr-ci/pr-loop.md`; engine
   `scripts/pr_loop.py`; `/pr-loop` command (`.claude/commands/`) and Trae rule
   (`.trae/rules/`) are content-twins.
 - **CI 无人值守分诊**（cron/双车道/熔断/kill switch 运维手册）:
-  `docs/misc/ci-triage.md`; engine `scripts/ci_triage.py`（pr_loop 姊妹件,
+  `docs/build-deploy-pr-ci/ci-triage.md`; engine `scripts/ci_triage.py`（pr_loop 姊妹件,
   main CI 红 → issue → headless agent 修复 → fix/ci-* PR）。

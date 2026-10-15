@@ -137,12 +137,12 @@ cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 
 > **SP 必须与目标机一致**：SP3 的 `glibc-devel` 携带 `Requires: glibc = <sp3-N>`，装到 SP4 会触发受保护 `glibc` 降级死结。`install-deps.sh` 通过 `.os-version` 标记在安装前拦截错配。
 
-**从 CI 下载预构建二进制（无需 clone 子模块）**：每次 [Multi-OS Verify](.github/workflows/multi-os-verify.yml) CI 运行（每日 cron + 手动触发）都为 15 个 SP 各产出一个自包含 tarball（`built-<series>-<sp>` artifact，保留 90 天）——仓库 → Actions → 任意运行 → Artifacts 下载，或 `gh run download <run-id> --name built-24.03-SP3`。解包后 `./run-sdcshield.sh` 用法同上。要**永久保存**某次构建：手动触发时勾选 `publish_release`，15 个 tarball 会作为 GitHub Release 资产上传（详见 [docs/build-deploy-ci/multi-version-build-deploy.md §6.2.1](docs/build-deploy-ci/multi-version-build-deploy.md)）。
+**从 CI 下载预构建二进制（无需 clone 子模块）**：每次 [Multi-OS Verify](.github/workflows/multi-os-verify.yml) CI 运行（每日 cron + 手动触发）都为 15 个 SP 各产出一个自包含 tarball（`built-<series>-<sp>` artifact，保留 90 天）——仓库 → Actions → 任意运行 → Artifacts 下载，或 `gh run download <run-id> --name built-24.03-SP3`。解包后 `./run-sdcshield.sh` 用法同上。要**永久保存**某次构建：手动触发时勾选 `publish_release`，15 个 tarball 会作为 GitHub Release 资产上传（详见 [docs/build-deploy-pr-ci/multi-version-build-deploy.md §6.2.1](docs/build-deploy-pr-ci/multi-version-build-deploy.md)）。
 
 ### 从源码构建
 
 ```bash
-# openEuler 24.03（基准平台）依赖；Ubuntu/Fedora 见 docs/build-deploy-ci/offline-build-dependencies.md
+# openEuler 24.03（基准平台）依赖；Ubuntu/Fedora 见 docs/build-deploy-pr-ci/offline-build-dependencies.md
 sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel libisa-l-devel gtest-devel
 # 首次构建前：依次构建 5 个 vendored 依赖库（幂等，install/ 已存在则秒过；
 # pocketfft 无需此步——头文件+源码直接编入测试库）
@@ -198,23 +198,23 @@ cd scripts/offline-build/
 
 > **22.03 / 20.03 适配仅在容器内进行**：旧工具链（gcc-10、meson 0.59/0.54、binutils 2.34）缺 C++20/23 特性。`container-build.sh` 只读挂载源码树，在可丢弃副本上注入 `framework/compat/cpp23_polyfill.h`、版本宏（`OPENEULER_22_03`/`OPENEULER_20_03`）和 `-D` meson option（`-Denable_acl=disabled`）——host 源码不动，x86/24.03 参考路径不受影响。历史上的 `sed` 补丁（`string::contains`→`.find()`、`udf`→`.inst`、ACL 置空、`meson_version` 放宽）**已全部收敛到源码/meson option**，容器内对源码副本零修改，只剩 CXXFLAGS/polyfill 注入。
 
-完整依赖与排坑见 [docs/build-deploy-ci/offline-build-dependencies.md](docs/build-deploy-ci/offline-build-dependencies.md)。
+完整依赖与排坑见 [docs/build-deploy-pr-ci/offline-build-dependencies.md](docs/build-deploy-pr-ci/offline-build-dependencies.md)。
 
 ### 多版本一键构建与部署（15 个 OS 版本）
 
-单 SP 手动链（上节 D→E→F）由 `build-all.sh` 自动化封装（镜像烘焙、哈希 skip、`-P` 并行、`--since`、smoke/full 五档）：`./scripts/offline-build/build-all.sh --all --full --jobs 3` 一次构建全 15 个版本（20.03/22.03/24.03 × LTS+SP1~SP4），以纯净容器 full 验证为发布闸门（期望 `PASS: 15`）；`./scripts/offline-build/package-release.sh <series> <sp>` 产出 ~6MB 现场 tarball，内含自动检测 OS 的 `run.sh`（精确匹配版本、校验 sha256，不匹配硬停指路；`run.sh full` 为两段式全核 eigen 满载，4 个数值敏感测试 `-n 1` 补跑规避 ULP 级假 FAIL）。一键式全流程 `release-all.sh` 是 agent/CI 首选入口：base 镜像拉取 → 15 版本烘焙 → 构建 → full 验证 → 提交推送（3 个 RPM submodule + 主仓），五阶段幂等，check 阶段 **15 × `RESULT: PASS` 且 0 FAIL** 硬闸、不过绝不推送，在 `main` 上拒绝运行；`--skip-base` 跳过 base 拉取。完整设计、一键复现指南（含 15 SP 全 full 验证基线）与速查见 [docs/build-deploy-ci/multi-version-build-deploy.md](docs/build-deploy-ci/multi-version-build-deploy.md)（设计方案）、[docs/build-deploy-ci/multi-version-build-deploy-usermanual.md](docs/build-deploy-ci/multi-version-build-deploy-usermanual.md)（用户手册）与 [scripts/offline-build/README.md](scripts/offline-build/README.md)。
+单 SP 手动链（上节 D→E→F）由 `build-all.sh` 自动化封装（镜像烘焙、哈希 skip、`-P` 并行、`--since`、smoke/full 五档）：`./scripts/offline-build/build-all.sh --all --full --jobs 3` 一次构建全 15 个版本（20.03/22.03/24.03 × LTS+SP1~SP4），以纯净容器 full 验证为发布闸门（期望 `PASS: 15`）；`./scripts/offline-build/package-release.sh <series> <sp>` 产出 ~6MB 现场 tarball，内含自动检测 OS 的 `run.sh`（精确匹配版本、校验 sha256，不匹配硬停指路；`run.sh full` 为两段式全核 eigen 满载，4 个数值敏感测试 `-n 1` 补跑规避 ULP 级假 FAIL）。一键式全流程 `release-all.sh` 是 agent/CI 首选入口：base 镜像拉取 → 15 版本烘焙 → 构建 → full 验证 → 提交推送（3 个 RPM submodule + 主仓），五阶段幂等，check 阶段 **15 × `RESULT: PASS` 且 0 FAIL** 硬闸、不过绝不推送，在 `main` 上拒绝运行；`--skip-base` 跳过 base 拉取。完整设计、一键复现指南（含 15 SP 全 full 验证基线）与速查见 [docs/build-deploy-pr-ci/multi-version-build-deploy.md](docs/build-deploy-pr-ci/multi-version-build-deploy.md)（设计方案）、[docs/build-deploy-pr-ci/multi-version-build-deploy-usermanual.md](docs/build-deploy-pr-ci/multi-version-build-deploy-usermanual.md)（用户手册）与 [scripts/offline-build/README.md](scripts/offline-build/README.md)。
 
 ### GitHub Actions 每日多 OS 自动验证（`.github/workflows/multi-os-verify.yml`）
 
-CI 哨兵（与上节 `release-all.sh` 发布链路互补）：每天 UTC 04:00（北京时间 12:00）自动触发，也可手动 `workflow_dispatch`；15 个镜像 × 15 个 job 并行（`fail-fast: false`）——openEuler 20.03/22.03/24.03 × LTS+SP1~SP4，运行在 `ubuntu-24.04-arm` 托管 aarch64 runner 的 ghcr.io 构建镜像内。每 job 原生 `meson+ninja` 构建后由 `scripts/gha/verify-params.py` 做全量用例 × 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），`scripts/gha/benchmark.sh` 采跨 OS 基准，`report` job 汇总 15 份结果成「用例 × 版本」矩阵。零执行与全 skip 分两层判定：任一阶段 `pass+skip` 全为 0（一条结果记录都没有）即按失败处理，不静默放过坏门；`all-quality` 阶段允许只有 skip 记录的通过（仍需 `seeds>0` 种证据），并发档与 `mdim` 档则要求至少 1 个 `pass` 结果（全 skip 判 FAIL）。镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。详见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
+CI 哨兵（与上节 `release-all.sh` 发布链路互补）：每天 UTC 04:00（北京时间 12:00）自动触发，也可手动 `workflow_dispatch`；15 个镜像 × 15 个 job 并行（`fail-fast: false`）——openEuler 20.03/22.03/24.03 × LTS+SP1~SP4，运行在 `ubuntu-24.04-arm` 托管 aarch64 runner 的 ghcr.io 构建镜像内。每 job 原生 `meson+ninja` 构建后由 `scripts/gha/verify-params.py` 做全量用例 × 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），`scripts/gha/benchmark.sh` 采跨 OS 基准，`report` job 汇总 15 份结果成「用例 × 版本」矩阵。零执行与全 skip 分两层判定：任一阶段 `pass+skip` 全为 0（一条结果记录都没有）即按失败处理，不静默放过坏门；`all-quality` 阶段允许只有 skip 记录的通过（仍需 `seeds>0` 种证据），并发档与 `mdim` 档则要求至少 1 个 `pass` 结果（全 skip 判 FAIL）。镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。详见 [docs/build-deploy-pr-ci/multi-version-build-deploy.md](docs/build-deploy-pr-ci/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
 
 ### PR CI 门禁、安全扫描与基准趋势
 
-PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ 新增代码随机性门禁（`scripts/gha/check-randomization.py`：对 diff 新增的 `tests/**.cpp` 分级检查——新增自建不可重放 RNG `mt19937`/`random_device`/`rand()` 为 R1 `::error::` 必须改用框架 RNG `random32`/`random64`/`memset_random`/`frandom*`，种子由框架统一管理并随 `-vvv` 落盘、失败可精确重放；固定 pattern 大表为 R2/R3 `::warning::`，有意为之可在文件内加 `R3-justified: <理由>` 注释豁免；diff 扫描本身失败按 exit 3 loudly 报错，不静默放行）→ git 历史/DCO（人工提交必须 Signed-off-by，Copilot Autofix 机器提交豁免）→ `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，结果矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3；源码/适配层改动才跑，docs-only PR 自动跳过）。安全（`security.yaml` + `codeql.yaml`，每周全量 + PR 增量）：zizmor / gitleaks / osv-scanner / CodeQL cpp。基准趋势：nightly 的 24.03-LTS-SP3 `benchmark.tsv` 经 github-action-benchmark 推 gh-pages 分支，出跨 commit 趋势图 + 150% 回归告警（观测期不硬门）。网页侧操作清单（原生失败通知、分支保护、Code scanning 确认）见 [docs/build-deploy/ci-web-operations.md](docs/build-deploy/ci-web-operations.md)。
+PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ 新增代码随机性门禁（`scripts/gha/check-randomization.py`：对 diff 新增的 `tests/**.cpp` 分级检查——新增自建不可重放 RNG `mt19937`/`random_device`/`rand()` 为 R1 `::error::` 必须改用框架 RNG `random32`/`random64`/`memset_random`/`frandom*`，种子由框架统一管理并随 `-vvv` 落盘、失败可精确重放；固定 pattern 大表为 R2/R3 `::warning::`，有意为之可在文件内加 `R3-justified: <理由>` 注释豁免；diff 扫描本身失败按 exit 3 loudly 报错，不静默放行）→ git 历史/DCO（人工提交必须 Signed-off-by，Copilot Autofix 机器提交豁免）→ `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，结果矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3；源码/适配层改动才跑，docs-only PR 自动跳过）。安全（`security.yaml` + `codeql.yaml`，每周全量 + PR 增量）：zizmor / gitleaks / osv-scanner / CodeQL cpp。基准趋势：nightly 的 24.03-LTS-SP3 `benchmark.tsv` 经 github-action-benchmark 推 gh-pages 分支，出跨 commit 趋势图 + 150% 回归告警（观测期不硬门）。网页侧操作清单（原生失败通知、分支保护、Code scanning 确认）见 [docs/build-deploy-pr-ci/ci-web-operations.md](docs/build-deploy-pr-ci/ci-web-operations.md)。
 
 ### 代码检视机器人（PR 自动检视，聚焦 SDC 激发）
 
-仓库接入 codex、CodeRabbit、PR-Agent、Greptile 四个代码检视机器人，在 PR 打开/更新时自动检视；四者配置（`AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、`.greptile/`）均内嵌 SDC 激发专属检视要点（激发强度与覆盖、数据模式与缺陷激活、golden 字节比对、x86-64 非回归、占位诚实性、SVE/NEON VL、失败现场留证、多样性与检出率口径）。新增 `bot-coverage.yml` 做**非阻塞**覆盖度校验：有界轮询四个 bot 是否已检视，结果写入 step summary 并评论告警，**恒 exit 0、绝不阻塞合并**。四个机器人均已生效（Greptile 于 2026-10-13 完成安装授权，PR #238 首次实测产出检视）。生效核查方法（`gh` 命令与账号对照）、Greptile 安装记录与 SDC 检视要点汇总见 [docs/misc/pr-review-bots.md](docs/misc/pr-review-bots.md)。
+仓库接入 codex、CodeRabbit、PR-Agent、Greptile 四个代码检视机器人，在 PR 打开/更新时自动检视；四者配置（`AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、`.greptile/`）均内嵌 SDC 激发专属检视要点（激发强度与覆盖、数据模式与缺陷激活、golden 字节比对、x86-64 非回归、占位诚实性、SVE/NEON VL、失败现场留证、多样性与检出率口径）。新增 `bot-coverage.yml` 做**非阻塞**覆盖度校验：有界轮询四个 bot 是否已检视，结果写入 step summary 并评论告警，**恒 exit 0、绝不阻塞合并**。四个机器人均已生效（Greptile 于 2026-10-13 完成安装授权，PR #238 首次实测产出检视）。生效核查方法（`gh` 命令与账号对照）、Greptile 安装记录与 SDC 检视要点汇总见 [docs/build-deploy-pr-ci/pr-review-bots.md](docs/build-deploy-pr-ci/pr-review-bots.md)。
 
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
@@ -517,9 +517,9 @@ bash  scripts/sdc-excite-reproduce/excite.sh --smoke / --status / --stop    # �
 
 ## 延伸
 
-- [PR 检视-修复闭环手册](docs/misc/pr-loop.md) — 会话内 agent 自动化：push 自动开 PR → 四 bot 检视 → subagent 批判性处置修复 → 循环闭环 → 人工 merge（引擎 `scripts/pr_loop.py`，双端入口 `/pr-loop` 与 `.trae/rules/pr-loop.md`）
-- [编写测试指南](docs/misc/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
-- [离线构建依赖与排坑](docs/build-deploy-ci/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
+- [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md) — 会话内 agent 自动化：push 自动开 PR → 四 bot 检视 → subagent 批判性处置修复 → 循环闭环 → 人工 merge（引擎 `scripts/pr_loop.py`，双端入口 `/pr-loop` 与 `.trae/rules/pr-loop.md`）
+- [编写测试指南](docs/coding/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
+- [离线构建依赖与排坑](docs/build-deploy-pr-ci/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
 - [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据
 - [SDC 学术综述报告](docs/paper/SDC_ACADEMIC_SURVEY_CN.md) — 53 篇论文全文精读（笔记在 `docs/paper/ref-paper-fullread-digest/`）写成的分类学综述：核心特征/根因/故障模式/检测/处理五层分类学，学术界×产业界对比、合作生态与全栈×全生命周期启示
 - [贡献指南](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md)
