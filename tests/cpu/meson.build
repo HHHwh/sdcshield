@@ -206,10 +206,11 @@ endif
 
 
 # Vector test suite: NEON-backed counterparts of the x86 AVX-512 k-register
-# (mask register) and swizzle/insert-extract tests. The 5 files that use
-# <arm_neon.h> (insert_extract, swizzle, kreg1, kreg4, kreg7) self-skip with
-# EXIT_SKIP on non-AArch64 via an #ifdef __aarch64__ guard; the other 6
-# (kreg2/3/5/6/8/9) are pure scalar integer simulations and build everywhere.
+# (mask register) and swizzle/insert-extract tests. All 11 files use
+# <arm_neon.h> under an #ifdef __aarch64__ guard and self-skip with
+# EXIT_SKIP on non-AArch64; the former scalar sw=hw self-comparisons in
+# kreg2/3/5/6/8/9 were replaced (B1-004) with real NEON vector paths
+# (vshlq/vorrq/vbicq/vzip1q/vmaxvq...) plus independent scalar goldens.
 tests_set_base.add(
     files(
         'vector/swizzle.cpp',
@@ -478,11 +479,13 @@ tests_set_base.add(
 )
 
 # CRC test suite (15 tests, tests/cpu/crc/). Three groups:
-#  - zpclmul / zpclmul_rep: zlib CRC32 with an ARM NEON instruction exercised
-#    on aarch64 (gated by #ifdef __aarch64__ in the source; on other arches
-#    they degrade to a portable zlib-only path, so they build everywhere
-#    zlib is present). Wired under the zlib_dep gate since they call
-#    zlib crc32().
+#  - zpclmul / zpclmul_rep: CRC-32 folded over NEON PMULL/PMULL2
+#    carry-less multiplication on aarch64 (DUT, structure after
+#    libdeflate's crc32_arm_pmullx4, function-level target("+crypto")
+#    so no extra -march is needed here) vs the independent zlib
+#    crc32() software golden. On non-aarch64 they compile to a clean
+#    EXIT_SKIP placeholder. Wired under the zlib_dep gate since the
+#    golden calls zlib crc32().
 #  - 10 isal_* tests: isa-l (libisal) CRC functions. isal is a portable C
 #    library with arch-optimised dispatch internally; the tests declare their
 #    own extern "C" prototypes. Wired under the isal_lib gate below.
@@ -614,11 +617,13 @@ else
     message('pocketfft.h not found under third-party/pocketfft — extract pocketfft-master.tar.gz to enable the pocketfft_fft test.')
 endif
 
-# Gather/scatter tests. These are software-simulated gather/scatter using
-# plain double/int arrays and std::mt19937 — no x86 intrinsics, no arm_neon.h.
-# The x86 AVX-style names (gatherscatterpd/ps) are inherited from the
-# reference tree; the implementations are portable C++ that run identically
-# on both x86-64 and aarch64.
+# Gather/scatter tests, ported in 9e06e31e. The x86 AVX-style names
+# (gatherscatterpd/ps) are inherited from the reference tree. On aarch64 the
+# DUT drives real NEON vector lanes (vld1q_lane_*/vst1q_lane_* gathers and
+# scatters with an independent scalar golden — load_port.cpp precedent);
+# inputs come from the framework RNG and are re-rolled every round (0445a218).
+# Elsewhere the tests skip honestly with "to be implemented (placeholder)"
+# (no vacuous pass).
 tests_set_base.add(
     files(
         'gather/gather_f32.cpp',

@@ -92,8 +92,10 @@ parse_yaml_counts() {
 }
 
 echo "=== $OS_TAG : list-tests ==="
-LIST=$(run_in_container --list-tests 2>/dev/null | grep -v '^$' || true)
-TOTAL=$(echo "$LIST" | grep -c . || echo 0)
+LIST=$(run_in_container --list-tests 2>/dev/null | grep -v '^$')
+# grep -c 无匹配时 rc=1 但已输出 "0"; "|| echo 0" 会追加第二个 0 使 TOTAL 变成两行,
+# [ "$TOTAL" -ge 100 ] 随即报"需要整数表达式"——改用 tr 单一数字输出(同 parse_yaml_counts)
+TOTAL=$(echo "$LIST" | grep -c . | tr -d '\n'); TOTAL=${TOTAL:-0}
 echo "total tests listed: $TOTAL"
 [ "$TOTAL" -ge 100 ] || { echo "RESULT: FAIL too-few-tests($TOTAL)" ; exit 1; }
 
@@ -104,19 +106,27 @@ echo "=== $OS_TAG : eigen 数值类 (-n 1) ==="
 for t in $EIGEN_TESTS; do
     echo "$LIST" | grep -qx "$t" || continue
     ey="$TEST_OUT_HOST/${t}.yaml"; rm -f "$ey"
-    out=$(run_in_container -e "$t" -t "$TTIME" -n 1 --ignore-timeout -o "/out/${t}.yaml" 2>&1 \
-          | grep -iE 'exit:' | tail -1 || true)
+    # O-1 修复: 不再 || true 吞错——rc!=0(崩溃/超时/容器错)或零执行(无任何 result 行)
+    # 一律记为该用例失败, 否则崩溃后 yaml 计数全 0 会静默通过
+    erc=0
+    out=$(run_in_container -e "$t" -t "$TTIME" -n 1 --ignore-timeout -o "/out/${t}.yaml" 2>&1) || erc=$?
+    exit_t=$(printf '%s\n' "$out" | grep -iE 'exit:' | tail -1)
+    exit_t=${exit_t:-exit: unknown}
     parse_yaml_counts "$ey"
-    echo "  $t: $out  (pass=$PASSES skip=$SKIPS fail=$FAILS_Y)"
-    [ "${FAILS_Y:-0}" -gt 0 ] && EIGEN_FAILS="$EIGEN_FAILS $t"
+    echo "  $t: $exit_t  (pass=$PASSES skip=$SKIPS fail=$FAILS_Y rc=$erc)"
+    if [ "${FAILS_Y:-0}" -gt 0 ] || [ "$erc" -ne 0 ] || [ $((PASSES + SKIPS + FAILS_Y)) -eq 0 ]; then
+        EIGEN_FAILS="$EIGEN_FAILS $t"
+    fi
 done
 
 echo "=== $OS_TAG : 其余用例 (-n $NTHREADS) ==="
 DISABLE_ARGS=""
 for t in $EIGEN_TESTS; do echo "$LIST" | grep -qx "$t" && DISABLE_ARGS="$DISABLE_ARGS --disable $t"; done
 FY="$TEST_OUT_HOST/fullsuite.yaml"; rm -f "$FY"
+# O-1 修复: 不再 || true 吞错——记录真实 rc, 崩溃/超时/容器错不得静默变 PASS
+FULL_RC=0
 FULL_STDOUT=$(run_in_container --ignore-timeout -t "$TTIME" -n "$NTHREADS" \
-    $DISABLE_ARGS -o "/out/fullsuite.yaml" 2>&1 || true)
+    $DISABLE_ARGS -o "/out/fullsuite.yaml" 2>&1) || FULL_RC=$?
 EXIT_LINE=$(echo "$FULL_STDOUT" | grep -iE 'exit:' | tail -1 || echo "exit: unknown")
 parse_yaml_counts "$FY"
 
@@ -132,7 +142,11 @@ echo "exit: $EXIT_LINE  crashes(stdout=$CRASH yaml=$CRASH_Y) eigen_fails=[$EIGEN
 VERDICT=PASS
 { [ "${FAILS_Y:-0}" -gt 0 ] || [ "${CRASH:-0}" -gt 0 ] || [ "${CRASH_Y:-0}" -gt 0 ] || [ -n "$EIGEN_FAILS" ]; } && VERDICT=FAIL
 echo "$EXIT_LINE" | grep -qi 'exit: fail' && VERDICT=FAIL
+# O-1: exit: unknown / 非零 rc / 零执行 同样是失败——原逻辑全 0 计数会误判 PASS
+echo "$EXIT_LINE" | grep -qi 'exit: unknown' && VERDICT=FAIL
+[ "${FULL_RC:-1}" -ne 0 ] && VERDICT=FAIL
+[ $(( ${PASSES:-0} + ${SKIPS:-0} + ${FAILS_Y:-0} )) -eq 0 ] && VERDICT=FAIL
 
 TOTAL_CRASH=$(( ${CRASH:-0} + ${CRASH_Y:-0} ))
-echo "RESULT: $VERDICT (full pass=$PASSES skip=$SKIPS fail=$FAILS_Y, eigen_fails=[$EIGEN_FAILS], crashes=$TOTAL_CRASH)"
+echo "RESULT: $VERDICT (full pass=$PASSES skip=$SKIPS fail=$FAILS_Y, eigen_fails=[$EIGEN_FAILS], crashes=$TOTAL_CRASH, rc=$FULL_RC)"
 [ "$VERDICT" = PASS ] && exit 0 || exit 1

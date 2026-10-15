@@ -8,7 +8,10 @@
  * This test validates two multi-precision addition chains: one using carry flag (CF)
  * and another using overflow flag (OF) as carry input. Since ARM64 lacks native
  * ADCX/ADOX instructions, both chains are software-simulated using 64-bit arithmetic.
- * The results are compared against a golden reference computed with 128-bit arithmetic.
+ * Three genuinely independent implementations of the same addition -- a 32-bit
+ * limb-wise golden, an overflow-flag ADCX-style chain, and a 128-bit ADOX-style
+ * chain -- cross-validate each other on inputs freshly randomized with the
+ * framework RNG every round.
  * @endparblock
  */
 
@@ -16,32 +19,107 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 
 // ============================================================================
-// 测试数据（所有线程共享只读）
-// ============================================================================
-
-struct TestData {
-    std::vector<uint64_t> lhs;      // 操作数1
-    std::vector<uint64_t> rhs;      // 操作数2
-    std::vector<uint64_t> gold;     // 黄金参考值 (普通多精度加法)
-    size_t num_elems;               // 向量长度
-};
-
-// ============================================================================
-// 黄金参考实现（软件模拟普通多精度加法）
+// 黄金参考实现（独立算法：32 位分段累加，进位按半字传播）
+// 与两条 DUT 链（溢出标志链、128 位加法链）在进位粒度与计算路径上均不同
 // ============================================================================
 
 static void compute_golden(const uint64_t *lhs, const uint64_t *rhs,
-                           uint64_t *gold, size_t n) {
-    uint64_t carry = 0;
+                           uint64_t carry_in, uint64_t *gold, size_t n) {
+    uint64_t carry = carry_in & 1;
+    for (size_t i = 0; i < n; ++i) {
+        /* low 32-bit limbs */
+        uint64_t t = (uint64_t)(uint32_t)lhs[i] + (uint32_t)rhs[i] + carry;
+        uint64_t lo = t & 0xffffffffu;
+        carry = t >> 32;
+
+        /* high 32-bit limbs */
+        t = (uint64_t)(uint32_t)(lhs[i] >> 32) + (uint32_t)(rhs[i] >> 32) + carry;
+        gold[i] = lo | ((t & 0xffffffffu) << 32);
+        carry = t >> 32;
+    }
+}
+
+// ============================================================================
+// 软件模拟 ADCX 链（DUT：64 位溢出标志进位链，对应 CF 语义）
+// ============================================================================
+
+static void adcx_chain_sw(const uint64_t *lhs, const uint64_t *rhs,
+                          uint64_t *result, size_t n, uint64_t carry_in) {
+    uint64_t carry = carry_in & 1;
+    for (size_t i = 0; i < n; ++i) {
+        uint64_t sum;
+        bool c1 = __builtin_add_overflow(lhs[i], rhs[i], &sum);
+        bool c2 = __builtin_add_overflow(sum, carry, &sum);
+        result[i] = sum;
+        carry = (c1 || c2);
+    }
+}
+
+// ============================================================================
+// 软件模拟 ADOX 链（DUT：__int128 加法，对应 OF 语义进位链）
+// 与 adcx_chain_sw 计算路径不同，二者交叉验证
+// ============================================================================
+
+static void adox_chain_sw(const uint64_t *lhs, const uint64_t *rhs,
+                          uint64_t *result, size_t n, uint64_t carry_in) {
+    uint64_t carry = carry_in & 1;
     for (size_t i = 0; i < n; ++i) {
         unsigned __int128 sum = (unsigned __int128)lhs[i] + rhs[i] + carry;
-        gold[i] = (uint64_t)sum;
+        result[i] = (uint64_t)sum;
         carry = (uint64_t)(sum >> 64);
     }
+}
+
+// ============================================================================
+// 已知答案自检（期望值为手算常量，独立于任一实现）
+// 覆盖：进位生成、进位跨字传播、进位吸收、混合模式
+// ============================================================================
+
+static bool kat_selfcheck() {
+    static const uint64_t kat_lhs[4] = {
+        0xFFFFFFFFFFFFFFFFull, 0x0000000000000000ull,
+        0xFFFFFFFFFFFFFFFFull, 0x1234567890ABCDEFull,
+    };
+    static const uint64_t kat_rhs[4] = {
+        0x0000000000000001ull, 0xFFFFFFFFFFFFFFFFull,
+        0x0000000000000001ull, 0xFEDCBA0987654321ull,
+    };
+    /* carry_in = 0:
+     *  w0: FFFFFFFFFFFFFFFF + 1 + 0 -> 0000000000000000, carry 1
+     *  w1: 0 + FFFFFFFFFFFFFFFF + 1 -> 0000000000000000, carry 1
+     *  w2: FFFFFFFFFFFFFFFF + 1 + 1 -> 0000000000000001, carry 1
+     *  w3: 1234567890ABCDEF + FEDCBA0987654321 + 1 -> 1111108218111111, carry 1
+     * carry_in = 1: 仅 w0 变为 0000000000000001，其余不变 */
+    static const uint64_t kat_expected_c0[4] = {
+        0x0000000000000000ull, 0x0000000000000000ull,
+        0x0000000000000001ull, 0x1111108218111111ull,
+    };
+    static const uint64_t kat_expected_c1[4] = {
+        0x0000000000000001ull, 0x0000000000000000ull,
+        0x0000000000000001ull, 0x1111108218111111ull,
+    };
+    uint64_t gold[4], res[4];
+
+    for (uint64_t carry_in : { 0ull, 1ull }) {
+        const uint64_t *expected = (carry_in == 0) ? kat_expected_c0 : kat_expected_c1;
+
+        compute_golden(kat_lhs, kat_rhs, carry_in, gold, 4);
+        if (memcmp(gold, expected, sizeof(kat_expected_c0)) != 0)
+            return false;
+
+        adcx_chain_sw(kat_lhs, kat_rhs, res, 4, carry_in);
+        if (memcmp(res, expected, sizeof(kat_expected_c0)) != 0)
+            return false;
+
+        adox_chain_sw(kat_lhs, kat_rhs, res, 4, carry_in);
+        if (memcmp(res, expected, sizeof(kat_expected_c0)) != 0)
+            return false;
+    }
+
+    return true;
 }
 
 // ============================================================================
@@ -70,80 +148,50 @@ static void print_colored_result(const char *label, bool passed,
 }
 
 // ============================================================================
-// 软件模拟 ADCX 链（使用 CF 作为进位）
-// ============================================================================
-
-static void adcx_chain_sw(const uint64_t *lhs, const uint64_t *rhs,
-                          uint64_t *result, size_t n, unsigned char carry_in) {
-    uint64_t carry = carry_in;
-    for (size_t i = 0; i < n; ++i) {
-        unsigned __int128 sum = (unsigned __int128)lhs[i] + rhs[i] + carry;
-        result[i] = (uint64_t)sum;
-        carry = (uint64_t)(sum >> 64);
-    }
-}
-
-// ============================================================================
-// 软件模拟 ADOX 链（使用 OF 作为进位，语义为无符号加法溢出）
-// ============================================================================
-
-static void adox_chain_sw(const uint64_t *lhs, const uint64_t *rhs,
-                          uint64_t *result, size_t n, unsigned char carry_in) {
-    uint64_t carry = carry_in;
-    for (size_t i = 0; i < n; ++i) {
-        unsigned __int128 sum = (unsigned __int128)lhs[i] + rhs[i] + carry;
-        result[i] = (uint64_t)sum;
-        // 无符号溢出：当 sum 大于 2^64-1 时 carry 为 1
-        carry = (uint64_t)(sum >> 64);
-    }
-}
-
-// ============================================================================
 // 测试生命周期函数
 // ============================================================================
 
 static int adcx_adox_interleaved_init(struct test *test) {
-    auto *data = new TestData;
-    if (!data) return EXIT_FAILURE;
-
-    constexpr size_t N = 1024;
-    data->num_elems = N;
-    data->lhs.resize(N);
-    data->rhs.resize(N);
-    data->gold.resize(N);
-
-    std::mt19937_64 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> dist;
-    for (size_t i = 0; i < N; ++i) {
-        data->lhs[i] = dist(rng);
-        data->rhs[i] = dist(rng);
-    }
-
-    compute_golden(data->lhs.data(), data->rhs.data(), data->gold.data(), N);
-
-    test->data = data;
+    (void)test;
     return EXIT_SUCCESS;
 }
 
 static int adcx_adox_interleaved_run(struct test *test, int cpu) {
     (void)cpu;
-    auto *td = static_cast<TestData*>(test->data);
-    const size_t N = td->num_elems;
+    constexpr size_t N = 1024;
 
+    if (!kat_selfcheck()) {
+        report_fail_msg("adcx_adox_interleaved: known-answer self-check failed");
+        return EXIT_FAILURE;
+    }
+
+    std::vector<uint64_t> lhs(N);
+    std::vector<uint64_t> rhs(N);
+    std::vector<uint64_t> gold(N);
     std::vector<uint64_t> result_cf(N);
     std::vector<uint64_t> result_of(N);
     std::vector<uint64_t> store_buf(N);
 
     do {
-        // 1. 模拟 ADCX 链（初始 CF = 0）
-        adcx_chain_sw(td->lhs.data(), td->rhs.data(), result_cf.data(), N, 0);
+        /* 每轮用框架 RNG 重掷输入（可通过 --random-seed 复现） */
+        const uint64_t carry_in = random64() & 1;
+        for (size_t i = 0; i < N; ++i) {
+            lhs[i] = random64();
+            rhs[i] = random64();
+        }
 
-        // 2. 模拟 ADOX 链（初始 OF = 0）
-        adox_chain_sw(td->lhs.data(), td->rhs.data(), result_of.data(), N, 0);
+        compute_golden(lhs.data(), rhs.data(), carry_in, gold.data(), N);
 
-        // 3. 验证：两个链的结果应与黄金参考一致，且彼此一致
-        bool cf_ok = (memcmp(result_cf.data(), td->gold.data(), N * sizeof(uint64_t)) == 0);
-        bool of_ok = (memcmp(result_of.data(), td->gold.data(), N * sizeof(uint64_t)) == 0);
+        // 1. 模拟 ADCX 链（64 位溢出标志进位链）
+        adcx_chain_sw(lhs.data(), rhs.data(), result_cf.data(), N, carry_in);
+
+        // 2. 模拟 ADOX 链（128 位加法链，与 ADCX 链计算路径不同）
+        adox_chain_sw(lhs.data(), rhs.data(), result_of.data(), N, carry_in);
+
+        // 3. 验证：两条独立实现链各自与 golden 比对，且彼此交叉比对
+        //    （三条比较均非冗余：任一实现单独损坏都会被至少两条比较捕获）
+        bool cf_ok = (memcmp(result_cf.data(), gold.data(), N * sizeof(uint64_t)) == 0);
+        bool of_ok = (memcmp(result_of.data(), gold.data(), N * sizeof(uint64_t)) == 0);
         bool both_ok = (memcmp(result_cf.data(), result_of.data(), N * sizeof(uint64_t)) == 0);
         bool data_ok = cf_ok && of_ok && both_ok;
 
@@ -151,15 +199,33 @@ static int adcx_adox_interleaved_run(struct test *test, int cpu) {
         memcpy(store_buf.data(), result_cf.data(), N * sizeof(uint64_t));
         bool consistent = (memcmp(store_buf.data(), result_cf.data(), N * sizeof(uint64_t)) == 0);
 
-        bool passed = data_ok && consistent;
-
-        if (!passed) {
-            print_colored_result("adcx_adox_interleaved", passed,
-                                 td->lhs.data(), td->rhs.data(),
+        if (!(data_ok && consistent)) {
+            /* 首失配下标定位（CodeRabbit 意见）：三条比较中任一失配的首个 i */
+            int bad_i = -1;
+            for (size_t i = 0; i < N; ++i) {
+                if (result_cf[i] != gold[i] || result_of[i] != gold[i] ||
+                    result_cf[i] != result_of[i]) {
+                    bad_i = (int)i;
+                    break;
+                }
+            }
+            if (bad_i >= 0) {
+                report_fail_msg("adcx_adox_interleaved: first mismatch at i=%d, carry_in=%lu, "
+                                "lhs=0x%016lx, rhs=0x%016lx, result_cf=0x%016lx, result_of=0x%016lx, "
+                                "gold=0x%016lx, xor_cf=0x%016lx, xor_of=0x%016lx",
+                                bad_i, (unsigned long)carry_in,
+                                (unsigned long)lhs[bad_i], (unsigned long)rhs[bad_i],
+                                (unsigned long)result_cf[bad_i], (unsigned long)result_of[bad_i],
+                                (unsigned long)gold[bad_i],
+                                (unsigned long)(result_cf[bad_i] ^ gold[bad_i]),
+                                (unsigned long)(result_of[bad_i] ^ gold[bad_i]));
+            }
+            print_colored_result("adcx_adox_interleaved", false,
+                                 lhs.data(), rhs.data(),
                                  result_cf.data(), result_of.data(),
-                                 td->gold.data(), N);
-            report_fail_msg("adcx_adox_interleaved: data_ok=%d, consistent=%d",
-                            data_ok, consistent);
+                                 gold.data(), N);
+            report_fail_msg("adcx_adox_interleaved: cf_ok=%d, of_ok=%d, both_ok=%d, consistent=%d",
+                            cf_ok, of_ok, both_ok, consistent);
             return EXIT_FAILURE;
         }
 
@@ -169,7 +235,7 @@ static int adcx_adox_interleaved_run(struct test *test, int cpu) {
 }
 
 static int adcx_adox_interleaved_finish(struct test *test) {
-    delete static_cast<TestData*>(test->data);
+    (void)test;
     return EXIT_SUCCESS;
 }
 

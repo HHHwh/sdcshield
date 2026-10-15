@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #endif
@@ -60,14 +59,16 @@ static int vmovnt2_run(struct test *test, int cpu) {
     alignas(16) int64_t store_i64_512[8];
     alignas(16) int64_t reload_i64_512[8];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> i32dist(-10000, 10000);
-    std::uniform_int_distribution<int64_t> i64dist(-1000000LL, 1000000LL);
+    /* randomization hardening (B3-007): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; ranges [-10000, 10000] and
+     * [-1000000, 1000000]. */
+    auto i32dist = []() { return (int32_t)((-10000) + (int64_t)(random64() % (uint64_t)((10000) - (-10000) + 1))); };
+    auto i64dist = []() { return (int64_t)((-1000000LL) + (int64_t)(random64() % (uint64_t)((1000000LL) - (-1000000LL) + 1))); };
 
     do {
         // ---- 生成随机数据（256 位） ----
-        for (int i = 0; i < 8; ++i) src_i32[i] = i32dist(rng);
-        for (int i = 0; i < 4; ++i) src_i64[i] = i64dist(rng);
+        for (int i = 0; i < 8; ++i) src_i32[i] = i32dist();
+        for (int i = 0; i < 4; ++i) src_i64[i] = i64dist();
 
         // ---- 测试 256-bit int32 (两个 128 位向量) ----
         int32x4_t v_i32_0 = vld1q_s32(src_i32);
@@ -122,8 +123,8 @@ static int vmovnt2_run(struct test *test, int cpu) {
         fprintf(stderr, "\033[32mvmovntdq (256-bit, int64) PASS\033[0m\n");
 
         // ---- 测试 512-bit 版本（4 个 128 位向量） ----
-        for (int i = 0; i < 16; ++i) src_i32_512[i] = i32dist(rng);
-        for (int i = 0; i < 8; ++i) src_i64_512[i] = i64dist(rng);
+        for (int i = 0; i < 16; ++i) src_i32_512[i] = i32dist();
+        for (int i = 0; i < 8; ++i) src_i64_512[i] = i64dist();
 
         // int32 512-bit
         int32x4_t vi32_512[4];

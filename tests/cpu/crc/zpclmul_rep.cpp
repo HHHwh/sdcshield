@@ -4,128 +4,115 @@
  *
  * @test @b zpclmul_rep
  * @parblock
- * Zlib PCLMUL CRC32 folding + rep movsb (ARM64 NEON version)
+ * Zlib PCLMUL CRC32 folding + rep movsb (ARM64 NEON PMULL version)
  *
- * This test combines memory copy (memcpy) with NEON-based CRC-32 folding.
- * It validates the correctness of mixed instruction sequences by performing
- * a memory copy followed by CRC calculation, and comparing against software
- * reference. Input data is random bytes.
+ * This test combines a bulk memory copy (the ARM64 analogue of x86
+ * rep movsb) with NEON PMULL CRC-32 folding: the data is first copied
+ * into a separate buffer, then the hardware path folds the IEEE 802.3
+ * CRC-32 (reflected polynomial 0xEDB88320) over the *copy* using
+ * PMULL/PMULL2 carry-less multiplication (4-accumulator main loop,
+ * 3-level fold-down, partial-vector tail fold, Barrett reduction -
+ * structure after libdeflate's crc32_arm_pmullx4). The golden is
+ * zlib's independent byte-sliced software crc32() over the original
+ * data, so both the copy and the folding are validated by one
+ * comparison. A known-answer self-check gates the random loop.
+ * Input data is random bytes with a random length in [16, BLOCK_SIZE].
  * @endparblock
  */
 
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <random>
-#include <vector>
 #include <zlib.h>
 
-#ifdef __aarch64__
-#include <arm_neon.h>
-#endif
+#include "crc32_pmull_fold.h"
 
-// ============================================================================
-// 测试配置常量
-// ============================================================================
+#ifdef __aarch64__
 
 static constexpr size_t BLOCK_SIZE = 4096;
-static constexpr uint32_t CRC_INIT = 0xFFFFFFFF;
-static constexpr uint32_t CRC_XOR = 0xFFFFFFFF;
 
-// ============================================================================
-// 硬件加速"占位"实现（先复制，再执行NEON指令，最后返回软件CRC）
-// ============================================================================
-
-static uint32_t crc32_hardware(const uint8_t *data, size_t len, uint32_t crc) {
-    // 1. 分配临时缓冲区并执行内存复制（替代 REP MOVS）
+/*
+ * DUT: bulk copy (rep-movsb analogue) followed by NEON PMULL CRC-32
+ * folding over the *copy*, zlib-API semantics. A corruption anywhere
+ * in the copy or the folding shows up as a mismatch against the
+ * zlib golden computed over the original data.
+ */
+static uint32_t crc32_hardware(const uint8_t *data, size_t len, uint32_t crc)
+{
     alignas(16) uint8_t copy_buf[BLOCK_SIZE];
-    memcpy(copy_buf, data, len);   // ARM64 上优化的内存复制
 
-    // 2. 调用软件 zlib CRC 得到正确结果（基于原始数据）
-    uint32_t sw_crc = crc32(crc, data, len);
-
-#ifdef __aarch64__
-    // 3. 执行一次 NEON 加法指令（模拟硬件加速指令执行）
-    uint8x16_t a = vld1q_u8(copy_buf);      // 从复制缓冲区加载
-    uint8x16_t b = vdupq_n_u8(0x01);
-    uint8x16_t c = vaddq_u8(a, b);          // 向量加法
-    (void)c;  // 结果丢弃，仅用于执行指令
-#endif
-
-    // 4. 返回软件结果，保证与参考一致
-    return sw_crc;
+    memcpy(copy_buf, data, len);   /* the ARM64 analogue of REP MOVS */
+    /* zlib API <-> raw state domain: result = ~raw(~crc) */
+    return ~crc32_pmull(~crc, copy_buf, len);
 }
 
-// ============================================================================
-// 软件参考实现（标准 zlib CRC-32）
-// ============================================================================
-
-static uint32_t crc32_software(const uint8_t *data, size_t len, uint32_t crc) {
+/* Golden: zlib software CRC-32 (byte-sliced tables, no NEON) over the
+ * original data */
+static uint32_t crc32_software(const uint8_t *data, size_t len, uint32_t crc)
+{
     return crc32(crc, data, len);
 }
 
-// ============================================================================
-// 辅助函数：带颜色的日志输出
-// ============================================================================
+/* Known-answer self-check gating the random loop: the standard
+ * "123456789" -> 0xCBF43926 vector exercises the len < 16 branch, and
+ * "123456789" x15 (135 bytes, 135 % 16 = 7 tail) exercises the 4-
+ * accumulator main loop plus the partial-vector tail fold. Both go
+ * through the copy+folding path and are cross-checked against the
+ * zlib golden. */
+static bool kat_selfcheck()
+{
+    static const char kat9[] = "123456789";
+    static const size_t kat9_len = 9;
+    uint8_t kat135[135];
 
-static void print_colored_result(const char *label, bool passed,
-                                  const uint8_t *input, size_t len,
-                                  uint32_t hw_crc, uint32_t sw_crc) {
-    const char *color = passed ? "\033[32m" : "\033[31m";
-    const char *result_str = passed ? "PASS" : "FAIL";
+    for (int i = 0; i < 15; i++)
+        memcpy(kat135 + i * 9, kat9, kat9_len);
 
-    fprintf(stderr, "%s: %s%s\033[0m\n", label, color, result_str);
-    fprintf(stderr, "  input[0..7] = %02X %02X %02X %02X %02X %02X %02X %02X\n",
-            input[0], input[1], input[2], input[3],
-            input[4], input[5], input[6], input[7]);
-    fprintf(stderr, "  hw_crc = 0x%08X, sw_crc = 0x%08X\n", hw_crc, sw_crc);
-    fflush(stderr);
-}
-
-// ============================================================================
-// SDCShield 测试生命周期函数（所有数据线程局部）
-// ============================================================================
-
-static int zpclmul_rep_init(struct test *test) {
-    (void)test;
-    return EXIT_SUCCESS;
+    if (crc32_hardware(reinterpret_cast<const uint8_t *>(kat9), kat9_len, 0)
+            != 0xCBF43926)
+        return false;
+    for (size_t len : { kat9_len, sizeof(kat135) }) {
+        const uint8_t *p = (len == kat9_len)
+                        ? reinterpret_cast<const uint8_t *>(kat9) : kat135;
+        if (crc32_hardware(p, len, 0) != crc32_software(p, len, 0))
+            return false;
+    }
+    return true;
 }
 
 static int zpclmul_rep_run(struct test *test, int cpu) {
-    (void)test;
     (void)cpu;
+
+    if (!kat_selfcheck()) {
+        report_fail_msg("zpclmul_rep: known-answer self-check failed");
+        return EXIT_FAILURE;
+    }
 
     alignas(16) uint8_t input[BLOCK_SIZE];
     alignas(16) uint8_t store_buf[BLOCK_SIZE];
     alignas(16) uint8_t reload_buf[BLOCK_SIZE];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
-
     do {
-        for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            input[i] = byte_dist(rng);
-        }
+        /* Random length >= 16 keeps both folding branches and the tail
+         * fold reachable; the len < 16 branch is covered by the KAT.
+         * The framework RNG (random64/random32) is per-thread and
+         * reproducible via --rng-state. */
+        size_t len = 16 + random64() % (BLOCK_SIZE - 15);
+        for (size_t i = 0; i < len; ++i)
+            input[i] = (uint8_t)random32();
 
-        uint32_t hw_crc = crc32_hardware(input, BLOCK_SIZE, CRC_INIT);
-        hw_crc ^= CRC_XOR;
-
-        uint32_t sw_crc = crc32_software(input, BLOCK_SIZE, CRC_INIT);
-        sw_crc ^= CRC_XOR;
-
+        uint32_t hw_crc = crc32_hardware(input, len, 0);
+        uint32_t sw_crc = crc32_software(input, len, 0);
         bool crc_ok = (hw_crc == sw_crc);
 
-        memcpy(store_buf, input, BLOCK_SIZE);
-        memcpy(reload_buf, store_buf, BLOCK_SIZE);
-        bool consistent = (memcmp(input, reload_buf, BLOCK_SIZE) == 0);
+        memcpy(store_buf, input, len);
+        memcpy(reload_buf, store_buf, len);
+        bool consistent = (memcmp(input, reload_buf, len) == 0);
 
-        bool passed = crc_ok && consistent;
-        print_colored_result("zpclmul_rep", passed, input, BLOCK_SIZE, hw_crc, sw_crc);
-
-        if (!passed) {
-            report_fail_msg("zpclmul_rep: crc_ok=%d, consistent=%d",
-                            crc_ok, consistent);
+        if (!(crc_ok && consistent)) {
+            report_fail_msg("zpclmul_rep: crc_ok=%d, consistent=%d, len=%zu, "
+                            "hw_crc=0x%08X, sw_crc=0x%08X",
+                            crc_ok, consistent, len, hw_crc, sw_crc);
             return EXIT_FAILURE;
         }
 
@@ -134,19 +121,33 @@ static int zpclmul_rep_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
+#else /* !__aarch64__ */
+
+static int zpclmul_rep_run(struct test *test, int cpu) {
+    (void)cpu;
+    (void)test;
+    log_skip(TestResourceIssueSkipCategory,
+             "to be implemented (placeholder): ARM64 NEON PMULL required");
+    return EXIT_SKIP;
+}
+
+#endif /* __aarch64__ */
+
+static int zpclmul_rep_init(struct test *test) {
+    (void)test;
+    return EXIT_SUCCESS;
+}
+
 static int zpclmul_rep_finish(struct test *test) {
     (void)test;
     return EXIT_SUCCESS;
 }
 
-// ============================================================================
-// 测试声明
-// ============================================================================
-
-DECLARE_TEST(zpclmul_rep, "Zlib PCLMUL CRC32 folding + rep movsb (ARM64 NEON)")
+DECLARE_TEST(zpclmul_rep, "Zlib PCLMUL CRC32 folding + rep movsb (ARM64 NEON PMULL)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = zpclmul_rep_init,
     .test_run = zpclmul_rep_run,
     .test_cleanup = zpclmul_rep_finish,
+    .minimum_cpu = ZPCLMUL_MIN_CPU,
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

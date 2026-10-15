@@ -115,16 +115,17 @@ if [ "$SMOKE" = 1 ]; then
     echo "冒烟名单  : $SMOKEFILE（$(wc -l < "$SMOKEFILE") 个：每桶前 2 + P7 前 2，单遍）"
     sed 's/^/    /' "$SMOKEFILE"
     echo "日志      : $OUT"
-    echo "停止方式  : 单遍自然结束（约 35s）；Ctrl-C 干净停止；300s 兜底；检出 FAIL 即自动停（-F）"
+    echo "停止方式  : 单遍自然结束（约 35s）；Ctrl-C 干净停止；300s 兜底；检出 FAIL 即自动停（-F）；skip 记为失败（--fatal-skips）"
     # 兜底：300s 绝对上限防意外挂死（SIGINT 干净停止已实测验证）
+    # --fatal-skips：冒烟名单含恒 skip/R1/R2b/R3 用例，skip 必须显式暴露而非静默通过（D-007）
     exec timeout -s INT 300 "$BIN" --quality="$QUALITY" --test-list-file "$SMOKEFILE" \
-        -t "$T_PER_TEST" -Y -F -o "$OUT" \
+        -t "$T_PER_TEST" -Y -F --fatal-skips -o "$OUT" \
         ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
 else
     echo "测试列表  : $LISTFILE（$TOTAL_N 个，优先序）"
     echo "日志      : $OUT"
-    echo "停止方式  : Ctrl-C（干净停止，日志完整落盘）；检出 FAIL 即自动停（-F）"
+    echo "停止方式  : Ctrl-C（干净停止，日志完整落盘）；检出 FAIL 即自动停（-F）；skip 记为失败（--fatal-skips）"
     exec "$BIN" --quality="$QUALITY" --test-list-file "$LISTFILE" \
-        "${TOTAL_ARGS[@]}" -t "$T_PER_TEST" -Y -F -o "$OUT" \
+        "${TOTAL_ARGS[@]}" -t "$T_PER_TEST" -Y -F --fatal-skips -o "$OUT" \
         ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
 fi

@@ -10,7 +10,11 @@
  * ciphertext via OpenSSL AES-ECB primitives using the AVX optimized code path.
  * It also decrypts the ciphertext and verifies that it matches the original
  * plaintext. The ciphertext, MAC, and decrypted data are compared against
- * pre-computed golden values on every iteration to detect silent data corruption.
+ * pre-computed golden values on every iteration to detect silent data
+ * corruption. Iterations alternate between a re-rolled input with a
+ * same-core recomputed golden and a frozen replay of the init-time inputs
+ * compared byte-exact against the init thread's cross-core golden, adding
+ * coverage for deterministic (mercurial-core) defects.
  * @endparblock
  */
 
@@ -143,15 +147,46 @@ static int aes_xcbc_avx_run(struct test *test, int cpu) {
     uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
     uint8_t *full_mac = (uint8_t *)malloc(XCBC_FULL_DIGEST_SIZE);
 
+    /* R2b (B2-003): per-thread plaintext + golden, re-rolled every
+     * iteration (thread-safe: shared d is only read after init; the
+     * struct copy puts plaintext and the golden fields written by
+     * compute_golden — golden_ciphertext/golden_mac — on this
+     * thread's stack; keys/IV ride along as identical values). */
+    struct aes_xcbc_avx_data local_d;
+    memcpy(&local_d, d, sizeof(local_d));
+    long iter = 0;
     TEST_LOOP(test, 256) {
-        aes_ctr_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "AES-192-CTR ciphertext mismatch (AVX)");
-        
-        aes_ctr_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "AES-192-CTR decryption mismatch (AVX)");
-        
-        aes_xcbc_96(d->xcbc_key, ciphertext, DATA_SIZE, full_mac);
-        memcmp_or_fail(full_mac, d->golden_mac, XCBC_96_DIGEST_SIZE, "XCBC-96 digest mismatch (AVX)");
+        if (iter & 1) {
+            /* frozen replay round (PR #244 review): init's shared
+             * cross-core golden — the reroll path recomputes golden
+             * with the same code on the same core, which cannot
+             * catch deterministic (mercurial-core) defects; every
+             * other round replays init's frozen inputs and compares
+             * byte-exact against init's golden computed on a
+             * different core. */
+            aes_ctr_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
+            memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "AES-192-CTR ciphertext mismatch (frozen replay)");
+
+            aes_ctr_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
+            memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "AES-192-CTR decryption mismatch (frozen replay)");
+
+            aes_xcbc_96(d->xcbc_key, ciphertext, DATA_SIZE, full_mac);
+            memcmp_or_fail(full_mac, d->golden_mac, XCBC_96_DIGEST_SIZE, "XCBC-96 digest mismatch (frozen replay)");
+        } else {
+            /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
+             * XCBC-96 recomputed for this thread's data) */
+            memset_random(local_d.plaintext, DATA_SIZE);
+            aes_xcbc_avx_compute_golden(&local_d);
+            aes_ctr_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, DATA_SIZE);
+            memcmp_or_fail(ciphertext, local_d.golden_ciphertext, DATA_SIZE, "AES-192-CTR ciphertext mismatch (AVX)");
+
+            aes_ctr_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, DATA_SIZE);
+            memcmp_or_fail(decrypted, local_d.plaintext, DATA_SIZE, "AES-192-CTR decryption mismatch (AVX)");
+
+            aes_xcbc_96(local_d.xcbc_key, ciphertext, DATA_SIZE, full_mac);
+            memcmp_or_fail(full_mac, local_d.golden_mac, XCBC_96_DIGEST_SIZE, "XCBC-96 digest mismatch (AVX)");
+        }
+        ++iter;
     }
     free(ciphertext);
     free(decrypted);

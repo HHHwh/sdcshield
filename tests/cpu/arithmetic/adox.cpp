@@ -6,6 +6,9 @@
  * @parblock
  * Testing unsigned add with overflow (adox) on ARM64 via software simulation.
  * Validates multi-precision addition using overflow-as-carry semantics.
+ * The device-under-test chain (__int128 adds) is cross-validated against an
+ * independent golden implementation (32-bit limb-wise addition) on inputs
+ * freshly randomized with the framework RNG every round.
  * @endparblock
  */
 
@@ -13,37 +16,33 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 
 // ============================================================================
-// 测试数据（所有线程共享只读）
-// ============================================================================
-
-struct TestData {
-    std::vector<uint64_t> lhs;      // 操作数1
-    std::vector<uint64_t> rhs;      // 操作数2
-    std::vector<uint64_t> gold;     // 黄金参考值
-    uint64_t carry_in;              // 初始进位 (0 或 1)
-    size_t num_elems;               // 向量长度
-};
-
-// ============================================================================
-// 黄金参考实现（软件模拟 ADOX 链：使用 128 位加法）
+// 黄金参考实现（独立算法：32 位分段累加，进位按半字传播）
+// 与 DUT 的 __int128 单次加法在进位粒度与计算路径上均不同，
+// 两者交叉验证可暴露任一路径上的数据损坏。
 // ============================================================================
 
 static void compute_golden(const uint64_t *lhs, const uint64_t *rhs,
                            uint64_t carry_in, uint64_t *gold, size_t n) {
+    uint64_t carry = carry_in & 1;
     for (size_t i = 0; i < n; ++i) {
-        unsigned __int128 sum = (unsigned __int128)lhs[i] + rhs[i] + carry_in;
-        gold[i] = (uint64_t)sum;
-        carry_in = (uint64_t)(sum >> 64);
+        /* low 32-bit limbs */
+        uint64_t t = (uint64_t)(uint32_t)lhs[i] + (uint32_t)rhs[i] + carry;
+        uint64_t lo = t & 0xffffffffu;
+        carry = t >> 32;
+
+        /* high 32-bit limbs */
+        t = (uint64_t)(uint32_t)(lhs[i] >> 32) + (uint32_t)(rhs[i] >> 32) + carry;
+        gold[i] = lo | ((t & 0xffffffffu) << 32);
+        carry = t >> 32;
     }
 }
 
 // ============================================================================
-// 软件模拟 ADOX 链（使用 OF 作为进位输入）
-// 在 ARM64 上无法直接使用 OF，因此用普通 64 位进位模拟
+// 软件模拟 ADOX 链（DUT：__int128 加法，OF 语义进位链）
+// 在 ARM64 上无法直接使用 OF，因此用 128 位加法模拟
 // ============================================================================
 
 static void adox_chain_sw(const uint64_t *lhs, const uint64_t *rhs,
@@ -54,6 +53,42 @@ static void adox_chain_sw(const uint64_t *lhs, const uint64_t *rhs,
         result[i] = (uint64_t)sum;
         carry = (uint64_t)(sum >> 64);
     }
+}
+
+// ============================================================================
+// 已知答案自检（期望值为手算常量，独立于任一实现）
+// 覆盖：进位生成、进位跨字传播、进位吸收、混合模式
+// ============================================================================
+
+static bool kat_selfcheck() {
+    static const uint64_t kat_lhs[4] = {
+        0xFFFFFFFFFFFFFFFFull, 0x0000000000000000ull,
+        0xFFFFFFFFFFFFFFFFull, 0x1234567890ABCDEFull,
+    };
+    static const uint64_t kat_rhs[4] = {
+        0x0000000000000001ull, 0xFFFFFFFFFFFFFFFFull,
+        0x0000000000000001ull, 0xFEDCBA0987654321ull,
+    };
+    /* carry_in = 1:
+     *  w0: FFFFFFFFFFFFFFFF + 1 + 1 -> 0000000000000001, carry 1
+     *  w1: 0 + FFFFFFFFFFFFFFFF + 1 -> 0000000000000000, carry 1
+     *  w2: FFFFFFFFFFFFFFFF + 1 + 1 -> 0000000000000001, carry 1
+     *  w3: 1234567890ABCDEF + FEDCBA0987654321 + 1 -> 1111108218111111, carry 1 */
+    static const uint64_t kat_expected[4] = {
+        0x0000000000000001ull, 0x0000000000000000ull,
+        0x0000000000000001ull, 0x1111108218111111ull,
+    };
+    uint64_t gold[4], dut[4];
+
+    compute_golden(kat_lhs, kat_rhs, 1, gold, 4);
+    if (memcmp(gold, kat_expected, sizeof(kat_expected)) != 0)
+        return false;
+
+    adox_chain_sw(kat_lhs, kat_rhs, dut, 4, 1);
+    if (memcmp(dut, kat_expected, sizeof(kat_expected)) != 0)
+        return false;
+
+    return true;
 }
 
 // ============================================================================
@@ -86,53 +121,63 @@ static void print_colored_result(const char *label, bool passed,
 // ============================================================================
 
 static int adox_init(struct test *test) {
-    auto *data = new TestData;
-    if (!data) return EXIT_FAILURE;
-
-    constexpr size_t N = 1024;
-    data->num_elems = N;
-    data->lhs.resize(N);
-    data->rhs.resize(N);
-    data->gold.resize(N);
-
-    std::mt19937_64 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> dist;
-    for (size_t i = 0; i < N; ++i) {
-        data->lhs[i] = dist(rng);
-        data->rhs[i] = dist(rng);
-    }
-    data->carry_in = dist(rng) & 1;
-
-    compute_golden(data->lhs.data(), data->rhs.data(), data->carry_in,
-                   data->gold.data(), N);
-
-    test->data = data;
+    (void)test;
     return EXIT_SUCCESS;
 }
 
 static int adox_run(struct test *test, int cpu) {
     (void)cpu;
-    auto *td = static_cast<TestData*>(test->data);
-    const size_t N = td->num_elems;
+    constexpr size_t N = 1024;
 
+    if (!kat_selfcheck()) {
+        report_fail_msg("adox: known-answer self-check failed");
+        return EXIT_FAILURE;
+    }
+
+    std::vector<uint64_t> lhs(N);
+    std::vector<uint64_t> rhs(N);
+    std::vector<uint64_t> gold(N);
     std::vector<uint64_t> result(N);
     std::vector<uint64_t> store_buf(N);
 
     do {
-        adox_chain_sw(td->lhs.data(), td->rhs.data(), result.data(), N, td->carry_in);
+        /* 每轮用框架 RNG 重掷输入（可通过 --random-seed 复现） */
+        const uint64_t carry_in = random64() & 1;
+        for (size_t i = 0; i < N; ++i) {
+            lhs[i] = random64();
+            rhs[i] = random64();
+        }
 
-        bool data_ok = (memcmp(result.data(), td->gold.data(), N * sizeof(uint64_t)) == 0);
+        compute_golden(lhs.data(), rhs.data(), carry_in, gold.data(), N);
+        adox_chain_sw(lhs.data(), rhs.data(), result.data(), N, carry_in);
+
+        bool data_ok = (memcmp(result.data(), gold.data(), N * sizeof(uint64_t)) == 0);
 
         memcpy(store_buf.data(), result.data(), N * sizeof(uint64_t));
         bool consistent = (memcmp(store_buf.data(), result.data(), N * sizeof(uint64_t)) == 0);
 
-        bool passed = data_ok && consistent;
-
-        if (!passed) {
-            print_colored_result("adox", passed,
-                                 td->lhs.data(), td->rhs.data(),
-                                 result.data(), td->gold.data(),
-                                 N, td->carry_in);
+        if (!(data_ok && consistent)) {
+            /* 首失配下标定位（CodeRabbit 意见） */
+            int bad_i = -1;
+            for (size_t i = 0; i < N; ++i) {
+                if (result[i] != gold[i]) {
+                    bad_i = (int)i;
+                    break;
+                }
+            }
+            if (bad_i >= 0) {
+                report_fail_msg("adox: first mismatch at i=%d, carry_in=%lu, "
+                                "lhs=0x%016lx, rhs=0x%016lx, result=0x%016lx, "
+                                "gold=0x%016lx, xor=0x%016lx",
+                                bad_i, (unsigned long)carry_in,
+                                (unsigned long)lhs[bad_i], (unsigned long)rhs[bad_i],
+                                (unsigned long)result[bad_i], (unsigned long)gold[bad_i],
+                                (unsigned long)(result[bad_i] ^ gold[bad_i]));
+            }
+            print_colored_result("adox", false,
+                                 lhs.data(), rhs.data(),
+                                 result.data(), gold.data(),
+                                 N, carry_in);
             report_fail_msg("adox: data_ok=%d, consistent=%d", data_ok, consistent);
             return EXIT_FAILURE;
         }
@@ -143,7 +188,7 @@ static int adox_run(struct test *test, int cpu) {
 }
 
 static int adox_finish(struct test *test) {
-    delete static_cast<TestData*>(test->data);
+    (void)test;
     return EXIT_SUCCESS;
 }
 

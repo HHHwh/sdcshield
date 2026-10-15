@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 #include <isa-l/crc.h>
 
@@ -36,12 +35,13 @@ static int isal_crc32_gzip_init(struct test *test) {
 static int isal_crc32_gzip_run(struct test *test, int cpu) {
     (void)cpu;
     std::vector<uint8_t> local_data(BLOCK_SIZE);
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
+    /* randomization hardening (B3-010): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; bytes [0, 255]. */
+    auto byte_dist = []() { return (uint8_t)((0) + (int64_t)(random64() % (uint64_t)((255) - (0) + 1))); };
 
     do {
         for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            local_data[i] = byte_dist(rng);
+            local_data[i] = byte_dist();
         }
 
         // 软件计算黄金 CRC 值

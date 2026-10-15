@@ -17,7 +17,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #endif
@@ -81,14 +80,15 @@ static int vmovnt3_run(struct test *test, int cpu) {
     alignas(16) float store_buf[TOTAL_FLOATS];
     alignas(16) float reload_buf[TOTAL_FLOATS];
 
-    // 每个线程独立随机数生成器
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    /* randomization hardening (B3-007): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; range [-1.0f, 1.0f) mapped
+     * from frandomf's [0,1). */
+    auto dist = []() { return frandomf_scale((float)(1.0f) - (float)(-1.0f)) + (float)(-1.0f); };
 
     do {
         // ---------- 1. 生成随机浮点数 ----------
         for (size_t i = 0; i < TOTAL_FLOATS; ++i) {
-            src[i] = dist(rng);
+            src[i] = dist();
         }
 
         // ---------- 2. 模拟非临时加载 + 预取 ----------

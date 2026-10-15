@@ -206,11 +206,11 @@ cd scripts/offline-build/
 
 ### GitHub Actions 每日多 OS 自动验证（`.github/workflows/multi-os-verify.yml`）
 
-CI 哨兵（与上节 `release-all.sh` 发布链路互补）：每天 UTC 04:00（北京时间 12:00）自动触发，也可手动 `workflow_dispatch`；15 个镜像 × 15 个 job 并行（`fail-fast: false`）——openEuler 20.03/22.03/24.03 × LTS+SP1~SP4，运行在 `ubuntu-24.04-arm` 托管 aarch64 runner 的 ghcr.io 构建镜像内。每 job 原生 `meson+ninja` 构建后由 `scripts/gha/verify-params.py` 做全量用例 × 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），`scripts/gha/benchmark.sh` 采跨 OS 基准，`report` job 汇总 15 份结果成「用例 × 版本」矩阵。镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。详见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
+CI 哨兵（与上节 `release-all.sh` 发布链路互补）：每天 UTC 04:00（北京时间 12:00）自动触发，也可手动 `workflow_dispatch`；15 个镜像 × 15 个 job 并行（`fail-fast: false`）——openEuler 20.03/22.03/24.03 × LTS+SP1~SP4，运行在 `ubuntu-24.04-arm` 托管 aarch64 runner 的 ghcr.io 构建镜像内。每 job 原生 `meson+ninja` 构建后由 `scripts/gha/verify-params.py` 做全量用例 × 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），`scripts/gha/benchmark.sh` 采跨 OS 基准，`report` job 汇总 15 份结果成「用例 × 版本」矩阵。零执行与全 skip 分两层判定：任一阶段 `pass+skip` 全为 0（一条结果记录都没有）即按失败处理，不静默放过坏门；`all-quality` 阶段允许只有 skip 记录的通过（仍需 `seeds>0` 种证据），并发档与 `mdim` 档则要求至少 1 个 `pass` 结果（全 skip 判 FAIL）。镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。详见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
 
 ### PR CI 门禁、安全扫描与基准趋势
 
-PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历史/DCO（人工提交必须 Signed-off-by，Copilot Autofix 机器提交豁免）→ `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，结果矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3；源码/适配层改动才跑，docs-only PR 自动跳过）。安全（`security.yaml` + `codeql.yaml`，每周全量 + PR 增量）：zizmor / gitleaks / osv-scanner / CodeQL cpp。基准趋势：nightly 的 24.03-LTS-SP3 `benchmark.tsv` 经 github-action-benchmark 推 gh-pages 分支，出跨 commit 趋势图 + 150% 回归告警（观测期不硬门）。网页侧操作清单（原生失败通知、分支保护、Code scanning 确认）见 [docs/build-deploy/ci-web-operations.md](docs/build-deploy/ci-web-operations.md)。
+PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ 新增代码随机性门禁（`scripts/gha/check-randomization.py`：对 diff 新增的 `tests/**.cpp` 分级检查——新增自建不可重放 RNG `mt19937`/`random_device`/`rand()` 为 R1 `::error::` 必须改用框架 RNG `random32`/`random64`/`memset_random`/`frandom*`，种子由框架统一管理并随 `-vvv` 落盘、失败可精确重放；固定 pattern 大表为 R2/R3 `::warning::`，有意为之可在文件内加 `R3-justified: <理由>` 注释豁免；diff 扫描本身失败按 exit 3 loudly 报错，不静默放行）→ git 历史/DCO（人工提交必须 Signed-off-by，Copilot Autofix 机器提交豁免）→ `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，结果矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3；源码/适配层改动才跑，docs-only PR 自动跳过）。安全（`security.yaml` + `codeql.yaml`，每周全量 + PR 增量）：zizmor / gitleaks / osv-scanner / CodeQL cpp。基准趋势：nightly 的 24.03-LTS-SP3 `benchmark.tsv` 经 github-action-benchmark 推 gh-pages 分支，出跨 commit 趋势图 + 150% 回归告警（观测期不硬门）。网页侧操作清单（原生失败通知、分支保护、Code scanning 确认）见 [docs/build-deploy/ci-web-operations.md](docs/build-deploy/ci-web-operations.md)。
 
 ### 代码检视机器人（PR 自动检视，聚焦 SDC 激发）
 
@@ -403,6 +403,8 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 
 > `mce_check` 是真实 EDAC 后端测试（统计 `/proc/interrupts` 的 EDAC `ce/ue_count`），实测 `exit: pass`，非 placeholder。
 
+**能力门控的诚实跳过**（skip 不是只有"未实现"一种）：17 个多流 HMAC 的 ipsec SVE 用例（`*_hmac_sha*` / `*_sha2_*`）每条 HMAC 流占一个 SVE lane（sha1/224/256 8×32-bit 需 `svcntw()>=8`，384/512 4×64-bit 需 `svcntd()>=4`，均为 VL≥256 bit），在 `test_init` 探测 `HWCAP_SVE` 后实测 `svcnt*`：短 VL 硬件（如 Neoverse N2，VL=128）返回 `CpuNotSupported` 跳过并在 skip-reason 报告实际 VL，绝不进入对未写入 lane 的比较（lane 超出 VL 的输出永不写入，比较只会读到未初始化内存——那不是检测而是噪声）；无 SVE 的硬件在框架级 `test compiled with sve` 守卫处跳过。目标硅片（鲲鹏 930，VL=256）正常执行，内核经独立标量参考实现 + gem5 VL=256 仿真双重位级验证。
+
 ### `memcpy_rewr`：MPSC memcpy 一致性压测（使用选项与推荐参数）
 
 GlusterFS IOT 调度器衍生的多生产者/单消费者队列 memcpy 一致性压测（ARM64 专属）：producer 经 4 优先级链表队列投递，consumer 对线程私有 `mem_info_s` 的 b1..b5 做五路 memcpy 并逐字节比对——拷贝不崩溃但不一致即为 SDC。角色分配与拷贝长度由策略配置驱动，无 conf 文件时自动退化成原版独立工具的默认模式（不 skip）。
@@ -443,7 +445,10 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 ./builddir/sdcshield --list-groups                       # @compression / @ipsec / @math
 ./builddir/sdcshield --dump-cpu-info                     # CPU + 特性 + 拓扑
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv   # 崩溃回溯
+./builddir/sdcshield --fatal-skips ...                   # skip 也按致命处理（不静默吞掉）
 ```
+
+`scripts/run/` 狩猎脚本遵循**失败留证**口径：逐测试长时窗轮跑（如 `run-sdc-hunt-30min.sh`）逐用例 `-o` 落盘 YAML 日志并传 `--fatal-skips`（skip 也算失败，诚实可见）；无论有无 SDC/失败信号，日志一律保留供事后审计，汇总 CSV 中 `pass` 与日志内 SDC 记录双保险——`exit_rc=0` 但日志含 `miscompare` 记为 `sdc_log`，不误报为 `pass`。
 
 ### Test knob（`-O`，运行期测试参数）
 

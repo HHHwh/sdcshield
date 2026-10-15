@@ -114,10 +114,10 @@ private:
     MonotonicTimePoint ns;
     uint64_t cycles = 0;
 
-    /* A persistent per-CPU perf fd accumulates cpu_cycles across the two
-     * Snapshot() calls. We keep one fd per observed cpu_number in a
-     * thread-local cache; the same fd is read at both snapshots so the
-     * delta is meaningful. */
+    /* A persistent per-thread perf fd accumulates the calling thread's
+     * cpu_cycles across the two Snapshot() calls. The fd is cached
+     * thread-locally keyed by the observed cpu_number; the same fd is
+     * read at both snapshots so the delta is meaningful. */
     struct PerfFd {
         int cpu_number = -1;
         int fd = -1;
@@ -145,7 +145,12 @@ private:
             pe.exclude_hv = 1;
             pe.read_format = PERF_FORMAT_TOTAL_TIME_ENABLED;
 
-            cached_fd.fd = syscall(__NR_perf_event_open, &pe, cpu_number, -1, -1, 0);
+            /* pid=0 counts the *calling* thread (A-001): the previous
+             * argument order opened pid=cpu_number / cpu=-1, attaching
+             * to whichever unrelated task happened to have
+             * TID == cpu_number. cpu=-1 keeps the counter following
+             * the thread. */
+            cached_fd.fd = syscall(__NR_perf_event_open, &pe, /*pid=*/0, /*cpu=*/-1, -1, 0);
             if (cached_fd.fd < 0) {
                 cached_fd.fd = -1;
                 return UINT64_MAX;   // signal "unavailable"

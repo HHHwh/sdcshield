@@ -22,7 +22,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 #include <cinttypes>
 #include <memory>
@@ -78,9 +77,12 @@ static int adcx_adox_interleaved_arm_init(struct test *test) {
         data->golden1_words.resize(NUM_GROUPS * (NUM_WORDS + 1));
 
         // 生成随机数据（使用 GMP 生成大整数，然后导出为单词）
+        // B1-006: seed GMP's randstate from the framework RNG (per-thread
+        // stream, reproducible via the reported seed / -s) instead of
+        // std::random_device, so the operand batch can be replayed.
         gmp_randstate_t rng_state;
         gmp_randinit_default(rng_state);
-        gmp_randseed_ui(rng_state, static_cast<unsigned long>(std::random_device{}()));
+        gmp_randseed_ui(rng_state, static_cast<unsigned long>(random64()));
 
         mpz_t a_tmp, b_tmp;
         mpz_init(a_tmp);
