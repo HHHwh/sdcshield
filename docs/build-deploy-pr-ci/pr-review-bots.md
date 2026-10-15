@@ -328,6 +328,16 @@ claude）。由此产生「pr_loop 等五 bot、bot-coverage 校验四 bot」的
 不代表第 5 bot 已检视；第 5 bot 的完成度以 `pr_loop status` 的第 5 位（local-claude）
 为准。
 
+### 8.6 注入面与沙箱边界（诚实声明）
+
+第 5 bot **无沙箱**：`claude` 以 `--dangerously-skip-permissions` 在可写的隔离
+worktree 内运行，可以执行任意命令、读写任意文件。`DIFF_BANNER` / `PR_CONTEXT_BANNER`
+（以及发布到 GitHub 的 `UNTRUSTED_BANNER`）**只是对检视者/处置 agent 的提示注入缓解
+（prompt 内要求其忽略 diff/标题/描述中的指令），不是安全边界、不构成沙箱**。攻击面 =
+同仓 PR 内容（diff / 标题 / 描述 / 关联 issue）——一个恶意 PR 若能让 claude 违背
+横幅约束，即可在运行第 5 bot 的机器上执行任意命令。触发第 5 bot 之前应确认 PR 来自
+可信作者；不要把「写文件无害且即弃」理解为安全保证。
+
 ## 9. 延伸阅读
 
 - [代码检视代理仓库上下文 `AGENTS.md`](../../AGENTS.md)

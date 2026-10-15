@@ -114,6 +114,21 @@ def test_publish_review_posts_marker_and_inline(monkeypatch):
 
     monkeypatch.setattr(plr, "_gh_api_post", fake_post)
 
+    # publish_review 先拉 `gh pr diff` 对行号做合法性校验(C2): fake 一段含 42
+    # 行的 diff,使 line=42 的 finding 能挂上行级评论。
+    diff = (
+        "diff --git a/tests/sve/fma_sve.c b/tests/sve/fma_sve.c\n"
+        "--- a/tests/sve/fma_sve.c\n"
+        "+++ b/tests/sve/fma_sve.c\n"
+        "@@ -40,5 +40,6 @@\n"
+        " context-40\n"
+        " context-41\n"
+        "+    memcmp_or_fail(actual, golden, sizeof(actual), \"fma_sve\");\n"
+        " context-43\n"
+        " context-44\n"
+    )
+    monkeypatch.setattr(plr, "_gh", lambda argv: diff)
+
     head_sha = "c" * 40
     findings = [
         # 行级 finding: path + line 均有效 → 挂 diff 行级评论
@@ -156,6 +171,117 @@ def test_publish_review_posts_marker_and_inline(monkeypatch):
     assert "TEST_LOOP 用固定 100 次" in body
     # 行级 finding 不应混进 body JSON 段
     assert "近似比对是 SDC 盲区" not in body
+
+
+def test_publish_review_demotes_invalid_line_to_body(monkeypatch):
+    """C2: claude 生成的行号不在 diff hunk 内(非法)→ 降级到 body JSON 段,
+    不放进 comments(否则一条越界行号让整单 POST /reviews 422)。"""
+    import pr_loop
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    # diff 只覆盖第 10–12 行;claude 报 line=42 → 越界 → 降级。
+    diff = (
+        "diff --git a/tests/sve/fma_sve.c b/tests/sve/fma_sve.c\n"
+        "--- a/tests/sve/fma_sve.c\n"
+        "+++ b/tests/sve/fma_sve.c\n"
+        "@@ -10,3 +10,3 @@\n"
+        " ctx\n"
+        "+    memcmp_or_fail(actual, golden, sizeof(actual), \"fma_sve\");\n"
+        " ctx\n"
+    )
+    monkeypatch.setattr(plr, "_gh", lambda argv: diff)
+    posted = {}
+
+    def fake_post(path, payload):
+        posted["path"] = path
+        posted["payload"] = payload
+
+    monkeypatch.setattr(plr, "_gh_api_post", fake_post)
+
+    findings = [
+        {"path": "tests/sve/fma_sve.c", "line": 42,
+         "severity": "Critical", "category": "正确性",
+         "message": "越界行号", "evidence": "行 42 不在本 diff"},
+    ]
+    plr.publish_review(7, "c" * 40, findings)
+
+    payload = posted["payload"]
+    assert payload["comments"] == []          # 无行级评论(全部降级)
+    body = payload["body"]
+    assert body.startswith(plr.LOCAL_CLAUDE_MARKER)
+    assert "越界行号" in body                  # 降级进 body JSON 段
+
+
+def test_publish_review_422_falls_back_to_marker_only(monkeypatch):
+    """C2: POST /reviews 遇 422(行级不满足 diff 上下文)→ 回退重发一次
+    marker-only review + 全部 findings 收进 body JSON 段,保住第 5 bot 信号。"""
+    import pr_loop
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    diff = (
+        "diff --git a/tests/sve/fma_sve.c b/tests/sve/fma_sve.c\n"
+        "--- a/tests/sve/fma_sve.c\n"
+        "+++ b/tests/sve/fma_sve.c\n"
+        "@@ -40,5 +40,6 @@\n"
+        " context-40\n"
+        " context-41\n"
+        "+    memcmp_or_fail(actual, golden, sizeof(actual), \"fma_sve\");\n"
+        " context-43\n"
+        " context-44\n"
+    )
+    monkeypatch.setattr(plr, "_gh", lambda argv: diff)
+    calls = []
+
+    def fake_post(path, payload):
+        calls.append((path, payload))
+        if len(calls) == 1:
+            raise plr.GhError(
+                "gh api repos/test/repo/pulls/7/reviews 失败(exit 1): "
+                "gh: Unprocessable Entity (HTTP 422)")
+
+    monkeypatch.setattr(plr, "_gh_api_post", fake_post)
+
+    findings = [
+        {"path": "tests/sve/fma_sve.c", "line": 42,
+         "severity": "Critical", "category": "正确性",
+         "message": "近似比对是 SDC 盲区", "evidence": "容差而非 memcmp"},
+    ]
+    plr.publish_review(7, "c" * 40, findings)
+
+    assert len(calls) == 2
+    first, second = calls
+    assert len(first[1]["comments"]) == 1     # 首次尝试带行级评论
+    assert second[1]["comments"] == []        # 回退零 inline(无 422 风险)
+    assert second[1]["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
+    assert "全部 findings" in second[1]["body"]
+    assert "近似比对是 SDC 盲区" in second[1]["body"]
+
+
+def test_review_all_open_single_pr_failure_isolated(monkeypatch, capsys):
+    """I1: 时间线单 PR 审查失败(GhError)只记日志、继续其余 PR,不炸整段循环。"""
+    def fake_gh(argv):
+        return json.dumps([
+            {"number": 1, "headRefOid": "a" * 40},
+            {"number": 2, "headRefOid": "b" * 40},
+            {"number": 3, "headRefOid": "c" * 40},
+        ])
+
+    monkeypatch.setattr(plr, "_gh", fake_gh)
+    monkeypatch.setattr(plr, "already_reviewed", lambda n, s: False)
+
+    def fake_run(n, s):
+        if n == 2:
+            raise plr.GhError("claude 检视失败(exit 1): 配额耗尽")
+        return []
+
+    monkeypatch.setattr(plr, "run_review", fake_run)
+    published = []
+    monkeypatch.setattr(plr, "publish_review",
+                        lambda n, s, f: published.append(n))
+
+    plr.review_all_open()                    # 不得抛异常
+
+    assert published == [1, 3]               # PR #2 失败不影响其余
+    err = capsys.readouterr().err
+    assert "#2" in err and "审查失败" in err
 
 
 # ---------------------------------------------------------------------------

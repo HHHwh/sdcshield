@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -230,25 +231,40 @@ def _worktree_add(head_sha: str) -> str:
 
     审查需读完整文件上下文(不只 diff 片段)——隔离 worktree 既不碰用户主
     工作区,也不抢 ci_triage 修复 agent 的 autoci clone(设计文档 §9)。
+    checkout 前先 `git fetch origin`,确保 head 已在本地(时间线遇主工作区
+    未含的 head 时,旧实现只报「请先 git fetch」不真 fetch,I1)。
     注意: `git worktree add --detach` 产出的是普通可写 checkout(非只读),
-    claude 以 `--dangerously-skip-permissions` 在其内运行可写文件——核心安全
-    目标(不碰主工作区/autoci)因隔离即弃已达成,写文件本身无害且即弃。
+    claude 以 `--dangerously-skip-permissions` 在其内运行可写文件——隔离即弃
+    保证不碰主工作区/autoci,写文件本身无害且即弃;**但 claude 无沙箱,可执行
+    任意命令,攻击面 = 同仓 PR 内容(diff/标题/描述),DIFF_BANNER/PR_CONTEXT_BANNER
+    只是提示注入缓解,不是安全边界(I3)**。
     """
     tmp = tempfile.mkdtemp(prefix="local-claude-review-")
     path = os.path.join(tmp, "wt")
+    try:
+        subprocess.run(["git", "fetch", "origin"],
+                       capture_output=True, text=True, timeout=GH_TIMEOUT,
+                       check=True)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise GhError(f"git fetch origin 失败: {exc}"
+                      "——无法在隔离 worktree 定位该 head")
+    except subprocess.CalledProcessError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        err = " ".join((exc.stderr or "").strip().split())[:300]
+        raise GhError(f"git fetch origin 失败: {err}"
+                      "——无法在隔离 worktree 定位该 head")
     try:
         subprocess.run(["git", "worktree", "add", "--detach", path, head_sha],
                        capture_output=True, text=True, timeout=GH_TIMEOUT,
                        check=True)
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         shutil.rmtree(tmp, ignore_errors=True)
-        raise GhError(f"git worktree add 失败: {exc}"
-                      "——请先 git fetch 该 head(本地可能尚未拉取此提交)")
+        raise GhError(f"git worktree add 失败: {exc}")
     except subprocess.CalledProcessError as exc:
         shutil.rmtree(tmp, ignore_errors=True)
         err = " ".join((exc.stderr or "").strip().split())[:300]
-        raise GhError(f"git worktree add 失败: {err}"
-                      "——请先 git fetch 该 head(本地可能尚未拉取此提交)")
+        raise GhError(f"git worktree add 失败: {err}")
     return path
 
 
@@ -367,20 +383,75 @@ def _gh_api_post(path: str, payload: dict) -> None:
         raise GhError(f"gh api {path} 失败(exit {proc.returncode}): {err}")
 
 
+def _norm_diff_path(path: str) -> str:
+    """去掉统一 diff 的 `a/` / `b/` 前缀(claude 输出的 path 可能带或不带)。"""
+    p = (path or "").strip()
+    if p.startswith("b/") or p.startswith("a/"):
+        return p[2:]
+    return p
+
+
+def _diff_new_positions(diff: str) -> set:
+    """解析 unified diff,返回新增侧合法行位集合 {(path, line)}。
+
+    GitHub 行级评论只能挂在 diff hunk 内的行;claude 生成的 path/line 未验证、
+    无 side——越界行号会让整单 POST /reviews 422(C2)。此集合用于发布前校验,
+    非法行号/缺 side 的 finding 降级到 body JSON 段。
+    只收集新增侧(hunk 内 `+` 行与 ` ` 上下文行)的新文件行号;`-` 删除行属
+    旧侧,不挂评论。
+    """
+    positions = set()
+    path = None
+    new_ln = None
+    for raw in (diff or "").splitlines():
+        if raw.startswith("diff --git"):
+            path = None
+            new_ln = None
+            continue
+        if raw.startswith("+++ "):
+            # +++ b/path[ \t 时间戳]
+            p = raw[4:].split("\t", 1)[0].strip()
+            path = _norm_diff_path(p)
+            new_ln = None
+            continue
+        if raw.startswith("@@"):
+            m = re.search(r"\+(\d+)(?:,\d+)?\s+@@", raw)
+            new_ln = int(m.group(1)) if m else None
+            continue
+        if path is None or new_ln is None:
+            continue
+        if raw.startswith("+") or raw.startswith(" "):
+            positions.add((path, new_ln))
+            new_ln += 1
+        elif raw.startswith("-"):
+            continue          # 旧侧删除行不挂评论
+    return positions
+
+
 def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
     """把 findings 发布为 PR review(作者 = 当前 gh 登录用户 wangxumarshall)。
 
     - 行级 finding(path 且 line 非 None)→ reviews 的 comments 数组挂 diff 行
       (可逐条 reply、逐条计数,coderabbit 式);
-    - 挂不上 diff 行的(line 为 None 或无 path)→ 收进 review body 的 JSON 段
-      (pr-agent 式);
+    - 挂不上 diff 行的(line 为 None、无 path,或经 `gh pr diff` 校验行号不
+      在 diff hunk 内)→ 收进 review body 的 JSON 段(pr-agent 式,C2);
     - review body 与每条行级评论正文首行均带 LOCAL_CLAUDE_MARKER(第 5 bot
       判据「作者 wangxumarshall 且 正文含标记」双条件之一);
-    - commit_id 锚定当前 head,供 pr_loop 的 commit 锚定过滤。
+    - commit_id 锚定当前 head,供 pr_loop 的 commit 锚定过滤;
+    - POST /reviews 遇 422(行级行号不满足 diff 上下文)且本单确有行级评论时,
+      回退重发一次 marker-only review + 全部 findings 收进 body JSON 段(零
+      inline 无 422 风险),保住第 5 bot 信号(C2)。
     """
+    diff = _gh(["pr", "diff", str(pr_number)])
+    positions = _diff_new_positions(diff)
     inline, body_findings = [], []
     for f in findings:
-        if f.get("path") and f.get("line") is not None:
+        path = _norm_diff_path(f.get("path") or "")
+        try:
+            line = int(f.get("line")) if f.get("line") is not None else None
+        except (TypeError, ValueError):
+            line = None
+        if path and line is not None and (path, line) in positions:
             inline.append(f)
         else:
             body_findings.append(f)
@@ -396,7 +467,7 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
         "body": body,
         "event": "COMMENT",
         "comments": [
-            {"path": f["path"], "line": f["line"],
+            {"path": _norm_diff_path(f.get("path") or ""), "line": f.get("line"),
              "body": _format_inline_comment(f)}
             for f in inline
         ],
@@ -407,7 +478,23 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
     # 只在调用期 import,届时 pr_loop 已完整加载。
     import pr_loop
     slug = pr_loop.resolve_slug(None)
-    _gh_api_post(f"repos/{slug}/pulls/{pr_number}/reviews", payload)
+    try:
+        _gh_api_post(f"repos/{slug}/pulls/{pr_number}/reviews", payload)
+    except GhError as exc:
+        if not inline or "HTTP 422" not in str(exc):
+            raise
+        # 422 回退: marker-only review + 全部 findings 收进 body JSON 段。
+        # 零 inline 无 422 风险——单条越界行号不得让整单 review 丢失、第 5
+        # bot 永久缺信号(设计文档反目标,C2)。
+        fallback_body = (
+            LOCAL_CLAUDE_MARKER + "\n\n"
+            "## 全部 findings(JSON,行级挂载 422 已降级)\n\n```json\n"
+            + json.dumps(findings, ensure_ascii=False, indent=2)
+            + "\n```\n"
+        )
+        _gh_api_post(f"repos/{slug}/pulls/{pr_number}/reviews",
+                     {"commit_id": head_sha, "body": fallback_body,
+                      "event": "COMMENT", "comments": []})
 
 
 # ============ CLI 入口(Task 5: 单 PR + --all-open 时间触发线) ============
@@ -470,15 +557,22 @@ def review_all_open() -> None:
 
     幂等: 同 head 已有含 LOCAL_CLAUDE_MARKER 的 review 的 PR 跳过(不重审、
     不重发)——事件线 + 时间线撞车只审一次。
+    逐 PR 隔离(I1): 单个 PR 审查抛 GhError(gh 失败/claude 配额耗尽/输出非
+    JSON)只记日志后 continue,不炸整个时间线循环——其余 PR 照常审查。
     """
     for number, head_sha in _open_pr_heads():
-        if already_reviewed(number, head_sha):
-            print(f"[skip] PR #{number}(head {head_sha[:8]})已有第 5 bot "
-                  f"review,跳过")
+        try:
+            if already_reviewed(number, head_sha):
+                print(f"[skip] PR #{number}(head {head_sha[:8]})已有第 5 bot "
+                      f"review,跳过")
+                continue
+            findings = run_review(number, head_sha)
+            publish_review(number, head_sha, findings)
+            print(f"[review] PR #{number}(head {head_sha[:8]})已审查并发布")
+        except GhError as exc:
+            print(f"[error] PR #{number} 审查失败,继续其余 PR: {exc}",
+                  file=sys.stderr)
             continue
-        findings = run_review(number, head_sha)
-        publish_review(number, head_sha, findings)
-        print(f"[review] PR #{number}(head {head_sha[:8]})已审查并发布")
 
 
 def build_parser() -> argparse.ArgumentParser:
