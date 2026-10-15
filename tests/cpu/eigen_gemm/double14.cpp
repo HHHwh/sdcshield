@@ -98,17 +98,17 @@ static int eigen_gemm_double14_run(struct test *test, int cpu) {
         if (!_x.isApprox(l_lhs)) {
                 report_fail_msg("_x.isApprox failed");
         }
-        memcmp_or_fail(_x.data(), l_lhs.data(), dim * dim);
+        memcmp_or_fail(_x.data(), l_lhs.data(), (size_t)dim * (size_t)dim);
 
         if (!_y.isApprox(l_rhs)) {
                 report_fail_msg("_y.isApprox failed");
         }
-        memcmp_or_fail(_y.data(), l_rhs.data(), dim * dim);
+        memcmp_or_fail(_y.data(), l_rhs.data(), (size_t)dim * (size_t)dim);
 
         if (!_prod.isApprox(l_prod)) {
                 report_fail_msg("_prod.isApprox failed");
         }
-        memcmp_or_fail(_prod.data(), l_prod.data(), dim * dim);
+        memcmp_or_fail(_prod.data(), l_prod.data(), (size_t)dim * (size_t)dim);
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;

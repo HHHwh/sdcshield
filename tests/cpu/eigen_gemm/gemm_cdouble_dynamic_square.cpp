@@ -98,7 +98,8 @@ static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
         x = l_lhs * l_rhs;
 
         memcmp_or_fail(reinterpret_cast<double *>(x.data()),
-                       reinterpret_cast<double *>(l_prod.data()), 2 * dim * dim);
+                       reinterpret_cast<double *>(l_prod.data()),
+                       2 * (size_t)dim * (size_t)dim);
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;

@@ -57,9 +57,9 @@ static void naive_gemm(const float *A, const float *B, float *C, int n)
             for (int k = 0; k < n; ++k) {
                 /* fmaf: 单次舍入 fused 乘加, 与 SVE svmla(FMLA)舍入序
                  * 一致 -> 有限值输入下位级可比较。 */
-                acc = std::fmaf(A[i * n + k], B[k * n + j], acc);
+                acc = std::fmaf(A[(size_t)i * n + k], B[(size_t)k * n + j], acc);
             }
-            C[i * n + j] = acc;
+            C[(size_t)i * n + j] = acc;
         }
 }
 
@@ -128,14 +128,14 @@ static int acl_gemm_sve_run(struct test *test, int cpu)
                 svfloat32_t acc = svdup_f32(0.0f);
                 for (int k = 0; k < N; ++k) {
                     /* B 行 k 的 jbase..jbase+n 列 → 向量 (谓词控) */
-                    for (int c = 0; c < n; ++c) brow[c] = d->B[k * N + jbase + c];
+                    for (int c = 0; c < n; ++c) brow[c] = d->B[(size_t)k * N + jbase + c];
                     svfloat32_t vb = svld1_f32(pg, brow);
                     /* svmla = FMLA fused 乘加(单次舍入), 与 golden 的
                      * fmaf 舍入序一致, 有限值输入下位级一致 */
                     acc = svmla_f32_x(pg, acc,
-                              svdup_f32(d->A[i * N + k]), vb);
+                              svdup_f32(d->A[(size_t)i * N + k]), vb);
                 }
-                svst1_f32(pg, C.data() + i * N + jbase, acc);
+                svst1_f32(pg, C.data() + (size_t)i * N + jbase, acc);
             }
         }
         if (memcmp(C.data(), d->golden.data(), C.size() * sizeof(float)) != 0) {
