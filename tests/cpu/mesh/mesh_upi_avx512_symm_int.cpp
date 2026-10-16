@@ -25,6 +25,7 @@ struct TestData {
     std::atomic<uint32_t> read_done;
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
+    uint64_t expected_block_sums[NUM_BLOCKS];   // 写侧逐块真值和（仅失败取证用）
 };
 
 static int mesh_upi_avx512_symm_int_init(struct test *test) {
@@ -41,6 +42,7 @@ static int mesh_upi_avx512_symm_int_init(struct test *test) {
         return EXIT_FAILURE;
     }
     memset(td->data, 0, TOTAL_BYTES);
+    memset(td->expected_block_sums, 0, sizeof(td->expected_block_sums));
 
     td->next_block.store(0, std::memory_order_relaxed);
     td->global_sum.store(0, std::memory_order_relaxed);
@@ -88,6 +90,7 @@ static int mesh_upi_avx512_symm_int_run(struct test *test, int cpu) {
             }
             __sync_synchronize();   // 类似 _mm_sfence
 
+            td->expected_block_sums[block] = local_sum;   // 写侧块真值（读者在屏障后读，序由 write_done RMW 保证）
             td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
             td->write_done.fetch_add(1, std::memory_order_seq_cst);
         }
@@ -110,6 +113,9 @@ static int mesh_upi_avx512_symm_int_run(struct test *test, int cpu) {
         // ---------- 读阶段：读取整个数组并校验 ----------
         uint64_t read_sum = 0;
         bool consistent = true;
+        uint64_t block_sums[NUM_BLOCKS];          // 逐块读和（仅失败取证用）
+        size_t bad_block = 0; int bad_vec = -1;   // 一致性首失配位置（仅取证）
+        int32_t bad_orig[NEON_VECTOR_SIZE], bad_reload[NEON_VECTOR_SIZE];
         alignas(16) int32_t store_buf[BLOCK_SIZE];   // 用于一致性测试
 
         for (size_t i = 0; i < TOTAL_ELEMENTS; i += BLOCK_SIZE) {
@@ -119,9 +125,12 @@ static int mesh_upi_avx512_symm_int_run(struct test *test, int cpu) {
                 int32x4_t vec = vld1q_s32(td->data + i + v * NEON_VECTOR_SIZE);
                 vst1q_s32(vals + v * NEON_VECTOR_SIZE, vec);
             }
+            uint64_t block_sum = 0;
             for (int j = 0; j < BLOCK_SIZE; ++j) {
                 read_sum += (uint64_t)vals[j];
+                block_sum += (uint64_t)vals[j];
             }
+            block_sums[i / BLOCK_SIZE] = block_sum;
 
             // 一致性测试：Store/Load 比较
             for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
@@ -137,6 +146,9 @@ static int mesh_upi_avx512_symm_int_run(struct test *test, int cpu) {
                       vgetq_lane_u32(cmp, 2) == 0xFFFFFFFF &&
                       vgetq_lane_u32(cmp, 3) == 0xFFFFFFFF)) {
                     consistent = false;
+                    bad_block = i / BLOCK_SIZE; bad_vec = v;
+                    vst1q_s32(bad_orig, orig);
+                    vst1q_s32(bad_reload, reload);
                     break;
                 }
             }
@@ -158,6 +170,53 @@ static int mesh_upi_avx512_symm_int_run(struct test *test, int cpu) {
                     passed ? GREEN : RED,
                     passed ? "PASS" : "FAIL",
                     RESET);
+            fflush(stderr);
+
+            // ---- 失败取证增强（不改变判定语义，仅增证据；2026-10-16 CPU27 事件
+            //      只剩聚合和、位级不可恢复——本段补齐块级定位与瞬态性自证）----
+            if (!sum_ok && consistent) {
+                // 纯求和失配（CPU27 事件形态）。二次全量读：本线程未 read_done++，
+                // reset 门控未过 → 数组在两读之间必然冻结。
+                uint64_t read_sum2 = 0;
+                uint64_t block_sums2[NUM_BLOCKS];
+                for (size_t i = 0; i < TOTAL_ELEMENTS; i += BLOCK_SIZE) {
+                    int32_t v2[BLOCK_SIZE];
+                    for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
+                        int32x4_t vec = vld1q_s32(td->data + i + v * NEON_VECTOR_SIZE);
+                        vst1q_s32(v2 + v * NEON_VECTOR_SIZE, vec);
+                    }
+                    uint64_t bs2 = 0;
+                    for (int j = 0; j < BLOCK_SIZE; ++j) bs2 += (uint64_t)v2[j];
+                    block_sums2[i / BLOCK_SIZE] = bs2;
+                    read_sum2 += bs2;
+                }
+                const char *verdict =
+                    (read_sum2 == expected_sum)
+                        ? "TRANSIENT-DATAPATH (array exonerated by re-read; fault in this thread's load/ALU path)"
+                        : "ARRAY-SIDE (re-read still mismatches; suspect stored data/memory)";
+                fprintf(stderr, "mesh_upi_avx512_symm_int: Thread %d re-read_sum=%lu (first=%lu, expected=%lu) -> %s\n",
+                        id, read_sum2, read_sum, expected_sum, verdict);
+                for (int b = 0; b < NUM_BLOCKS; ++b) {
+                    if (block_sums[b] != block_sums2[b] ||
+                        block_sums2[b] != td->expected_block_sums[b]) {
+                        const int32_t *p = td->data + b * BLOCK_SIZE;
+                        fprintf(stderr, "mesh_upi_avx512_symm_int: Thread %d block %d: first-read=%lu re-read=%lu write-side=%lu delta(first-re-read)=%ld, block re-read values=(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d)\n",
+                                id, b, block_sums[b], block_sums2[b],
+                                td->expected_block_sums[b],
+                                (int64_t)(block_sums[b] - block_sums2[b]),
+                                p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7],
+                                p[8],p[9],p[10],p[11],p[12],p[13],p[14],p[15]);
+                        break;
+                    }
+                }
+            }
+            if (!consistent && bad_vec >= 0) {
+                // 一致性失配：lane 级原始值 vs 重载值（位级直接可见）
+                fprintf(stderr, "mesh_upi_avx512_symm_int: Thread %d consistency first-mismatch block %zu vec %d: orig=(%d,%d,%d,%d) reload=(%d,%d,%d,%d)\n",
+                        id, bad_block, bad_vec,
+                        bad_orig[0], bad_orig[1], bad_orig[2], bad_orig[3],
+                        bad_reload[0], bad_reload[1], bad_reload[2], bad_reload[3]);
+            }
             fflush(stderr);
             report_fail_msg("mesh_upi_avx512_symm_int: Sum mismatch or consistency failure");
             return EXIT_FAILURE;
