@@ -307,10 +307,14 @@ phase_l3() {
     if [ -n "${L3_DISABLE:-}" ] && flag_ok --disable=zstd19; then
         dis=(--disable "$L3_DISABLE")
     fi
+    # sm3sm4 病理区规避（2026-10-16 定性: 本机 OpenSSL SM4 软实现 ~2.2MB/s, 每迭代
+    # 5×data_size EVP 操作——4M 首迭代 128s, 8M+ 单迭代超窗 interrupted, 自适应 hi≈22M
+    # 落病理区=上轮全核 fail 机制。固定 1M ≈2.2s/迭代, 60s 量子 ~25 次有效比对）
+    local smo=(-O openssl_sm3sm4.data_size=1048576)
     # 自终止预算（-T + --strict-runtime），不用 -T forever + 外部 kill：
     # smoke 实测 sdcshield 对 TERM 60s+ 无响应，外部 KILL 产生 rc=137 伪事件
-    run_bounded "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" 60 "${dis[@]}" "${FLAGS[@]}"
-    run_bounded "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" 60 --test-list-randomize "${dis[@]}" "${FLAGS[@]}"
+    run_bounded "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" 60 "${dis[@]}" "${smo[@]}" "${FLAGS[@]}"
+    run_bounded "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" 60 --test-list-randomize "${dis[@]}" "${smo[@]}" "${FLAGS[@]}"
     local eig; eig=$(resolve 'eigen*')
     # eigen 单线程大参数档（2026-10-16 标定: svd@2048=558MB/99.7s迭代, gemm@4096=1.03G/64s;
     # 量子 260s 保 ≥2 次完整迭代——60s 量子在 100s 迭代下零比对, 大参数形同虚设）
@@ -434,7 +438,11 @@ phase_l4() {
     [ $each -lt 60 ] && each=60
     log "L4 深驻留：$n 个对象 × ${each}s（关 fracturing 固定模式）"
     for t in "${arr[@]}"; do
-        run_sdc "l4_dwell_${t}_c${CYCLE}" 0 -e "$t" -t "${each}s" --max-test-loop-count=0 "${FLAGS[@]}"
+        # 满核驻留大参数档（2026-10-16 标定: oblas mdim=2048 满核峰值 23G 与伴层叠加
+        # 超界, 降档 1536 ≈13G; 条件注入——DWELL_OVERRIDE 事件测试不带 oblas 参数）
+        local o=()
+        [ "$t" = "openblas_dgemm" ] && o=(-O openblas_dgemm.mdim=1536)
+        run_sdc "l4_dwell_${t}_c${CYCLE}" 0 -e "$t" -t "${each}s" --max-test-loop-count=0 "${o[@]}" "${FLAGS[@]}"
     done
 }
 
