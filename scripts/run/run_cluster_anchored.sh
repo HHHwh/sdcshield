@@ -43,7 +43,7 @@ if [ -z "${SDCSHIELD:-}" ] || [ ! -x "$SDCSHIELD" ]; then
     echo "       请先构建（README「从源码构建」）或 export SDC_BIN=<路径>。" >&2
     exit 1
 fi
-TIMEOUT=1800
+TIMEOUT=1800s
 ROUNDS=4
 TESTS="sve512_nt_reload_arm,sve512_f64_chain_arm,sve512_f32_chain_arm,sve512_gather_scatter_arm,sve512_stencil_axis_arm,power_virus_dit"
 QUICK=0
@@ -55,10 +55,12 @@ while getopts "c:C:t:r:e:q" opt; do
     case $opt in
         c) CLUSTER_ID="$OPTARG" ;;
         C) CPUSET="$OPTARG" ;;
-        t) TIMEOUT="$OPTARG" ;;
+        # -t 单位归一: 框架 -t 裸数字=毫秒(实测 1800=1.8s, "每轮 1800s"标签成谎);
+        #   本脚本语义=秒 → 裸数字补 s 后缀, 已带 [smh] 单位的原样透传
+        t) case "$OPTARG" in *[smh]) TIMEOUT="$OPTARG" ;; *) TIMEOUT="${OPTARG}s" ;; esac ;;
         r) ROUNDS="$OPTARG" ;;
         e) TESTS="$OPTARG" ;;
-        q) QUICK=1; TIMEOUT=60; ROUNDS=20 ;;
+        q) QUICK=1; TIMEOUT=60s; ROUNDS=20 ;;
         *) echo "用法: $0 [-c 簇号|-C cpu列表] [-t 秒] [-r 轮数] [-e 测试列表] [-q]"; exit 1 ;;
     esac
 done
@@ -142,7 +144,7 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 echo "========== 簇锚定 campaign =========="
 echo "目标簇 cpus: $CPUSET"
 echo "对照簇 cpus: ${CONTROL_CPUSET:-无(退化为单簇)}"
-echo "每轮 ${TIMEOUT}s × ${ROUNDS} 轮"
+echo "每轮 ${TIMEOUT} × ${ROUNDS} 轮"
 echo "测试: $TESTS"
 echo "日志: $LOG_DIR/"
 echo "开始: $(date)"
