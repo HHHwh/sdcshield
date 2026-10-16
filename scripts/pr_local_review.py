@@ -147,18 +147,19 @@ def build_adversarial_prompt(diff: str, pr_context: dict) -> str:
 def already_reviewed(pr_number: int, head_sha: str) -> bool:
     """同 head 幂等检查: 该 head 是否已有第 5 bot 的 review。
 
-    经 `gh pr view <pr> --json reviews` 拉全部 review,判定「body 含
-    LOCAL_CLAUDE_MARKER 且 commit_id == head_sha」(commit 锚定)——事件线 +
-    时间线撞车只审一次。body 含标记但锚定旧 head 的 review 不算已审。
+    经 pr_loop.gh_api_paged 拉 REST `repos/{slug}/pulls/{n}/reviews`(与
+    pr_loop 的 status/collect 同源、同分页)。曾经走 `gh pr view --json
+    reviews`(GraphQL),其响应的 commit_id 恒为 null——commit 锚定永假、
+    幂等门禁形同虚设,cron 每 30 分钟对同 head 重发一轮(2026-10-16 PR#266
+    实证: 同 head 24 轮/62 条行级评论;REST 端点 commit_id 有值,同日实证)。
+    判定「body 含 LOCAL_CLAUDE_MARKER 且 commit_id == head_sha」(commit
+    锚定)——事件线 + 时间线撞车只审一次;body 含标记但锚定旧 head 的
+    review 不算已审。
     """
-    raw = _gh(["pr", "view", str(pr_number), "--json", "reviews"])
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise GhError(f"gh pr view --json reviews 返回非 JSON: {exc}")
-    if not isinstance(data, dict):
-        return False
-    reviews = data.get("reviews") or []
+    import pr_loop   # 懒 import(与 publish_review 同策略): pr_loop 顶层
+    #              import 本模块,顶层互相 import 会循环。
+    slug = pr_loop.resolve_slug(None)
+    reviews = pr_loop.gh_api_paged(f"repos/{slug}/pulls/{pr_number}/reviews")
     if not isinstance(reviews, list):
         return False
     return any(LOCAL_CLAUDE_MARKER in (r.get("body") or "")
