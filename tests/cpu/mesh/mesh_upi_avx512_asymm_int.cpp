@@ -16,14 +16,29 @@
 #define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)           // = 64
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
 
+/* 2026-10-16 协议重设计（对照 mesh_upi_avx2_asymm_int 的 G2'/G3' 修复与
+ * mesh_upi_avx512_symm_int 的 v2 范式 13b13850）：原版 reset-winner 清零
+ * 协议（读者 CAS reset_lock 选举胜者、等 readers_done、清零
+ * global_sum/next_block/allocated_blocks）存在已实证的假 FAIL 竞态——
+ * 清零/写者重入与其他读者的快照之间无屏障隔离，读者可跨迭代混合读、
+ * 快照到 expected_sum=0。新版结构性消除：
+ *   1. 双感知反转屏障 B1（写后读前）/B2（读后写前）替代 reset-winner
+ *      协议——无业务计数器清零、无胜者选举、无套圈窗口（B1 保证快照时
+ *      全部写完成且无人开写下一迭代；B2 保证全部读完才允许覆写数组）；
+ *   2. 累计和差分（expected = cum(K) - cum(K-1)）替代"每迭代清零
+ *      global_sum"——global_sum 单调累加，B1 后全线程读到相同值；
+ *   3. 写者随 epoch 轮转（writer_id = my_epoch % total，对齐 avx2 修复
+ *      版与测试描述 "switching write core"；原实现固定 id==0 写者，
+ *      并未真正轮换）；
+ *   4. 删除 next_block/allocated_blocks/reset_lock/readers_done（单写者
+ *      静态遍历全部块，B1 到达即"写完成"信号，无需任何分配/完成计数器）。
+ * 时间到期时各线程在自己的屏障自旋处退出（他人亦到期退出，有界无死锁）。 */
 struct TestData {
     alignas(16) int32_t *data;           // 共享数据数组（16 字节对齐）
-    std::atomic<uint32_t> next_block;    // 下一个可分配的块索引
-    std::atomic<uint64_t> global_sum;    // 写核心的校验和累加
-    std::atomic<uint32_t> allocated_blocks; // 已分配的块数
+    std::atomic<uint64_t> global_sum;    // 跨迭代单调累计（差分得每迭代期望）
     std::atomic<uint32_t> thread_idx;    // 线程 ID 分配器
-    std::atomic<uint32_t> reset_lock;    // 重置互斥锁
-    std::atomic<uint32_t> readers_done;  // 已完成校验的读核心数
+    std::atomic<uint32_t> b1_count, b1_sense;   // 屏障 B1: 写后读前
+    std::atomic<uint32_t> b2_count, b2_sense;   // 屏障 B2: 读后写前
 };
 
 static int mesh_upi_avx512_asymm_int_init(struct test *test) {
@@ -41,12 +56,12 @@ static int mesh_upi_avx512_asymm_int_init(struct test *test) {
     }
     memset(td->data, 0, TOTAL_BYTES);
 
-    td->next_block.store(0, std::memory_order_relaxed);
     td->global_sum.store(0, std::memory_order_relaxed);
-    td->allocated_blocks.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->reset_lock.store(0, std::memory_order_relaxed);
-    td->readers_done.store(0, std::memory_order_relaxed);
+    td->b1_count.store(0, std::memory_order_relaxed);
+    td->b1_sense.store(0, std::memory_order_relaxed);
+    td->b2_count.store(0, std::memory_order_relaxed);
+    td->b2_sense.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -57,8 +72,18 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
     auto *td = static_cast<TestData*>(test->data);
 
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
-    bool is_writer = (id == 0);
-    uint32_t total_readers = thread_count() - 1;   // 一个写核心，其余为读核心
+
+    /* 线程总数取框架权威值 thread_count()（自动尊重 --cpuset、
+     * test.max_threads 与 OS 亲和性限制，每个线程取值一致）——屏障
+     * 参与者数目必须全体一致，否则轮次隔离崩溃（avx2_asymm_int 同款；
+     * 单线程无法做 asymm 跨核测试）。 */
+    uint32_t total = thread_count();
+    if (total < 2) {
+        log_skip(CpuTopologyIssueSkipCategory,
+                 "mesh_upi_avx512_asymm_int requires at least 2 threads (inter-core test); "
+                 "skipping on this thread count");
+        return EXIT_SKIP;
+    }
 
     /* randomization hardening H14' (P17): framework RNG (per-thread
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
@@ -68,13 +93,42 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
     #define RED   "\033[31m"
     #define RESET "\033[0m"
 
-    do {
-        if (is_writer) {
-            // 写核心：循环分配块直到所有块分配完
-            while (test_time_condition(test)) {
-                uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
-                if (block >= NUM_BLOCKS) break;
+    /* 感知反转屏障（v2 范式，参照 symm_int 13b13850 + avx2_asymm_int
+     * G2'/G3'）：最后一个到达者清 cnt、翻转 sense 放行所有人；其余自旋
+     * 等翻转。自旋按 1024 次一档节流检查时间预算——test_time_condition
+     * 每次调用消耗 auto-fracture 的 inner_loop_count 预算（默认 40），
+     * 写者填满数组需数十微秒，逐自旋检查会在写完成前耗尽预算而全员
+     * 提前退出。到期时各自从屏障退出，他人亦到期退出（有界、无死锁）。
+     * 返回 false = 时间预算耗尽，调用方退出主循环。 */
+    auto barrier = [&](std::atomic<uint32_t> &cnt, std::atomic<uint32_t> &sen) -> bool {
+        uint32_t s = sen.load(std::memory_order_seq_cst);
+        if (cnt.fetch_add(1, std::memory_order_seq_cst) + 1 == total) {
+            cnt.store(0, std::memory_order_seq_cst);
+            sen.store(1 - s, std::memory_order_seq_cst);
+            return true;
+        }
+        uint32_t spin = 0;
+        while (sen.load(std::memory_order_seq_cst) == s) {
+            if ((++spin & 1023u) == 0) {
+                if (!test_time_condition(test)) return false;
+            } else {
+                __asm__ volatile("yield");
+            }
+        }
+        return true;
+    };
 
+    uint64_t prev_cum = 0;    // 上一迭代 B1 快照（B1..B2 间无写 → 全线程相同值）
+    uint32_t my_epoch = 0;
+
+    do {
+        uint32_t writer_id = my_epoch % total;   // 写者随 epoch 轮转
+
+        if (id == (int)writer_id) {
+            // ---------- 写者：静态遍历写入所有块 ----------
+            // （单写者无需 next_block 动态分配；本轮状态无需清零——
+            //   global_sum 单调累计，由 B1 后的差分快照取值。）
+            for (uint32_t block = 0; block < NUM_BLOCKS; ++block) {
                 size_t offset = block * BLOCK_ELEMENTS;
                 int32_t vals[BLOCK_ELEMENTS];
                 uint64_t local_sum = 0;
@@ -107,29 +161,20 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
                 // 原代码发现不一致时仅记录，我们也同样处理
 
                 td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
-                td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
             }
-            /* 等待读核心完成本轮读取并重置 next_block，避免 32 位
-             * next_block 被越界 fetch_add 回绕后覆盖读核心正在读取的数据，
-             * 造成 sum 校验假失败。 */
-            while (td->next_block.load(std::memory_order_seq_cst) != 0 &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
-            }
-        } else {
-            // 读核心：等待所有块分配完成
-            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
-            }
-            if (!test_time_condition(test)) break;
+        }
 
-            // Sum snapshot BEFORE the read loop (see symm_f64/int): a reader
-            // snapshotting global_sum after the walk races the reset-phase
-            // writer restart and the next iteration's writes.
-            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
+        // B1：全部块写完成（此后到 B2 之间数组冻结、global_sum 稳定）
+        if (!barrier(td->b1_count, td->b1_sense)) break;
 
-            // 读取整个数组，计算校验和并进行一致性测试
+        // 累计和快照：expected = cum(K) - cum(K-1)。写者同样推进
+        // prev_cum——写者随 epoch 轮转，下一轮它就是读者，差分链必须连续。
+        uint64_t cum = td->global_sum.load(std::memory_order_seq_cst);
+        uint64_t expected_sum = cum - prev_cum;   // 本迭代全部块之和
+        prev_cum = cum;
+
+        if (id != (int)writer_id) {
+            // ---------- 读者：读取整个数组，计算校验和并进行一致性测试 ----------
             uint64_t read_sum = 0;
             bool consistent = true;
             alignas(16) int32_t store_buf[BLOCK_ELEMENTS];   // 用于一致性测试
@@ -183,40 +228,12 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
                 report_fail_msg("mesh_upi_avx512_asymm_int: Sum mismatch or consistency failure");
                 return EXIT_FAILURE;
             }
-
-            // 注册已完成校验
-            td->readers_done.fetch_add(1, std::memory_order_seq_cst);
-
-            // ---------- 重置状态（仅由一个读核心执行） ----------
-            uint32_t expected_lock = 0;
-            if (td->reset_lock.compare_exchange_strong(expected_lock, 1,
-                                                       std::memory_order_seq_cst,
-                                                       std::memory_order_seq_cst)) {
-                // 等待所有读核心完成校验
-                while (td->readers_done.load(std::memory_order_seq_cst) < total_readers &&
-                       test_time_condition(test)) {
-                    __asm__ volatile("yield");
-                }
-                if (!test_time_condition(test)) {
-                    td->reset_lock.store(0, std::memory_order_seq_cst);
-                    break;
-                }
-
-                // 重置共享状态
-                td->global_sum.store(0, std::memory_order_seq_cst);
-                td->next_block.store(0, std::memory_order_seq_cst);
-                td->allocated_blocks.store(0, std::memory_order_seq_cst);
-                td->readers_done.store(0, std::memory_order_seq_cst);
-                td->reset_lock.store(0, std::memory_order_seq_cst);
-            } else {
-                // 未获得锁，等待重置完成（reset_lock 变为 0）
-                while (td->reset_lock.load(std::memory_order_seq_cst) != 0 &&
-                       test_time_condition(test)) {
-                    __asm__ volatile("yield");
-                }
-                if (!test_time_condition(test)) break;
-            }
         }
+
+        // B2：全部读完成，数组保护解除（下一迭代写可开始）
+        if (!barrier(td->b2_count, td->b2_sense)) break;
+
+        ++my_epoch;
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;

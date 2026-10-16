@@ -22,9 +22,19 @@ struct TestData {
     std::atomic<uint64_t> global_sum;    // 写核心的校验和累加
     std::atomic<uint32_t> allocated_blocks; // 已分配的块数
     std::atomic<uint32_t> thread_idx;    // 线程 ID 分配器
-    std::atomic<uint32_t> round_done;    // 已完成校验的读核心数
-    std::atomic<uint32_t> reader_count;  // 读核心总数（仅用于同步）
-    std::atomic<uint64_t> iter;          // 全局轮次（用于切换读者）
+    /* sense-reversal 轮屏障（2731971 已验证模式）：原 iter 轮转协议的
+     * 写者分支是除超时外无可行出口的无限循环（外层 while(ttc) 内自旋
+     * 等 allocated<NUM_BLOCKS 再认领写块）——写者一旦进入就永远回不到
+     * do-while 顶端重读 iter，"轮流当读者"的轮转从未发生：第 0 轮由
+     * 最先入场的 id 0 校验一次并单方复位后，全体线程（含原读者）被钉
+     * 死在写者自旋里空转到超时，后续轮次的校验全部缺失（vacuous）。
+     * 原读者复位（global_sum/next_block/allocated_blocks 逐条清零）也
+     * 是本族 13b13850 结构性消除的"每迭代清零计数器 + 复位者单方写"
+     * 模式。round_done/reader_count 自始未被读写（死状态，移植残留）。
+     * arrived/epoch 固定参与者屏障 + 本地 my_epoch 轮转读者让轮转真正
+     * 发生；轮次状态由屏障最后到达者复位，无清零竞态窗口。 */
+    std::atomic<uint32_t> arrived;       // 本轮已到达屏障的线程数（写者+读者）
+    std::atomic<uint32_t> epoch;         // 轮次代（sense 位）
 };
 
 static int mesh_upi_sse_asymm_write_int_init(struct test *test) {
@@ -46,9 +56,8 @@ static int mesh_upi_sse_asymm_write_int_init(struct test *test) {
     td->global_sum.store(0, std::memory_order_relaxed);
     td->allocated_blocks.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->round_done.store(0, std::memory_order_relaxed);
-    td->reader_count.store(0, std::memory_order_relaxed);
-    td->iter.store(0, std::memory_order_relaxed);
+    td->arrived.store(0, std::memory_order_relaxed);
+    td->epoch.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -83,17 +92,26 @@ static int mesh_upi_sse_asymm_write_int_run(struct test *test, int cpu) {
     #define RED   "\033[31m"
     #define RESET "\033[0m"
 
+    uint32_t my_epoch = 0;
     do {
-        uint64_t current_iter = td->iter.load(std::memory_order_acquire);
-        int reader_id = current_iter % total_threads;  // 轮流当读者
+        int reader_id = my_epoch % total_threads;  // 轮流当读者（原 iter 轮转语义）
 
         if (id == reader_id) {
             // ---------- 读者：等待所有块分配完成 ----------
-            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
+            /* 等待条件每自旋检查、ttc 预算按档节流检查、预算耗尽走
+             * out_of_budget 干净退出（2731971/8502e491 模式）。档距
+             * 131072（8502e491 实测参数）：首轮读者是最先入场的 id 0，
+             * 要桥接写者线程 2.7~6.7ms 的孵化偏斜，而 1024 一档下
+             * 40 次预算仅覆盖 ~70µs，会把首轮变成预算耗尽的 vacuous
+             * 退出（40 × 131072 × ~1.7ns ≈ 8.9ms 覆盖实测最大值）。 */
+            uint32_t spin = 0;
+            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
+                if ((++spin & 131071u) == 0) {
+                    if (!test_time_condition(test)) goto out_of_budget;
+                } else {
+                    __asm__ volatile("yield");
+                }
             }
-            if (!test_time_condition(test)) break;
 
             // 全内存屏障
             __sync_synchronize();
@@ -145,24 +163,17 @@ static int mesh_upi_sse_asymm_write_int_run(struct test *test, int cpu) {
                 return EXIT_FAILURE;
             }
 
-            // ---------- 重置状态（由唯一的读者执行） ----------
-            td->global_sum.store(0, std::memory_order_seq_cst);
-            td->next_block.store(0, std::memory_order_seq_cst);
-            td->allocated_blocks.store(0, std::memory_order_seq_cst);
-            td->iter.fetch_add(1, std::memory_order_release);
-
         } else {
-            // ---------- 写者：竞争分配块并写入随机数据 ----------
-            while (test_time_condition(test)) {
-                while (td->allocated_blocks.load(std::memory_order_seq_cst) >= NUM_BLOCKS &&
-                       test_time_condition(test)) {
-                    __asm__ volatile("yield");
-                }
-                if (!test_time_condition(test)) break;
-
+            // ---------- 写者：竞争分配块并写入随机数据（本轮有限工作量） ----------
+            /* 原实现这里是无限外层循环 + allocated_blocks 自旋等待——
+             * 写者永不回到轮转判定，是协议失效的根因（见 TestData 注释）。
+             * 认领语义不变：fetch_add 竞争，认到 >= NUM_BLOCKS 即本轮
+             * 退出；每块写入（随机数生成、NEON 存储、sfence、立即读回、
+             * 记账提交）与原实现逐句相同。 */
+            while (true) {
                 uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
                 if (block >= NUM_BLOCKS) {
-                    continue;
+                    break;
                 }
 
                 size_t offset = block * BLOCK_ELEMENTS;
@@ -191,8 +202,39 @@ static int mesh_upi_sse_asymm_write_int_run(struct test *test, int cpu) {
                 td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
             }
         }
+
+        /* ---------- 轮屏障：sense-reversal，读者与全体写者都到达 ----------
+         * 最后到达者在此复位下一轮状态（global_sum/next_block/
+         * allocated_blocks）后翻转 epoch：fetch_add(acq_rel) 的到达链
+         * 保证复位发生时所有线程都已离开本轮的认领/校验，epoch 的
+         * release 存储保证复位先于任何线程的下一轮访问可见 —— 这正是
+         * 原协议想做而没做对的轮次隔离（原版由读者在写者仍被困于
+         * 无限循环时单方清零，轮转从未发生）。reader 随 my_epoch 轮转。
+         * 自旋按 131072 一档节流预算检查：首轮早到者须等最晚孵化者
+         * （同读者等待的档距依据）。 */
+        {
+            uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (done == total_threads) {
+                td->global_sum.store(0, std::memory_order_seq_cst);
+                td->next_block.store(0, std::memory_order_seq_cst);
+                td->allocated_blocks.store(0, std::memory_order_seq_cst);
+                td->arrived.store(0, std::memory_order_relaxed);
+                td->epoch.store(my_epoch + 1, std::memory_order_release);
+            } else {
+                uint32_t spin = 0;
+                while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
+                    if ((++spin & 131071u) == 0) {
+                        if (!test_time_condition(test)) goto out_of_budget;
+                    } else {
+                        __asm__ volatile("yield");
+                    }
+                }
+            }
+        }
+        ++my_epoch;
     } while (test_time_condition(test));
 
+out_of_budget:
     return EXIT_SUCCESS;
 
     #undef GREEN
