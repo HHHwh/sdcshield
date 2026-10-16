@@ -20,7 +20,7 @@ else
     # SWEEP=4m：spectrum 脚本 -t 为每用例语义（42 个测试槽 × 4m ≈ 2.8h ≈ plan L2 预算）
     T_COLD=30m; T_SWEEP=4m; T_DWELLM=4m; T_L3F=6h; T_L3R=2h
     T_L5=90m;   T_L4E=2h;   T_IPSEC=15m; T_MEMCPY=15m; T_DOM=30m
-    T_HEAT=30m; T_TARGET=30m; T_EIGEN=300s
+    T_HEAT=30m; T_TARGET=30m; T_EIGEN=900s
 fi
 DUR_S() { python3 -c "
 import sys
@@ -312,7 +312,11 @@ phase_l3() {
     run_bounded "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" 60 "${dis[@]}" "${FLAGS[@]}"
     run_bounded "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" 60 --test-list-randomize "${dis[@]}" "${FLAGS[@]}"
     local eig; eig=$(resolve 'eigen*')
-    [ -n "$eig" ] && run_bounded "l3_eigen_n1_c${CYCLE}" "$(DUR_S "$T_EIGEN")" 60 -e "$eig" -n 1 "${FLAGS[@]}"
+    # eigen 单线程大参数档（2026-10-16 标定: svd@2048=558MB/99.7s迭代, gemm@4096=1.03G/64s;
+    # 量子 260s 保 ≥2 次完整迭代——60s 量子在 100s 迭代下零比对, 大参数形同虚设）
+    [ -n "$eig" ] && run_bounded "l3_eigen_n1_c${CYCLE}" "$(DUR_S "$T_EIGEN")" 260 -e "$eig" -n 1 \
+        -O eigen_svd_double.mdim=2048 -O eigen_svd_double2.mdim=2048 \
+        -O eigen_gemm_double_dynamic_square.mdim=4096 "${FLAGS[@]}"
 }
 
 l5_dit() {
