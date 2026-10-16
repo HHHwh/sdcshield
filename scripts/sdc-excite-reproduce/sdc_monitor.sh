@@ -537,13 +537,19 @@ PYEOF
             if [ -n "$last_sel_id" ] && [ "$lastid" != "$last_sel_id" ]; then
                 evf="$SEL_EV/$(date +%Y%m%d-%H%M%S).txt"
                 awk -F'|' -v a="$last_sel_id" '{gsub(/ /,"",$1); if (strtonum("0x"$1) > strtonum("0x"a)) print}' <<<"$selout" > "$evf"
-                nnew=$(grep -c . "$evf" 2>/dev/null || echo 0)
+                # grep -c 零匹配时打印 0 且 rc=1，`|| echo 0` 会叠加成两行 "0\n0"，
+                # 经 SEL5M_CARRY 写入 CSV 后把行尾拆成 "0,1" 杂行（2026-10-15 实证）
+                nnew=$(grep -c . "$evf" 2>/dev/null); [ -n "$nnew" ] || nnew=0
                 SEL5M_CARRY=$nnew
                 # 事件率异常（如固件节流振荡 5 分钟 60+ 条）——告警不暂停（温度联锁管根因）
                 [ "$nnew" -ge 20 ] && alert "SEL 事件风暴：5 分钟新增 ${nnew} 条（$(awk -F'|' '{print $3}' "$evf" | sort | uniq -c | sort -rn | head -2 | tr '\n' ' ')）——典型为热节流振荡，见 $evf"
                 if grep -qE 'Critical.*(Asserted|asserted)' "$evf"; then
                     ! paused_for sel && set_pause sel "SEL Critical 事件（粘性：需人工调查后 rm PAUSE）: $(head -1 "$evf")"
                 fi
+            else
+                # 本窗口无新 SEL 事件：sel5m 归零（否则该列永远停在最后一个
+                # 有事件的窗口，"近5min窗口"语义失真——10min 汇总同受影响）
+                SEL5M_CARRY=0
             fi
             last_sel_id=$lastid
             echo "$lastid" > "$SEL_BASELINE_FILE" 2>/dev/null
