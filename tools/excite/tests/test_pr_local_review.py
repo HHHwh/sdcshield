@@ -166,6 +166,11 @@ def test_publish_review_posts_marker_and_inline(monkeypatch):
     assert inline["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
     assert "近似比对是 SDC 盲区" in inline["body"]
 
+    # 行级评论与 review body 都必须有可见 claude 标识(HTML 注释 marker 渲染
+    # 不可见,无法与 wangxumarshall 本人意见区分——2026-10-16 用户要求)
+    assert "[claude]" in payload["comments"][0]["body"]
+    assert plr.CLAUDE_VISIBLE_TAG in payload["body"]
+
     # 挂不上 diff 行的 finding 收进 body JSON 段(结论与 evidence 均在)
     assert "固定迭代次数短跑不证明无缺陷" in body
     assert "TEST_LOOP 用固定 100 次" in body
@@ -208,6 +213,7 @@ def test_publish_review_demotes_invalid_line_to_body(monkeypatch):
     assert payload["comments"] == []          # 无行级评论(全部降级)
     body = payload["body"]
     assert body.startswith(plr.LOCAL_CLAUDE_MARKER)
+    assert plr.CLAUDE_VISIBLE_TAG in body     # 降级路径 body 同样带可见标识
     assert "越界行号" in body                  # 降级进 body JSON 段
 
 
@@ -251,6 +257,8 @@ def test_publish_review_422_falls_back_to_marker_only(monkeypatch):
     assert len(first[1]["comments"]) == 1     # 首次尝试带行级评论
     assert second[1]["comments"] == []        # 回退零 inline(无 422 风险)
     assert second[1]["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
+    fallback_body = second[1]["body"]         # 第二次 fake_post 捕获的 body
+    assert plr.CLAUDE_VISIBLE_TAG in fallback_body
     assert "全部 findings" in second[1]["body"]
     assert "近似比对是 SDC 盲区" in second[1]["body"]
 
@@ -282,6 +290,8 @@ def test_publish_review_empty_findings_skips_diff(monkeypatch):
     assert posted["path"] == "repos/test/repo/pulls/7/reviews"
     assert posted["payload"]["comments"] == []
     assert posted["payload"]["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
+    # marker-only 空 review 的 body 同样带可见标识(噪音信号也须可辨识)
+    assert plr.CLAUDE_VISIBLE_TAG in posted["payload"]["body"]
 
 
 def test_review_all_open_single_pr_failure_isolated(monkeypatch, capsys):

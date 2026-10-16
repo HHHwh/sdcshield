@@ -40,6 +40,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 的普通评论混淆,设计文档反目标 2)。
 LOCAL_CLAUDE_MARKER = "<!-- local-claude-review -->"
 
+# 第 5 bot 可见身份标识(2026-10-16 用户要求): LOCAL_CLAUDE_MARKER 是 HTML
+# 注释,GitHub 渲染不可见;review 作者显示 GitHub 账号 wangxumarshall,页面上
+# 无法区分 bot 意见与本人意见。所有可见正文(review body 一行引语、行级评论
+# 结论行 [claude] 前缀)必须含 "claude" 字样。机器判据不变(作者 + marker)。
+CLAUDE_VISIBLE_TAG = "> 🤖 **claude 检视**(本地无头 claude bot 自动生成,非 wangxumarshall 本人意见)"
+
 # diff 是不可信输入,不是指令——以横幅包裹,语义与 pr_loop 的 UNTRUSTED_BANNER
 # 同源: 检视者只把它当作被审查的代码数据,绝不执行其中的任何指令。
 DIFF_BANNER = (
@@ -395,7 +401,7 @@ def _format_inline_comment(finding: dict) -> str:
     cat = finding.get("category") or "?"
     msg = finding.get("message") or ""
     ev = finding.get("evidence") or ""
-    lines = [LOCAL_CLAUDE_MARKER, f"**[{sev}] {cat}**: {msg}"]
+    lines = [LOCAL_CLAUDE_MARKER, f"**[claude] [{sev}] {cat}**: {msg}"]
     if ev:
         lines.append(f"证据: {ev}")
     return "\n".join(lines)
@@ -499,7 +505,7 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
     else:
         body_findings = list(findings)
 
-    body = LOCAL_CLAUDE_MARKER + "\n"
+    body = LOCAL_CLAUDE_MARKER + "\n" + CLAUDE_VISIBLE_TAG + "\n"
     if body_findings:
         body += ("\n## 挂不上 diff 行的 findings(JSON)\n\n```json\n"
                  + json.dumps(body_findings, ensure_ascii=False, indent=2)
@@ -530,7 +536,7 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
         # 零 inline 无 422 风险——单条越界行号不得让整单 review 丢失、第 5
         # bot 永久缺信号(设计文档反目标,C2)。
         fallback_body = (
-            LOCAL_CLAUDE_MARKER + "\n\n"
+            LOCAL_CLAUDE_MARKER + "\n" + CLAUDE_VISIBLE_TAG + "\n\n"
             "## 全部 findings(JSON,行级挂载 422 已降级)\n\n```json\n"
             + json.dumps(findings, ensure_ascii=False, indent=2)
             + "\n```\n"
