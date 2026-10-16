@@ -315,10 +315,15 @@ phase_l3() {
     # smoke 实测 sdcshield 对 TERM 60s+ 无响应，外部 KILL 产生 rc=137 伪事件
     run_bounded "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" 60 "${dis[@]}" "${smo[@]}" "${FLAGS[@]}"
     run_bounded "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" 60 --test-list-randomize "${dis[@]}" "${smo[@]}" "${FLAGS[@]}"
-    local eig; eig=$(resolve 'eigen*')
+    local eig; eig=$(resolve 'eigen_svd_double,eigen_svd_double2,eigen_gemm_double_dynamic_square')
     # eigen 单线程大参数档（2026-10-16 标定: svd@2048=558MB/99.7s迭代, gemm@4096=1.03G/64s;
-    # 量子 260s 保 ≥2 次完整迭代——60s 量子在 100s 迭代下零比对, 大参数形同虚设）
-    [ -n "$eig" ] && run_bounded "l3_eigen_n1_c${CYCLE}" "$(DUR_S "$T_EIGEN")" 260 -e "$eig" -n 1 \
+    # 量子 260s 保 ≥2 次完整迭代——60s 量子在 100s 迭代下零比对, 大参数形同虚设）。
+    # -e 只列三个 -O 目标: 框架按 -e 顺序逐测试调度, 每测试吃满量子, 900s 预算仅容
+    # 3-4 个——resolve 'eigen*' 的 17 测试序中 svd 居 11/12 位永不可达(2026-10-17
+    # review 发现, 缩比探针复现)。其余 eigen* 由 l3_fixed/rand 全集波次覆盖。
+    # 量子按 MODE 分档: smoke 档 260s 会拖长 smoke 且竞争下逼近外层 pto 兜底。
+    local eq=260; [ "$MODE" = smoke ] && eq=60
+    [ -n "$eig" ] && run_bounded "l3_eigen_n1_c${CYCLE}" "$(DUR_S "$T_EIGEN")" "$eq" -e "$eig" -n 1 \
         -O eigen_svd_double.mdim=2048 -O eigen_svd_double2.mdim=2048 \
         -O eigen_gemm_double_dynamic_square.mdim=4096 "${FLAGS[@]}"
 }
