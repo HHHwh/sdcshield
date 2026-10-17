@@ -20,7 +20,7 @@ else
     # SWEEP=4m：spectrum 脚本 -t 为每用例语义（42 个测试槽 × 4m ≈ 2.8h ≈ plan L2 预算）
     T_COLD=30m; T_SWEEP=4m; T_DWELLM=4m; T_L3F=6h; T_L3R=2h
     T_L5=90m;   T_L4E=2h;   T_IPSEC=15m; T_MEMCPY=15m; T_DOM=30m
-    T_HEAT=30m; T_TARGET=30m; T_EIGEN=900s
+    T_HEAT=30m; T_TARGET=30m; T_EIGEN=1300s
 fi
 DUR_S() { python3 -c "
 import sys
