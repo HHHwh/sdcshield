@@ -310,7 +310,11 @@ phase_l3() {
     # sm3sm4 病理区规避（2026-10-16 定性: 本机 OpenSSL SM4 软实现 ~2.2MB/s, 每迭代
     # 5×data_size EVP 操作——4M 首迭代 128s, 8M+ 单迭代超窗 interrupted, 自适应 hi≈22M
     # 落病理区=上轮全核 fail 机制。固定 1M ≈2.2s/迭代, 60s 量子 ~25 次有效比对）
-    local smo=(-O openssl_sm3sm4.data_size=1048576)
+    # eigen_gemm 满核限幅 1024（2026-10-17 事件定性: 自适应 85% 预算=24G 波次与
+    # mem_saturate 叠加连环 OOM——dmesg 18:48 ×4 实录; mdim=1024 ≈4-5G 安全档,
+    # 大参数形态由 l3_eigen_n1 单线程段承载不损失覆盖）
+    local smo=(-O openssl_sm3sm4.data_size=1048576 \
+               -O eigen_gemm_double_dynamic_square.mdim=1024)
     # 自终止预算（-T + --strict-runtime），不用 -T forever + 外部 kill：
     # smoke 实测 sdcshield 对 TERM 60s+ 无响应，外部 KILL 产生 rc=137 伪事件
     run_bounded "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" 60 "${dis[@]}" "${smo[@]}" "${FLAGS[@]}"
