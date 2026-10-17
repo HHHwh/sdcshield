@@ -64,6 +64,11 @@ struct RegionInfo {
 struct SweepData {
     std::vector<RegionInfo> regions;   /* one per cpu */
     size_t region_size;                /* common size */
+    /* knobs 在 init(main 线程)读取后缓存——get_testspecific_knob_value_int
+     * 仅允许 init 调用，run 的 per-cpu worker 线程直接调用会触发框架
+     * Internal error abort（2026-10-17 战役事件#002 实测捕获） */
+    AddrMode addr_mode = ADDR_RAND;
+    ValMode val_mode = VAL_RANDOM;
 };
 
 /* High-Hamming value table (same construction as lsu_store_forward_arm /
@@ -185,6 +190,19 @@ static int random_access_sweep_init(struct test *test)
     data->region_size = (size_knob > 0)
                        ? (size_t)size_knob * (1u << 20)
                        : default_region_bytes();
+    /* address/value mode 旋钮同样只能在 init 读取（见 SweepData 注释） */
+    {
+        int64_t m = get_testspecific_knob_value_int(test, "mode", 0);
+        if (m == 1)
+            data->addr_mode = ADDR_SEQ;
+    }
+    {
+        int64_t v = get_testspecific_knob_value_int(test, "valmode", 0);
+        if (v == 1)
+            data->val_mode = VAL_PATTERN;
+        else if (v == 2)
+            data->val_mode = VAL_SPECIALS;
+    }
     if (data->region_size > DEFAULT_SIZE_CAP)
         data->region_size = DEFAULT_SIZE_CAP;
     if (data->region_size < MAX_BLOCK * 2)
@@ -238,21 +256,10 @@ static int random_access_sweep_run(struct test *test, int cpu)
     uint8_t *base = region.base;
     const size_t size = region.size;
 
-    /* knobs (address mode / value mode) */
-    AddrMode addr_mode = ADDR_RAND;
-    {
-        int64_t m = get_testspecific_knob_value_int(test, "mode", 0);
-        if (m == 1)
-            addr_mode = ADDR_SEQ;
-    }
-    ValMode val_mode = VAL_RANDOM;
-    {
-        int64_t v = get_testspecific_knob_value_int(test, "valmode", 0);
-        if (v == 1)
-            val_mode = VAL_PATTERN;
-        else if (v == 2)
-            val_mode = VAL_SPECIALS;
-    }
+    /* knobs 已在 init 缓存到 data（本函数为 per-cpu worker 线程，
+     * 禁止调用 get_testspecific_knob_value_int） */
+    AddrMode addr_mode = data->addr_mode;
+    ValMode val_mode = data->val_mode;
 
     /* Sequential-mode cursor, 64-byte stepped so every cache line is
      * eventually visited in-order (address control for attribution). */
