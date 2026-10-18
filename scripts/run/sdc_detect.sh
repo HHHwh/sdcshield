@@ -103,6 +103,20 @@ if [ "$SMOKE" = 1 ]; then
 fi
 LC_ALL=C sort "$REST" >> "$LISTFILE"
 echo "  P7 其余（字母序）      : $((TOTAL_N - SUM)) 个用例"
+
+# 硬件能力预过滤(2026-10-18 战役修复): 无 SVE/SME 的机器剔除编译期
+# CpuNotSupported 用例——否则 PR#244 fail-loud 下 --fatal-skips 把这类
+# skip 记失败 + -F 首错即停(night2 实捕: eigen_gemm_double_max_arm
+# 'test compiled with sve' 停机, P2-P7 全未跑)。保留 --fatal-skips 对
+# 剩余 skip 的严格性(D-007)。
+if ! grep -qw sve /proc/cpuinfo 2>/dev/null; then
+    BEFORE=$(wc -l < "$LISTFILE")
+    grep -vE '^(sve|sleef_sve|sme)' "$LISTFILE" > "${LISTFILE}.hw" && mv "${LISTFILE}.hw" "$LISTFILE"
+    [ "$SMOKE" = 1 ] && grep -vE '^(sve|sleef_sve|sme)' "$SMOKEFILE" > "${SMOKEFILE}.hw" && mv "${SMOKEFILE}.hw" "$SMOKEFILE"
+    AFTER=$(wc -l < "$LISTFILE")
+    echo "  硬件预过滤(无SVE/SME)  : 剔除 $((BEFORE - AFTER)) 个编译期skip用例(sve*/sleef_sve*/sme*)"
+    TOTAL_N=$AFTER   # 一致性基准同步为过滤后数量
+fi
 rm -f "${LISTFILE}.all" "${LISTFILE}.rest"
 
 LISTED=$(wc -l < "$LISTFILE")
