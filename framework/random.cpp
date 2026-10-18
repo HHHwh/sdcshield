@@ -346,9 +346,9 @@ template<>
 void EngineWrapper<aes_engine>::reloadGlobalState(const char *ptr)
 {
     uint8_t *state = rng_for_thread(-1)->u8;
-    for (size_t i = 0; ptr[i]; ++i) {
+    constexpr size_t max_nibbles = 2 * sizeof(aes_engine::state);   /* 64 hex chars */
+    for (size_t i = 0; ptr[i] && i < max_nibbles; ++i) {
         unsigned char c = ptr[i];
-        // dirty, doesn't check if it's out of range!
         unsigned char nibble = c >= 'a' ? c - 'a' + 10 :
                                           c >= 'A' ? c - 'A' + 10 : c - '0';
 
@@ -439,7 +439,8 @@ template<>
 void EngineWrapper<aes_engine>::reloadGlobalState(const char *ptr)
 {
     uint8_t *state = rng_for_thread(-1)->u8;
-    for (size_t i = 0; ptr[i]; ++i) {
+    constexpr size_t max_nibbles = 2 * sizeof(aes_engine::state);   /* 64 hex chars */
+    for (size_t i = 0; ptr[i] && i < max_nibbles; ++i) {
         unsigned char c = ptr[i];
         unsigned char nibble = c >= 'a' ? c - 'a' + 10 :
                                           c >= 'A' ? c - 'A' + 10 : c - '0';
