@@ -52,6 +52,7 @@
 // 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)，
 // 把用例操作数放大到逼近物理内存(~90%)，作为 SDC 内存通路激发。
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) double *data;             // 共享缓冲(16B 对齐)
     size_t num_blocks;                    // 运行时块数(按目标内存计算)
@@ -63,6 +64,7 @@ struct TestData {
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
 };
+}
 
 // 块值生成:slot j 的种子值(精确 0.5 倍数)
 static inline double block_value(uint32_t block, int j)

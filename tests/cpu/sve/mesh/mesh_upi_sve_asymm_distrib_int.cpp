@@ -19,6 +19,7 @@
 #define BLOCK_ELEMENTS (VECTOR_SIZE * 2)  // 每个块 8 个元素（两个向量）
 // 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;           // 16 字节对齐即可
     size_t num_blocks;                   // 运行时块数(按目标内存计算)
@@ -37,6 +38,7 @@ struct TestData {
     std::atomic<uint32_t> arrived;       // 本轮已到达屏障的线程数（写者+读者）
     std::atomic<uint32_t> epoch;         // 轮次代（sense 位）
 };
+}
 
 // 目标字节数: -O mesh_upi_sve_asymm_distrib_int.buffer_bytes=N /
 // SDC_MESH_UPI_SVE_ASYMM_DISTRIB_INT_BUFFER_BYTES 环境变量 /

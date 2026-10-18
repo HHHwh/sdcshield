@@ -26,10 +26,12 @@
 static constexpr int NUM_WORDS = 8;          // 512 位 = 8 × 64 位
 static constexpr int BITS = 512;
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     // Operands and golden are per-thread stack buffers re-rolled every
     // iteration in run (framework RNG); nothing shared is needed anymore.
 };
+}
 
 // 辅助：GMP -> uint64_t 数组（小端序），只取低 low_words 个字
 static void mpz_to_words_trunc(uint64_t *words, const mpz_t src, int num_words) {

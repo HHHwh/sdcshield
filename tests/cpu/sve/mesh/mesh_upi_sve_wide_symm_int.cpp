@@ -20,6 +20,7 @@
 #define VECTORS_PER_BLOCK (BLOCK_SIZE / NEON_VECTOR_SIZE)  // = 4
 // 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;          // 16 字节对齐即可
     size_t num_blocks;                   // 运行时块数(按目标内存计算)
@@ -32,6 +33,7 @@ struct TestData {
     std::atomic<uint32_t> thread_idx;
     uint32_t total_threads;
 };
+}
 
 // 目标字节数: -O mesh_upi_sve_wide_symm_int.buffer_bytes=N /
 // SDC_MESH_UPI_SVE_WIDE_SYMM_INT_BUFFER_BYTES 环境变量 /

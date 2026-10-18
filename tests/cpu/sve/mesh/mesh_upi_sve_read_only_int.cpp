@@ -16,12 +16,14 @@
 #define VECTOR_SIZE 4                  // 原负载：一次处理 4 个 int32（SVE 谓词分批）
 // 总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;         // 共享只读数据（16 字节对齐）
     size_t total_elements;             // 运行时总元素数(按目标内存计算)
     uint64_t golden_sum;               // 预先计算的参考累加和
     std::atomic<uint32_t> thread_idx;
 };
+}
 
 // 目标字节数: -O mesh_upi_sve_read_only_int.buffer_bytes=N /
 // SDC_MESH_UPI_SVE_READ_ONLY_INT_BUFFER_BYTES 环境变量 /

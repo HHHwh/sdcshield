@@ -24,6 +24,7 @@
 #define BLOCK_ELEMENTS VECTOR_SIZE
 // 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) float *data;               // 16 字节对齐即可（原版 avx_sym 为 float）
     size_t num_blocks;                     // 运行时块数(按目标内存计算)
@@ -40,6 +41,7 @@ struct TestData {
     std::atomic<uint32_t> arrived;
     std::atomic<uint32_t> epoch;
 };
+}
 
 // 目标字节数: -O mesh_upi_sve_sym.buffer_bytes=N /
 // SDC_MESH_UPI_SVE_SYM_BUFFER_BYTES 环境变量 /

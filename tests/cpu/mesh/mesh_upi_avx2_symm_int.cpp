@@ -16,6 +16,7 @@
 #define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 128
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;           // 16 字节对齐即可
     std::atomic<uint32_t> next_block;
@@ -30,6 +31,7 @@ struct TestData {
     std::atomic<uint32_t> arrived;
     std::atomic<uint32_t> epoch;
 };
+}
 
 static int mesh_upi_avx2_symm_int_init(struct test *test) {
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2) return -255;

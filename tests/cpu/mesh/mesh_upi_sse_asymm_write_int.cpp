@@ -16,6 +16,7 @@
 #define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 256
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;           // 共享数据数组，16 字节对齐
     std::atomic<uint32_t> next_block;    // 下一个可分配的块索引
@@ -26,6 +27,7 @@ struct TestData {
     std::atomic<uint32_t> reader_count;  // 读核心总数（仅用于同步）
     std::atomic<uint64_t> iter;          // 全局轮次（用于切换读者）
 };
+}
 
 static int mesh_upi_sse_asymm_write_int_init(struct test *test) {
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2) {
