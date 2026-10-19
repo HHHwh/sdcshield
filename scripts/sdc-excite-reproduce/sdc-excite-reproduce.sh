@@ -210,7 +210,10 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     echo "$(date '+%F %T'),$label,rc=$rc,test=${failed_test:-?},seed=${fail_seed:-none},$(tr '\n' ';' < "$evdir/retests.txt"),$evdir" >> "$EVENTS_DIR/ledger.csv"
     enqueue_repro "$evdir" "${failed_test:-?}" "${fail_seed:-none}"   # M2 enqueue_reproduction 落点（M3 T5）→ repro_queue 待 --from-queue 消费
     alert "SDC/崩溃事件: $label rc=$rc test=${failed_test:-?} → $evdir（战役继续）"
-    [ -n "$failed_test" ] && DWELL_OVERRIDE="$failed_test"   # 本周期 L4 优先深驻留该测试
+    # 本周期 L4 优先深驻留该测试。排除表: 已定性为外部 root agent 干扰伪影的测试
+    # (mesh_upi_avx_sym 7 次 code 9 全部复测 pass + 4×57min 驻留零比对 fail——
+    # 2026-10-19 patrol): 每Cycle驻留它=驻留时段持续被外部杀浪费, 协议可信度已充分
+    [ -n "$failed_test" ] && [ "$failed_test" != "mesh_upi_avx_sym" ] && DWELL_OVERRIDE="$failed_test"
 }
 
 # ---------------- stress-ng 补充层（后台，小时轮转 --verify）----------------
