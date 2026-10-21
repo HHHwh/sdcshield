@@ -166,6 +166,11 @@ def test_publish_review_posts_marker_and_inline(monkeypatch):
     assert inline["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
     assert "近似比对是 SDC 盲区" in inline["body"]
 
+    # 行级评论与 review body 都必须有可见 claude 标识(HTML 注释 marker 渲染
+    # 不可见,无法与 wangxumarshall 本人意见区分——2026-10-16 用户要求)
+    assert "[claude]" in payload["comments"][0]["body"]
+    assert plr.CLAUDE_VISIBLE_TAG in payload["body"]
+
     # 挂不上 diff 行的 finding 收进 body JSON 段(结论与 evidence 均在)
     assert "固定迭代次数短跑不证明无缺陷" in body
     assert "TEST_LOOP 用固定 100 次" in body
@@ -208,6 +213,7 @@ def test_publish_review_demotes_invalid_line_to_body(monkeypatch):
     assert payload["comments"] == []          # 无行级评论(全部降级)
     body = payload["body"]
     assert body.startswith(plr.LOCAL_CLAUDE_MARKER)
+    assert plr.CLAUDE_VISIBLE_TAG in body     # 降级路径 body 同样带可见标识
     assert "越界行号" in body                  # 降级进 body JSON 段
 
 
@@ -251,6 +257,8 @@ def test_publish_review_422_falls_back_to_marker_only(monkeypatch):
     assert len(first[1]["comments"]) == 1     # 首次尝试带行级评论
     assert second[1]["comments"] == []        # 回退零 inline(无 422 风险)
     assert second[1]["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
+    fallback_body = second[1]["body"]         # 第二次 fake_post 捕获的 body
+    assert plr.CLAUDE_VISIBLE_TAG in fallback_body
     assert "全部 findings" in second[1]["body"]
     assert "近似比对是 SDC 盲区" in second[1]["body"]
 
@@ -282,6 +290,8 @@ def test_publish_review_empty_findings_skips_diff(monkeypatch):
     assert posted["path"] == "repos/test/repo/pulls/7/reviews"
     assert posted["payload"]["comments"] == []
     assert posted["payload"]["body"].startswith(plr.LOCAL_CLAUDE_MARKER)
+    # marker-only 空 review 的 body 同样带可见标识(噪音信号也须可辨识)
+    assert plr.CLAUDE_VISIBLE_TAG in posted["payload"]["body"]
 
 
 def test_review_all_open_single_pr_failure_isolated(monkeypatch, capsys):
@@ -324,6 +334,8 @@ def _reviews_json(items):
 
 
 def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path):
+    import pr_loop
+
     # fake gh: `gh pr diff` 返回 diff,`gh pr view --json title,body` 返回元数据
     def fake_gh(argv):
         if argv[:3] == ["pr", "diff", "7"]:
@@ -331,11 +343,13 @@ def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path)
         if argv[:2] == ["pr", "view"] and "title,body" in argv:
             return json.dumps({"title": "FMA SVE 测试字节级比对",
                                "body": "修复 golden 比对,防止误报"})
-        if argv[:2] == ["pr", "view"] and "reviews" in argv:
-            return json.dumps({"reviews": []})   # 幂等门禁: 尚未审过
         raise AssertionError(f"意外 gh 调用: {argv}")
 
     monkeypatch.setattr(plr, "_gh", fake_gh)
+    # already_reviewed 门禁走 pr_loop REST 端点: 未审(空列表)
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
 
     # fake worktree: 只记录 add/remove,绝不真实 git checkout
     wt = tmp_path / "wt"
@@ -380,25 +394,34 @@ def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path)
 
 
 def test_already_reviewed_true_when_marker_present(monkeypatch):
+    import pr_loop
+
     head_sha = "d" * 40
     marker = plr.LOCAL_CLAUDE_MARKER
 
+    def fake_reviews(items):
+        # already_reviewed 走 pr_loop 的 REST 分页端点(gh pr view --json reviews
+        # 的 GraphQL 响应 commit_id 恒 null,commit 锚定永假——2026-10-16 PR#266
+        # cron 每 30 分钟对同 head 重发 24 轮的根因)。
+        monkeypatch.setattr(pr_loop, "resolve_slug",
+                            lambda explicit=None: "test/repo")
+        monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: items)
+
     # 含标记且 commit_id 匹配当前 head → 已审
-    monkeypatch.setattr(plr, "_gh", lambda argv: _reviews_json([
-        {"body": f"{marker}\n检视意见", "commit_id": head_sha},
-    ]))
+    fake_reviews([{"body": f"{marker}\n检视意见", "commit_id": head_sha}])
     assert plr.already_reviewed(7, head_sha) is True
 
     # 无标记(用户本人普通 review)→ 未审
-    monkeypatch.setattr(plr, "_gh", lambda argv: _reviews_json([
-        {"body": "普通人工 review", "commit_id": head_sha},
-    ]))
+    fake_reviews([{"body": "普通人工 review", "commit_id": head_sha}])
     assert plr.already_reviewed(7, head_sha) is False
 
     # 有标记但 commit_id 不匹配当前 head(旧 head 检视)→ 未审(commit 锚定)
-    monkeypatch.setattr(plr, "_gh", lambda argv: _reviews_json([
-        {"body": f"{marker}\n旧 head 检视", "commit_id": "c" * 40},
-    ]))
+    fake_reviews([{"body": f"{marker}\n旧 head 检视", "commit_id": "c" * 40}])
+    assert plr.already_reviewed(7, head_sha) is False
+
+    # GraphQL 形状的 commit_id=None 不得误判为已审(旧 bug 场景回归锚:
+    # null != head_sha,该 review 不满足 commit 锚定)
+    fake_reviews([{"body": f"{marker}\nnull commit", "commit_id": None}])
     assert plr.already_reviewed(7, head_sha) is False
 
 

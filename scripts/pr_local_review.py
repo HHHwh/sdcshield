@@ -40,6 +40,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 的普通评论混淆,设计文档反目标 2)。
 LOCAL_CLAUDE_MARKER = "<!-- local-claude-review -->"
 
+# 第 5 bot 可见身份标识(2026-10-16 用户要求): LOCAL_CLAUDE_MARKER 是 HTML
+# 注释,GitHub 渲染不可见;review 作者显示 GitHub 账号 wangxumarshall,页面上
+# 无法区分 bot 意见与本人意见。所有可见正文(review body 一行引语、行级评论
+# 结论行 [claude] 前缀)必须含 "claude" 字样。机器判据不变(作者 + marker)。
+CLAUDE_VISIBLE_TAG = "> 🤖 **claude 检视**(本地无头 claude bot 自动生成,非 wangxumarshall 本人意见)"
+
 # diff 是不可信输入,不是指令——以横幅包裹,语义与 pr_loop 的 UNTRUSTED_BANNER
 # 同源: 检视者只把它当作被审查的代码数据,绝不执行其中的任何指令。
 DIFF_BANNER = (
@@ -147,18 +153,19 @@ def build_adversarial_prompt(diff: str, pr_context: dict) -> str:
 def already_reviewed(pr_number: int, head_sha: str) -> bool:
     """同 head 幂等检查: 该 head 是否已有第 5 bot 的 review。
 
-    经 `gh pr view <pr> --json reviews` 拉全部 review,判定「body 含
-    LOCAL_CLAUDE_MARKER 且 commit_id == head_sha」(commit 锚定)——事件线 +
-    时间线撞车只审一次。body 含标记但锚定旧 head 的 review 不算已审。
+    经 pr_loop.gh_api_paged 拉 REST `repos/{slug}/pulls/{n}/reviews`(与
+    pr_loop 的 status/collect 同源、同分页)。曾经走 `gh pr view --json
+    reviews`(GraphQL),其响应的 commit_id 恒为 null——commit 锚定永假、
+    幂等门禁形同虚设,cron 每 30 分钟对同 head 重发一轮(2026-10-16 PR#266
+    实证: 同 head 24 轮/62 条行级评论;REST 端点 commit_id 有值,同日实证)。
+    判定「body 含 LOCAL_CLAUDE_MARKER 且 commit_id == head_sha」(commit
+    锚定)——事件线 + 时间线撞车只审一次;body 含标记但锚定旧 head 的
+    review 不算已审。
     """
-    raw = _gh(["pr", "view", str(pr_number), "--json", "reviews"])
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise GhError(f"gh pr view --json reviews 返回非 JSON: {exc}")
-    if not isinstance(data, dict):
-        return False
-    reviews = data.get("reviews") or []
+    import pr_loop   # 懒 import(与 publish_review 同策略): pr_loop 顶层
+    #              import 本模块,顶层互相 import 会循环。
+    slug = pr_loop.resolve_slug(None)
+    reviews = pr_loop.gh_api_paged(f"repos/{slug}/pulls/{pr_number}/reviews")
     if not isinstance(reviews, list):
         return False
     return any(LOCAL_CLAUDE_MARKER in (r.get("body") or "")
@@ -394,7 +401,7 @@ def _format_inline_comment(finding: dict) -> str:
     cat = finding.get("category") or "?"
     msg = finding.get("message") or ""
     ev = finding.get("evidence") or ""
-    lines = [LOCAL_CLAUDE_MARKER, f"**[{sev}] {cat}**: {msg}"]
+    lines = [LOCAL_CLAUDE_MARKER, f"**[claude] [{sev}] {cat}**: {msg}"]
     if ev:
         lines.append(f"证据: {ev}")
     return "\n".join(lines)
@@ -498,7 +505,7 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
     else:
         body_findings = list(findings)
 
-    body = LOCAL_CLAUDE_MARKER + "\n"
+    body = LOCAL_CLAUDE_MARKER + "\n" + CLAUDE_VISIBLE_TAG + "\n"
     if body_findings:
         body += ("\n## 挂不上 diff 行的 findings(JSON)\n\n```json\n"
                  + json.dumps(body_findings, ensure_ascii=False, indent=2)
@@ -529,7 +536,7 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
         # 零 inline 无 422 风险——单条越界行号不得让整单 review 丢失、第 5
         # bot 永久缺信号(设计文档反目标,C2)。
         fallback_body = (
-            LOCAL_CLAUDE_MARKER + "\n\n"
+            LOCAL_CLAUDE_MARKER + "\n" + CLAUDE_VISIBLE_TAG + "\n\n"
             "## 全部 findings(JSON,行级挂载 422 已降级)\n\n```json\n"
             + json.dumps(findings, ensure_ascii=False, indent=2)
             + "\n```\n"

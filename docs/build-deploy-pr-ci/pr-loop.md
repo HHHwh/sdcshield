@@ -94,6 +94,12 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   local-claude = 作者 `wangxumarshall(claude and glm)`（GitHub 账号 `wangxumarshall`，claude+glm 双模型）**且** 正文含 `<!-- local-claude-review -->` 标记
   （双条件，与 pr-agent 同构——避免把用户本人普通评论误判为第 5 bot；
   `BOT_ORDER` 五元素顺序 codex/coderabbit/pr-agent/greptile/local-claude）。
+  发布的可见正文带 claude 标识——review body 一行引语（`> 🤖 **claude 检视**…`）
+  与行级评论结论行 `[claude]` 前缀（HTML 注释 marker 渲染不可见，页面上以此
+  区分 bot 意见与本人意见），机器判据仍是「作者 + HTML 注释 marker」双条件；
+  同 head 幂等检查 `already_reviewed` 已改走 REST `pulls/{n}/reviews` 端点（原
+  `gh pr view --json reviews` 的 GraphQL 响应 `commit_id` 恒 null、commit 锚定
+  永假，2026-10-16 PR#266 实证同 head 重发 24 轮/62 条行级评论）。
 - **判据分裂（已知不变量破例）**：`.github/workflows/bot-coverage.yml` 保持**四 bot**
   不变（GitHub-hosted 触发不了本地 claude）——「pr_loop 等五 bot、bot-coverage 校验
   四 bot」。bot-coverage 报告的「汇总 4/4」仅指四个外部 SaaS bot；第 5 bot 完成度以
