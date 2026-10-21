@@ -29,6 +29,7 @@
  *   3. 累计和差分（expected = cum(K) - cum(K-1)）替代"每迭代清零 global_sum"
  *      ——global_sum 单调累加, B1 后全线程读到相同值。
  * 时间到期时各线程在自己的屏障自旋处退出（他人亦到期退出, 有界无死锁）。 */
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;
     std::atomic<uint64_t> global_sum;       // 跨迭代单调累计（差分得每迭代期望）

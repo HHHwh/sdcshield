@@ -33,6 +33,7 @@
  *   4. 删除 next_block/allocated_blocks/reset_lock/readers_done（单写者
  *      静态遍历全部块，B1 到达即"写完成"信号，无需任何分配/完成计数器）。
  * 时间到期时各线程在自己的屏障自旋处退出（他人亦到期退出，有界无死锁）。 */
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;           // 共享数据数组（16 字节对齐）
     std::atomic<uint64_t> global_sum;    // 跨迭代单调累计（差分得每迭代期望）

@@ -33,6 +33,7 @@
  *      "全部非读核共写数组、唯一读核校验"的写压力语义；W > NUM_BLOCKS
  *      时多余写者本轮空转，所有块仍恰好被写一次，sum 语义不变）。
  * 时间到期时各线程在自己的屏障自旋处退出（他人亦到期退出，有界无死锁）。 */
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;           // 共享数据数组（16 字节对齐）
     std::atomic<uint64_t> global_sum;    // 跨迭代单调累计（差分得每迭代期望）
