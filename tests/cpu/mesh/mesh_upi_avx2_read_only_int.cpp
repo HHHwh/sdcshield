@@ -11,11 +11,13 @@
 #define ARRAY_SIZE (1 << 20)           // 1M 个 int32 = 4MB
 #define VECTOR_SIZE 4                  // NEON 每次加载 4 个 int32（128 位）
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;         // 共享只读数据（16 字节对齐）
     uint64_t golden_sum;               // 预先计算的参考累加和
     std::atomic<uint64_t> thread_idx;  // 用于线程 ID 分配
 };
+}
 
 static int mesh_upi_avx2_read_only_int_init(struct test *test) {
     auto *td = new TestData;

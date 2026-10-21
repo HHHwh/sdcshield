@@ -16,10 +16,12 @@
 #define VECTOR_SIZE 4                  // 原负载：每次存储 4 个 int32（SVE 谓词分批）
 // 每线程元素数在 run 中按目标内存动态计算(见 mesh_target_bytes)。
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     std::atomic<uint64_t> thread_idx;
     size_t per_thread_elements;         // 运行时每线程元素数(按目标内存计算)
 };
+}
 
 // 每线程目标字节数: -O mesh_upi_sve_write_only_int.buffer_bytes=N /
 // SDC_MESH_UPI_SVE_WRITE_ONLY_INT_BUFFER_BYTES 环境变量 /

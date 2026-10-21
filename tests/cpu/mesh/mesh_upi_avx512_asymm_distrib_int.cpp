@@ -16,6 +16,7 @@
 #define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)           // = 64
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;           // 共享数据数组（16 字节对齐）
     std::atomic<uint32_t> next_block;    // 下一个可分配的块索引
@@ -32,6 +33,7 @@ struct TestData {
     std::atomic<uint32_t> arrived;       // 本轮已到达屏障的线程数（写者+全体读者）
     std::atomic<uint32_t> epoch;         // 轮次代（sense 位）
 };
+}
 
 static int mesh_upi_avx512_asymm_distrib_int_init(struct test *test) {
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2) {

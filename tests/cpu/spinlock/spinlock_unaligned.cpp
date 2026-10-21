@@ -30,6 +30,7 @@ static inline void spin_unlock(uint64_t *lock) {
     __atomic_store_n(lock, 0, __ATOMIC_RELEASE);
 }
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     uint8_t *base;              // 分配的内存基址
     uint64_t *lock;             // 非对齐锁指针（原子操作直接作用于该地址）
@@ -37,6 +38,7 @@ struct TestData {
     std::atomic<uint64_t> thread_idx;
     uint64_t local_sums[MAX_THREADS];
 };
+}
 
 static int spinlock_unaligned_init(struct test *test) {
     auto *td = new TestData;

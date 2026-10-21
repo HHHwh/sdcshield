@@ -14,11 +14,13 @@
 #define VECTORS_PER_BLOCK (VECTOR_SIZE / NEON_VECTOR_SIZE)  // = 4
 #define TOTAL_BYTES (ARRAY_ELEMS * sizeof(int32_t))
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;          // 共享只读数据，16 字节对齐
     uint64_t golden_sum;                // 预先计算的参考累加和
     std::atomic<uint32_t> thread_idx;   // 用于线程 ID 分配
 };
+}
 
 static int mesh_upi_avx512_asymm_read_only_int_init(struct test *test) {
     auto *td = new TestData;

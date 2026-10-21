@@ -11,9 +11,11 @@
 #define PER_THREAD_SIZE (1 << 20)      // 每个线程 1M 个 int32 = 4MB
 #define VECTOR_SIZE 4                  // NEON 每次存储 4 个 int32（128 位）
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     std::atomic<uint64_t> thread_idx;
 };
+}
 
 static int mesh_upi_avx2_write_only_int_init(struct test *test) {
     auto *td = new TestData;

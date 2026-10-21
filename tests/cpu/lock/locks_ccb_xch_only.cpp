@@ -27,6 +27,7 @@ struct SpinLock {
     }
 };
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     uint8_t *base;                 // 分配的内存基址
     SpinLock *lock;                // 指向跨缓存行的锁对象
@@ -34,6 +35,7 @@ struct TestData {
     std::atomic<uint64_t> thread_idx;
     uint64_t local_sums[MAX_THREADS];
 };
+}
 
 static int locks_ccb_xch_only_init(struct test *test) {
     auto *td = new TestData;

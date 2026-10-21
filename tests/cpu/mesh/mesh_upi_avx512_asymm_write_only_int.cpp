@@ -40,6 +40,7 @@ struct TestData {
     std::atomic<uint32_t> b1_count, b1_sense;   // 屏障 B1: 写后读前
     std::atomic<uint32_t> b2_count, b2_sense;   // 屏障 B2: 读后写前
 };
+}
 
 static int mesh_upi_avx512_asymm_write_only_int_init(struct test *test) {
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2) {

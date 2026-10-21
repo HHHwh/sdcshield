@@ -30,6 +30,7 @@
 #endif
 #endif
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     uint64_t carry_in;
     size_t num_elems;
@@ -37,6 +38,7 @@ struct TestData {
     std::vector<uint64_t> rhs;
     std::vector<uint64_t> gold;
 };
+}
 
 // 带颜色的日志输出（与原版一致）
 static void print_colored_result(const char *label, bool passed,

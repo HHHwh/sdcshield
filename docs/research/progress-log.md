@@ -508,3 +508,25 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   cluster-anchored → bounded=0 值域档);selftest_sme_sigill_probe 首两次
   运行出现 132/167s 瞬态慢跑(稳态 0.2s,未复现,疑冷启动页入伪象,记录在案)。
 - **检测战役**:合并二进制上启动 sdc_detect.sh 全核优先序轮转(见后续条目)。
+
+## 2026-10-16/17（战役：类型SDC捕获 night1——零检出+两用例缺陷暴露）
+
+- **战役**:campaign-20261016_type-sdc(仓外 ~/sdc-campaigns/),11.5h 满载联合激发+检测,
+  三窗口(full 4h/excite 2h/detect 2h+补救C'/C''/C''')+96核基线scan(0可疑)。
+- **结果**:零 SDC 检出。激发 825 核·小时;检测 175,952 条 pass 记录/254 用例覆盖
+  (P1-P4 全桶);95% 置信上界 ≈1.7e-5/记录(v5 §9.6 k=0 上界口径)。
+- **PR#244 fail-loud 净收益实证**:暴露 2 个旧行为下静默的用例缺陷——
+  ①cache_stress_aggressor:per-CPU 线程共享 victim_value 数据竞争(96线程写同址,
+  -n1 pass↔全核fail,act部分覆盖他线程值;旧RNG同序列掩盖);②random_access_sweep:
+  run 阶段调 get_test_knob_value_xxx() 框架断言 abort。两用例已 --disable 待修。
+- **工具链缺陷**:sdc_detect.sh --fatal-skips × PR#244 收紧:SVE 用例编译期 skip
+  被记 fail→-F 停机(P2-P7 未跑,补救窗口已补齐);openssl_sm3sm4 内存自适应 33M/线程
+  × SM3/SM4 软实现超 -t 45s(配置失配,降维后 pass)。
+- **资源管理**:addrspace 周期撞峰+OOM 共 15 次 FAILOUT(rc=143/137),全部设计内自愈
+  (oom_score_adj=500 保护 gem5/stress-ng 全程幸存,shield 轮转重启);night2 修复项:
+  excite 窗口档1/相位错峰/watchdog 冷却期。
+- **内存最大化标定**:最大稳定档=eigen/openblas mdim=768+sleef nelems=1M(per-thread
+  276B/elem)+pocketfft n=8192(边界档 2.5/3 实证 swap/OOM FAIL);sleef nelems 语义与
+  glibc 动态 mmap 阈值累积坑已记台账。
+- **完整报告**:~/sdc-campaigns/campaign-20261016_type-sdc/SDC_TYPE_REPORT.md
+  (事件全清单/证据链/night2 建议)。

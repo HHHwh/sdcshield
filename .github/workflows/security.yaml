@@ -73,7 +73,7 @@ jobs:
       # 上游只有 v2.x.y tag,无裸 v2 tag/分支(写 v2 会 action 解析失败)。
       # v2 CLI 是 scan source 子命令:--skip-git 已不存在("flag provided
       # but not defined");本仓无 lockfile,空扫描用 --allow-no-lockfiles 通过
-      - uses: google/osv-scanner-action/osv-scanner-action@v2.6.0
+      - uses: google/osv-scanner-action/osv-scanner-action@v2.7.0
         with:
           scan-args: |-
             -r

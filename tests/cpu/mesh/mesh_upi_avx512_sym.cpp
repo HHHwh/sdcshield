@@ -14,6 +14,7 @@
 #define VECTORS_PER_BLOCK (BLOCK_SIZE / NEON_VECTOR_SIZE)  // = 2048
 // 块数/总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) float *data;            // 共享数据数组（16 字节对齐）
     size_t num_blocks;                  // 运行时块数(按目标内存计算)
@@ -25,6 +26,7 @@ struct TestData {
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
 };
+}
 
 // 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
 // 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(FP 用例是唯一大内存消费者)。
