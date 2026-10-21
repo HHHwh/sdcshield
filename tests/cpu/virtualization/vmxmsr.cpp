@@ -8,11 +8,13 @@
 // ARM64 系统寄存器：MIDR_EL1（Main ID Register）
 #define MIDR_EL1_REG 0
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     std::vector<uint64_t> reg_values;  // 按逻辑 CPU 编号索引
     bool all_same;                     // 是否所有核心值相同
     uint64_t common_value;             // 共同值（如果相同）
 };
+}
 
 // 读取 ARM64 系统寄存器（用户态可读）
 [[maybe_unused]] static bool read_midr_el1(int cpu, uint64_t *val) {

@@ -18,12 +18,14 @@
 #define VECTORS_PER_BLOCK (VECTOR_SIZE / NEON_VECTOR_SIZE)  // = 4
 // 总元素数在 init 中按目标内存动态计算(见 mesh_target_bytes)。
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;          // 共享只读数据，16 字节对齐
     size_t total_elements;               // 运行时总元素数(按目标内存计算)
     uint64_t golden_sum;                // 预先计算的参考累加和
     std::atomic<uint32_t> thread_idx;   // 用于线程 ID 分配
 };
+}
 
 // 目标字节数: -O mesh_upi_sve_wide_asymm_read_L3_int.buffer_bytes=N /
 // SDC_MESH_UPI_SVE_WIDE_ASYMM_READ_L3_INT_BUFFER_BYTES 环境变量 /

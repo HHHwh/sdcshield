@@ -34,11 +34,13 @@ static constexpr int NUM_WORDS = 8;          // 512 位 = 8 × 64 位
 static constexpr int BITS = 512;
 static constexpr uint64_t FIXED_SEED = 0x123456789ABCDEF0ULL;
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     std::vector<uint64_t> a_words;
     std::vector<uint64_t> b_words;
     std::vector<uint64_t> golden_product;    // 乘积的低 NUM_WORDS 个字
 };
+}
 
 #ifdef __aarch64__
 /* SVE 512-bit 乘: 学校园算法 — 每 (i,j) 词对 64x64->128 部分积,

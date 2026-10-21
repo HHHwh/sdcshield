@@ -22,6 +22,7 @@
 // 测试数据（所有线程共享只读）
 // ============================================================================
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     std::vector<uint64_t> lhs;      // 操作数1
     std::vector<uint64_t> rhs;      // 操作数2
@@ -29,6 +30,7 @@ struct TestData {
     uint64_t carry_in;              // 初始进位 (0 或 1)
     size_t num_elems;               // 向量长度
 };
+}
 
 // ============================================================================
 // 黄金参考实现（软件模拟 ADCX 链）

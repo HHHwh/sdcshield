@@ -29,6 +29,7 @@ static inline void spin_unlock(std::atomic<uint64_t> &lock) {
     lock.store(0, std::memory_order_release);
 }
 
+namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     uint8_t *base;                 // 分配的内存基址
     std::atomic<uint64_t> *lock;   // 跨缓存行的锁指针（原子类型）
@@ -36,6 +37,7 @@ struct TestData {
     std::atomic<uint64_t> thread_idx;
     uint64_t local_sums[MAX_THREADS];
 };
+}
 
 static int spinlock_crosses_cacheline_init(struct test *test) {
     auto *td = new TestData;
