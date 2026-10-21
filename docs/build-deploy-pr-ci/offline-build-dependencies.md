@@ -134,7 +134,7 @@ cd /path/to/sdcshield-arm-test2
 # aarch64 路径：eigen5 仓库自带，无需系统 eigen3
 # PKG_CONFIG_PATH 仅为兼容 x86 路径而保留，aarch64 可省
 meson setup builddir --buildtype=release
-ninja -C builddir
+./scripts/build.sh
 
 # 验证（278 = vendored 依赖齐备时的 PROD 实测值，2026-09-15；
 # 缺某个 install/ 时数量相应减少，meson 配置日志有对应 message）
@@ -150,7 +150,7 @@ ninja -C builddir
 
 # 默认构建即包含 SSL 测试（ssl_link_type 默认 dynamic，优先 vendored 静态归档）：
 meson setup builddir --buildtype=release
-ninja -C builddir
+./scripts/build.sh
 ./builddir/sdcshield --list-tests | grep openssl_sha    # 1 行
 ./builddir/sdcshield --list-tests | grep -c ipsec       # 46 行
 ```

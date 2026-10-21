@@ -8,11 +8,11 @@
 ```bash
 # 首次构建（vendored 依赖已在 third-party/*/install 齐备时可跳过 build.sh）：
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
-ninja -C builddir
+./scripts/build.sh
 
 # 修改 meson sources/options 之后必须 reconfigure（plain ninja 不会感知配置变化）：
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir --buildtype=release
-ninja -C builddir
+./scripts/build.sh
 ```
 
 vendored 库构建（可选，缺失时对应测试优雅降级不阻断构建）：

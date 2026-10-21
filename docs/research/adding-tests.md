@@ -52,7 +52,7 @@ END_DECLARE_TEST
 ```meson
 tests_set_base.add( files( 'mydir/my_test.cpp' ) )
 ```
-然后 `meson setup --reconfigure builddir ... && ninja -C builddir`（改 meson 必须
+然后 `meson setup --reconfigure builddir ... && ./scripts/build.sh`（改 meson 必须
 reconfigure，plain ninja 感知不到），`./builddir/sdcshield --quality=0 --list-tests | grep my_test`。
 
 ## 1. 测试生命周期（必须理解）
@@ -174,7 +174,7 @@ ARM NEON/CRC/Crypto/inline-asm 专属？
    计划到 `docs/superpowers/plans/YYYY-MM-DD-<feature>.md`（用 superpowers:writing-plans
    skill），按计划逐项 commit。
 5. **提交前自验证（100% 真实命令）**：
-   - `ninja -C builddir` 零新错误（既有良性警告可接受）
+   - `./scripts/build.sh` 零新错误（既有良性警告可接受）
    - 跑真实命令并引用真实输出（`--list-tests` 出现新测试、`-e <newtest>` `exit: pass`、
      skip 测试要看到 skip-reason）
    - 回归：至少一个无关测试（如 zstd19）`exit: pass`

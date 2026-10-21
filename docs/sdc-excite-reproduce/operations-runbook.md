@@ -473,5 +473,5 @@ ras/日志 <1；v5 §5.6）。参考机实况（2026-09-27）：数据根 7.6G�
   （错配 → glibc 降级死结，安装脚本拦截）；或 Actions MultiOS Verify 自包含 tarball。
 - **路径 B 源码**：vendored 依赖 `third-party/{openssl,openblas,sleef,isa-l,acl}/build.sh`
   （幂等）→ `PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
-  && ninja -C builddir`；离线/旧版本走 `scripts/offline-build/container-build.sh`。
+  && ./scripts/build.sh`；离线/旧版本走 `scripts/offline-build/container-build.sh`。
 - **冒烟门槛**（过后才准正式战役）：`-e zstd19 -n 1 -t 2000` → exit: pass。

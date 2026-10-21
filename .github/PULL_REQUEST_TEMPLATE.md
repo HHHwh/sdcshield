@@ -4,7 +4,7 @@
 
 **自验证清单(CLAUDE.md 规则 2,100% 实证)**
 
-- [ ] `ninja -C builddir` 干净构建,零新增告警
+- [ ] `./scripts/build.sh` 干净构建,零新增告警
 - [ ] 实际运行受影响行为,引用真实输出
 - [ ] 回归:`./builddir/sdcshield -e zstd19 -t 2000 -n 1` → `exit: pass`
 - [ ] x86-64 非回归(检查确认;共享代码改动必查)

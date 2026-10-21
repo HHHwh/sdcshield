@@ -1628,7 +1628,7 @@ Preflight 有关键项失败则拒绝启动，不允许用环境变量静默跳�
 **架构分支（先判 `uname -m`）**：aarch64 → sdcshield（Kunpeng 920/openEuler 基准平台，ARMv8.1+ 通用）；x86-64 → 上游 OpenDCDiag 官方构建优先，sdcshield x86 路径仅参考移植可作交叉验证；任何架构配 stress-ng `--verify` + rasdaemon 补充层。
 
 - **路径 A 预构建（推荐）**：仓库 `third-party/rpms/` 按 openEuler 20.03/22.03/24.03 各 LTS/SP 提供；**SP 必须精确匹配**（错配→glibc 降级死结，安装脚本拦截，不要强装）；或 Actions MultiOS Verify 自包含 tarball（`built-<series>-<sp>`）解包即用；入口 `./run-sdcshield.sh --list-tests`。
-- **路径 B 源码构建**：openEuler 24.03 基准 `dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel libisa-l-devel gtest-devel`；vendored 依赖依次 `third-party/{openssl,openblas,sleef,isa-l,acl}/build.sh`（幂等；pocketfft 免构建）；`PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release && ninja -C builddir`；基准 `--list-tests` 约 280+ PROD 用例。离线/旧版本走 `scripts/offline-build/container-build.sh <series> <sp>` 容器构建。
+- **路径 B 源码构建**：openEuler 24.03 基准 `dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel libisa-l-devel gtest-devel`；vendored 依赖依次 `third-party/{openssl,openblas,sleef,isa-l,acl}/build.sh`（幂等；pocketfft 免构建）；`PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release && ./scripts/build.sh`；基准 `--list-tests` 约 280+ PROD 用例。离线/旧版本走 `scripts/offline-build/container-build.sh <series> <sp>` 容器构建。
 - **冒烟门槛（通过后才准进入正式 sdc-excite-reproduce）**：`run-sdcshield.sh -e zstd19 -n 1 -t 2000` pass。
 
 ### 16.4 启动与正常运行

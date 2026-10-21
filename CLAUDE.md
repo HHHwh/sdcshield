@@ -12,7 +12,7 @@ routes you; consult it before guessing.
 
 1. **One patch per unit** — each feature/bug/porting point is its own commit;
    never bundle. Work multi-item lists sequentially: verify → commit → push.
-2. **Self-verify before commit, 100% real** — (a) `ninja -C builddir` clean,
+2. **Self-verify before commit, 100% real** — (a) `./scripts/build.sh` clean,
    zero new warnings; (b) run the affected behavior and quote real output;
    (c) regression: `-e zstd19 -t 2000 -n 1` → `exit: pass`; (d) x86
    non-regression by inspection. No "should work" — fix and re-verify, never
@@ -59,7 +59,7 @@ routes you; consult it before guessing.
 ```console
 # ARM64 needs vendored Eigen 5.0.0+ (system 3.3.x breaks on GCC 12+):
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
-ninja -C builddir
+./scripts/build.sh      # ninja -j = nproc/2 by default (shared-server cap)
 # Fresh clone: run the vendored build.sh first (openssl/openblas/sleef/isa-l/
 # acl — see README). Missing install/ degrades gracefully, never hard.
 

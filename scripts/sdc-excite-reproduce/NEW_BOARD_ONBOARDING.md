@@ -36,7 +36,7 @@ scripts/sdc-excite-reproduce/collect_inventory.sh docs/superpowers/inventory/
 ./third-party/openssl/build.sh && ./third-party/openblas/build.sh \
   && ./third-party/sleef/build.sh && ./third-party/isa-l/build.sh && ./third-party/acl/build.sh
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
-ninja -C builddir
+./scripts/build.sh
 ./builddir/sdcshield --list-tests | wc -l        # 记录数量（应 ≥278）
 ./builddir/sdcshield -e zstd19 -n 1 -t 2000      # 必须 exit: pass
 ```

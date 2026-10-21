@@ -153,10 +153,12 @@ sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzs
 ./third-party/isa-l/build.sh             # → install/lib/libisal.a（isal_igzip + isal_crc*；缺省回退系统 libisal）
 ./third-party/acl/build.sh               # → install/lib/libarm_compute-core.a（acl_gemm NEGEMM + fisttp_arm；NEON runtime core 目标，v23.02）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
-ninja -C builddir
+./scripts/build.sh
 ./builddir/sdcshield --list-tests        # 应列出 440 个 PROD 用例（gcc + 全部 vendored 依赖，实测于 2026-10-12）
 ```
 
+> 构建统一走 `./scripts/build.sh`：默认 `-j` = `nproc`/2（共享服务器保护；ninja 上游默认是核数+2）。显式 `-j` 或 `SDC_BUILD_JOBS` 可覆盖，详见 `scripts/build.sh` 头注释。
+>
 > ARM64 要求 Eigen 5.0.0+（系统 Eigen 3.3.x 在 GCC 12+ 下编译失败）。仓库自带 `third-party/eigen5/`，aarch64 构建路径在 `tests/cpu/meson.build` 中直接 `include_directories` 指向它，**无需系统安装 eigen3**；`PKG_CONFIG_PATH` 仅为兼容 x86 路径而保留，带上无害。
 >
 > 五个 `build.sh` 均为可选步骤：任一 `install/` 缺失时 meson 打印提示并跳过对应测试组或回退系统库（不阻断构建、不影响其余用例；isa-l 缺失时回退系统 `libisal`，两者皆无才剔除 `isal_*` 测试；acl 缺失时 `acl_gemm`/`fisttp_arm` 两个 ACL 库测试不构建，SVE 变体为 svmla 重实现、不受影响）。vendored 库的选型依据（向量 FMA GEMM > 哈希/加密 > 压缩 > SVE 超越函数）见 [docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md)（31 篇 SDC 文献综合）。
@@ -239,7 +241,7 @@ PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ 新增�
 # 仅当回退系统库且未装 openssl-devel 时才需要：
 sudo dnf install -y openssl-devel
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir --buildtype=release
-ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
+./scripts/build.sh && ./builddir/sdcshield --list-tests | grep openssl_sha
 ```
 
 ## Vendored 计算库（third-party/，SDC 负载扩展）
@@ -261,7 +263,7 @@ isa-l（`isal_igzip` + 10 个 `isal_crc*`）自 2026-09-16 起 vendor 到 `third
 ```bash
 # 首次构建顺序（pocketfft 无需预构建）：
 ./third-party/openssl/build.sh && ./third-party/openblas/build.sh && ./third-party/sleef/build.sh && ./third-party/isa-l/build.sh
-PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release && ninja -C builddir
+PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release && ./scripts/build.sh
 # 全核 30s 压测终验（实测 8806/8806 迭代全 pass，2026-09-15，鲲鹏 920 128 核）：
 ./builddir/sdcshield -e openblas_dgemm,openblas_sgemm,openblas_zgemm,sleef_neon,isal_igzip,pocketfft_fft,openssl_sha -t 30000
 ```
