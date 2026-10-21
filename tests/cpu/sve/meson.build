@@ -142,30 +142,30 @@ if host_machine.cpu_family() == 'aarch64'
         # line-window/set-attack/line-sweep/no-op-ALU/param-nops), the mrn
         # memory-renaming family, neon_rot_2src on z registers (asm ldr z/
         # str z), and mite's constant chain with predicate branches.
-'core179/movbe_sve.cpp',
-'core179/movbe_dump_sve.cpp',
-'core179/movbe_dump_probe_a_sve.cpp',
-'core179/movbe_dump_probe_b_sve.cpp',
-'core179/movbe_dump_probe_c_sve.cpp',
-'core179/movbe_dump_probe_d_sve.cpp',
-'core179/movbe_dump_probe_e_sve.cpp',
-'core179/movbe_dump_probe_f_sve.cpp',
-'core179/movbe_dump_probe_g1_sve.cpp',
-'core179/movbe_dump_probe_g2_sve.cpp',
-'core179/movbe_dump_probe_h_sve.cpp',
-'core179/movbe_dump_probe_x_sve.cpp',
-'core179/movbe_dump_probe_xn_sve.cpp',
-'core179/mrn_nuke_sve.cpp',
-'core179/mrn_pairs_sve.cpp',
-'core179/mrn_flags_sve.cpp',
-'core179/mrn_reloaded_sve.cpp',
-'core179/mrn_rmw_sve.cpp',
-'core179/mrn_rmw_dump_sve.cpp',
-'core179/neon_rot_2src_sve.cpp',
-'core179/mite_sve.cpp',
-'core179/movbe_slf_sweep_sve.cpp',
-'core179/neon_rot_ldr_at_top_sve.cpp',
-'core179/neon_rot_ldr_at_top_rowmajor_sve.cpp',
+'case/movbe_sve.cpp',
+'case/movbe_dump_sve.cpp',
+'case/movbe_dump_probe_a_sve.cpp',
+'case/movbe_dump_probe_b_sve.cpp',
+'case/movbe_dump_probe_c_sve.cpp',
+'case/movbe_dump_probe_d_sve.cpp',
+'case/movbe_dump_probe_e_sve.cpp',
+'case/movbe_dump_probe_f_sve.cpp',
+'case/movbe_dump_probe_g1_sve.cpp',
+'case/movbe_dump_probe_g2_sve.cpp',
+'case/movbe_dump_probe_h_sve.cpp',
+'case/movbe_dump_probe_x_sve.cpp',
+'case/movbe_dump_probe_xn_sve.cpp',
+'case/mrn_nuke_sve.cpp',
+'case/mrn_pairs_sve.cpp',
+'case/mrn_flags_sve.cpp',
+'case/mrn_reloaded_sve.cpp',
+'case/mrn_rmw_sve.cpp',
+'case/mrn_rmw_dump_sve.cpp',
+'case/neon_rot_2src_sve.cpp',
+'case/mite_sve.cpp',
+'case/movbe_slf_sweep_sve.cpp',
+'case/neon_rot_ldr_at_top_sve.cpp',
+'case/neon_rot_ldr_at_top_rowmajor_sve.cpp',
         # Batch 6 (first 2 of 7): partial-width predicated stores (the
         # native SVE form of partial stores) with store-buffer partial-hit
         # loads; AGU 2-source vector-load throughput with the rotating
@@ -189,63 +189,63 @@ if host_machine.cpu_family() == 'aarch64'
         # probes — L1D-hit vs L2-reload differential pair + init-golden-dump
         # cross-validation (asm-guaranteed input reload, svtbl bswap on
         # lanes, per-line dc civac eviction in the l2 variant).
-        'core179/movbe_l1d_vs_l2_sve.cpp',
-        'core179/movbe_dump_golden_sve.cpp',
+        'case/movbe_l1d_vs_l2_sve.cpp',
+        'case/movbe_dump_golden_sve.cpp',
         # missing_testcases_20261009 ports (batch 2/8): mrn_rmw load-path
         # family — forwarding vs L1D-array (evict) pair, different-address
         # isolation probe + 64KB/1MB footprint scan, and the 6-point
         # nop-delay timing series (.rept mov x9,x9 fused with the ldr z).
-        'core179/mrn_rmw_fwd_vs_l1d_sve.cpp',
-        'core179/mrn_rmw_fwd_vs_diff_sve.cpp',
-        'core179/mrn_rmw_diff_footprint_sve.cpp',
-        'core179/mrn_rmw_timing_probe_sve.cpp',
+        'case/mrn_rmw_fwd_vs_l1d_sve.cpp',
+        'case/mrn_rmw_fwd_vs_diff_sve.cpp',
+        'case/mrn_rmw_diff_footprint_sve.cpp',
+        'case/mrn_rmw_timing_probe_sve.cpp',
         # missing_testcases_20261009 ports (batch 3/8): mrn constructed
         # family — nuke dependency-chain depth axis (2/3/4-source ALU
         # chains), 16x load-density cell, the pairs back-to-back collapse,
         # and the reloaded qword-segment immediate-verify variant.
-        'core179/mrn_nuke_2src_alu_sve.cpp',
-        'core179/mrn_nuke_3src_alu_sve.cpp',
-        'core179/mrn_nuke_4src_alu_sve.cpp',
-        'core179/mrn_nuke_dense_sve.cpp',
-        'core179/mrn_pairs_2src_alu_sve.cpp',
-        'core179/mrn_reloaded_2src_alu_sve.cpp',
+        'case/mrn_nuke_2src_alu_sve.cpp',
+        'case/mrn_nuke_3src_alu_sve.cpp',
+        'case/mrn_nuke_4src_alu_sve.cpp',
+        'case/mrn_nuke_dense_sve.cpp',
+        'case/mrn_pairs_2src_alu_sve.cpp',
+        'case/mrn_reloaded_2src_alu_sve.cpp',
         # missing_testcases_20261009 ports (batch 4/8): reload-necessity
         # and lane/axis probes — agu store-only (2 stores no load, OR
         # rotation), neon_rot store-only on z registers, the full-VL
         # byte-lane variant (width-vs-lane), and the random-address
         # disambiguation probe (svdup pattern at data-dependent offsets).
         'mem/agu_stress_store_only_sve.cpp',
-        'core179/neon_rot_store_only_sve.cpp',
-        'core179/neon_rot_u8x16_sve.cpp',
+        'case/neon_rot_store_only_sve.cpp',
+        'case/neon_rot_u8x16_sve.cpp',
         'mem/mem_disambig_alu_sve.cpp',
         # missing_testcases_20261009 ports (batch 5/8): ldr_at_top base
         # variants — ALU-dimension (sub/eor/bic/orn, ORN composed), the
         # 32-bit MAC-lane variant (narrowed persisted sources), the
         # interleaved-layout address-separation cell, the 3-store and
         # 4-load count-gradient cells.
-        'core179/neon_rot_ldr_at_top_sub_sve.cpp',
-        'core179/neon_rot_ldr_at_top_mla_sve.cpp',
-        'core179/neon_rot_ldr_at_top_offdiag_sve.cpp',
-        'core179/neon_rot_ldr_at_top_str3_sve.cpp',
-        'core179/neon_rot_ldr_at_top_ldr4_sve.cpp',
+        'case/neon_rot_ldr_at_top_sub_sve.cpp',
+        'case/neon_rot_ldr_at_top_mla_sve.cpp',
+        'case/neon_rot_ldr_at_top_offdiag_sve.cpp',
+        'case/neon_rot_ldr_at_top_str3_sve.cpp',
+        'case/neon_rot_ldr_at_top_ldr4_sve.cpp',
         # missing_testcases_20261009 ports (batch 6/8): rowmajor
         # instrumented variants — per-element binary records (dump), the
         # GPS self-describing-tag chassis with five-buffer dumps, the
         # dual-store-leg comparison, and the str3 3-way slot-mask
         # checkall with transient markers.
-        'core179/neon_rot_ldr_at_top_rowmajor_dump_sve.cpp',
-        'core179/neon_rot_ldr_at_top_rowmajor_gps_sve.cpp',
-        'core179/neon_rot_ldr_at_top_rowmajor_dualcmp_sve.cpp',
-        'core179/neon_rot_ldr_at_top_rowmajor_str3_checkall_sve.cpp',
+        'case/neon_rot_ldr_at_top_rowmajor_dump_sve.cpp',
+        'case/neon_rot_ldr_at_top_rowmajor_gps_sve.cpp',
+        'case/neon_rot_ldr_at_top_rowmajor_dualcmp_sve.cpp',
+        'case/neon_rot_ldr_at_top_rowmajor_str3_checkall_sve.cpp',
         # missing_testcases_20261009 ports (batch 7/8): K-cells — the
         # interleaved dual-source layout cell (GPS-tagged + its natural-
         # random control), the 4x-footprint residency cell (byte_off tag
         # wrap documented), and the 4-cell pattern-activation battery
         # (zero/one/GPS-rand/hiham).
-        'core179/neon_rot_ldr_at_top_rowmajor_k5far_sve.cpp',
-        'core179/neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve.cpp',
-        'core179/neon_rot_ldr_at_top_rowmajor_k3res_sve.cpp',
-        'core179/neon_rot_ldr_at_top_rowmajor_k7pattern_sve.cpp',
+        'case/neon_rot_ldr_at_top_rowmajor_k5far_sve.cpp',
+        'case/neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve.cpp',
+        'case/neon_rot_ldr_at_top_rowmajor_k3res_sve.cpp',
+        'case/neon_rot_ldr_at_top_rowmajor_k7pattern_sve.cpp',
         # missing_testcases_20261009 ports (batch 8/8): arm-0102
         # trigger-recipe variants on pg4 sub-blocks — BSL select
         # (composed, no svbsl in GCC 12), NOT-logic, mask-logic, and the
