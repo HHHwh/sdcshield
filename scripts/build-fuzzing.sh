@@ -19,8 +19,11 @@ if ! command -v afl-gcc &> /dev/null; then
     exit 1
 fi
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 target_dir=$1
 shift
 
 CC=afl-gcc CXX=afl-g++ meson setup $target_dir -Dfuzzing=true $@
-CC=afl-gcc CXX=afl-g++ ninja -C $target_dir
+# 统一走受限并行度入口（默认 -j = nproc/2; 显式 -j/SDC_BUILD_JOBS 可覆盖）
+CC=afl-gcc CXX=afl-g++ "$script_dir/build.sh" -C "$target_dir"

@@ -329,7 +329,8 @@ meson_setup() { ${MESON_BIN:-meson} "$@"; }
 meson_setup setup "$BUILD/builddir" "$SRCW" --buildtype=release -Dcpp_std="$CPPSTD" $ACL_OPT ${EXTRA_MESON_ARGS:-}
 
 echo "===== [4/5] ninja ====="
-ninja -C "$BUILD/builddir"
+# 统一走受限并行度入口（默认 -j = nproc/2; 容器内 nproc 即容器可见核数）
+"$SRCW/scripts/build.sh" -C "$BUILD/builddir"
 
 BIN="$BUILD/builddir/sdcshield"
 echo "===== [5/5] 功能验证 ====="

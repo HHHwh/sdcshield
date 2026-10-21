@@ -36,7 +36,8 @@ else
 fi
 
 echo "==> ninja..."
-ninja -C "$BUILD"
+# 统一走受限并行度入口（默认 -j = nproc/2, 共享服务器保护; 显式 -j/SDC_BUILD_JOBS 可覆盖）
+"$SCRIPT_DIR/../build.sh" -C "$BUILD"
 
 BIN="$BUILD/sdcshield"
 echo "==> 产物: $(ls -la "$BIN")"
