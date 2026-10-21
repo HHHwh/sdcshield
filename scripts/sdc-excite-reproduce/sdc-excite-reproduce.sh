@@ -20,7 +20,7 @@ else
     # SWEEP=4m：spectrum 脚本 -t 为每用例语义（42 个测试槽 × 4m ≈ 2.8h ≈ plan L2 预算）
     T_COLD=30m; T_SWEEP=4m; T_DWELLM=4m; T_L3F=6h; T_L3R=2h
     T_L5=90m;   T_L4E=2h;   T_IPSEC=15m; T_MEMCPY=15m; T_DOM=30m
-    T_HEAT=30m; T_TARGET=30m; T_EIGEN=300s
+    T_HEAT=30m; T_TARGET=30m; T_EIGEN=1300s
 fi
 DUR_S() { python3 -c "
 import sys
@@ -210,7 +210,10 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     echo "$(date '+%F %T'),$label,rc=$rc,test=${failed_test:-?},seed=${fail_seed:-none},$(tr '\n' ';' < "$evdir/retests.txt"),$evdir" >> "$EVENTS_DIR/ledger.csv"
     enqueue_repro "$evdir" "${failed_test:-?}" "${fail_seed:-none}"   # M2 enqueue_reproduction 落点（M3 T5）→ repro_queue 待 --from-queue 消费
     alert "SDC/崩溃事件: $label rc=$rc test=${failed_test:-?} → $evdir（战役继续）"
-    [ -n "$failed_test" ] && DWELL_OVERRIDE="$failed_test"   # 本周期 L4 优先深驻留该测试
+    # 本周期 L4 优先深驻留该测试。排除表: 已定性为外部 root agent 干扰伪影的测试
+    # (mesh_upi_avx_sym 7 次 code 9 全部复测 pass + 4×57min 驻留零比对 fail——
+    # 2026-10-19 patrol): 每Cycle驻留它=驻留时段持续被外部杀浪费, 协议可信度已充分
+    [ -n "$failed_test" ] && [ "$failed_test" != "mesh_upi_avx_sym" ] && DWELL_OVERRIDE="$failed_test"
 }
 
 # ---------------- stress-ng 补充层（后台，小时轮转 --verify）----------------
@@ -307,12 +310,29 @@ phase_l3() {
     if [ -n "${L3_DISABLE:-}" ] && flag_ok --disable=zstd19; then
         dis=(--disable "$L3_DISABLE")
     fi
+    # sm3sm4 病理区规避（2026-10-16 定性: 本机 OpenSSL SM4 软实现 ~2.2MB/s, 每迭代
+    # 5×data_size EVP 操作——4M 首迭代 128s, 8M+ 单迭代超窗 interrupted, 自适应 hi≈22M
+    # 落病理区=上轮全核 fail 机制。固定 1M ≈2.2s/迭代, 60s 量子 ~25 次有效比对）
+    # eigen_gemm 满核限幅 1024（2026-10-17 事件定性: 自适应 85% 预算=24G 波次与
+    # mem_saturate 叠加连环 OOM——dmesg 18:48 ×4 实录; mdim=1024 ≈4-5G 安全档,
+    # 大参数形态由 l3_eigen_n1 单线程段承载不损失覆盖）
+    local smo=(-O openssl_sm3sm4.data_size=1048576 \
+               -O eigen_gemm_double_dynamic_square.mdim=1024)
     # 自终止预算（-T + --strict-runtime），不用 -T forever + 外部 kill：
     # smoke 实测 sdcshield 对 TERM 60s+ 无响应，外部 KILL 产生 rc=137 伪事件
-    run_bounded "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" 60 "${dis[@]}" "${FLAGS[@]}"
-    run_bounded "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" 60 --test-list-randomize "${dis[@]}" "${FLAGS[@]}"
-    local eig; eig=$(resolve 'eigen*')
-    [ -n "$eig" ] && run_bounded "l3_eigen_n1_c${CYCLE}" "$(DUR_S "$T_EIGEN")" 60 -e "$eig" -n 1 "${FLAGS[@]}"
+    run_bounded "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" 60 "${dis[@]}" "${smo[@]}" "${FLAGS[@]}"
+    run_bounded "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" 60 --test-list-randomize "${dis[@]}" "${smo[@]}" "${FLAGS[@]}"
+    local eig; eig=$(resolve 'eigen_svd_double,eigen_svd_double2,eigen_gemm_double_dynamic_square')
+    # eigen 单线程大参数档（2026-10-16 标定: svd@2048=558MB/99.7s迭代, gemm@4096=1.03G/64s;
+    # 量子 260s 保 ≥2 次完整迭代——60s 量子在 100s 迭代下零比对, 大参数形同虚设）。
+    # -e 只列三个 -O 目标: 框架按 -e 顺序逐测试调度, 每测试吃满量子, 900s 预算仅容
+    # 3-4 个——resolve 'eigen*' 的 17 测试序中 svd 居 11/12 位永不可达(2026-10-17
+    # review 发现, 缩比探针复现)。其余 eigen* 由 l3_fixed/rand 全集波次覆盖。
+    # 量子按 MODE 分档: smoke 档 260s 会拖长 smoke 且竞争下逼近外层 pto 兜底。
+    local eq=260; [ "$MODE" = smoke ] && eq=60
+    [ -n "$eig" ] && run_bounded "l3_eigen_n1_c${CYCLE}" "$(DUR_S "$T_EIGEN")" "$eq" -e "$eig" -n 1 \
+        -O eigen_svd_double.mdim=2048 -O eigen_svd_double2.mdim=2048 \
+        -O eigen_gemm_double_dynamic_square.mdim=4096 "${FLAGS[@]}"
 }
 
 l5_dit() {
@@ -430,7 +450,11 @@ phase_l4() {
     [ $each -lt 60 ] && each=60
     log "L4 深驻留：$n 个对象 × ${each}s（关 fracturing 固定模式）"
     for t in "${arr[@]}"; do
-        run_sdc "l4_dwell_${t}_c${CYCLE}" 0 -e "$t" -t "${each}s" --max-test-loop-count=0 "${FLAGS[@]}"
+        # 满核驻留大参数档（2026-10-16 标定: oblas mdim=2048 满核峰值 23G 与伴层叠加
+        # 超界, 降档 1536 ≈13G; 条件注入——DWELL_OVERRIDE 事件测试不带 oblas 参数）
+        local o=()
+        [ "$t" = "openblas_dgemm" ] && o=(-O openblas_dgemm.mdim=1536)
+        run_sdc "l4_dwell_${t}_c${CYCLE}" 0 -e "$t" -t "${each}s" --max-test-loop-count=0 "${o[@]}" "${FLAGS[@]}"
     done
 }
 
