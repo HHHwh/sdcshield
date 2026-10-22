@@ -100,7 +100,7 @@ static int neon_rot_ldr_at_top_offdiag_sve_init(struct test *test) {
     for (int i = 0; i < data->slots; i++) {
         svuint64_t a = svld1_u64(pg, data->interleaved + (size_t)(3 * i + 1) * lanes);
         svuint64_t b = svld1_u64(pg, data->interleaved + (size_t)(3 * i + 2) * lanes);
-        svuint64_t res;
+        svuint64_t res = svundef_u64();
         switch (i % 4) {
             case 0: res = svadd_u64_x(pg, a, b); break;
             case 1: res = sveor_u64_x(pg, a, b); break;
@@ -145,7 +145,7 @@ static int neon_rot_ldr_at_top_offdiag_sve_run(struct test *test, int cpu) {
             /* 两个源载相邻地址 (相差一个向量) — 地址间隔必要性探针 */
             svuint64_t a = load_vec_sve(data->interleaved + (size_t)(3 * i + 1) * data->lanes);
             svuint64_t b = load_vec_sve(data->interleaved + (size_t)(3 * i + 2) * data->lanes);
-            svuint64_t res;
+            svuint64_t res = svundef_u64();
 
             switch (i % 4) {
                 case 0: res = svadd_u64_x(svptrue_b64(), a, b); break;

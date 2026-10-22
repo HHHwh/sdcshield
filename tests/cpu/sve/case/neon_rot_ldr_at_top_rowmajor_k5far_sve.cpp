@@ -126,7 +126,7 @@ static int neon_rot_ldr_at_top_rowmajor_k5far_sve_init(struct test *test) {
     for (int i = 0; i < data->slots; i++) {
         svuint64_t a = svld1_u64(pg, data->src + (size_t)(2 * i) * lanes);
         svuint64_t b = svld1_u64(pg, data->src + (size_t)(2 * i + 1) * lanes);
-        svuint64_t res;
+        svuint64_t res = svundef_u64();
         switch (i % 4) {
             case 0: res = svadd_u64_x(pg, a, b); break;
             case 1: res = sveor_u64_x(pg, a, b); break;
@@ -178,7 +178,7 @@ static int neon_rot_ldr_at_top_rowmajor_k5far_sve_run(struct test *test, int cpu
             /* 交错双源: 地址邻居永远是另一族 */
             svuint64_t a = load_vec_sve(data->src + (size_t)(2 * i) * data->lanes);
             svuint64_t b = load_vec_sve(data->src + (size_t)(2 * i + 1) * data->lanes);
-            svuint64_t res;
+            svuint64_t res = svundef_u64();
 
             switch (i % 4) {
                 case 0: res = svadd_u64_x(svptrue_b64(), a, b); break;

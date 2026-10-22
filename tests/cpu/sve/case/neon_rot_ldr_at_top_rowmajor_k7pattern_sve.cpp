@@ -155,7 +155,7 @@ static int k7p_sve_init_common(struct test *test, K7pSvePattern pattern)
     for (int i = 0; i < data->slots; i++) {
         svuint64_t a = svld1_u64(pg, data->srcA + (size_t)i * lanes);
         svuint64_t b = svld1_u64(pg, data->srcB + (size_t)i * lanes);
-        svuint64_t res;
+        svuint64_t res = svundef_u64();
         switch (i % 4) {
             case 0: res = svadd_u64_x(pg, a, b); break;
             case 1: res = sveor_u64_x(pg, a, b); break;
@@ -271,7 +271,7 @@ static int k7p_sve_run_common(struct test *test, int cpu, const char *name)
 
             svuint64_t a = load_vec_sve(data->srcA + off);
             svuint64_t b = load_vec_sve(data->srcB + off);
-            svuint64_t res;
+            svuint64_t res = svundef_u64();
 
             switch (i % 4) {
                 case 0: res = svadd_u64_x(svptrue_b64(), a, b); break;

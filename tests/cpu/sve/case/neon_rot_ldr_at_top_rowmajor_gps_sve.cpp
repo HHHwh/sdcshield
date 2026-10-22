@@ -136,7 +136,7 @@ static int neon_rot_ldr_at_top_rowmajor_gps_sve_init(struct test *test) {
     for (int i = 0; i < data->slots; i++) {
         svuint64_t a = svld1_u64(pg, data->srcA + (size_t)i * lanes);
         svuint64_t b = svld1_u64(pg, data->srcB + (size_t)i * lanes);
-        svuint64_t res;
+        svuint64_t res = svundef_u64();
         switch (i % 4) {
             case 0: res = svadd_u64_x(pg, a, b); break;
             case 1: res = sveor_u64_x(pg, a, b); break;
@@ -187,7 +187,7 @@ static int neon_rot_ldr_at_top_rowmajor_gps_sve_run(struct test *test, int cpu) 
 
             svuint64_t a = load_vec_sve(data->srcA + off);
             svuint64_t b = load_vec_sve(data->srcB + off);
-            svuint64_t res;
+            svuint64_t res = svundef_u64();
 
             switch (i % 4) {
                 case 0: res = svadd_u64_x(svptrue_b64(), a, b); break;
