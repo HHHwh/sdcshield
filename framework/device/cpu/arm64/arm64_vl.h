@@ -171,21 +171,25 @@ static inline long arm64_sme_pin_vl(long bytes)
  * range message — callers own their argument sanity. Units: min_bits/max_bits
  * are bits as requested by tests (e.g. 128/256/512); the return value is
  * bytes, ready to feed arm64_sve_pin_vl(bytes) — do NOT multiply by 8 again
- * (unit mix-up deferred to P6 per the PR description). */
+ * (unit mix-up deferred to P6 per the PR description). On skip the helpers
+ * return EXIT_SKIP (not a bare -1): the framework's init-result handling
+ * (sandstone_run.cpp) logs "Unexpected OS error: %s" with strerror(-ret) for
+ * any negative value other than EXIT_SKIP, so a bare -1 would emit a
+ * misleading "Operation not permitted" on top of the real log_skip reason. */
 
 static inline long arm64_require_sve_vl(struct test *test, long min_bits, long max_bits)
 {
     if (!arm64_cpu_has_sve()) {
         log_skip(CpuNotSupportedSkipCategory,
                  "ARM64 SVE not available; %s exercises the SVE datapath", test->id);
-        return -1;
+        return EXIT_SKIP;
     }
     long bits = arm64_sve_vl_bytes() * 8;
     if (bits < min_bits || bits > max_bits) {
         log_skip(CpuNotSupportedSkipCategory,
                  "%s: SVE vector length %ld bits is outside the supported %ld..%ld-bit range",
                  test->id, bits, min_bits, max_bits);
-        return -1;
+        return EXIT_SKIP;
     }
     return bits / 8;
 }
@@ -195,14 +199,14 @@ static inline long arm64_require_sme_svl(struct test *test, long min_bits, long 
     if (!arm64_cpu_has_sme()) {
         log_skip(CpuNotSupportedSkipCategory,
                  "ARM64 SME not available; %s exercises the SME datapath", test->id);
-        return -1;
+        return EXIT_SKIP;
     }
     long bits = arm64_sme_svl_bytes() * 8;
     if (bits < min_bits || bits > max_bits) {
         log_skip(CpuNotSupportedSkipCategory,
                  "%s: SME streaming vector length %ld bits is outside the supported %ld..%ld-bit range",
                  test->id, bits, min_bits, max_bits);
-        return -1;
+        return EXIT_SKIP;
     }
     return bits / 8;
 }
@@ -229,14 +233,14 @@ static inline long arm64_require_sve_vl(struct test *test, long min_bits, long m
     (void)min_bits; (void)max_bits;
     log_skip(CpuNotSupportedSkipCategory,
              "ARM64 SVE not available; %s exercises the SVE datapath", test->id);
-    return -1;
+    return EXIT_SKIP;
 }
 static inline long arm64_require_sme_svl(struct test *test, long min_bits, long max_bits)
 {
     (void)min_bits; (void)max_bits;
     log_skip(CpuNotSupportedSkipCategory,
              "ARM64 SME not available; %s exercises the SME datapath", test->id);
-    return -1;
+    return EXIT_SKIP;
 }
 
 #endif /* __aarch64__ && __linux__ */
