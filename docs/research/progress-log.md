@@ -535,8 +535,9 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 
 - **P0**(5 独立 PR):mla svundef 漏网补齐(#272)/sve_rot×5 构建真相(#273)/
   孤儿标注(#274)/CLAUDE.md 环境修正(#275)/PR #242 补记(#276)。
-- **P1**(#277,3 commit):arm64_vl.h(能力探测/VL 查询/自 pin/require 助子)+
-  selftest×2 + --dump-cpu-info 输出 + 文档同步(architecture/adding-tests/README)。
+- **P1**(#277,5 commit 含双评审修复轮):arm64_vl.h(能力探测/VL 查询/自 pin/
+  require 助手)+ selftest×2 + --dump-cpu-info 输出 + 文档同步
+  (architecture/adding-tests/README)。
 - **本机(0xd01 无 SVE)**:TDD RED(缺头文件构建失败)→ GREEN [461/461] 0 告警;
   -e selftest_arm64_vl_api -v → result: pass;-e selftest_arm64_vl_require_sve -v →
   result: skip(CpuNotSupported);dump-cpu-info 两行 n/a;zstd19 回归 pass。
@@ -549,7 +550,10 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **诚实边界**:gem5 SE prctl=ignoreFunc 恒返 0(非真 GET_VL 值,findings.md 记录
   不判定);auxv hwcap_sve=1/hwcap2_sme=1/hwcap2_sve2=0;全量 --selftests 止步
   selftest_sigkill 系先于本改动的框架行为(其后 34 个既有 selftest 含 min_cpu
-  全系列同缺席,独立问题不在本战役范围)。
+  全系列同缺席,独立问题不在本战役范围);**pin 成功路径(SET_VL 生效+clone
+  继承)本机与 gem5 SE 双不可达,系内核文档行为而非实证**——评审修复轮已把
+  pin 部署进 selftest require-init,首个 SVE 主机运行即自动成为继承性证明
+  (双评审收敛发现,含 -EPERM 沙箱区分)。
 - **验证模式**:gem5 四档验证由隔离 subagent 并行执行(用户指令,主 agent 不阻塞
   开发);探针零修改 -Wall -Wextra 一次编译通过,单 run 1-2 秒。
 - **承接**:P2(SME fmopa_za 收尾)起各阶段另行计划(spec §6)。

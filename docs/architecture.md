@@ -93,14 +93,21 @@ per-thread SVE vector length (VL) and SME streaming vector length (SVL):
   use them without a +sve march;
 - self-pinning (`arm64_sve_pin_vl` / `arm64_sme_pin_vl`, prctl) for
   size-specific TUs, to be called from test_init before worker threads
-  are created (new threads inherit the creator's VL);
+  are created (new threads inherit the creator's VL — kernel-documented,
+  see the verification note below);
 - test-flow helpers (`arm64_require_sve_vl` / `arm64_require_sme_svl`)
   folding capability check + range check + log_skip into one call.
 
 VL/SVL are deliberately **not** part of `device_features`: they are
 per-thread runtime quantities, while feature bits are process-wide.
-Validated at all four tiers (128/256/512/1024-bit) in gem5-fi
-(`workloads/sdcshield/vl_api_probe.c`).
+The query layer (capability probes, rdvl/rdsvl, prctl GET reporting) is
+validated at all four tiers (128/256/512/1024-bit) in gem5-fi
+(`workloads/sdcshield/vl_api_probe.c`). Verification boundary: gem5 SE
+maps prctl to ignoreFunc, so the pin success path (SET_VL taking effect)
+and the clone-inheritance behavior are kernel-documented but not yet
+empirically executed anywhere — `selftest_arm64_vl_require_sve_init`
+pins in init so the first SVE-host selftest run proves inheritance
+automatically.
 
 ## Sysdeps layering
 
@@ -152,7 +159,9 @@ The vendored Eigen 5.0 SVE backend carries `double`/`complex<double>` packets
 (`PacketXd` in `arch/SVE/PacketMath.h`, `PacketXcd` + `arch/SVE/Complex.h`),
 making `eigen_svd_cdouble_sve` run vectorized SVD (~0.7 s at M_DIM 300 vs
 >10 min scalar). **Runtime-VL rule**: size-specific SVE code requires the
-process vector length to equal the compile-time `-msve-vector-bits`; this host
-is VL=256 while `tests_sve` compiles at 128, so the SVD SVE test must run via
-the `prctl(PR_SVE_SET_VL, 16)` launcher in `scripts/eigen-sve-double/`.
-`sleef_sve` compiles at 128 by design.
+process vector length to equal the compile-time `-msve-vector-bits`. The
+earlier "this host is VL=256" record was written on the cortex x3b machine;
+the current host (0xd01, Kunpeng 920) has no SVE at all, so the SVD SVE test
+cleanly skips here — on SVE hosts with VL≠128 it needs a
+`prctl(PR_SVE_SET_VL, 16)` pin (see `scripts/eigen-sve-double/` and
+`arm64_sve_pin_vl()`). `sleef_sve` compiles at 128 by design.

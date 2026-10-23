@@ -977,13 +977,11 @@ static int selftest_arm64_vl_api_run(struct test *test, int cpu)
         report_fail_msg("%s: arm64_sme_svl_bytes() returned %ld without SME", test->id, svl);
     }
 
-    if (arm64_cpu_has_sve()) {
-        long applied = arm64_sve_pin_vl(vl);
-        if (applied != vl)
-            report_fail_msg("%s: pin to current VL (%ld) applied %ld", test->id, vl, applied);
-    } else if (arm64_sve_pin_vl(16) != -EINVAL) {
+    /* The pin success path (and the clone-inheritance proof) lives in
+       selftest_arm64_vl_require_sve_init: pin belongs in test_init, not in
+       a worker thread. Here we only assert the no-capability guard. */
+    if (!arm64_cpu_has_sve() && arm64_sve_pin_vl(16) != -EINVAL)
         report_fail_msg("%s: arm64_sve_pin_vl() succeeded on an SVE-less host", test->id);
-    }
 
     return EXIT_SUCCESS;
 }
@@ -996,6 +994,22 @@ static int selftest_arm64_vl_require_sve_init(struct test *test)
     long vl = arm64_require_sve_vl(test, 128, 1024);
     if (vl < 0)
         return EXIT_SKIP; /* log_skip already emitted with the reason */
+
+    /* Exercise the pin success path on the INIT thread, before the framework
+       creates worker threads: pinning to the current VL is semantically a
+       no-op, and the run-side re-check below then proves the created thread
+       inherited the pinned VL (spec §5 hard boundary 2). -EPERM (e.g. a
+       seccomp-restricted SVE host) only forfeits this extra proof; it does
+       not fail an otherwise healthy machine. */
+    long applied = arm64_sve_pin_vl(vl);
+    if (applied == -EPERM) {
+        log_info("%s: prctl(PR_SVE_SET_VL) returned -EPERM; pin-inheritance "
+                 "proof skipped, require path still verified", test->id);
+    } else if (applied != vl) {
+        log_error("%s: pin to current VL (%ld) applied %ld", test->id, vl, applied);
+        return EXIT_FAILURE;
+    }
+
     test->data = (void *)(uintptr_t)vl;
     return EXIT_SUCCESS;
 }

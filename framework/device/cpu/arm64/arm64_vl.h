@@ -95,6 +95,19 @@ static inline long arm64_sme_svl_bytes(void)
 }
 
 /* ---- self-pinning (size-specific TUs; call from test_init) ---- */
+/*
+ * Semantics: bytes is masked to the 16-bit VL length field before the prctl,
+ * so out-of-range values are silently truncated and bytes == 0 asks the
+ * kernel to restore the default VL (not an error). The kernel rounds the
+ * request to the nearest VL it supports; the return value is the effective
+ * VL in bytes (>= 0) or -errno — callers MUST check it and must not assume
+ * the exact request took effect. New threads created after the call inherit
+ * the pinned VL (kernel-documented per-thread semantics). Verification
+ * boundary: the SET_VL effect and the clone inheritance are kernel-documented
+ * but not yet empirically executed on any available host (this machine has
+ * no SVE; gem5 SE maps prctl to ignoreFunc) — selftest_arm64_vl_require_sve_init
+ * pins in init so the first SVE-host selftest run proves it automatically.
+ */
 
 static inline long arm64_sve_pin_vl(long bytes)
 {
@@ -117,6 +130,8 @@ static inline long arm64_sme_pin_vl(long bytes)
 }
 
 /* ---- test-flow helpers ---- */
+/* Note: an empty range (min_bits > max_bits) skips unconditionally with the
+ * range message — callers own their argument sanity. */
 
 static inline long arm64_require_sve_vl(struct test *test, long min_bits, long max_bits)
 {
