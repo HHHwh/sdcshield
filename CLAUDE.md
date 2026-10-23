@@ -22,7 +22,7 @@ routes you; consult it before guessing.
    capability (missing HWCAP/HWCAP2 bit such as SME, an unsupported VL/SVL
    tier, a newer ISA generation), then verifying only the SKIP path is NOT
    sufficient — the change MUST be validated in gem5-fi
-   (`/home/sdc/wangxu/gem5-fi-fuzz`, CHAOS/SE, same-source dual kernel under
+   (`/home/sdc/wangxu/code-review/gem5-fi`, CHAOS/SE, same-source dual kernel under
    `workloads/sdcshield/`) at the affected VL/SVL tiers, quoting real run
    output (tier, checksum, `SDCSHIELD_FAILS=0`); if gem5 validation is
    genuinely impossible, state that verification boundary honestly instead.
@@ -109,9 +109,14 @@ END_DECLARE_TEST
 - `eigen_svd_double`/`eigen_sparse` fail sporadically under full-system
   multithreading (192 CPUs; ULP-level diffs vs strict memcmp) — `-n 1` always
   passes. Eigen/large-core-count limitation, not a port defect.
-- SVE runtime-VL rule: host is VL=256 while `tests_sve` compiles at 128 → the
-  eigen SVD SVE test needs the VL-pinning launcher in
-  `scripts/eigen-sve-double/`; `sleef_sve` stays at 128 by design.
+- SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 96 CPUs) has NO
+  SVE/SME — all SVE/SME functional verification is gem5-fi only
+  (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). Earlier "host is
+  VL=256" records refer to a different machine (cortex x3b,
+  docs/architecture.md:130). `tests_sve` still compiles at fixed 128-bit; on
+  SVE hosts with VL≠128 the eigen SVD test needs a VL-pinning launcher
+  (`scripts/eigen-sve-double/` precedent; the external `/tmp/vlrun` tool no
+  longer exists); `sleef_sve` stays at 128 by design.
 
 ## Documentation map — consult before guessing
 
