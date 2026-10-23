@@ -598,3 +598,27 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   独立验证(build 零新警告+selftest/zstd19 真实输出),20.03 编译失败用
   v4.19 uapi 模拟复现+修复对照实证。
 - **承接**:P2(SME fmopa_za 收尾)起各阶段另行计划(spec §6)。
+
+## 2026-10-23（all-VL Phase 2 P2：SME fmopa_za 收尾——四重缺陷修复 + 四档实证）
+
+- **发现**:sme_fmopa_za_arm 原形态从未在任何硬件执行过, 全文核验四重独立
+  缺陷:rdsvl imm0 恒 0(cols=0+堆溢出)/asm 步距 #16 字节 vs golden 16-float
+  几何/golden 按行建模而 mova za0v 读列/smstart za-only 下 FMOPA 非法。
+- **重构**(PR feat/sme-fmopa-za-allvl, 堆叠 #277):arm64_require_sme_svl(
+  128,1024) 一行门控+窗口几何 [s*cols+i]+步距寄存器化+精确整数操作数
+  (累加上界 8960<2^24, 舍入零歧义且豁免 gem5 F4 双舍入)+run 侧 SVL 漂移
+  fail-closed+整块 memcmp 首失配定位。
+- **gem5 四档实证**(gem5-fi feat/fmopa-za-dual @ ebe08632, 16 run=四档×
+  {fixed,random×3}):axis=COLUMN 四档一字不差(za_tileview 探针结论二次
+  实证, 原测试 docblock 的 ROW 说法证伪);SMSTART 裁决 za-only 非法——
+  tier-1 pilot 崩于首条 fmopa(gem5 smEnCheckCode 要求 SVCR.SM=1), 改
+  sm+za 双开后 16/16 SDCSHIELD_FAILS=0、cols 逐档 4/8/16/32 精确、16 个
+  checksum 互异(fixed1 各档 150538c2…/95df82c8…/4f59b61a…/4b243679…)。
+- **无回归锚**(诚实声明):原形态无任何有效输出, 验证锚=dual kernel 四档
+  通道 A 对精确整数 golden 的逐字节一致。
+- **writing_tests.md VL 政策节**交付(spec 0c6c9c89 归属 P2):框架层探测/
+  范围检查/fail-closed/几何缩放不变式/逐 lane 字节级比对五条军规。
+- **验证模式**:16 run 由隔离 subagent 执行(用户指令);主 agent 并行完成
+  测试重构与文档, 裁决回报后定稿——工作假设 COLUMN 命中, za-only 假设
+  被实证推翻, 按裁决改 sm+za 双开。
+- **承接**:P3(sve512 家族×10)起另行计划。
