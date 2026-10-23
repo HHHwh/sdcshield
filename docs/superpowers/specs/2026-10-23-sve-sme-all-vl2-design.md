@@ -196,7 +196,7 @@ long arm64_require_sme_svl(struct test *t, long min_bits, long max_bits);
 |---|---|
 | `docs/architecture.md` | feature detection 章节后新增 VL/SVL 层小节（arm64_vl.h 定位、与 device_features 边界） |
 | `docs/research/adding-tests.md` | 政策改写：SVE/SME 测试 init 从手写 getauxval → `arm64_require_*` 一行 |
-| `docs/coding/writing_tests.md` | 补 VL 政策节：范围检查、fail-closed 守卫、字节级 memcmp 不变式 |
+| `docs/coding/writing_tests.md` | 补 VL 政策节：范围检查、fail-closed 守卫、字节级 memcmp 不变式（**P2+ 交付**——memcmp 不变式随 P2 首个改造用例落地时一并写入；P1 只交付框架 API 与 adding-tests 政策。对抗性评审 #6 修正：原表未排期形成无主条目） |
 | `README.md` | SVE/SME 用例四档适配说明 + `--dump-cpu-info` 新输出 |
 | `CLAUDE.md` | gem5 路径修正；过时「host is VL=256」陈述修正 |
 | `docs/research/progress-log.md` | 补 PR #242 条目 + 本战役各阶段条目 |
