@@ -118,7 +118,9 @@ this machine), and gem5 SE maps prctl to ignoreFunc, so the pin success
 path (SET_VL taking effect) is kernel-documented but not yet empirically
 executed anywhere — `selftest_arm64_vl_require_sve` pins an alternate VL
 on the worker thread and reads it back via rdvl, so the first SVE-host
-selftest run proves the round-trip automatically.
+selftest run *attempts* the round-trip proof; where prctl is blocked
+(-EPERM), ignored (-ENOSYS), or no alternate VL exists, the test degrades
+to a logged warning rather than claiming the proof.
 
 ## Sysdeps layering
 

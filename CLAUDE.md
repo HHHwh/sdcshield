@@ -107,7 +107,9 @@ END_DECLARE_TEST
 - No `cpufreq` → `--vary-frequency`/`--vary-uncore-frequency` skip gracefully;
   no CPU `thermal_zone*` zones → thermal throttle is a no-op here.
 - `eigen_svd_double`/`eigen_sparse` fail sporadically under full-system
-  multithreading (192 CPUs; ULP-level diffs vs strict memcmp) — `-n 1` always
+  multithreading (ULP-level diffs vs strict memcmp; the original "192 CPUs"
+  records are from the cortex x3b machine — see the SVE rule below, this host
+  is the 96-CPU 0xd01) — `-n 1` always
   passes. Eigen/large-core-count limitation, not a port defect.
 - SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 96 CPUs) has NO
   SVE/SME (PR #275 correction; earlier "host is VL=256" records refer to a
