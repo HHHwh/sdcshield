@@ -951,8 +951,10 @@ static int selftest_sme_sigill_probe_run(struct test *test, int)
 // All-VL Phase 2 P1: arm64_vl.h API invariants. On SVE-less hosts (this
 // Kunpeng 920) queries must report absence (false/0, pin -EINVAL) and agree
 // with getauxval ground truth; on SVE hosts VL must be a 16-byte multiple in
-// [16,256]. Functional SVE behavior is validated in gem5-fi
-// (workloads/sdcshield/vl_api_probe.c, four tiers).
+// [16,256]. Functional SVE behavior (pin round-trip) is proven automatically
+// by the first SVE-host run of selftest_arm64_vl_require_sve — the earlier
+// "validated in gem5-fi" claim could not be verified on audit (see the
+// 2026-10-23 entry in docs/research/progress-log.md).
 static int selftest_arm64_vl_api_run(struct test *test, int cpu)
 {
     (void)cpu;

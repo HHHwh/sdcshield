@@ -106,14 +106,17 @@ per-thread SVE vector length (VL) and SME streaming vector length (SVL):
 
 VL/SVL are deliberately **not** part of `device_features`: they are
 per-thread runtime quantities, while feature bits are process-wide.
-The query layer (capability probes, rdvl/rdsvl, prctl GET reporting) is
-validated at all four tiers (128/256/512/1024-bit) in gem5-fi
-(`workloads/sdcshield/vl_api_probe.c`). Verification boundary: gem5 SE
-maps prctl to ignoreFunc, so the pin success path (SET_VL taking effect)
-is kernel-documented but not yet empirically executed anywhere —
-`selftest_arm64_vl_require_sve` pins an alternate VL on the worker thread
-and reads it back via rdvl, so the first SVE-host selftest run proves the
-round-trip automatically.
+Verification: the `.inst` encodings (rdvl/rdsvl) are derived via
+`as`+`objdump` (recorded in the header comments) and exercised on every
+aarch64 build; capability probes and the SKIP paths run on this host.
+Verification boundary, stated honestly: an earlier "validated at all four
+tiers in gem5-fi" claim could not be verified on audit (the referenced
+probe/branch no longer exists locally and no gem5 build is present on
+this machine), and gem5 SE maps prctl to ignoreFunc, so the pin success
+path (SET_VL taking effect) is kernel-documented but not yet empirically
+executed anywhere — `selftest_arm64_vl_require_sve` pins an alternate VL
+on the worker thread and reads it back via rdvl, so the first SVE-host
+selftest run proves the round-trip automatically.
 
 ## Sysdeps layering
 
