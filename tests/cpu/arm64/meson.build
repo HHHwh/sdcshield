@@ -144,6 +144,11 @@ if host_machine.cpu_family() == 'aarch64'
     # test_init and returns a clean EXIT_SKIP on SVE-less CPUs, so their SVE
     # codegen only ever executes on SVE-capable hardware. Built only on
     # aarch64.
+    #
+    # NOTE: sve512_fma_arm.cpp is committed (ea879f68) but deliberately NOT
+    # wired into any sources list yet — wiring + all-VL validation is
+    # scheduled for all-VL Phase 2 P3
+    # (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
     arm64_sve_lib = static_library(
         'tests_arm64_sve',
         files(
