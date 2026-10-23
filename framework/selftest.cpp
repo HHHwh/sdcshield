@@ -2680,6 +2680,29 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
 },
+#if defined(__aarch64__) && defined(__linux__)
+/* Registered BEFORE the crash selftests (selftest_sigkill/fastfail kill the
+   child, so nothing after them in this array runs under a plain --selftests
+   sweep): these two are the only runtime gates for the arm64_vl.h .inst
+   encodings and the pin round-trip, and must stay reachable by default. */
+{
+    .id = "selftest_arm64_vl_api",
+    .description = "arm64_vl.h API invariants (capability/VL consistency, pin round-trip)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_arm64_vl_api_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_arm64_vl_require_sve",
+    .description = "arm64_require_sve_vl() clean-skip/run path (skips cleanly on SVE-less hosts)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_init = selftest_arm64_vl_require_sve_init,
+    .test_run = selftest_arm64_vl_require_sve_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
 #ifdef _WIN32
 {
     .id = "selftest_fastfail",
@@ -2974,25 +2997,6 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
     .test_run = selftest_pass_run,
     .minimum_cpu = cpu_feature_sve2p1,
-    .desired_duration = -1,
-    .quality_level = TEST_QUALITY_PROD,
-},
-#endif
-#if defined(__aarch64__) && defined(__linux__)
-{
-    .id = "selftest_arm64_vl_api",
-    .description = "arm64_vl.h API invariants (capability/VL consistency, pin round-trip)",
-    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
-    .test_run = selftest_arm64_vl_api_run,
-    .desired_duration = -1,
-    .quality_level = TEST_QUALITY_PROD,
-},
-{
-    .id = "selftest_arm64_vl_require_sve",
-    .description = "arm64_require_sve_vl() clean-skip/run path (skips cleanly on SVE-less hosts)",
-    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
-    .test_init = selftest_arm64_vl_require_sve_init,
-    .test_run = selftest_arm64_vl_require_sve_run,
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
 },
