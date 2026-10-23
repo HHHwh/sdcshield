@@ -114,11 +114,12 @@ static inline long arm64_sve_vl_bytes(void)
  * honestly: unlike the rdvl encoding above (independently reproduced with
  * this repo's `as`, binutils 2.37), rdsvl needs binutils 2.38+ (SME) which
  * this machine lacks, so this encoding is taken from the Arm ARM encoding
- * tables (same 0x04bf5xxx RDVL/RDSVL space, bit 11 set) and its first
- * executed proof is the SME-host run of selftest_arm64_vl_api — if the
- * encoding were wrong, that selftest's svl consistency check would fail
- * loudly rather than silently mis-report. Same "+r" input-binding hardening
- * as arm64_sve_vl_bytes(). */
+ * tables (same 0x04bf5xxx RDVL/RDSVL space, bit 11 set). First executed
+ * paths on an SME host: --dump-cpu-info (cpu_device.cpp, the usual
+ * first command on a new host — a wrong encoding would SIGILL there) and
+ * selftest_arm64_vl_api's SVL range check (fails loudly rather than
+ * silently mis-reporting). Same "+r" input-binding hardening as
+ * arm64_sve_vl_bytes(). */
 static inline long arm64_sme_svl_bytes(void)
 {
     if (!arm64_cpu_has_sme())
@@ -138,8 +139,13 @@ static inline long arm64_sme_svl_bytes(void)
  * vec_set_vector_length/find_supported_vector_length in
  * arch/arm64/kernel/fpsimd.c) — a zero length would fail the kernel's
  * sve_vl_valid() check with -EINVAL, it does NOT restore any default. The
- * return value is the effective VL in bytes (>= 0) or -errno — callers MUST
- * check it and must not assume the exact request took effect. The call only
+ * return value is the effective VL in bytes (>= 16, since SVE_VL_MIN is
+ * always supported and a successful PR_SVE_SET_VL never returns less) or
+ * -errno; a prctl that returns 0 is an execution layer silently ignoring
+ * the call (e.g. gem5 SE maps prctl to ignoreFunc) and is surfaced as
+ * -ENOSYS so callers doing `if (pin(vl) < 0) skip;` never mistake
+ * "ignored" for "applied". Callers MUST check the return value and must
+ * not assume the exact request took effect. The call only
  * affects the calling thread; threads created by THIS thread afterwards
  * inherit the pinned VL (kernel-documented per-thread semantics). Verification
  * boundary: the SET_VL effect and rdvl read-back are kernel-documented but
@@ -147,8 +153,8 @@ static inline long arm64_sme_svl_bytes(void)
  * no SVE; gem5 SE maps prctl to ignoreFunc) — selftest_arm64_vl_require_sve
  * pins an alternate VL on the worker thread and reads it back, so the first
  * SVE-host selftest run *attempts* the round-trip proof; on hosts where
- * prctl is blocked (-EPERM, e.g. seccomp) or ignored (returns 0) the test
- * degrades to a logged warning rather than claiming the proof.
+ * prctl is blocked (-EPERM, e.g. seccomp) the test degrades to a logged
+ * warning rather than claiming the proof.
  */
 
 static inline long arm64_sve_pin_vl(long bytes)
@@ -160,6 +166,8 @@ static inline long arm64_sve_pin_vl(long bytes)
     int rc = prctl(PR_SVE_SET_VL, (unsigned long)(bytes & PR_SVE_VL_LEN_MASK));
     if (rc < 0)
         return -errno;
+    if (rc == 0)
+        return -ENOSYS; /* a real kernel returns the new VL (>= 16); 0 = ignored */
     return rc & PR_SVE_VL_LEN_MASK;
 }
 
@@ -172,6 +180,8 @@ static inline long arm64_sme_pin_vl(long bytes)
     int rc = prctl(PR_SME_SET_VL, (unsigned long)(bytes & PR_SME_VL_LEN_MASK));
     if (rc < 0)
         return -errno;
+    if (rc == 0)
+        return -ENOSYS; /* a real kernel returns the new VL (>= 16); 0 = ignored */
     return rc & PR_SME_VL_LEN_MASK;
 }
 
