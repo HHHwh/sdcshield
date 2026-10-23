@@ -52,6 +52,21 @@
 #define PR_SME_VL_LEN_MASK 0xffff
 #endif
 
+/* HWCAP2 bits, for build environments whose uapi asm/hwcap.h predates the
+ * features (openEuler 20.03-LTS ships 4.19-era headers with no HWCAP2_*
+ * definitions at all — SVE2 landed in uapi 5.10, SME in 5.15; the CI
+ * Multi-version (20.03-LTS) source build and this repo's own oe2203
+ * kernel-headers both lack HWCAP2_SME). Values per uapi asm/hwcap.h; same
+ * fallback pattern as tests/cpu/arm64/sme_fmopa_stress_arm.cpp. Runtime is
+ * unaffected: kernels that predate the uapi never set these auxv bits, so
+ * the probes still return false. */
+#ifndef HWCAP2_SVE2
+#define HWCAP2_SVE2 (1UL << 1)
+#endif
+#ifndef HWCAP2_SME
+#define HWCAP2_SME (1UL << 23)
+#endif
+
 /* ---- capability probes: honest runtime, immune to the compile-time
  * short-circuit of device_has_feature() in +sve/+sme-compiled TUs ---- */
 
