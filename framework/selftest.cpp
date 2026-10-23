@@ -40,6 +40,9 @@
 #  include "amx_common.h"
 #elif defined(__aarch64__)
 #  include <arm_neon.h>
+#  include <sys/auxv.h>
+#  include <asm/hwcap.h>
+#  include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #ifdef _WIN32
@@ -938,6 +941,73 @@ static int selftest_sme_sigill_probe_run(struct test *test, int)
     log_warning("selftest_sme_sigill_probe: unexpected child status %d",
                 status);
     return EXIT_FAILURE;
+}
+#endif
+
+#if defined(__aarch64__)
+// All-VL Phase 2 P1: arm64_vl.h API invariants. On SVE-less hosts (this
+// Kunpeng 920) queries must report absence (false/0, pin -EINVAL) and agree
+// with getauxval ground truth; on SVE hosts VL must be a 16-byte multiple in
+// [16,256]. Functional SVE behavior is validated in gem5-fi
+// (workloads/sdcshield/vl_api_probe.c, four tiers).
+static int selftest_arm64_vl_api_run(struct test *test, int cpu)
+{
+    (void)cpu;
+
+    if (arm64_cpu_has_sve() != !!(getauxval(AT_HWCAP) & HWCAP_SVE))
+        report_fail_msg("%s: arm64_cpu_has_sve() disagrees with getauxval(AT_HWCAP)", test->id);
+    if (arm64_cpu_has_sve2() != !!(getauxval(AT_HWCAP2) & HWCAP2_SVE2))
+        report_fail_msg("%s: arm64_cpu_has_sve2() disagrees with getauxval(AT_HWCAP2)", test->id);
+    if (arm64_cpu_has_sme() != !!(getauxval(AT_HWCAP2) & HWCAP2_SME))
+        report_fail_msg("%s: arm64_cpu_has_sme() disagrees with getauxval(AT_HWCAP2)", test->id);
+
+    long vl = arm64_sve_vl_bytes();
+    if (arm64_cpu_has_sve()) {
+        if (vl < 16 || vl > 256 || (vl % 16) != 0)
+            report_fail_msg("%s: SVE VL %ld bytes is not 16-aligned in [16,256]", test->id, vl);
+    } else if (vl != 0) {
+        report_fail_msg("%s: arm64_sve_vl_bytes() returned %ld without SVE", test->id, vl);
+    }
+
+    long svl = arm64_sme_svl_bytes();
+    if (arm64_cpu_has_sme()) {
+        if (svl < 16 || svl > 256 || (svl % 16) != 0)
+            report_fail_msg("%s: SME SVL %ld bytes is not 16-aligned in [16,256]", test->id, svl);
+    } else if (svl != 0) {
+        report_fail_msg("%s: arm64_sme_svl_bytes() returned %ld without SME", test->id, svl);
+    }
+
+    if (arm64_cpu_has_sve()) {
+        long applied = arm64_sve_pin_vl(vl);
+        if (applied != vl)
+            report_fail_msg("%s: pin to current VL (%ld) applied %ld", test->id, vl, applied);
+    } else if (arm64_sve_pin_vl(16) != -EINVAL) {
+        report_fail_msg("%s: arm64_sve_pin_vl() succeeded on an SVE-less host", test->id);
+    }
+
+    return EXIT_SUCCESS;
+}
+
+// The require-helper path: on SVE-less hosts the framework must report a
+// clean EXIT_SKIP from init (never a crash); on SVE hosts run re-checks the
+// VL recorded at init (fail-closed against init/run drift).
+static int selftest_arm64_vl_require_sve_init(struct test *test)
+{
+    long vl = arm64_require_sve_vl(test, 128, 1024);
+    if (vl < 0)
+        return EXIT_SKIP; /* log_skip already emitted with the reason */
+    test->data = (void *)(uintptr_t)vl;
+    return EXIT_SUCCESS;
+}
+
+static int selftest_arm64_vl_require_sve_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    long vl_at_init = (long)(uintptr_t)test->data;
+    if (arm64_sve_vl_bytes() != vl_at_init)
+        report_fail_msg("%s: SVE VL drifted between init (%ld) and run (%ld)",
+                        test->id, vl_at_init, arm64_sve_vl_bytes());
+    return EXIT_SUCCESS;
 }
 #endif
 
@@ -2844,6 +2914,25 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
     .test_run = selftest_pass_run,
     .minimum_cpu = cpu_feature_sve2p1,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
+#if defined(__aarch64__)
+{
+    .id = "selftest_arm64_vl_api",
+    .description = "arm64_vl.h API invariants (capability/VL consistency, pin round-trip)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_arm64_vl_api_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_arm64_vl_require_sve",
+    .description = "arm64_require_sve_vl() clean-skip/run path (skips cleanly on SVE-less hosts)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_init = selftest_arm64_vl_require_sve_init,
+    .test_run = selftest_arm64_vl_require_sve_run,
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
 },
