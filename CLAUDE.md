@@ -109,9 +109,12 @@ END_DECLARE_TEST
 - `eigen_svd_double`/`eigen_sparse` fail sporadically under full-system
   multithreading (192 CPUs; ULP-level diffs vs strict memcmp) — `-n 1` always
   passes. Eigen/large-core-count limitation, not a port defect.
-- SVE runtime-VL rule: host is VL=256 while `tests_sve` compiles at 128 → the
-  eigen SVD SVE test needs the VL-pinning launcher in
-  `scripts/eigen-sve-double/`; `sleef_sve` stays at 128 by design.
+- SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 96 CPUs) has NO
+  SVE/SME (PR #275 correction; earlier "host is VL=256" records refer to a
+  different machine, cortex x3b). `tests_sve` still compiles at fixed
+  128-bit; on SVE hosts with VL≠128 the eigen SVD test needs a VL-pinning
+  launcher (`scripts/eigen-sve-double/` precedent); `sleef_sve` stays at 128
+  by design.
 
 ## Documentation map — consult before guessing
 
