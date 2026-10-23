@@ -89,23 +89,28 @@ static inline bool arm64_cpu_has_sme(void)
 
 /* rdvl x0, #1 == .inst 0x04bf5020 (derived via as -march=armv8.2-a+sve +
  * objdump, 2026-10-23). The destination is pinned to x0 by the local
- * register binding; the encoding's Rd field must stay 0. */
+ * register binding; the encoding's Rd field must stay 0. The operand is
+ * read-write ("+r" on an initialized variable): input-side local register
+ * bindings are a long-documented GCC guarantee, whereas bare output
+ * ("=r" on an uninitialized one) was only documented from GCC 12 — on the
+ * repo's GCC-10 baseline it merely happens to work. */
 static inline long arm64_sve_vl_bytes(void)
 {
     if (!arm64_cpu_has_sve())
         return 0;
-    register long vl __asm__("x0");
-    asm volatile(".inst 0x04bf5020" : "=r"(vl));
+    register long vl __asm__("x0") = 0;
+    asm volatile(".inst 0x04bf5020" : "+r"(vl));
     return vl;
 }
 
-/* rdsvl x0, #1 == .inst 0x04bf5820 (derived via as -march=armv9-a+sve+sme). */
+/* rdsvl x0, #1 == .inst 0x04bf5820 (derived via as -march=armv9-a+sve+sme).
+ * Same "+r" input-binding hardening as arm64_sve_vl_bytes(). */
 static inline long arm64_sme_svl_bytes(void)
 {
     if (!arm64_cpu_has_sme())
         return 0;
-    register long vl __asm__("x0");
-    asm volatile(".inst 0x04bf5820" : "=r"(vl));
+    register long vl __asm__("x0") = 0;
+    asm volatile(".inst 0x04bf5820" : "+r"(vl));
     return vl;
 }
 
@@ -128,6 +133,8 @@ static inline long arm64_sve_pin_vl(long bytes)
 {
     if (!arm64_cpu_has_sve())
         return -EINVAL;
+    if (bytes <= 0 || bytes > PR_SVE_VL_LEN_MASK)
+        return -EINVAL; /* reject instead of silently truncating the 16-bit field */
     int rc = prctl(PR_SVE_SET_VL, (unsigned long)(bytes & PR_SVE_VL_LEN_MASK));
     if (rc < 0)
         return -errno;
@@ -138,6 +145,8 @@ static inline long arm64_sme_pin_vl(long bytes)
 {
     if (!arm64_cpu_has_sme())
         return -EINVAL;
+    if (bytes <= 0 || bytes > PR_SME_VL_LEN_MASK)
+        return -EINVAL; /* reject instead of silently truncating the 16-bit field */
     int rc = prctl(PR_SME_SET_VL, (unsigned long)(bytes & PR_SME_VL_LEN_MASK));
     if (rc < 0)
         return -errno;
@@ -146,7 +155,10 @@ static inline long arm64_sme_pin_vl(long bytes)
 
 /* ---- test-flow helpers ---- */
 /* Note: an empty range (min_bits > max_bits) skips unconditionally with the
- * range message — callers own their argument sanity. */
+ * range message — callers own their argument sanity. Units: min_bits/max_bits
+ * are bits as requested by tests (e.g. 128/256/512); the return value is
+ * bytes, ready to feed arm64_sve_pin_vl(bytes) — do NOT multiply by 8 again
+ * (unit mix-up deferred to P6 per the PR description). */
 
 static inline long arm64_require_sve_vl(struct test *test, long min_bits, long max_bits)
 {
