@@ -210,23 +210,34 @@ static inline long arm64_require_sme_svl(struct test *test, long min_bits, long 
 #else /* !(__aarch64__ && __linux__): include-safety stubs. Covers x86-64
        * (untouched by design) and Windows ARM64, whose toolchains have no
        * <sys/auxv.h>/<asm/hwcap.h>/prctl — coding_style_guide requires
-       * cross-platform (Linux + Windows) source compatibility. */
+       * cross-platform (Linux + Windows) source compatibility. Stubs mirror
+       * the aarch64 no-capability paths: pin returns -EINVAL and the require
+       * helpers log_skip with the same category, so a shared TU that reaches
+       * them skips for a stated reason instead of an unexplained -1. */
+
+#include <errno.h>
 
 static inline bool arm64_cpu_has_sve(void)   { return false; }
 static inline bool arm64_cpu_has_sve2(void)  { return false; }
 static inline bool arm64_cpu_has_sme(void)   { return false; }
 static inline long arm64_sve_vl_bytes(void)  { return 0; }
 static inline long arm64_sme_svl_bytes(void) { return 0; }
-static inline long arm64_sve_pin_vl(long bytes)  { (void)bytes; return -1; }
-static inline long arm64_sme_pin_vl(long bytes)  { (void)bytes; return -1; }
+static inline long arm64_sve_pin_vl(long bytes)  { (void)bytes; return -EINVAL; }
+static inline long arm64_sme_pin_vl(long bytes)  { (void)bytes; return -EINVAL; }
 static inline long arm64_require_sve_vl(struct test *test, long min_bits, long max_bits)
 {
-    (void)test; (void)min_bits; (void)max_bits; return -1;
+    (void)min_bits; (void)max_bits;
+    log_skip(CpuNotSupportedSkipCategory,
+             "ARM64 SVE not available; %s exercises the SVE datapath", test->id);
+    return -1;
 }
 static inline long arm64_require_sme_svl(struct test *test, long min_bits, long max_bits)
 {
-    (void)test; (void)min_bits; (void)max_bits; return -1;
+    (void)min_bits; (void)max_bits;
+    log_skip(CpuNotSupportedSkipCategory,
+             "ARM64 SME not available; %s exercises the SME datapath", test->id);
+    return -1;
 }
 
-#endif /* __aarch64__ */
+#endif /* __aarch64__ && __linux__ */
 #endif /* SANDSTONE_ARM64_VL_H */
