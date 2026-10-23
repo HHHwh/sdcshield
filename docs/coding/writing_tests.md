@@ -638,6 +638,35 @@ Information written to standard error will appear in the logs.  However,
 test writers are expected to use the framework's logging functions rather than
 writing to standard error directly.
 
+## SVE/SME vector-length policy (all-VL Phase 2)
+
+Tests that exercise SVE/SME must adapt to the runtime vector length
+instead of assuming one tier:
+
+- **Probe via the framework layer**: `#include
+  <device/cpu/arm64/arm64_vl.h>` and call
+  `arm64_require_sve_vl(test, min_bits, max_bits)` /
+  `arm64_require_sme_svl(...)` from `test_init`; a -1 return means the
+  helper already logged the skip — `return EXIT_SKIP` immediately. Do
+  not hand-write getauxval probes: `device_has_feature()` is
+  short-circuited by compile-time `__ARM_FEATURE_*` macros in +sve/+sme
+  TUs (docs/architecture.md).
+- **Range check, never single-value match**: gate on
+  `min_bits <= VL <= max_bits` (128..1024-bit covers all four tiers); an
+  out-of-range VL skips with the measured value in the message. A test
+  that only runs at exactly one VL must say why in its docblock.
+- **Fail-closed on the run side**: re-check the VL in `test_run` and
+  `report_fail` on drift from the value recorded at init — never
+  continue with stale geometry.
+- **Geometry scales, element sizes stay immediate** (the PR #242
+  invariant): size buffers by the helper's return (or svcnt/SVL) at
+  init, registerize strides and loop bounds in inline asm, keep only
+  element-size immediates (e.g. `sizeof(float)` multiplies, `lsl #2`).
+- **Golden comparison is byte-exact per lane/element**: memcmp /
+  memcmp_or_fail against a golden recomputed for the actual VL;
+  sum/xor/reduce cross-lane aggregation is forbidden (it can cancel a
+  flipped bit).
+
 ## Additional information
 
 ### Test groups
