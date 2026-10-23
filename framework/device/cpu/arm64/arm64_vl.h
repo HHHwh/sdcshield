@@ -32,7 +32,7 @@
 #include <stdbool.h>
 #include <sandstone.h>
 
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__linux__)
 #include <errno.h>
 #include <sys/auxv.h>
 #include <sys/prctl.h>
@@ -207,7 +207,10 @@ static inline long arm64_require_sme_svl(struct test *test, long min_bits, long 
     return bits / 8;
 }
 
-#else /* !__aarch64__: include-safety stubs; x86-64 untouched by design. */
+#else /* !(__aarch64__ && __linux__): include-safety stubs. Covers x86-64
+       * (untouched by design) and Windows ARM64, whose toolchains have no
+       * <sys/auxv.h>/<asm/hwcap.h>/prctl — coding_style_guide requires
+       * cross-platform (Linux + Windows) source compatibility. */
 
 static inline bool arm64_cpu_has_sve(void)   { return false; }
 static inline bool arm64_cpu_has_sve2(void)  { return false; }

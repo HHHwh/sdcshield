@@ -40,9 +40,12 @@
 #  include "amx_common.h"
 #elif defined(__aarch64__)
 #  include <arm_neon.h>
-#  include <sys/auxv.h>
-#  include <asm/hwcap.h>
-#  include <device/cpu/arm64/arm64_vl.h>
+#  if defined(__linux__) /* the VL layer probes Linux auxv/prctl; Windows
+#                           ARM64 falls back to arm64_vl.h's stubs */
+#    include <sys/auxv.h>
+#    include <asm/hwcap.h>
+#    include <device/cpu/arm64/arm64_vl.h>
+#  endif
 #endif
 
 #ifdef _WIN32
@@ -944,7 +947,7 @@ static int selftest_sme_sigill_probe_run(struct test *test, int)
 }
 #endif
 
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__linux__)
 // All-VL Phase 2 P1: arm64_vl.h API invariants. On SVE-less hosts (this
 // Kunpeng 920) queries must report absence (false/0, pin -EINVAL) and agree
 // with getauxval ground truth; on SVE hosts VL must be a 16-byte multiple in
@@ -2964,7 +2967,7 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .quality_level = TEST_QUALITY_PROD,
 },
 #endif
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__linux__)
 {
     .id = "selftest_arm64_vl_api",
     .description = "arm64_vl.h API invariants (capability/VL consistency, pin round-trip)",
