@@ -79,6 +79,29 @@ arches. `detect_cpu()` (`cpuid_internal.h`) fills the global `device_features`;
 `dump_device_info()` (`cpu_device.cpp`) and `device_features_to_string()`
 consume the generated tables.
 
+## SVE/SME vector-length layer (arm64_vl.h)
+
+`framework/device/cpu/arm64/arm64_vl.h` is the single entry point for
+per-thread SVE vector length (VL) and SME streaming vector length (SVL):
+
+- capability probes (`arm64_cpu_has_sve/sve2/sme`) — honest runtime
+  `getauxval(AT_HWCAP/HWCAP2)` checks that, unlike `device_has_feature()`,
+  are not short-circuited by compile-time `__ARM_FEATURE_*` macros in
+  +sve/+sme-compiled TUs;
+- current-thread VL/SVL queries (`arm64_sve_vl_bytes` /
+  `arm64_sme_svl_bytes`) — rdvl/rdsvl via `.inst`, so any aarch64 TU can
+  use them without a +sve march;
+- self-pinning (`arm64_sve_pin_vl` / `arm64_sme_pin_vl`, prctl) for
+  size-specific TUs, to be called from test_init before worker threads
+  are created (new threads inherit the creator's VL);
+- test-flow helpers (`arm64_require_sve_vl` / `arm64_require_sme_svl`)
+  folding capability check + range check + log_skip into one call.
+
+VL/SVL are deliberately **not** part of `device_features`: they are
+per-thread runtime quantities, while feature bits are process-wide.
+Validated at all four tiers (128/256/512/1024-bit) in gem5-fi
+(`workloads/sdcshield/vl_api_probe.c`).
+
 ## Sysdeps layering
 
 ```
