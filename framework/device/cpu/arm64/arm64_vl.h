@@ -17,9 +17,16 @@
  *   in one call, replacing per-test getauxval boilerplate.
  *
  * Hard boundary: VL/SVL are per-thread runtime quantities, deliberately NOT
- * part of the process-wide device_features bitmask. Self-pinning is meant
- * for test_init, before worker threads are created (new threads inherit the
- * creator's VL).
+ * part of the process-wide device_features bitmask. Pinning only affects the
+ * calling thread — it does NOT reach the framework's per-CPU workers when done
+ * from test_init: ordinary tests run test_init on a throwaway aux thread
+ * (sandstone_run.cpp run_one_test_inner(init_in_aux_thread=true); its pinning
+ * doesn't affect the control thread, per the framework's own comment), while
+ * workers are created by the control thread and inherit ITS (unpinned) VL.
+ * Pin where the VL is needed: inside test_run on each worker thread. The
+ * kernel's clone-inheritance rule (new threads inherit the creator's VL)
+ * still holds — the framework's thread structure is simply not "test_init
+ * creates the workers".
  */
 
 #include <stdbool.h>
@@ -114,19 +121,25 @@ static inline long arm64_sme_svl_bytes(void)
     return vl;
 }
 
-/* ---- self-pinning (size-specific TUs; call from test_init) ---- */
+/* ---- self-pinning (size-specific TUs; pin on the thread that needs the VL,
+ * i.e. inside test_run workers — see the header comment on why test_init
+ * pinning does not propagate to framework workers) ---- */
 /*
- * Semantics: bytes is masked to the 16-bit VL length field before the prctl,
- * so out-of-range values are silently truncated and bytes == 0 asks the
- * kernel to restore the default VL (not an error). The kernel rounds the
- * request to the nearest VL it supports; the return value is the effective
- * VL in bytes (>= 0) or -errno — callers MUST check it and must not assume
- * the exact request took effect. New threads created after the call inherit
- * the pinned VL (kernel-documented per-thread semantics). Verification
- * boundary: the SET_VL effect and the clone inheritance are kernel-documented
- * but not yet empirically executed on any available host (this machine has
- * no SVE; gem5 SE maps prctl to ignoreFunc) — selftest_arm64_vl_require_sve_init
- * pins in init so the first SVE-host selftest run proves it automatically.
+ * Semantics: bytes <= 0 or > PR_xx_VL_LEN_MASK is rejected with -EINVAL up
+ * front (no silent truncation); the kernel then selects the largest
+ * supported VL not exceeding the request (round-down, per
+ * vec_set_vector_length/find_supported_vector_length in
+ * arch/arm64/kernel/fpsimd.c) — a zero length would fail the kernel's
+ * sve_vl_valid() check with -EINVAL, it does NOT restore any default. The
+ * return value is the effective VL in bytes (>= 0) or -errno — callers MUST
+ * check it and must not assume the exact request took effect. The call only
+ * affects the calling thread; threads created by THIS thread afterwards
+ * inherit the pinned VL (kernel-documented per-thread semantics). Verification
+ * boundary: the SET_VL effect and rdvl read-back are kernel-documented but
+ * not yet empirically executed on any available host (this machine has
+ * no SVE; gem5 SE maps prctl to ignoreFunc) — selftest_arm64_vl_require_sve
+ * pins an alternate VL on the worker thread and reads it back, so the first
+ * SVE-host selftest run proves the round-trip automatically.
  */
 
 static inline long arm64_sve_pin_vl(long bytes)

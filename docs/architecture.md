@@ -92,9 +92,15 @@ per-thread SVE vector length (VL) and SME streaming vector length (SVL):
   `arm64_sme_svl_bytes`) — rdvl/rdsvl via `.inst`, so any aarch64 TU can
   use them without a +sve march;
 - self-pinning (`arm64_sve_pin_vl` / `arm64_sme_pin_vl`, prctl) for
-  size-specific TUs, to be called from test_init before worker threads
-  are created (new threads inherit the creator's VL — kernel-documented,
-  see the verification note below);
+  size-specific TUs. Pin on the thread that needs the VL — inside
+  `test_run` workers. Pinning from `test_init` does **not** reach the
+  workers: ordinary tests run `test_init` on a throwaway aux thread
+  (`sandstone_run.cpp`, `init_in_aux_thread=true`), and the per-CPU
+  workers are created by the control thread, inheriting *its* (unpinned)
+  default VL. The kernel's rule that a newly created thread inherits its
+  *creator's* VL still holds — the framework's thread structure is simply
+  not "test_init creates the workers" (only `test_in_parent` /
+  `test_init_in_parent` flagged tests differ);
 - test-flow helpers (`arm64_require_sve_vl` / `arm64_require_sme_svl`)
   folding capability check + range check + log_skip into one call.
 
@@ -104,10 +110,10 @@ The query layer (capability probes, rdvl/rdsvl, prctl GET reporting) is
 validated at all four tiers (128/256/512/1024-bit) in gem5-fi
 (`workloads/sdcshield/vl_api_probe.c`). Verification boundary: gem5 SE
 maps prctl to ignoreFunc, so the pin success path (SET_VL taking effect)
-and the clone-inheritance behavior are kernel-documented but not yet
-empirically executed anywhere — `selftest_arm64_vl_require_sve_init`
-pins in init so the first SVE-host selftest run proves inheritance
-automatically.
+is kernel-documented but not yet empirically executed anywhere —
+`selftest_arm64_vl_require_sve` pins an alternate VL on the worker thread
+and reads it back via rdvl, so the first SVE-host selftest run proves the
+round-trip automatically.
 
 ## Sysdeps layering
 
