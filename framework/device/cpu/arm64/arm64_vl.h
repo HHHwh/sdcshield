@@ -110,8 +110,15 @@ static inline long arm64_sve_vl_bytes(void)
     return vl;
 }
 
-/* rdsvl x0, #1 == .inst 0x04bf5820 (derived via as -march=armv9-a+sve+sme).
- * Same "+r" input-binding hardening as arm64_sve_vl_bytes(). */
+/* rdsvl x0, #1 == .inst 0x04bf5820. Encoding-verification boundary, stated
+ * honestly: unlike the rdvl encoding above (independently reproduced with
+ * this repo's `as`, binutils 2.37), rdsvl needs binutils 2.38+ (SME) which
+ * this machine lacks, so this encoding is taken from the Arm ARM encoding
+ * tables (same 0x04bf5xxx RDVL/RDSVL space, bit 11 set) and its first
+ * executed proof is the SME-host run of selftest_arm64_vl_api — if the
+ * encoding were wrong, that selftest's svl consistency check would fail
+ * loudly rather than silently mis-report. Same "+r" input-binding hardening
+ * as arm64_sve_vl_bytes(). */
 static inline long arm64_sme_svl_bytes(void)
 {
     if (!arm64_cpu_has_sme())
@@ -139,7 +146,9 @@ static inline long arm64_sme_svl_bytes(void)
  * not yet empirically executed on any available host (this machine has
  * no SVE; gem5 SE maps prctl to ignoreFunc) — selftest_arm64_vl_require_sve
  * pins an alternate VL on the worker thread and reads it back, so the first
- * SVE-host selftest run proves the round-trip automatically.
+ * SVE-host selftest run *attempts* the round-trip proof; on hosts where
+ * prctl is blocked (-EPERM, e.g. seccomp) or ignored (returns 0) the test
+ * degrades to a logged warning rather than claiming the proof.
  */
 
 static inline long arm64_sve_pin_vl(long bytes)
