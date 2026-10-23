@@ -56,8 +56,9 @@
  *      the sm+za double-switch is mandatory (four-tier gem5 verdict,
  *      dual kernel ebe08632).
  * The rework: SVL via the framework layer (`arm64_require_sme_svl`,
- * 128..1024-bit range check), per-step operand WINDOWS of cols = SVL/32
- * floats, the window stride registerized (cols * sizeof(float) as an
+ * 128..1024-bit range check — the helper returns the SVL in BYTES),
+ * per-step operand WINDOWS of cols = SVL_bits/32 = SVL_bytes/4 f32
+ * lanes, the window stride registerized (cols * sizeof(float) as an
  * asm operand — element size stays fixed), and the golden follows the
  * gem5-verified axis verdict below. This is the test's FIRST FUNCTIONAL
  * FORM; there is no regression anchor (the pre-P2 form produced no
@@ -96,7 +97,6 @@
 #include <cstdint>
 #include <cinttypes>
 #include <cstring>
-#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -187,14 +187,26 @@ static int sme_fmopa_za_arm_init(struct test *test)
     return EXIT_SUCCESS;
 #else
     /* Framework layer: HWCAP2_SME capability + 128..1024-bit SVL range
-       check in one call; -1 means the skip was already logged. */
+       check in one call; -1 means the skip was already logged. The
+       return value is the SVL in BYTES; cols = SVL_bits/32 = svl_bytes/4
+       (f32 lanes per tile row) — the exact mapping the dual kernel uses
+       (sme_fmopa_za_dual.c: cols = svl_bytes/4). The explicit range
+       check below catches any unit drift on the first SME host to run
+       this, release builds included (assert() is compiled out under
+       NDEBUG; adversarial review Critical-1: the pre-fix form divided
+       bytes by 32 — an 8x error no local run could expose). */
     const long svl = arm64_require_sme_svl(test, 128, 1024);
     if (svl < 0)
         return EXIT_SKIP;
 
     try {
         auto data = std::make_unique<SmeFmopaData>();
-        data->tile_cols = (size_t)svl / 32;
+        data->tile_cols = (size_t)svl / 4;
+        if (data->tile_cols < 4 || data->tile_cols > 32) {
+            log_error("sme_fmopa_za_arm: cols %zu outside [4,32] — unit "
+                      "drift (svl %ld bytes)", data->tile_cols, svl);
+            return EXIT_FAILURE;
+        }
 
         fill_operand_windows(data->a_stream, data->b_stream, MOPA_STEPS,
                              data->tile_cols);
@@ -224,10 +236,11 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
     const size_t cols = d->tile_cols;
 
     /* Fail-closed: never continue with stale geometry if the SVL drifted
-       between init and run (PR #242 review invariant). */
-    if ((size_t)arm64_sme_svl_bytes() / 32 != cols) {
+       between init and run (PR #242 review invariant). arm64_sme_svl_bytes
+       returns BYTES — same /4 mapping as init. */
+    if ((size_t)arm64_sme_svl_bytes() / 4 != cols) {
         log_error("sme_fmopa_za_arm: SVL drifted between init (%zu cols) "
-                  "and run (%ld cols)", cols, arm64_sme_svl_bytes() / 32);
+                  "and run (%ld cols)", cols, arm64_sme_svl_bytes() / 4);
         report_fail_msg("sme_fmopa_za_arm: SVL drifted between init and run");
     }
 
@@ -243,7 +256,6 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
         if (memcmp(expect.data(), got.data(), cols * sizeof(float)) != 0) {
             report_fail_msg("sme_fmopa_za_arm: golden tile-mapping "
                             "self-check failed — test bug, not SDC");
-            return EXIT_FAILURE;
         }
     }
 

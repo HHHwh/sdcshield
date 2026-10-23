@@ -340,9 +340,9 @@ if host_machine.cpu_family() == 'aarch64'
     # library (armv8.2-a+sve) can host, and which GCC-12 cannot parse at all.
     # Compiler-support probed with the C++ compiler object so GCC builds
     # degrade gracefully (test simply absent, the gmp/acl/openblas pattern);
-    # the test itself re-gates at runtime on HWCAP2_SME and the measured
-    # 512-bit SVL geometry, so it only ever executes on characterized SME
-    # hardware. Built only on aarch64.
+    # every test re-gates at runtime on HWCAP2_SME and the measured SVL
+    # range (128..1024-bit, all-VL Phase 2), so it only ever executes on
+    # characterized SME hardware. Built only on aarch64.
     sme_march = '-march=armv9-a+sve+sme+sme-f64f64'
     sme_args = [sme_march]
     # Clang keeps __ARM_FEATURE_BTI defined for v8.5+/v9 marches regardless
@@ -359,11 +359,12 @@ if host_machine.cpu_family() == 'aarch64'
                 'sme_fmopa_stress_arm.cpp',
                 # SME FMOPA/ZA outer-product chain: 256-step fmopa za0.s
                 # accumulation inside one SMSTART..SMSTOP asm block (operands
-                # staged through memory), row-slice extraction via mova,
-                # byte-exact vs an exact-integer scalar golden, one-step
-                # tile-mapping self-check. Pure inline asm: GCC 12.3's
-                # <arm_sme.h> is an empty shell; runtime-gated on
-                # HWCAP2_SME (kernel >= 5.19 exposure).
+                # staged through memory), column-slice extraction via mova
+                # (four-tier gem5 axis verdict), byte-exact vs an
+                # exact-integer scalar golden, one-step tile-mapping
+                # self-check. Pure inline asm: GCC 12.3's <arm_sme.h> is an
+                # empty shell; runtime-gated via arm64_require_sme_svl
+                # (HWCAP2_SME + 128..1024-bit SVL range, all-VL Phase 2).
                 'sme_fmopa_za_arm.cpp',
             ),
             build_by_default: false,
