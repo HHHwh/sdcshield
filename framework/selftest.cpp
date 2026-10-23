@@ -42,8 +42,6 @@
 #  include <arm_neon.h>
 #  if defined(__linux__) /* the VL layer probes Linux auxv/prctl; Windows
 #                           ARM64 falls back to arm64_vl.h's stubs */
-#    include <sys/auxv.h>
-#    include <asm/hwcap.h>
 #    include <device/cpu/arm64/arm64_vl.h>
 #  endif
 #endif
@@ -985,9 +983,12 @@ static int selftest_arm64_vl_api_run(struct test *test, int cpu)
     /* The pin round-trip proof lives in selftest_arm64_vl_require_sve_run:
        pinning belongs on the worker thread (test_run), NOT in test_init —
        see that test's comment and arm64_vl.h's header. Here we only assert
-       the no-capability guard. */
+       the no-capability guards (the only pin paths actually executable on
+       capability-less hosts like this one). */
     if (!arm64_cpu_has_sve() && arm64_sve_pin_vl(16) != -EINVAL)
         report_fail_msg("%s: arm64_sve_pin_vl() succeeded on an SVE-less host", test->id);
+    if (!arm64_cpu_has_sme() && arm64_sme_pin_vl(16) != -EINVAL)
+        report_fail_msg("%s: arm64_sme_pin_vl() succeeded on an SME-less host", test->id);
 
     return EXIT_SUCCESS;
 }
