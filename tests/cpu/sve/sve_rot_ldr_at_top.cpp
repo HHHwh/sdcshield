@@ -19,8 +19,11 @@
  * length (VL):
  *   - buffers are sized in VL slots: `SLOTS` z-register-width elements
  *     each, allocated at init after probing svcntb(), so the test runs
- *     unchanged on 128b/256b/512b hardware (true VLA, no
- *     -msve-vector-bits);
+ *     unchanged on 128b/256b/512b hardware (VLA by design; NOTE:
+ *     currently compiled in tests_set_sve with -msve-vector-bits=128,
+ *     so guaranteed correct only at runtime VL == 128 until the
+ *     all-VL Phase 2 P5 migration — see
+ *     docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6);
  *   - loads/stores use inline asm `ldr`/`str` on z registers (NEON
  *     parent: `ldr %q0` on q registers) — one instruction each, no
  *     compiler-generated addressing freedom;

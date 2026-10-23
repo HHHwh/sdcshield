@@ -443,12 +443,18 @@ tests_set_sve.add(
 )
 
 # ARM64-only SVE SDC probes: SVE/SVE2 ports of the core-179 NEON attribution
-# family (tests/cpu/misc/neon_rot_ldr_at_top*.cpp). These compile in the
-# tests_sve static library (-march=armv8.2-a+sve, true VLA — no
-# -msve-vector-bits), so the framework auto-skips them on non-SVE hardware
-# via compiler_minimum_device (see framework/sandstone_run.cpp). The Eigen
-# namespace-rename macros on that library are inert for these files (they
-# never include Eigen). x86-64 untouched.
+# family (tests/cpu/misc/neon_rot_ldr_at_top*.cpp). They are registered in
+# tests_set_sve, which compiles them with -march=armv8.2-a+sve
+# -msve-vector-bits=128 (see the tests_sve build block below): fixed 128-bit
+# SVE semantics, guaranteed correct only at runtime VL == 128 (the
+# size-specific rule in docs/architecture.md); on VL != 128 silicon their
+# behavior is in the same undefined class documented for
+# eigen_gemm/gemm_double_max_arm.cpp:40-47. The framework auto-skips them on
+# non-SVE hardware via compiler_minimum_device (framework/sandstone_run.cpp).
+# The Eigen namespace-rename macros on that library are inert for these
+# files (they never include Eigen). Scheduled: migrate to a true-VLA library
+# in all-VL Phase 2 P5 (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md
+# §6). x86-64 untouched.
 if host_machine.cpu_family() == 'aarch64'
     tests_set_sve.add(
         files(
