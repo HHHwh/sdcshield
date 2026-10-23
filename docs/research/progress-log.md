@@ -530,3 +530,26 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   glibc 动态 mmap 阈值累积坑已记台账。
 - **完整报告**:~/sdc-campaigns/campaign-20261016_type-sdc/SDC_TYPE_REPORT.md
   (事件全清单/证据链/night2 建议)。
+
+## 2026-10-23（all-VL Phase 2 P0+P1：真相快修 + 框架 VL/SVL API）
+
+- **P0**(5 独立 PR):mla svundef 漏网补齐(#272)/sve_rot×5 构建真相(#273)/
+  孤儿标注(#274)/CLAUDE.md 环境修正(#275)/PR #242 补记(#276)。
+- **P1**(#277,3 commit):arm64_vl.h(能力探测/VL 查询/自 pin/require 助子)+
+  selftest×2 + --dump-cpu-info 输出 + 文档同步(architecture/adding-tests/README)。
+- **本机(0xd01 无 SVE)**:TDD RED(缺头文件构建失败)→ GREEN [461/461] 0 告警;
+  -e selftest_arm64_vl_api -v → result: pass;-e selftest_arm64_vl_require_sve -v →
+  result: skip(CpuNotSupported);dump-cpu-info 两行 n/a;zstd19 回归 pass。
+- **gem5 四档**(gem5-fi feat/vl-api-probe @ 2e58aba5,vl_api_probe 8 run,O3,
+  --sve_vl/--sme_vl 1/2/4/8):rdvl=rdsvl=16/32/64/128 字节逐档精确(=
+  128/256/512/1024-bit);SDCSHIELD_FAILS=0 ×8、gem5_exit=0 ×8;同档 fixed/random
+  checksum 相同(fc6b7711a5894505/cd1a5f5cf05bcec5/eb4200cb1ffccb85/
+  54b1c1bf3fbd7405),跨档互异——.inst 编码 0x04bf5020/0x04bf5820 四档功能实证
+  (规则 2b)。
+- **诚实边界**:gem5 SE prctl=ignoreFunc 恒返 0(非真 GET_VL 值,findings.md 记录
+  不判定);auxv hwcap_sve=1/hwcap2_sme=1/hwcap2_sve2=0;全量 --selftests 止步
+  selftest_sigkill 系先于本改动的框架行为(其后 34 个既有 selftest 含 min_cpu
+  全系列同缺席,独立问题不在本战役范围)。
+- **验证模式**:gem5 四档验证由隔离 subagent 并行执行(用户指令,主 agent 不阻塞
+  开发);探针零修改 -Wall -Wextra 一次编译通过,单 run 1-2 秒。
+- **承接**:P2(SME fmopa_za 收尾)起各阶段另行计划(spec §6)。
