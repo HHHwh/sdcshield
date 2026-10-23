@@ -5,7 +5,7 @@
 
 #include "sandstone_p.h"
 #include "cpu_device.h"
-#include "arm64/arm64_vl.h"
+#include <device/cpu/arm64/arm64_vl.h>
 
 #include <cinttypes>
 
