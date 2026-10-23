@@ -988,9 +988,10 @@ static int selftest_arm64_vl_api_run(struct test *test, int cpu)
         report_fail_msg("%s: arm64_sme_svl_bytes() returned %ld without SME", test->id, svl);
     }
 
-    /* The pin success path (and the clone-inheritance proof) lives in
-       selftest_arm64_vl_require_sve_init: pin belongs in test_init, not in
-       a worker thread. Here we only assert the no-capability guard. */
+    /* The pin round-trip proof lives in selftest_arm64_vl_require_sve_run:
+       pinning belongs on the worker thread (test_run), NOT in test_init —
+       see that test's comment and arm64_vl.h's header. Here we only assert
+       the no-capability guard. */
     if (!arm64_cpu_has_sve() && arm64_sve_pin_vl(16) != -EINVAL)
         report_fail_msg("%s: arm64_sve_pin_vl() succeeded on an SVE-less host", test->id);
 
@@ -1010,7 +1011,10 @@ static int selftest_arm64_vl_api_run(struct test *test, int cpu)
 // pinning never reaches the workers (see arm64_vl.h's header comment).
 static int selftest_arm64_vl_require_sve_init(struct test *test)
 {
-    long vl = arm64_require_sve_vl(test, 128, 1024);
+    /* 128..2048 bits = the full SVE1 architectural range (matches the api
+       test's 16..256-byte acceptance below) — a 2048-bit top-tier host must
+       run this test too, not skip on an artificial 1024-bit ceiling. */
+    long vl = arm64_require_sve_vl(test, 128, 2048);
     if (vl < 0)
         return EXIT_SKIP; /* log_skip already emitted with the reason */
 
@@ -1032,8 +1036,12 @@ static int selftest_arm64_vl_require_sve_run(struct test *test, int cpu)
        must apply 16 and rdvl must observe exactly that. */
     long applied = arm64_sve_pin_vl(16);
     if (applied == -EPERM) {
-        log_info("%s: prctl(PR_SVE_SET_VL) returned -EPERM; pin round-trip "
-                 "proof skipped, require path still verified", test->id);
+        /* log_warning, not log_info: this forfeits the test's very purpose
+           (the pin round-trip proof), and a silently-degraded pass is the
+           "no-op test reporting pass" antipattern (CLAUDE.md rule 6) — the
+           degradation must be visible at the default -v verbosity. */
+        log_warning("%s: prctl(PR_SVE_SET_VL) returned -EPERM; pin round-trip "
+                    "proof skipped, require path still verified", test->id);
         return EXIT_SUCCESS;
     }
     if (applied == 0) {
@@ -1041,10 +1049,11 @@ static int selftest_arm64_vl_require_sve_run(struct test *test, int cpu)
            (sve_vl_valid() rejects zero lengths with -EINVAL), so rc == 0
            means the syscall is being ignored underneath us — e.g. gem5 SE
            maps prctl to ignoreFunc. That forfeits the round-trip proof but
-           is not a machine defect. */
-        log_info("%s: prctl(PR_SVE_SET_VL) returned 0 (ignored by the "
-                 "execution layer?); pin round-trip proof skipped",
-                 test->id);
+           is not a machine defect. log_warning for the same visibility
+           reason as the -EPERM branch above. */
+        log_warning("%s: prctl(PR_SVE_SET_VL) returned 0 (ignored by the "
+                    "execution layer?); pin round-trip proof skipped",
+                    test->id);
         return EXIT_SUCCESS;
     }
     if (applied < 0) {
