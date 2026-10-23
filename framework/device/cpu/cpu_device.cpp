@@ -58,9 +58,12 @@ void dump_device_info()
     printf("Detected CPU: %s; family-model-stepping (hex): %02x-%02x-%02x; CPU features: %s\n",
            detected, sApp->hwinfo.family, sApp->hwinfo.model, sApp->hwinfo.stepping,
            device_features_to_string(device_features).c_str());
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__linux__)
     /* Per-thread vector lengths, distinct from the process-wide feature
-       bits above; see docs/architecture.md "SVE/SME vector-length layer". */
+       bits above; see docs/architecture.md "SVE/SME vector-length layer".
+       Linux-only: on Windows ARM64 the arm64_vl.h stubs always report
+       absence, and printing "SVE not present" there would assert a hardware
+       fact this OS cannot probe — print nothing rather than a falsehood. */
     if (arm64_cpu_has_sve())
         printf("SVE vector length: %ld bits (%ld bytes)\n",
                arm64_sve_vl_bytes() * 8, arm64_sve_vl_bytes());

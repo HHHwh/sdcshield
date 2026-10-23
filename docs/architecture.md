@@ -107,8 +107,10 @@ per-thread SVE vector length (VL) and SME streaming vector length (SVL):
 VL/SVL are deliberately **not** part of `device_features`: they are
 per-thread runtime quantities, while feature bits are process-wide.
 Verification: the `.inst` encodings (rdvl/rdsvl) are derived via
-`as`+`objdump` (recorded in the header comments) and exercised on every
-aarch64 build; capability probes and the SKIP paths run on this host.
+`as`+`objdump` (recorded in the header comments) and included in every
+aarch64 build — but the instructions only *execute* where the capability
+probes pass, so their runtime verification still awaits an SVE/SME host
+(the probes and SKIP paths do run on this host).
 Verification boundary, stated honestly: an earlier "validated at all four
 tiers in gem5-fi" claim could not be verified on audit (the referenced
 probe/branch no longer exists locally and no gem5 build is present on
