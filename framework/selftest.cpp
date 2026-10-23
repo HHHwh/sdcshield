@@ -954,6 +954,12 @@ static int selftest_arm64_vl_api_run(struct test *test, int cpu)
 {
     (void)cpu;
 
+    /* Guard-rail consistency checks: these re-derive the probes from raw
+       getauxval, so they cannot catch a wrong HWCAP2 fallback *value* (both
+       sides use the same macros) — their value is regression-gating the
+       implementation against future drift. The real discriminative checks
+       for the .inst query path are the VL/SVL range checks below and the
+       pin round-trip in selftest_arm64_vl_require_sve_run. */
     if (arm64_cpu_has_sve() != !!(getauxval(AT_HWCAP) & HWCAP_SVE))
         report_fail_msg("%s: arm64_cpu_has_sve() disagrees with getauxval(AT_HWCAP)", test->id);
     if (arm64_cpu_has_sve2() != !!(getauxval(AT_HWCAP2) & HWCAP2_SVE2))
@@ -987,28 +993,21 @@ static int selftest_arm64_vl_api_run(struct test *test, int cpu)
 }
 
 // The require-helper path: on SVE-less hosts the framework must report a
-// clean EXIT_SKIP from init (never a crash); on SVE hosts run re-checks the
-// VL recorded at init (fail-closed against init/run drift).
+// clean EXIT_SKIP from init (never a crash). On SVE hosts the worker-side
+// check below is the pin round-trip proof: pin the minimum VL on the worker
+// thread itself and read it back with rdvl. SVE_VL_MIN (16 bytes) is a
+// kernel-guaranteed supported length (the SVE_VQ_MIN bit is WARN_ON-checked
+// in fpsimd.c), so pin(16) is valid on every SVE host; when the host's
+// default VL is larger, the read-back proves SET_VL actually changed this
+// thread's VL and that rdvl observes it — unlike pinning the current VL,
+// which is a no-op and proves nothing. Pinning here (test_run) rather than
+// in test_init is deliberate: test_init runs on a throwaway aux thread whose
+// pinning never reaches the workers (see arm64_vl.h's header comment).
 static int selftest_arm64_vl_require_sve_init(struct test *test)
 {
     long vl = arm64_require_sve_vl(test, 128, 1024);
     if (vl < 0)
         return EXIT_SKIP; /* log_skip already emitted with the reason */
-
-    /* Exercise the pin success path on the INIT thread, before the framework
-       creates worker threads: pinning to the current VL is semantically a
-       no-op, and the run-side re-check below then proves the created thread
-       inherited the pinned VL (spec §5 hard boundary 2). -EPERM (e.g. a
-       seccomp-restricted SVE host) only forfeits this extra proof; it does
-       not fail an otherwise healthy machine. */
-    long applied = arm64_sve_pin_vl(vl);
-    if (applied == -EPERM) {
-        log_info("%s: prctl(PR_SVE_SET_VL) returned -EPERM; pin-inheritance "
-                 "proof skipped, require path still verified", test->id);
-    } else if (applied != vl) {
-        log_error("%s: pin to current VL (%ld) applied %ld", test->id, vl, applied);
-        return EXIT_FAILURE;
-    }
 
     test->data = (void *)(uintptr_t)vl;
     return EXIT_SUCCESS;
@@ -1021,6 +1020,39 @@ static int selftest_arm64_vl_require_sve_run(struct test *test, int cpu)
     if (arm64_sve_vl_bytes() != vl_at_init)
         report_fail_msg("%s: SVE VL drifted between init (%ld) and run (%ld)",
                         test->id, vl_at_init, arm64_sve_vl_bytes());
+
+    /* Pin round-trip on this worker thread: request the minimum VL. The
+       kernel rounds down to the largest supported length not exceeding the
+       request, and SVE_VL_MIN is always supported, so a healthy SVE host
+       must apply 16 and rdvl must observe exactly that. */
+    long applied = arm64_sve_pin_vl(16);
+    if (applied == -EPERM) {
+        log_info("%s: prctl(PR_SVE_SET_VL) returned -EPERM; pin round-trip "
+                 "proof skipped, require path still verified", test->id);
+        return EXIT_SUCCESS;
+    }
+    if (applied == 0) {
+        /* A real kernel never returns 0 from a successful PR_SVE_SET_VL
+           (sve_vl_valid() rejects zero lengths with -EINVAL), so rc == 0
+           means the syscall is being ignored underneath us — e.g. gem5 SE
+           maps prctl to ignoreFunc. That forfeits the round-trip proof but
+           is not a machine defect. */
+        log_info("%s: prctl(PR_SVE_SET_VL) returned 0 (ignored by the "
+                 "execution layer?); pin round-trip proof skipped",
+                 test->id);
+        return EXIT_SUCCESS;
+    }
+    if (applied < 0) {
+        log_error("%s: pin to SVE_VL_MIN failed with %ld", test->id, applied);
+        return EXIT_FAILURE;
+    }
+    long readback = arm64_sve_vl_bytes();
+    if (readback != applied)
+        report_fail_msg("%s: pin applied VL %ld but rdvl reads %ld",
+                        test->id, applied, readback);
+    if (vl_at_init > 16 && readback == vl_at_init)
+        report_fail_msg("%s: pin to 16 left the thread at its old VL %ld",
+                        test->id, vl_at_init);
     return EXIT_SUCCESS;
 }
 #endif
