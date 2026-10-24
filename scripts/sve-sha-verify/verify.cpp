@@ -4,6 +4,11 @@
  * must match OpenSSL bit-for-bit on a large vector set before being used
  * as ipsec SVE test golden bases.
  *
+ * All-VL Phase 2 P4: the stream count is the runtime lane count
+ * (svcntw()/svcntd(), one message per lane, 128..1024-bit VL), matching
+ * the parameterized kernels — the vector-set size per round scales with
+ * the host VL (5200 vectors at VL=256, more at wider VL).
+ *
  * Build: g++ -O2 -march=armv8.2-a+sve -I<openssl install include> \
  *            this_file.c -o verifier -L<lib> -l:libcrypto.a
  */
@@ -44,25 +49,26 @@ static std::vector<uint8_t> pad_sha512(const uint8_t *msg, size_t len) {
 int main() {
     int fails = 0, total = 0;
 
-    /* ---------- SHA-256 x8 ---------- */
+    /* ---------- SHA-256 (streams = svcntw()) ---------- */
     for (int round = 0; round < 200; ++round) {
+        const int n = (int)svcntw();              /* all-VL: runtime lane count */
         size_t len = lcg() % 512;                 /* 0..511 字节 */
         size_t nblocks = ((len + 9 + 63) / 64);
-        uint8_t msgs[8][512];
-        for (int s = 0; s < 8; ++s)
+        uint8_t msgs[SVE_SHA_STREAMS_MAX_32][512];
+        for (int s = 0; s < n; ++s)
             for (size_t i = 0; i < len; ++i)
                 msgs[s][i] = (uint8_t)lcg();
 
-        const uint8_t *mp[8];
-        std::vector<uint8_t> padded[8];
-        for (int s = 0; s < 8; ++s) {
+        const uint8_t *mp[SVE_SHA_STREAMS_MAX_32];
+        std::vector<uint8_t> padded[SVE_SHA_STREAMS_MAX_32];
+        for (int s = 0; s < n; ++s) {
             padded[s] = pad_sha256(msgs[s], len);
             mp[s] = padded[s].data();
         }
-        uint32_t st[8][8];
+        uint32_t st[8][SVE_SHA_STREAMS_MAX_32];
         sha256_compress_x8(st, mp, (uint32_t)nblocks, sha256_iv);
 
-        for (int s = 0; s < 8; ++s) {
+        for (int s = 0; s < n; ++s) {
             uint8_t digest[32];
             unsigned dlen = 0;
             EVP_Digest(msgs[s], len, digest, &dlen, EVP_sha256(), nullptr);
@@ -82,23 +88,24 @@ int main() {
         }
     }
 
-    /* ---------- SHA-224 (IV 不同 + 截断 7 字) ---------- */
+    /* ---------- SHA-224 (IV 不同 + 截断 7 字; streams = svcntw()) ---------- */
     for (int round = 0; round < 100; ++round) {
+        const int n = (int)svcntw();
         size_t len = lcg() % 256;
         size_t nblocks = ((len + 9 + 63) / 64);
-        uint8_t msgs[8][256];
-        for (int s = 0; s < 8; ++s)
+        uint8_t msgs[SVE_SHA_STREAMS_MAX_32][256];
+        for (int s = 0; s < n; ++s)
             for (size_t i = 0; i < len; ++i)
                 msgs[s][i] = (uint8_t)lcg();
-        const uint8_t *mp[8];
-        std::vector<uint8_t> padded[8];
-        for (int s = 0; s < 8; ++s) {
+        const uint8_t *mp[SVE_SHA_STREAMS_MAX_32];
+        std::vector<uint8_t> padded[SVE_SHA_STREAMS_MAX_32];
+        for (int s = 0; s < n; ++s) {
             padded[s] = pad_sha256(msgs[s], len);
             mp[s] = padded[s].data();
         }
-        uint32_t st[8][8];
+        uint32_t st[8][SVE_SHA_STREAMS_MAX_32];
         sha256_compress_x8(st, mp, (uint32_t)nblocks, sha224_iv);
-        for (int s = 0; s < 8; ++s) {
+        for (int s = 0; s < n; ++s) {
             uint8_t digest[28];
             unsigned dlen = 0;
             EVP_Digest(msgs[s], len, digest, &dlen, EVP_sha224(), nullptr);
@@ -115,23 +122,24 @@ int main() {
         }
     }
 
-    /* ---------- SHA-512 x4 ---------- */
+    /* ---------- SHA-512 (streams = svcntd()) ---------- */
     for (int round = 0; round < 200; ++round) {
+        const int n = (int)svcntd();
         size_t len = lcg() % 1024;
         size_t nblocks = ((len + 17 + 127) / 128);
-        uint8_t msgs[4][1024];
-        for (int s = 0; s < 4; ++s)
+        uint8_t msgs[SVE_SHA_STREAMS_MAX_64][1024];
+        for (int s = 0; s < n; ++s)
             for (size_t i = 0; i < len; ++i)
                 msgs[s][i] = (uint8_t)lcg();
-        const uint8_t *mp[4];
-        std::vector<uint8_t> padded[4];
-        for (int s = 0; s < 4; ++s) {
+        const uint8_t *mp[SVE_SHA_STREAMS_MAX_64];
+        std::vector<uint8_t> padded[SVE_SHA_STREAMS_MAX_64];
+        for (int s = 0; s < n; ++s) {
             padded[s] = pad_sha512(msgs[s], len);
             mp[s] = padded[s].data();
         }
-        uint64_t st[8][4];
+        uint64_t st[8][SVE_SHA_STREAMS_MAX_64];
         sha512_compress_x4(st, mp, (uint32_t)nblocks, sha512_iv);
-        for (int s = 0; s < 4; ++s) {
+        for (int s = 0; s < n; ++s) {
             uint8_t digest[64];
             unsigned dlen = 0;
             EVP_Digest(msgs[s], len, digest, &dlen, EVP_sha512(), nullptr);
@@ -145,23 +153,24 @@ int main() {
         }
     }
 
-    /* ---------- SHA-384 ---------- */
+    /* ---------- SHA-384 (streams = svcntd()) ---------- */
     for (int round = 0; round < 100; ++round) {
+        const int n = (int)svcntd();
         size_t len = lcg() % 512;
         size_t nblocks = ((len + 17 + 127) / 128);
-        uint8_t msgs[4][512];
-        for (int s = 0; s < 4; ++s)
+        uint8_t msgs[SVE_SHA_STREAMS_MAX_64][512];
+        for (int s = 0; s < n; ++s)
             for (size_t i = 0; i < len; ++i)
                 msgs[s][i] = (uint8_t)lcg();
-        const uint8_t *mp[4];
-        std::vector<uint8_t> padded[4];
-        for (int s = 0; s < 4; ++s) {
+        const uint8_t *mp[SVE_SHA_STREAMS_MAX_64];
+        std::vector<uint8_t> padded[SVE_SHA_STREAMS_MAX_64];
+        for (int s = 0; s < n; ++s) {
             padded[s] = pad_sha512(msgs[s], len);
             mp[s] = padded[s].data();
         }
-        uint64_t st[8][4];
+        uint64_t st[8][SVE_SHA_STREAMS_MAX_64];
         sha512_compress_x4(st, mp, (uint32_t)nblocks, sha384_iv);
-        for (int s = 0; s < 4; ++s) {
+        for (int s = 0; s < n; ++s) {
             uint8_t digest[48];
             unsigned dlen = 0;
             EVP_Digest(msgs[s], len, digest, &dlen, EVP_sha384(), nullptr);
@@ -175,23 +184,24 @@ int main() {
         }
     }
 
-    /* ---------- SHA-1 x8 ---------- */
+    /* ---------- SHA-1 (streams = svcntw()) ---------- */
     for (int round = 0; round < 200; ++round) {
+        const int n = (int)svcntw();
         size_t len = lcg() % 512;
         size_t nblocks = ((len + 9 + 63) / 64);
-        uint8_t msgs[8][512];
-        for (int s = 0; s < 8; ++s)
+        uint8_t msgs[SVE_SHA_STREAMS_MAX_32][512];
+        for (int s = 0; s < n; ++s)
             for (size_t i = 0; i < len; ++i)
                 msgs[s][i] = (uint8_t)lcg();
-        const uint8_t *mp[8];
-        std::vector<uint8_t> padded[8];
-        for (int s = 0; s < 8; ++s) {
+        const uint8_t *mp[SVE_SHA_STREAMS_MAX_32];
+        std::vector<uint8_t> padded[SVE_SHA_STREAMS_MAX_32];
+        for (int s = 0; s < n; ++s) {
             padded[s] = pad_sha256(msgs[s], len);
             mp[s] = padded[s].data();
         }
-        uint32_t st[5][8];
+        uint32_t st[5][SVE_SHA_STREAMS_MAX_32];
         sha1_compress_x8(st, mp, (uint32_t)nblocks);
-        for (int s = 0; s < 8; ++s) {
+        for (int s = 0; s < n; ++s) {
             uint8_t digest[20];
             unsigned dlen = 0;
             EVP_Digest(msgs[s], len, digest, &dlen, EVP_sha1(), nullptr);
@@ -208,7 +218,8 @@ int main() {
         }
     }
 
-    printf("total=%d fails=%d → %s\n", total, fails,
+    printf("total=%d fails=%d (svcntw=%zu svcntd=%zu) → %s\n", total, fails,
+           (size_t)svcntw(), (size_t)svcntd(),
            fails == 0 ? "ALL MATCH ✓ (kernels verified against OpenSSL)" : "MISMATCH ✗");
     return fails != 0;
 }
