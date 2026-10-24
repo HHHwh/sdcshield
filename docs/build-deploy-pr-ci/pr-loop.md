@@ -122,7 +122,14 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   review-state JSON 的 `last_run.head_sha` 均须匹配当前 head（字段缺失/解析失败回退
   时间锚定）。PR(issue)评论仅时间锚：无 commit 绑定字段，timeline 的 `committed`
   事件无 `created_at` 字段、`head_ref_force_pushed` 仅 force push 产生（均实证）——
-  PushEvent 的 push 时间是可作下界的最强锚定。check-run 信号须 `head_sha` 精确等于
+  PushEvent 的 push 时间是可作下界的最强锚定。时钟偏差容差（±300s）**仅限回退锚**：
+  push 时间可得时（PushEvent `created_at` 与条目时间同属 GitHub 服务器钟，无本机偏差
+  可言），时间锚保持严格——防同 SHA 强推回退（意见#22 先例）；仅回退 committer
+  date（本机钟盖戳，可快/慢于服务器约 1 分钟，2026-10-24 九个 open PR 实证）时，
+  commit 锚**严格匹配**（锚定字段存在且 `== head`，字段缺失不算）的条目在锚前
+  300s 内仍计入。pr-agent 检视评论是 PR(issue)评论的唯一例外：回退锚容差窗口内仅
+  `last_run.head_sha` 严格命中者计入；无 commit 绑定字段的其余 issue 评论不放宽
+  （放宽须以「可证属于当前 head」为前提）。check-run 信号须 `head_sha` 精确等于
   PR head 且 `status == completed`。
 - **意见计数口径**：双锚定后的**待处置意见**数 = 有正文的 COMMENTED/CHANGES_REQUESTED
   review + 行级评论 + PR 评论 + check annotations。摘要/LGTM 类不计：APPROVED/
