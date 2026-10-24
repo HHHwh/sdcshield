@@ -104,14 +104,15 @@ reconfigure，plain ninja 感知不到），`./builddir/sdcshield --quality=0 --
 
 ## 4. 本仓库的构建分区（tests/cpu/meson.build sourceset 机制）
 
-四个 sourceset，决定源文件用什么编译选项：
+五个 sourceset，决定源文件用什么编译选项：
 
 | 集合 | 编译选项 | 用途 |
 |---|---|---|
 | `tests_set_base` | 基线 march | 通用测试（绝大多数） |
 | `tests_set_hsw`（仅x86） | `-march=haswell` + `-DEigen=EigenAVX2` | x86 AVX2 |
 | `tests_set_skx`（仅x86） | `-march=skylake-avx512` + `-DEigen=EigenAVX512` | x86 AVX512 |
-| `tests_set_sve`（仅aarch64） | `-march=armv8.2-a+sve -msve-vector-bits=128` + `-DEIGEN_ARM64_USE_SVE -DEigen=EigenSVE` | ARM SVE（Eigen 命名空间改名避免与 NEON 基线符号冲突） |
+| `tests_set_sve`（仅aarch64） | `-march=armv8.2-a+sve -msve-vector-bits=128` + `-DEIGEN_ARM64_USE_SVE -DEigen=EigenSVE` | ARM SVE 定宽 128-bit（all-VL Phase 2 P5 后仅剩 eigen×2——Eigen packet 定宽，测试在 test_run 里 `arm64_sve_pin_vl(16)` 自 pin；Eigen 命名空间改名避免与 NEON 基线符号冲突） |
+| `tests_set_sve_vla`（仅aarch64） | `-march=armv8.2-a+sve`（无 `-msve-vector-bits`） | 真 VLA SVE 测试（sleef_sve + sve_rot×5，all-VL 128..1024-bit；all-VL Phase 2 P5） |
 
 另外几个独立 static_library（带专属 march）：
 - `tests_crc`（aarch64）：`-march=armv8.1-a+crc`——arm_acle CRC intrinsics
