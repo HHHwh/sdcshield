@@ -32,6 +32,15 @@
  * thread) catches transient/intermittent non-determinism even when
  * single-threaded; multi-core only raises the concurrent-exposure
  * probability. Full-core is the recommended detection posture.
+ *
+ * Detection-channel disclosure: the same-source repeat detects
+ * NON-deterministic defects — transient/intermittent/marginal errors
+ * where the same computation yields different bits on the same input.
+ * It is structurally blind to deterministic core defects (a
+ * permanently wrong instruction/data path computes the golden and
+ * the re-run identically wrong, so the memcmp matches); those are
+ * covered by the independent golden-value test family (fixed golden
+ * data, byte-compared).
  * @endparblock
  */
 

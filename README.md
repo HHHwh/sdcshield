@@ -71,7 +71,7 @@ bash scripts/run/sdc_detect.sh
 
 1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
 2. **停下且有 FAIL**：先看挂在哪个测试——
-   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**（per-thread 同源 golden——每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；分支会话验证【64 核机器，git 无法进一步判定身份，来源未定谳】：3×240s×3 seed + 10 分钟档×2 + 300s 换 seed 全绿，gem5-fi FS 双线程 `eigen_svd_double -n 2` pass；本机复跑锚点【鲲鹏 920 0xd01，128 CPUs = 2×64 核，32GB】：满核 `eigen_sparse` 300s×2 seed 全绿，校准 k=3.30~3.39 → 单解验证 369-825ms ≤ 2s 预算）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑仍可用作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。历史"已知 ULP 级良性抖动"记录见 CLAUDE.md 平台怪癖条目（修复前行为）。
+   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**（per-thread 同源 golden——每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；分支会话验证【64 核机器，git 无法进一步判定身份，来源未定谳】：3×240s×3 seed + 10 分钟档×2 + 300s 换 seed 全绿，gem5-fi FS 双线程 `eigen_svd_double -n 2` pass；本机复跑锚点【鲲鹏 920 0xd01，128 CPUs = 2×64 核，32GB】：满核 `eigen_sparse` 300s×2 seed 全绿，校准 k=3.30~3.39 → 单解验证 369-825ms ≤ 2s 预算）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑仍可用作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。历史"已知 ULP 级良性抖动"记录见 CLAUDE.md 平台怪癖条目（修复前行为）。检出通道口径：eigen 族的同源重算比对（same-source repeat）检出**非确定性缺陷**（瞬态/间歇/边际——同输入不同位），对**确定性核缺陷**结构性盲区（golden 与重算走同一错误路径、位级一致地错），后者由独立 golden-value 测试族（固定 golden 数据）覆盖——两类测试互补，缺一不可。
    - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
