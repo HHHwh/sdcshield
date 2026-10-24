@@ -41,6 +41,12 @@
  * Dump: five buffers to movbe_log/gps_rowmajor/ with the svek3res_
  * prefix (never collides with NEON dumps). GPS tags otherwise
  * unchanged.
+ *
+ * Build note: registered in tests_set_sve and compiled with
+ * -msve-vector-bits=128 (fixed 128-bit SVE semantics, correct only at
+ * runtime VL == 128, docs/architecture.md size-specific rule); the
+ * true-VLA migration is scheduled for all-VL Phase 2 P5
+ * (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
  * @endparblock
  */
 

@@ -509,6 +509,26 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   运行出现 132/167s 瞬态慢跑(稳态 0.2s,未复现,疑冷启动页入伪象,记录在案)。
 - **检测战役**:合并二进制上启动 sdc_detect.sh 全核优先序轮转(见后续条目)。
 
+## 2026-10-15（PR #242：SVE/SME 全 VL 规格化一期——三测试四档实证）
+
+- **合并**:merge `2b016d9c`("WIP: feat/sve-sme-all-vl");计划载体
+  `docs/superpowers/plans/2026-10-13-sve-sme-all-vl.md`(本条目为 2026-10-23
+  补记——此前 progress-log 漏记)。
+- **三测试全 VL 化**:`sve512_stencil_axis_arm`(bt=2×svcntd(),[4,32])、
+  `sme_fmopa_stress_arm`(n=svl/4,[4,32],run 侧 assert)、
+  `sme_za_tileview_arm`(n=svl/8,[2,16],kTileNMax=16)。
+- **gem5-fi 四档实证**:dual kernel 四档(128/256/512/1024)× {fixed,
+  random×3} 共 48 run 全绿(gem5-fi findings.md `4f88821a` 记录);512-bit
+  回归锚逐位一致(za_tileview `e9e2be2a`、fmopa_stress `892e4ba8`、stencil
+  `610e3ce5`)。kernel 归属:fmopa_dual 已合 main(`9dbbbbba`);
+  za_tileview/stencil 全 VL 版在 `feat/sve-sme-all-vl`(`b75c7a31`)未合回。
+- **review 修正固化**:范围检查替代单值门控;run 侧 fail-closed assert;
+  golden 逐 lane 字节级 memcmp 禁跨 lane 聚合。
+- **诚实边界**:当年 run 在 operator 工作仓完成(本机不可复现);五相位
+  za_tileview dual kernel 不在本机 checkout(缺口记 all-VL Phase 2 spec §7)。
+- **承接**:all-VL Phase 2 spec
+  `docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md`(P0-P6)。
+
 ## 2026-10-16/17（战役：类型SDC捕获 night1——零检出+两用例缺陷暴露）
 
 - **战役**:campaign-20261016_type-sdc(仓外 ~/sdc-campaigns/),11.5h 满载联合激发+检测,

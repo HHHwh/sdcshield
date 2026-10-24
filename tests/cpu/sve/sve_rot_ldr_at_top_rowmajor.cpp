@@ -25,7 +25,10 @@
  * Same SVE skeleton as sve_rot_ldr_at_top otherwise: 3rd ldr at top +
  * 2-src loads + rotating ALU (svadd/sveor/svand/svorr per i%4) +
  * back-to-back str/str on z registers; memcmp in cold path.
- * Buffers are sized in VL slots (true VLA).
+ * Buffers are sized in VL slots (VLA by design; NOTE: currently compiled
+ * in tests_set_sve with -msve-vector-bits=128, so guaranteed correct only
+ * at runtime VL == 128 until the all-VL Phase 2 P5 migration — see
+ * docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
  * @endparblock
  */
 

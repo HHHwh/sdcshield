@@ -135,7 +135,7 @@ build_one() {
         local cur_hash existing=""
         cur_hash=$(compute_build_hash "$series" "$sp")
         [ -f "$builtdir/BUILD-HASH" ] && existing=$(cat "$builtdir/BUILD-HASH" 2>/dev/null || echo "")
-        if [ -n "$existing" ] && [ "$cur_hash" = "$existing" ] && [ -x "$builddir/sdcshield" ]; then
+        if [ -n "$existing" ] && [ "$cur_hash" = "$existing" ] && [ -x "$builtdir/sdcshield" ]; then
             echo "skip $tag (BUILD-HASH 未变,复用 built/)"
             # 复用时仍可跑验证(若要求)
             if [ "$NOVERIFY" != 1 ] && [ "$MODE" = "full" ]; then

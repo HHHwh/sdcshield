@@ -114,7 +114,7 @@ static int neon_rot_ldr_at_top_mla_sve_init(struct test *test) {
         svst1_u32(pg, data->srcB + off, b);
         svint32_t sa = svreinterpret_s32_u32(a);
         svint32_t sb = svreinterpret_s32_u32(b);
-        svuint32_t res;
+        svuint32_t res = svundef_u32();
         switch (i % 4) {
             case 0: res = svreinterpret_u32_s32(svmul_s32_x(pg, sa, sb)); break;
             case 1: res = svreinterpret_u32_s32(svadd_s32_x(pg, svmul_s32_x(pg, sa, sb), sa)); break;
@@ -160,7 +160,7 @@ static int neon_rot_ldr_at_top_mla_sve_run(struct test *test, int cpu) {
             svuint32_t b = load_vec_sve(data->srcB + off);
             svint32_t sa = svreinterpret_s32_u32(a);
             svint32_t sb = svreinterpret_s32_u32(b);
-            svuint32_t res;
+            svuint32_t res = svundef_u32();
 
             switch (i % 4) {
                 case 0: res = svreinterpret_u32_s32(svmul_s32_x(svptrue_b32(), sa, sb)); break;
