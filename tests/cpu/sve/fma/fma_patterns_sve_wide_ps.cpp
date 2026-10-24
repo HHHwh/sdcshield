@@ -7,10 +7,7 @@
 
 #ifdef __aarch64__
 #include <arm_sve.h>
-#include <sys/auxv.h>
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static constexpr int VECTOR_SIZE = 16; // 16 个单精度浮点数（与 fma_patterns_avx512_ps 负载一致）
@@ -18,12 +15,11 @@ static constexpr int VECTOR_SIZE = 16; // 16 个单精度浮点数（与 fma_pat
 static int fma_patterns_sve_wide_ps_init(struct test *test) {
     (void)test;
 #ifdef __aarch64__
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for fma_patterns_sve_wide_ps");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 #endif
     return EXIT_SUCCESS;
 }

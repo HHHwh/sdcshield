@@ -7,10 +7,7 @@
 
 #ifdef __aarch64__
 #include <arm_sve.h>           // ARM SVE 头文件
-#include <sys/auxv.h>
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static constexpr int VECTOR_SIZE = 4; // 4 个双精度浮点数（与 fma_tail_avx2 负载一致）
@@ -18,15 +15,11 @@ static constexpr int VECTOR_SIZE = 4; // 4 个双精度浮点数（与 fma_tail_
 static int fma_tail_sve_init(struct test *test) {
     (void)test;
 #ifdef __aarch64__
-    /* Runtime gate: probe HWCAP_SVE directly via getauxval (sleef_sve.cpp
-     * precedent — device_has_feature would be always-true here because this
-     * TU is compiled with +sve). */
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for fma_tail_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 #endif
     return EXIT_SUCCESS;
 }
