@@ -60,7 +60,7 @@ import sys
 import textwrap
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
 # 第 5 bot(本地 claude)唯一标记: 从 pr_local_review 导入,避免字面量漂移。
@@ -332,6 +332,41 @@ def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
     return True
 
 
+# 时钟偏差容差: 条目锚定的 commit 严格匹配当前 head 时,时间锚放宽的下界。
+# 背景(2026-10-24 九个 open PR 实证): 本机时钟快于 GitHub 服务器约 1 分钟,
+# commit 的 committer date 由本机钟盖戳;events 窗口(约 300 条)被 9 个 PR 的
+# bot/CI 事件挤掉 PushEvent 后,时间锚回退 committer date → 合法 bot 信号
+# (greptile 对全部 9 个 PR 当前 head 的 review,commit_id 精确匹配)落在锚前
+# 数十秒被整批误杀。commit 锚严格匹配的条目不可能早于 head 存在,时间锚仅
+# 防 force-push 回退同 SHA 等病态场景,按此容差放宽不影响甄别目标。
+CLOCK_SKEW_TOLERANCE = timedelta(seconds=300)
+
+
+def commit_strict_match(item: dict, sha_keys: tuple, head_sha: str) -> bool:
+    """commit 锚严格匹配: 锚定字段存在且 == 当前 head(区别于 commit_anchored
+    的「字段缺失回退 True」——那只是兜底,不能作为放宽时间锚的依据)。"""
+    for key in sha_keys:
+        sha = item.get(key)
+        if sha:
+            return sha == head_sha
+    return False
+
+
+def head_anchored(item: dict, ts_key: str, anchor: datetime,
+                  sha_keys: tuple, head_sha: str) -> bool:
+    """双锚定组合判定(时钟偏差加固版),替代各调用点的
+    「is_after_head(...) and commit_anchored(...)」:
+    - 常规路径(时间 ≥ anchor): 维持原语义(commit_anchored 含字段缺失回退);
+    - anchor 前 CLOCK_SKEW_TOLERANCE 内: 仅 commit 锚严格匹配时计入。"""
+    ts = parse_ts(item.get(ts_key))
+    if ts is None:
+        return False
+    if ts >= anchor:
+        return commit_anchored(item, sha_keys, head_sha)
+    return (ts >= anchor - CLOCK_SKEW_TOLERANCE
+            and commit_strict_match(item, sha_keys, head_sha))
+
+
 def is_summary_text(body: str) -> bool:
     """摘要/报告类正文(bot 机器标记)→ 不计入待处置意见。"""
     return any(m in (body or "") for m in SUMMARY_MARKERS)
@@ -591,8 +626,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
-        counted = (ts is not None and ts >= anchor
-                   and commit_anchored(r, ("commit_id",), head_sha))
+        counted = head_anchored(r, "submitted_at", anchor,
+                                ("commit_id",), head_sha)
         data.signals.append(Signal(
             bot=bot, kind="review", time=ts or anchor, counted=counted,
             detail=f'review({r.get("state")})',
@@ -607,8 +642,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
-        counted = (ts is not None and ts >= anchor
-                   and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha))
+        counted = head_anchored(c, "created_at", anchor,
+                                ("original_commit_id", "commit_id"), head_sha)
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
         data.signals.append(Signal(
             bot=bot, kind="review_comment", time=ts or anchor, counted=counted,
@@ -653,8 +688,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
             bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
-        if not (is_after_head(r, "submitted_at", anchor)
-                and commit_anchored(r, ("commit_id",), head_sha)):
+        if not head_anchored(r, "submitted_at", anchor,
+                             ("commit_id",), head_sha):
             continue
         if not body or is_summary_text(body):
             continue
@@ -675,8 +710,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
             bot = "local-claude"
         if bot is None:
             continue
-        if (is_after_head(c, "created_at", anchor)
-                and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha)):
+        if head_anchored(c, "created_at", anchor,
+                         ("original_commit_id", "commit_id"), head_sha):
             n_rcomment += 1
     n_icomment = 0
     for c in issue_comments:
@@ -775,9 +810,8 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
             bot = "local-claude"
         if bot is None:
             continue
-        if not (is_after_head(c, "created_at", anchor)
-                and commit_anchored(c, ("original_commit_id", "commit_id"),
-                                    pr.head_sha)):
+        if not head_anchored(c, "created_at", anchor,
+                             ("original_commit_id", "commit_id"), pr.head_sha):
             continue
         path = c.get("path") or ""
         line = c.get("line")
@@ -796,8 +830,8 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
             bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
-        if not (is_after_head(r, "submitted_at", anchor)
-                and commit_anchored(r, ("commit_id",), pr.head_sha)):
+        if not head_anchored(r, "submitted_at", anchor,
+                             ("commit_id",), pr.head_sha):
             continue
         if not raw_body.strip() or is_summary_text(raw_body):
             continue
