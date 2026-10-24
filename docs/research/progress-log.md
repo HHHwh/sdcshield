@@ -657,6 +657,7 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 
 ## 2026-10-24（all-VL Phase 2 P3：sve512 家族×10 全 VL 化——issue #182 疑点清除）
 ## 2026-10-24（all-VL Phase 2 P3：sve512 家族×10 全 VL 化——issue #182 在 3 个代表性 kernel 上未复现）
+## 2026-10-24（all-VL Phase 2 P3：sve512 家族×10 全 VL 化——issue #182 疑点清除）
 
 - **探索结论**:8/10 文件几何早已 svcnt 动态(512-ism 全为文案), 真重构仅
   xlswave(Phase A 硬 512 双向量几何: B_TILE=16/n+8/result+8 越界/闭式 golden
@@ -666,10 +667,15 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   f32 链/特殊值类别比对)lanes 逐档 2/4/8/16 与 4/8/16/32; sve512_gather_dual
   两模式(1d_tag 索引标签断言/2d_block whilelt 尾)gn=128..1024;
   stencil_axis_dual(bt=4..32, 7bed7f0e 全 VL 版+memcpy 告警修复)。**issue
+<<<<<<< HEAD
   #182 在 3 个代表性 kernel(chain/gather/stencil)上未复现**: 128-bit 档
   全部模式字节级全绿——历史 GH runner VL=128 golden 失配在 gem5-fi O3
   全 VL 语义下不复现;非全家族逐文件运行验证, 且本机无 SVE、真实 SVE
   主机验证未覆盖(结论口径收窄, PR #283 评审)。chain 16 checksum 互异;
+=======
+  #182 疑点清除**: 128-bit 档全部模式字节级全绿——历史 GH runner VL=128
+  golden 失配在 gem5-fi O3 全 VL 语义下不复现。chain 16 checksum 互异;
+>>>>>>> 860edf6e (docs(all-vl2): P3 收尾——README SKIP 声明全 VL 化 + progress-log 实证条目)
   gather 同档 fixed/random checksum 相同系设计属性(FNV 按地址序, dst 内容
   与排列无关, 源码核实)。
 - **重构**(feat/sve512-allvl, 11 commit): 范本 f64_chain_arm(a08302c0)+
@@ -687,6 +693,7 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   fracture_loop_count 一致性问题记账未动。
 - **承接**:P4(ipsec HMAC×17)计划已就绪(docs/superpowers/plans/
   2026-10-24-sve-sme-all-vl2-p4.md)。
+<<<<<<< HEAD
 ## 2026-10-24（all-VL Phase 2 P4：ipsec HMAC×17 流数参数化——两个既有缺陷随阶段修复）
 
 - **既有缺陷修复**(评估代理实证, 随 P4 落地): ①门控无上界——旧
@@ -779,3 +786,5 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   完整 sdcshield 二进制(fork+96 线程+OpenSSL)不可入 gem5 SE 单进程
   配置; 胶水依赖的算术不变式(lanes 换算 svl/4==svcntw()、[4,32]/
   [2,16] 范围、漂移比较操作数)已由同源 harness 逐档执行。
+=======
+>>>>>>> 860edf6e (docs(all-vl2): P3 收尾——README SKIP 声明全 VL 化 + progress-log 实证条目)
