@@ -49,6 +49,17 @@ static std::vector<uint8_t> pad_sha512(const uint8_t *msg, size_t len) {
 int main() {
     int fails = 0, total = 0;
 
+    /* All-VL gate (adversarial review Important-1): arrays are sized to
+       the 1024-bit cap; a wider runtime VL would overflow them — mirror
+       the gem5 kernel's exit-3 guard. */
+    if ((int)svcntw() < 4 || (int)svcntw() > SVE_SHA_STREAMS_MAX_32 ||
+        (int)svcntd() < 2 || (int)svcntd() > SVE_SHA_STREAMS_MAX_64) {
+        fprintf(stderr, "unsupported VL (svcntw=%d svcntd=%d; arrays "
+                        "sized for 128..1024-bit)\n",
+                (int)svcntw(), (int)svcntd());
+        return 3;
+    }
+
     /* ---------- SHA-256 (streams = svcntw()) ---------- */
     for (int round = 0; round < 200; ++round) {
         const int n = (int)svcntw();              /* all-VL: runtime lane count */

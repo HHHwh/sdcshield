@@ -33,6 +33,13 @@ static inline int hmac_sha256_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
     const int n = (int)svcntw();
     /* HMAC 密钥块 = 64 字节: key 补零后与 ipad(0x36)/opad(0x5c) 异或 */
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_32][64], opad_blk[SVE_SHA_STREAMS_MAX_32][64];
+    /* Capacity guard, key side (adversarial review Minor-1): the ipad/opad
+       XOR loops index keys[s][i] unbounded — key_len beyond the 64-byte
+       (32-bit family) block overflows the stack. RFC 2104 long-key hashing
+       is out of scope for these callers (all pass <= 64B). */
+    if (key_len > 64)
+        return -1;
+
     for (int s = 0; s < n; ++s) {
         memset(ipad_blk[s], 0x36, 64);
         memset(opad_blk[s], 0x5c, 64);
@@ -109,6 +116,11 @@ static inline int hmac_sha512_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][64],
 {
     const int n = (int)svcntd();
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_64][128], opad_blk[SVE_SHA_STREAMS_MAX_64][128];
+    /* Capacity guard, key side (see the 32-bit family note): the block is
+       128 bytes in the SHA-512 family. */
+    if (key_len > 128)
+        return -1;
+
     for (int s = 0; s < n; ++s) {
         memset(ipad_blk[s], 0x36, 128);
         memset(opad_blk[s], 0x5c, 128);
@@ -171,6 +183,13 @@ static inline int hmac_sha1_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][20],
 {
     const int n = (int)svcntw();
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_32][64], opad_blk[SVE_SHA_STREAMS_MAX_32][64];
+    /* Capacity guard, key side (adversarial review Minor-1): the ipad/opad
+       XOR loops index keys[s][i] unbounded — key_len beyond the 64-byte
+       (32-bit family) block overflows the stack. RFC 2104 long-key hashing
+       is out of scope for these callers (all pass <= 64B). */
+    if (key_len > 64)
+        return -1;
+
     for (int s = 0; s < n; ++s) {
         memset(ipad_blk[s], 0x36, 64);
         memset(opad_blk[s], 0x5c, 64);
@@ -243,6 +262,13 @@ static inline int hmac_sha224_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][28],
 {
     const int n = (int)svcntw();
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_32][64], opad_blk[SVE_SHA_STREAMS_MAX_32][64];
+    /* Capacity guard, key side (adversarial review Minor-1): the ipad/opad
+       XOR loops index keys[s][i] unbounded — key_len beyond the 64-byte
+       (32-bit family) block overflows the stack. RFC 2104 long-key hashing
+       is out of scope for these callers (all pass <= 64B). */
+    if (key_len > 64)
+        return -1;
+
     for (int s = 0; s < n; ++s) {
         memset(ipad_blk[s], 0x36, 64);
         memset(opad_blk[s], 0x5c, 64);
@@ -314,6 +340,11 @@ static inline int hmac_sha384_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][48],
 {
     const int n = (int)svcntd();
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_64][128], opad_blk[SVE_SHA_STREAMS_MAX_64][128];
+    /* Capacity guard, key side (see the 32-bit family note): the block is
+       128 bytes in the SHA-512 family. */
+    if (key_len > 128)
+        return -1;
+
     for (int s = 0; s < n; ++s) {
         memset(ipad_blk[s], 0x36, 128);
         memset(opad_blk[s], 0x5c, 128);
