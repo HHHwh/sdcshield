@@ -17,24 +17,31 @@
  * sweep, so the machine sees the same instruction-class alternation as
  * the real application without reproducing its MPI/libomp scaffolding.
  *
- * Phase A — stencil axis core, verbatim from sve512_stencil_axis_arm:
- *   svdup_f64(coeff[r]) loads, dual-vector svmla_x chain, full unroll,
- *   memory-resident thread-local loop counter, per-iteration VA[63:48]
- *   canary on the accumulator's stack slot. K_AXIS_CALLS calls per sweep
- *   add exactly 1.5*(lane+1)*K_AXIS_CALLS per lane (0.125 is exact).
+ * Phase A — stencil axis core, verbatim from sve512_stencil_axis_arm
+ *   (all-VL form): svdup_f64(coeff[r]) loads, dual-vector svmla_x chain,
+ *   full unroll, memory-resident thread-local loop counter,
+ *   per-iteration VA[63:48] canary on the accumulator's stack slot. The
+ *   tile width is bt = 2*svcntd() f64 lanes (128..1024-bit SVE — every
+ *   layout offset scales with bt; all-VL Phase 2 P3, four-tier gem5
+ *   evidence in gem5-fi feat/sve512-dual stencil_axis_dual).
  * Phase B — SVD-format gather/scatter, verbatim addressing topology from
  *   sve512_gather_scatter_svd: 300x300 doubles (720 KB, L2-overflow),
  *   2-D 16x16 block permutation (clamped tail blocks), svld1_gather /
  *   svst1_scatter with svwhilelt tails, fma(v,v,1.5) in flight.
- * Phase C — verification: phase-A exact-integer lane check, phase-B full
+ * Phase C — verification: phase-A per-lane check against a scalar
+ *   reference recomputed on the 1/8-exact grid (the pre-P3 closed-form
+ *   constant 96.0*(jj+1) was bound to the 512-bit tile alignment and is
+ *   replaced by the stencil_axis-style scalar golden), phase-B full
  *   byte-compare against the init-time scalar golden (verified every
  *   sweep — the compare is ~0.1 ms, so no subset rotation is needed),
  *   and a pointer-table canary (workspace pointers byte-compared against
  *   their sweep-0 images, each checked for VA[63:48] == 0).
  *
- * Goldens are SVE-independent: phase A is a closed-form scalar constant,
- * phase B is precomputed by a scalar C loop in test_init (framework-side).
- * Requires 512-bit SVE like the rest of the sve512 family (issue #182).
+ * Goldens are SVE-independent: phase A is a scalar reference over the
+ * bt-wide tile, phase B is precomputed by a scalar C loop in test_init
+ * (framework-side). All-VL (128..1024-bit via arm64_require_sve_vl);
+ * the pre-P3 512-bit single-value gate and its issue #182 caveat are
+ * cleared by the four-tier dual-kernel evidence.
  * @endparblock
  */
 
@@ -47,17 +54,16 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 using std::size_t;
 using std::ptrdiff_t;
 
-// Phase A geometry (identical to sve512_stencil_axis_arm).
+// Phase A geometry (identical to sve512_stencil_axis_arm, all-VL form).
 constexpr size_t RADIUS = 6;
-constexpr size_t B_TILE = 16;
+constexpr size_t kTileMax = 32;   /* 1024-bit cap: bt = 2*svcntd() <= 32 */
 static constexpr size_t coord = 10;
 static constexpr size_t extent = 56;
 static constexpr size_t stride = 64;
@@ -73,8 +79,9 @@ static constexpr size_t SVD_BLOCK_COLS = 16;
 static thread_local size_t j;
 
 struct XlswaveCtxData {
-    std::vector<double> src;            // [extent][stride][B_TILE] grid
+    std::vector<double> src;            // [extent][stride][bt] grid
     const double *s_base = nullptr;     // coord=10 layer's first tile
+    size_t bt = 0;                      // tile width = 2*svcntd() lanes
     size_t vl_d = 0;
     std::vector<uint64_t> gather_src;
     std::vector<uint64_t> gather_idx;
@@ -86,25 +93,26 @@ struct XlswaveCtxData {
 inline void axis_generic_16x2(
     const double* s_base, const size_t coord,
     const size_t extent, const size_t stride,
-    const svbool_t ptrue, const double* coeff,
+    const svbool_t ptrue, const double* coeff, const size_t bt,
     svfloat64_t& res0, svfloat64_t& res1)
 {
+    const size_t lanes = bt / 2;   /* f64 lanes per result vector */
 #if defined(__clang__)
 #pragma clang loop unroll(full)
 #endif
     for (size_t r = 1; r <= RADIUS; ++r) {
-        const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * B_TILE;
+        const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * bt;
         const svfloat64_t c = svdup_f64(coeff[r]);
 
         if (coord >= r) {
             const double* n = s_base - off;
             res0 = svmla_x(ptrue, res0, svld1(ptrue, n), c);
-            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + 8), c);
+            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + lanes), c);
         }
         if (coord + r < extent) {
             const double* n = s_base + off;
             res0 = svmla_x(ptrue, res0, svld1(ptrue, n), c);
-            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + 8), c);
+            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + lanes), c);
         }
     }
 }
@@ -137,32 +145,32 @@ static void gather_scatter_hw(XlswaveCtxData *d, uint64_t *dst)
 
 static int sve512_xlswave_ctx_arm_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve512_xlswave_ctx_arm requires SVE");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call; the historical issue #182 VL=128 mismatch is
+       cleared by the four-tier dual-kernel evidence (gem5-fi
+       feat/sve512-dual). arm64_require_sve_vl returns BYTES — f64 lanes
+       = svl/8, tile width bt = 2*lanes, range-checked below
+       (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<XlswaveCtxData>();
-        data->vl_d = svcntd();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        data->bt = 2 * data->vl_d;
+        if (data->vl_d < 2 || data->vl_d > 16 || data->bt > kTileMax) {
+            log_error("sve512_xlswave_ctx_arm: lanes %zu / bt %zu outside "
+                      "[2,16]/[4,32] — unit drift (svl %ld bytes)",
+                      data->vl_d, data->bt, svl);
+            return EXIT_FAILURE;
+        }
 
-        // Phase A workspace: [extent][stride][B_TILE], tile values {1..16}.
-        data->src.resize(extent * stride * B_TILE);
+        // Phase A workspace: [extent][stride][bt], tile values {1..bt}.
+        data->src.resize(extent * stride * data->bt);
         for (size_t i = 0; i < data->src.size(); ++i)
-            data->src[i] = static_cast<double>(i % B_TILE + 1);
-        data->s_base = data->src.data() + coord * stride * B_TILE;
+            data->src[i] = static_cast<double>(i % data->bt + 1);
+        data->s_base = data->src.data() + coord * stride * data->bt;
 
         // Phase B workspace + 2-D block permutation (framework RNG, H12').
         const size_t gn = SVD_ROWS * SVD_COLS;
@@ -211,6 +219,16 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
     (void)cpu;
     auto *d = static_cast<XlswaveCtxData *>(test->data);
 
+    /* All-VL policy #3: fail closed on init/run VL drift. */
+    if (svcntd() != d->vl_d) {
+        log_error("sve512_xlswave_ctx_arm: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", d->vl_d, (unsigned)svcntd());
+        report_fail_msg("sve512_xlswave_ctx_arm: SVE VL drifted between "
+                        "init and run");
+    }
+    const size_t bt = d->bt;
+    const size_t lanes = d->vl_d;
+
     // Stack-local coefficient table (the svdup_f64 / ld1rd source).
     double coeff[RADIUS + 1] = {};
     for (size_t r = 1; r <= RADIUS; ++r)
@@ -237,7 +255,7 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
     memcpy(canary_golden, canary, sizeof(canary));
 
     do {
-        /* ---- Phase A: stencil axis core (field recipe verbatim) ---- */
+        /* ---- Phase A: stencil axis core (field recipe, all-VL form) ---- */
         svfloat64_t res0 = svdup_f64(0.0);
         svfloat64_t res1 = svdup_f64(0.0);
         for (j = 0; j < K_AXIS_CALLS; ++j) {
@@ -247,17 +265,43 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
                             j, static_cast<void *>(&res0));
             }
             axis_generic_16x2(s_base, coord, extent, stride, ptrue, coeff,
-                              res0, res1);
+                              bt, res0, res1);
         }
-        double result[B_TILE];
+        double result[kTileMax];
         svst1(ptrue, result, res0);
-        svst1(ptrue, result + 8, res1);
-        for (size_t jj = 0; jj < B_TILE; ++jj) {
-            const double expected = 96.0 * (jj + 1);  // 1.5*K_AXIS_CALLS*(jj+1)
-            if (result[jj] != expected) {
+        svst1(ptrue, result + lanes, res1);
+
+        /* Scalar reference (stencil_axis idiom): one kernel call adds,
+           per lane jj, sum over r of coeff[r] * (s_base[-off+jj] +
+           s_base[+off+jj]); coord=10 and RADIUS=6 make both directions
+           valid for every r. Every term is an exact multiple of 1/8 and
+           the per-call increment stays below 12 * 0.125 * bt <= 48, so
+           both the hardware accumulation and this reference stay on the
+           exact 1/8 grid below 2^53: bit-exact equality. (The pre-P3
+           closed-form constant 96.0*(jj+1) was bound to the 512-bit
+           tile alignment; this reference is alignment-free.) */
+        double expected[kTileMax];
+        for (size_t jj = 0; jj < bt; ++jj)
+            expected[jj] = 0.0;
+        for (size_t r = 1; r <= RADIUS; ++r) {
+            const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * bt;
+            for (size_t jj = 0; jj < bt; ++jj) {
+                double delta = 0.0;
+                if (coord >= r)
+                    delta += s_base[-off + static_cast<ptrdiff_t>(jj)];
+                if (coord + r < extent)
+                    delta += s_base[+off + static_cast<ptrdiff_t>(jj)];
+                expected[jj] += 0.125 * delta;
+            }
+        }
+        for (size_t jj = 0; jj < bt; ++jj)
+            expected[jj] *= static_cast<double>(K_AXIS_CALLS);
+
+        for (size_t jj = 0; jj < bt; ++jj) {
+            if (result[jj] != expected[jj]) {
                 log_warning("sve512_xlswave_ctx: axis lane %2zu "
                             "result=%.1f expected=%.1f",
-                            jj, result[jj], expected);
+                            jj, result[jj], expected[jj]);
                 report_fail_msg("sve512_xlswave_ctx_arm: phase A "
                                 "(stencil axis) SDC detected");
                 return EXIT_FAILURE;
@@ -317,11 +361,12 @@ static int sve512_xlswave_ctx_arm_cleanup(struct test *test)
 DECLARE_TEST(sve512_xlswave_ctx_arm,
              "XLSDFT composite-context SDC stress (escalation T1): rotating "
              "phases — stencil axis kernel (svdup/ld1rd coefficients, "
-             "RADIUS=6 dual svmla chain, per-iteration VA[63:48] accumulator "
-             "canary), SVD-format SVE-512 gather/scatter over a 720 KB "
-             "L2-overflow working set with 2-D 16x16 block permutation, and "
-             "a workspace pointer-table canary; exact-integer and byte-exact "
-             "verification every sweep")
+             "RADIUS=6 dual svmla chain at bt = 2*svcntd() lanes, "
+             "per-iteration VA[63:48] accumulator canary), SVD-format SVE "
+             "gather/scatter over a 720 KB L2-overflow working set with "
+             "2-D 16x16 block permutation, and a workspace pointer-table "
+             "canary; exact-integer and byte-exact verification every "
+             "sweep; all-VL 128..1024-bit via arm64_require_sve_vl")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_xlswave_ctx_arm_init,
     .test_run = sve512_xlswave_ctx_arm_run,
