@@ -11,8 +11,10 @@
 # Naming rule (user decision 2026-09-19): _avx/_avx2 -> _sve, _avx512 ->
 # _sve_wide. The _wide suffix reflects the wider-vector variant of the pair
 # (original avx2=256-bit vs avx512=512-bit), NOT the SVE2 instruction set —
-# no SVE2 instructions are used (target silicon Kunpeng 920: SVE1, VL=256;
-# the tests themselves are all-VL 128..1024-bit since all-VL Phase 2).
+# no SVE2 instructions are used (Kunpeng 920 (0xd01) has NO SVE — these
+# tests skip cleanly there; the historical "VL=256" records are from the
+# cortex x3b machine, docs/architecture.md; the tests themselves are
+# all-VL 128..1024-bit since all-VL Phase 2).
 #
 # Build discipline mirrors tests/cpu/arm64/meson.build: the whole subdir is
 # entered only under the aarch64 guard (x86-64 untouched), and the SVE object
