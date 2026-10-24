@@ -14,8 +14,18 @@
  * A random double precision sparse real symmetric matrix (A) and a
  * random vector (b) are generated as inputs and then
  * Eigen::SimplicialCholesky is used to solve the problem Ax=b. The
- * result vector is compared against a golden result that is computed
- * during init.
+ * result vector is compared against a golden result.
+ *
+ * Per-thread golden (H11'/P14 pattern, aligned with the EigenSVDTest
+ * template): each worker generates its OWN A/b from the framework RNG
+ * (per-thread stream, -s reproducible) and computes the golden on the
+ * SAME thread with the same solver — same-source repeat. This removes
+ * the old init-time shared golden, whose cross-thread byte-exact
+ * comparison was the source of the multi-thread ULP flakiness recorded
+ * in CLAUDE.md (different threads' heap alignment can steer Eigen into
+ * different SIMD/scalar paths). Inputs re-roll every kRerollEvery
+ * iterations; the old "deliberately NOT re-rolled" freeze existed only
+ * to protect the shared-golden structure and is obsolete with it.
  *
  * @note Although the test should run fine on a single thread, it is
  * only expected to catch defects if run on at least 2 cores.
@@ -48,69 +58,47 @@ static size_t sparse_n(struct test *test)
 
 namespace {
 struct EigenSparseTestData {
-    size_t n;
-    Eigen::SparseMatrix<double> A;   /* 运行时构造, 见 init */
-    Eigen::VectorXd b;
-    Eigen::VectorXd golden;
+    size_t n;   /* matrix dimension — the only field run() consumes */
 };
-}
 
-static int initialize_problem(EigenSparseTestData *d)
+/* Same generator semantics as the historical initialize_problem():
+ * ~10% density symmetric off-diagonal entries in [0, 0.1), strictly
+ * diagonally dominant (fabs + 0.05) so SimplicialCholesky stays
+ * well-conditioned, b in [-1, 1). Operates on the CALLING thread's
+ * objects — no shared state. */
+static void generate_problem(size_t n,
+                             Eigen::SparseMatrix<double> &A,
+                             Eigen::VectorXd &b)
 {
-    const size_t n = d->n;
-    try {
-        d->A.resize(n, n);
-        d->b.resize(n);
-        d->golden.resize(n);
-        std::vector<Eigen::Triplet<double>> trip;
-        for(size_t i=0; i<n; ++i) {
-            for(size_t j=i+1; j<n; ++j) {
-                double x = frandom_scale(1.0);
-                if(x < 0.1) {
-                    trip.push_back(Eigen::Triplet<double>(i,j,x));
-                    if (j>i)
-                        trip.push_back(Eigen::Triplet<double>(j,i,x));
-                }
+    A.resize(n, n);
+    b.resize(n);
+    std::vector<Eigen::Triplet<double>> trip;
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t j = i + 1; j < n; ++j) {
+            double x = frandom_scale(1.0);
+            if (x < 0.1) {
+                trip.push_back(Eigen::Triplet<double>(i, j, x));
+                if (j > i)
+                    trip.push_back(Eigen::Triplet<double>(j, i, x));
             }
         }
-        for(size_t i=0; i<n; ++i) {
-            double x = fabs(frandom_scale(1.0)) + 0.05;
-            trip.push_back(Eigen::Triplet<double>(i,i,x));
-        }
-        d->A.setFromTriplets(trip.begin(), trip.end());
-        /* randomization hardening H11' (P14): b from the framework RNG
-         * ([-1, 1), -s reproducible) instead of Eigen's deterministic
-         * VectorXd::Random; per-iteration re-roll is deliberately NOT
-         * done — CLAUDE.md documents multi-thread ULP flakiness in the
-         * sparse solve, and the A matrix already varies per run. */
-        for (size_t i = 0; i < n; ++i)
-            d->b[i] = frandom_scale(2.0) - 1.0;
-    } catch (...) {
-        log_skip(TestResourceIssueSkipCategory, "Exception on Eigen code, most probably OOM");
-        return EXIT_SKIP;
     }
-
-    return 0;
+    for (size_t i = 0; i < n; ++i) {
+        double x = fabs(frandom_scale(1.0)) + 0.05;
+        trip.push_back(Eigen::Triplet<double>(i, i, x));
+    }
+    A.setFromTriplets(trip.begin(), trip.end());
+    /* randomization hardening H11' (P14): b from the framework RNG
+     * ([-1, 1), -s reproducible) instead of Eigen's deterministic
+     * VectorXd::Random. */
+    for (size_t i = 0; i < n; ++i)
+        b[i] = frandom_scale(2.0) - 1.0;
+}
 }
 
 static int eigen_sparse_init(struct test *test) {
     auto d = std::make_unique<EigenSparseTestData>();
     d->n = sparse_n(test);
-    int ret = initialize_problem(d.get());
-    if (ret)
-        return ret;
-    Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
-    try {
-        d->golden = solver.compute(d->A).solve(d->b);
-    } catch (...) {
-        log_skip(TestResourceIssueSkipCategory, "Exception on Eigen code, most probably OOM");
-        return EXIT_SKIP;
-    }
-    if (solver.info() != Eigen::Success) {
-        report_fail(test);
-        return EXIT_FAILURE;
-    }
-
     test->data = d.release();
     return EXIT_SUCCESS;
 }
@@ -120,23 +108,68 @@ static int eigen_sparse_cleanup(struct test *test) {
     return EXIT_SUCCESS;
 }
 
+/* Input re-roll cadence (H11' alignment with the EigenSVDTest template:
+ * same-source repeat, fresh operands). */
+static constexpr int kRerollEvery = 16;
+
 static int eigen_sparse_run(struct test *test, int cpu) {
-    auto d = static_cast<EigenSparseTestData *>(test->data);
-    do {
+    (void)cpu;
+    auto *d = static_cast<EigenSparseTestData *>(test->data);
+    const size_t n = d->n;
+
+    /* Per-thread problem + golden: allocated once, refilled in place.
+     * The golden is computed on THIS thread with the same solver that
+     * recomputes it below — cross-thread SIMD-path divergence (the old
+     * shared-golden ULP hazard) cannot produce a false mismatch. */
+    Eigen::SparseMatrix<double> A;
+    Eigen::VectorXd b, golden, x;
+    generate_problem(n, A, b);
+    {
         Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
-        Eigen::VectorXd x;
         try {
-            x = solver.compute(d->A).solve(d->b);
+            golden = solver.compute(A).solve(b);
         } catch (...) {
-            report_fail_msg("Exception on Eigen code, most probably OOM");
+            log_skip(TestResourceIssueSkipCategory, "Exception on Eigen code, most probably OOM");
+            return EXIT_SKIP;
         }
         if (solver.info() != Eigen::Success) {
             report_fail(test);
             return EXIT_FAILURE;
         }
-        if (x != d->golden) {
+    }
+
+    int since_reroll = 0;
+    do {
+        Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
+        try {
+            x = solver.compute(A).solve(b);
+        } catch (...) {
+            report_fail_msg("Exception on Eigen code, most probably OOM");
+            return EXIT_FAILURE;
+        }
+        if (solver.info() != Eigen::Success) {
             report_fail(test);
             return EXIT_FAILURE;
+        }
+        if (x != golden) {
+            report_fail(test);
+            return EXIT_FAILURE;
+        }
+
+        if (++since_reroll >= kRerollEvery) {
+            since_reroll = 0;
+            generate_problem(n, A, b);
+            Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
+            try {
+                golden = solver.compute(A).solve(b);
+            } catch (...) {
+                log_skip(TestResourceIssueSkipCategory, "Exception on Eigen code, most probably OOM");
+                return EXIT_SKIP;
+            }
+            if (solver.info() != Eigen::Success) {
+                report_fail(test);
+                return EXIT_FAILURE;
+            }
         }
     } while (test_time_condition(test));
     return EXIT_SUCCESS;
