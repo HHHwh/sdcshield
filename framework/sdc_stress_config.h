@@ -359,7 +359,10 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  *   本函数在自适应路径上叠加时间上限: 在 lo 与 2*lo 两档各完整求解一次
  *   (结果丢弃, 只为计时), 幂律 t(n)=c*n^k 拟合指数 k, 外推使单次求解
  *   <= max_single_ms 的维度, 再乘安全系数 0.5 吸收外推偏差。
- *   k clamp [1.5, 4.0] 抑制小档计时噪声; 试解总成本仅两小档(秒级)。
+ *   外推后再实测选定维度一次, 超预算按实测幂律收缩并复验——构造性
+ *   保证 one solve <= max_single_ms(外推/安全系数失准的兜底)。
+ *   k clamp [1.5, 4.0] 抑制小档计时噪声; 试解总成本两小档+一验证档
+ *   (秒级, 失准收缩时验证档可至 max_single_ms 量级)。
  *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
@@ -411,8 +414,31 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
     int dim = (int)((double)p1 * std::pow(budget / t1, 1.0 / k));
     if (dim < lo) dim = lo;
     if (dim > hi) dim = hi;
-    log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, k=%.2f) → %d",
-                test_id, knob, max_single_ms, p1, t1, mid, t2, k, dim);
+    /* 外推后验证探针(2026-10-24 检视 #11): 幂律外推与 k_floor 都是
+     * 启发式, 失准时单解可远超预算(检视实证: 大内存主机旧口径外推
+     * 落点单解 8.3s >> 2s)。在选定 dim 再实测一次, 超预算按实测幂律
+     * 收缩并复验——构造性保证 one solve ≤ max_single_ms; 收缩到 lo
+     * 仍超限则如实记录(机器极慢/lo 过大, 后果与显式 knob 同级)。
+     * nd 强制单调递减吸收计时噪声, 轮数上限 4 防抖动。 */
+    int xdim = dim;
+    double td = probe(dim);
+    double td0 = td;
+    int shrinks = 0;
+    while (td > (double)max_single_ms && dim > lo && shrinks < 4) {
+        int nd = (int)((double)dim * std::pow(budget / td, 1.0 / k));
+        if (nd >= dim) nd = dim - 1;
+        if (nd < lo) nd = lo;
+        dim = nd;
+        ++shrinks;
+        td = probe(dim);
+    }
+    if (td0 > (double)max_single_ms)
+        log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
+                    test_id, knob, xdim, td0, shrinks);
+    log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
+                "k=%.2f) → %d (验证 %.1fms%s)",
+                test_id, knob, max_single_ms, p1, t1, mid, t2, k, dim, td,
+                td > (double)max_single_ms ? ", lo 档仍超预算" : "");
     return dim;
 }
 
