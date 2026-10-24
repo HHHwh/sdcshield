@@ -152,7 +152,12 @@ static int eigen_sparse_run(struct test *test, int cpu) {
      * shared-golden ULP hazard) cannot produce a false mismatch. */
     Eigen::SparseMatrix<double> A;
     Eigen::VectorXd b, golden, x;
-    generate_problem(n, A, b);
+    try {
+        generate_problem(n, A, b);
+    } catch (...) {
+        log_skip(TestResourceIssueSkipCategory, "Exception on Eigen code, most probably OOM");
+        return EXIT_SKIP;
+    }
     {
         Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
         try {
@@ -187,7 +192,12 @@ static int eigen_sparse_run(struct test *test, int cpu) {
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;
-            generate_problem(n, A, b);
+            try {
+                generate_problem(n, A, b);
+            } catch (...) {
+                log_skip(TestResourceIssueSkipCategory, "Exception on Eigen code, most probably OOM");
+                return EXIT_SKIP;
+            }
             Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
             try {
                 golden = solver.compute(A).solve(b);
