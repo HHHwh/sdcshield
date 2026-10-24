@@ -35,11 +35,7 @@
  * SVE 架构最大 VL 2048bit = 256 字节 */
 #define SVE_MAX_VECTOR_BYTES 256
 #endif
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 /* 每缓冲 u64 元素数(原 1024) — 统一优先级链:
@@ -69,12 +65,13 @@ struct AguStoreOnlySveData {
 static int agu_stress_store_only_sve_init(struct test *test)
 {
 #if defined(__aarch64__)
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for agu_stress_store_only_sve");
+    /* All-VL Phase 2 P6: per-test auxv hand-probe -> framework
+     * layer: arm64_require_sve_vl does the SVE capability check
+     * + 128..1024-bit range gate in one call (skip reason
+     * framework-issued). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 #endif
     auto *data = static_cast<AguStoreOnlySveData *>(malloc(sizeof(AguStoreOnlySveData)));
     data->count = agu_store_only_sve_count(test);
