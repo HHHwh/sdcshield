@@ -37,11 +37,18 @@
  * bf16), so products and sums stay exact and the chain of 256 steps is
  * byte-exact comparable. Chains are dependent (accumulator feeds forward).
  *
- * test_init probes HWCAP_SVE + HWCAP2 (SVE2, SVEBF16) and returns a clean
- * EXIT_SKIP when absent; a one-step self-check compares golden vs hardware
- * before the long chain so a golden bug never reports as SDC. Requires
- * the tests_arm64_sve2 library (-march=armv9-a+sve2+bf16). Any runtime
- * vector length accepted. ARM64-native.
+ * test_init gates in two layers (all-VL Phase 2 P6 split): the pure SVE
+ * capability + 128..1024-bit range check goes through the framework
+ * layer (arm64_require_sve_vl, one call), while the composite
+ * SVE2|SVEBF16 HWCAP2 bits stay a getauxval hand-probe — that
+ * conjunction is this test's own semantics (FEAT_SVE_bf16 widening
+ * pipelines), not something the generic require helper covers. Either
+ * layer returns a clean EXIT_SKIP when absent; test_run re-checks the
+ * VL and fails closed on drift. A one-step self-check compares golden
+ * vs hardware before the long chain so a golden bug never reports as
+ * SDC. Requires the tests_arm64_sve2 library (-march=armv9-a+sve2+bf16).
+ * Any runtime vector length in the supported range is accepted.
+ * ARM64-native.
  * @endparblock
  */
 
@@ -58,6 +65,7 @@
 #include <asm/hwcap.h>
 #include <arm_sve.h>
 #include <arm_fp16.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 // Dependent chain length per iteration.
@@ -188,14 +196,16 @@ static int sve2_cross_precision_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    unsigned long hwcap2 = getauxval(AT_HWCAP2);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve2_cross_precision_arm "
-                 "requires SVE");
+    /* All-VL Phase 2 P6 split gate: the pure SVE capability + 128..1024-bit
+       range check moves to the framework layer (arm64_require_sve_vl —
+       returns the VL in BYTES), while the composite SVE2|SVEBF16 HWCAP2
+       conjunction stays a getauxval hand-probe: it is this test's own
+       semantic gate (FEAT_SVE_bf16), which the generic require helper
+       does not cover. */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
+    unsigned long hwcap2 = getauxval(AT_HWCAP2);
     if ((hwcap2 & (HWCAP2_SVE2 | HWCAP2_SVEBF16))
             != (HWCAP2_SVE2 | HWCAP2_SVEBF16)) {
         log_skip(CpuNotSupportedSkipCategory,
@@ -209,7 +219,13 @@ static int sve2_cross_precision_arm_init(struct test *test)
 
     try {
         auto data = std::make_unique<CrossPrecData>();
-        data->vl_f32 = svcntw();
+        data->vl_f32 = (size_t)svl / 4;   /* f32 lanes = SVL bytes / 4 */
+        if (data->vl_f32 < 4 || data->vl_f32 > 32) {
+            log_error("sve2_cross_precision_arm: f32 lanes %zu outside "
+                      "[4,32] — unit drift (svl %ld bytes)",
+                      data->vl_f32, svl);
+            return EXIT_FAILURE;
+        }
 
         const size_t lanes = data->vl_f32;
         const size_t srcs = 2 * lanes;   // f16/bf16 source lanes
@@ -252,6 +268,18 @@ static int sve2_cross_precision_arm_run(struct test *test, int cpu)
     return EXIT_SKIP;
 #else
     auto *d = static_cast<CrossPrecData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift (the goldens
+       are sized at init's lanes; a wider run-side VL would read past
+       them in the compare loops below). */
+    if (svcntw() != d->vl_f32) {
+        log_error("sve2_cross_precision_arm: VL drifted between init "
+                  "(%zu f32 lanes) and run (%u lanes)", d->vl_f32,
+                  (unsigned)svcntw());
+        report_fail_msg("sve2_cross_precision_arm: SVE VL drifted "
+                        "between init and run");
+    }
+
     const size_t lanes = d->vl_f32;
     const size_t srcs = 2 * lanes;
     bool all_passed = true;
