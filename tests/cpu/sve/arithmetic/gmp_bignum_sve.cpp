@@ -23,11 +23,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static constexpr int NUM_WORDS = 8;          // 512 位 = 8 × 64 位
@@ -94,12 +90,13 @@ static void sw_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *out
 
 static int gmp_bignum_sve_init(struct test *test) {
 #ifdef __aarch64__
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for gmp_bignum_sve");
+    /* All-VL Phase 2 P6: per-test auxv hand-probe -> framework
+     * layer: arm64_require_sve_vl does the SVE capability check
+     * + 128..1024-bit range gate in one call (skip reason
+     * framework-issued). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 #endif
 
     auto *data = new TestData;
