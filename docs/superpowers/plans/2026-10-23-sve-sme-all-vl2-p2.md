@@ -165,6 +165,7 @@ int main(int argc, char **argv)
         long steps = STEPS;
         const size_t stride = (size_t)cols * sizeof(float);
         asm volatile(
+            "smstart sm\n\t"
             "smstart za\n\t"
             "ptrue p0.s\n\t"
             "zero {za}\n\t"
@@ -180,18 +181,25 @@ int main(int argc, char **argv)
             "mova z2.s, p0/m, za0v.s[w12, 0]\n\t"
             "st1w {z2.s}, p0, [%[o]]\n\t"
             "smstop za\n\t"
+            "smstop sm\n\t"
             : [a] "+r"(pa), [b] "+r"(pb), [n] "+r"(steps)
             : [o] "r"(po), [s] "r"(stride)
             : "z0", "z1", "z2", "p0", "w12", "memory", "cc");
+        /* 注: 输出 %[a]/%[b]/%[n] 在输入 [s]/[o] 读尽前已写,GCC 语义上理论
+           正确形为 "+&r";保持 "+r" 系与 ebe08632 已验证 kernel 及仓库惯例
+           (sme_fmopa_stress_arm / za_tileview)逐字同源,统一硬化留待后续 PR
+           (三处 SME asm 一并改 "+&r" 并重跑 16-run)。 */
     }
-
-    for (int i = 0; i < cols; ++i)
-        fnv_u32(*(uint32_t *)&out[i]);
 
     int row_ok = 1, col_ok = 1;
     for (int i = 0; i < cols; ++i) {
-        if (out[i] != g_row[i]) row_ok = 0;
-        if (out[i] != g_col[i]) col_ok = 0;
+        uint32_t ob, rb, cb;
+        memcpy(&ob, &out[i], 4);   /* no aliasing UB; byte-exact per lane */
+        memcpy(&rb, &g_row[i], 4);
+        memcpy(&cb, &g_col[i], 4);
+        fnv_u32(ob);
+        if (ob != rb) row_ok = 0;
+        if (ob != cb) col_ok = 0;
     }
     if (row_ok && col_ok) {
         /* row0 == col0 at this seed: patterns degenerated — rerun with a
@@ -207,9 +215,10 @@ int main(int argc, char **argv)
         ++g_fails;
     }
 
+    const char *axis = row_ok ? "ROW" : (col_ok ? "COLUMN" : "UNKNOWN");
     printf("sme_fmopa_za_dual: svl=%ld cols=%d axis=%s\n",
-           (long)svl_bytes, cols, row_ok ? "ROW" : "COLUMN");
-    printf("SDCSHIELD_FAILS=%u\n%016llx\n",
+           (long)svl_bytes, cols, axis);
+    printf("SDCSHIELD_FAILS=%u\nchecksum=%016llx\n",
            g_fails, (unsigned long long)fnv);
     return g_fails ? 1 : 0;
 }
@@ -231,17 +240,21 @@ sme_fmopa_za_dual: sme_fmopa_za_dual.c
 
 ```bash
 G5=/home/sdc/wangxu/code-review/gem5-fi/build/ARM/gem5.opt
+overall=0
 for T in 1 2 4 8; do
   for ARGS in "fixed 1" "random 1" "random 2" "random 3"; do
     timeout 600 $G5 configs/se/arm_chaos.py --cpu O3 \
       --cmd workloads/sdcshield/sme_fmopa_za_dual --sme_vl $T --sve_vl $T \
       --workload_args "$ARGS" 2>&1 | tee /tmp/fza_sve${T}_$(echo $ARGS | tr ' ' '_').log \
       | grep -E 'sme_fmopa_za_dual|SDCSHIELD_FAILS|checksum|mismatch'
-    echo "tier=$T args='$ARGS' exit=$?"
+    rc=${PIPESTATUS[0]}      # timeout/gem5 的真实退出码,不是 grep 的
+    echo "tier=$T args='$ARGS' exit=$rc"
+    [ "$rc" -ne 0 ] && overall=1
   done
 done
+exit $overall
 ```
-Expected 逐档：`cols=4/8/16/32`（=128/256/512/1024-bit）；**axis= 四档一致**（记录 ROW 还是 COLUMN——这是 Task 2 golden 公式的依据）；全部 `SDCSHIELD_FAILS=0`；random 各 seed checksum 互异、fixed/random 可比即记录。若 gem5 在 smstart/fmopa 处崩溃（SIGILL 类）→ za-only 非法，改 `smstart sm`+`smstart za` / `smstop za`+`smstop sm`（stress 先例 :121-122/:150-151），重跑全部 16 run 并在 findings.md 记录裁决过程。若 axis 判别失败（两 golden 均不匹配）→ 看 mismatch dump，如实上报，不改数据迁就。
+Expected 逐档：`cols=4/8/16/32`（=128/256/512/1024-bit）；**axis= 四档一致**（记录 ROW 还是 COLUMN——这是 Task 2 golden 公式的依据）；全部 `SDCSHIELD_FAILS=0`；random 各 seed checksum 互异、fixed/random 可比即记录；**exit≠0 或 axis=UNKNOWN 的档位不得计入全绿、不得作为 Task 2 golden 依据**。若 gem5 在 smstart/fmopa 处崩溃（SIGILL 类）→ za-only 非法，改 `smstart sm`+`smstart za` / `smstop za`+`smstop sm`（stress 先例 :121-122/:150-151），重跑全部 16 run 并在 findings.md 记录裁决过程。若 axis 判别失败（两 golden 均不匹配）→ 看 mismatch dump，如实上报，不改数据迁就。
 
 - [ ] **Step 5: findings.md + 提交推送**
 
@@ -253,7 +266,7 @@ findings.md 尾部：日期、16 run 表（tier/mode/cols/axis/checksum/FAILS/ex
 - Modify: `tests/cpu/arm64/sme_fmopa_za_arm.cpp`（全文重构 init/asm/golden/run/docblock）
 
 **Interfaces:**
-- Consumes: `arm64_require_sme_svl(struct test *, long min_bits, long max_bits) -> long`（>0 = SVL 字节；-1 = 已 log_skip，PR #277，`#include <device/cpu/arm64/arm64_vl.h>`）；Task 1 的 axis 裁决与 smstart 形态结论。
+- Consumes: `arm64_require_sme_svl(struct test *, long min_bits, long max_bits) -> long`（>0 = SVL 字节；<0 = EXIT_SKIP(-255) 且已 log_skip——非裸 -1，见 arm64_vl.h 头注，直接 return；PR #277，`#include <device/cpu/arm64/arm64_vl.h>`）；Task 1 的 axis 裁决（**COLUMN**，ebe08632 四档实证）与 smstart 形态结论（**sm+za 双切强制**，za-only 首条 FMOPA 即陷阱）。
 - Produces: SME 侧全部达标（spec §6 P2 出口）。
 
 - [ ] **Step 1: 堆叠分支**
@@ -271,7 +284,9 @@ static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
 {
     const size_t stride = cols * sizeof(float);   /* window bytes, runtime */
     __asm__ volatile(
-        "smstart za\n\t"                    /* [Task 1 裁决: za-only 或 sm+za] */
+        "smstart sm\n\t"   /* Task 1 裁决: sm+za 双切强制——za-only 下首条 FMOPA
+                              即陷阱(FMOPA 需 SVCR.SM=1),四档实证 ebe08632 */
+        "smstart za\n\t"
         "ptrue p0.s\n\t"
         "zero {za}\n\t"
         "mov w12, wzr\n\t"
@@ -286,9 +301,12 @@ static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
         "mova z2.s, p0/m, za0v.s[w12, 0]\n\t"
         "st1w {z2.s}, p0, [%[o]]\n\t"
         "smstop za\n\t"
+        "smstop sm\n\t"
         : [a] "+r"(a_stream), [b] "+r"(b_stream), [n] "+r"(steps)
         : [o] "r"(out_vec), [s] "r"(stride)
         : "z0", "z1", "z2", "p0", "w12", "memory", "cc");
+    /* 注: 输出 %[a]/%[b]/%[n] 在输入 [s]/[o] 读尽前已写,理论正确形 "+&r";
+       保持 "+r" 与 ebe08632 已验证形态及仓库惯例逐字同源,统一硬化留待后续 PR。 */
 }
 ```
 
@@ -320,11 +338,19 @@ static int sme_fmopa_za_arm_init(struct test *test)
 #else
     const long svl = arm64_require_sme_svl(test, 128, 1024);
     if (svl < 0)
-        return EXIT_SKIP;   /* log_skip already emitted (capability or range) */
+        return EXIT_SKIP;   /* helper returns EXIT_SKIP(-255), not a bare -1;
+                               log_skip already emitted (capability or range) */
 
     try {
         auto data = std::make_unique<SmeFmopaData>();
-        data->tile_cols = (size_t)svl / 32;
+        /* arm64_require_sme_svl returns SVL BYTES (arm64_vl.h: bits/8);
+           cols = f32 lanes = SVL_bits/32 = svl_bytes/4 — same as the kernel. */
+        data->tile_cols = (size_t)svl / 4;
+        if (data->tile_cols < 4 || data->tile_cols > 32) {
+            log_error("sme_fmopa_za_arm: cols %zu outside [4,32] — unit "
+                      "drift (svl %ld bytes)", data->tile_cols, svl);
+            return EXIT_FAILURE;   /* assert() is compiled out under NDEBUG */
+        }
 
         /* Exact-integer operand windows [s*cols + i] (Task 1 geometry). */
         std::vector<float> a_stream(MOPA_STEPS * data->tile_cols);
@@ -333,8 +359,8 @@ static int sme_fmopa_za_arm_init(struct test *test)
             a_stream[si] = (float)((si % 7) + 1);
             b_stream[si] = (float)((si % 5) + 1);
         }
-        data->golden_row0 = fmopa_golden(a_stream, b_stream, MOPA_STEPS,
-                                         data->tile_cols);
+        data->golden_readout = fmopa_golden(a_stream, b_stream, MOPA_STEPS,
+                                            data->tile_cols);
         data->a_stream = a_stream;      /* struct 增两字段, 免 run 重建 */
         data->b_stream = b_stream;
         test->data = data.release();
@@ -347,7 +373,7 @@ static int sme_fmopa_za_arm_init(struct test *test)
 #endif
 }
 ```
-`SmeFmopaData` 增字段 `std::vector<float> a_stream, b_stream;`（golden_row0 改名 golden_out 亦可，保持最小改动则留名并在注释说明实际轴向）。
+`SmeFmopaData` 增字段 `std::vector<float> a_stream, b_stream;`；`golden_row0` 改名 **`golden_readout`**（与 38faa1b3 实现一致——原名暗示行 0，与 Task 1 裁决的 COLUMN 轴向矛盾）。
 
 `run` ——fail-closed 断言 + 一步自检 cols 化（替换 :176-233 函数体；流直接用 init 存的，不再重建）：
 ```cpp
@@ -364,14 +390,15 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
     auto *d = static_cast<SmeFmopaData *>(test->data);
     const size_t cols = d->tile_cols;
 
-    if ((size_t)arm64_sme_svl_bytes() / 32 != cols) {
+    if ((size_t)arm64_sme_svl_bytes() / 4 != cols) {
         log_error("sme_fmopa_za_arm: SVL drifted between init (%zu cols) "
-                  "and run (%ld cols)", cols, arm64_sme_svl_bytes() / 32);
+                  "and run (%ld cols)", cols, arm64_sme_svl_bytes() / 4);
         report_fail_msg("sme_fmopa_za_arm: SVL drifted between init and run");
     }
 
-    /* One-step self-check (golden-vs-hardware on a single FMOPA — a golden
-       bug reports as a test bug, never as SDC). */
+    /* One-step self-check (golden-vs-hardware on a single FMOPA; 走同一
+       fmopa_chain_asm 硬件路径,失配不预设分类——golden 缺陷与真实 SDC
+       在此处不可区分,统一按未分类硬件/金标准失配上报)。 */
     {
         std::vector<float> one_a(cols, 2.0f), one_b(cols);
         for (size_t j = 0; j < cols; ++j)
@@ -381,8 +408,8 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
         fmopa_chain_asm(one_a.data(), one_b.data(), 1, got.data(), cols);
         if (memcmp(expect.data(), got.data(), cols * sizeof(float)) != 0) {
             report_fail_msg("sme_fmopa_za_arm: golden tile-mapping "
-                            "self-check failed — test bug, not SDC");
-            return EXIT_FAILURE;
+                            "self-check failed — golden/asm mismatch or "
+                            "hardware fault (unclassified)");
         }
     }
 
@@ -390,12 +417,12 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
         std::vector<float> out(cols, -1.0f);
         fmopa_chain_asm(d->a_stream.data(), d->b_stream.data(), MOPA_STEPS,
                         out.data(), cols);
-        if (memcmp(out.data(), d->golden_row0.data(),
+        if (memcmp(out.data(), d->golden_readout.data(),
                    cols * sizeof(float)) != 0) {
             for (size_t c = 0; c < cols; ++c)
-                if (out[c] != d->golden_row0[c]) {
+                if (out[c] != d->golden_readout[c]) {
                     uint32_t g, a;
-                    memcpy(&g, &d->golden_row0[c], 4);
+                    memcpy(&g, &d->golden_readout[c], 4);
                     memcpy(&a, &out[c], 4);
                     log_warning("sme_fmopa_za: col %zu golden=0x%08" PRIx32
                                 " actual=0x%08" PRIx32, c, g, a);
@@ -412,6 +439,8 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
 }
 ```
 （比较改 memcmp 字节级整块比较 + 首失配定位日志——spec §8 军规口径。）
+
+**验证边界诚实声明（P2 评审裁决补记）**：本计划的验证架构存在结构性盲区——gem5 只执行 Task 1 kernel，测试粘合层（init 流尺寸/golden 组装/run 缓冲）在本机与 gem5 均零执行覆盖。缓解防线：① 测试 fixed 模式与 kernel 逐字节几何同构（操作数公式 `(si%7)+1/(si%5)+1`、`MOPA_STEPS=256`、golden 公式三者与 kernel 一致），16-run 证据经同构锚定直达测试 golden；② run 侧一步自检使真机首跑即校验 golden 组装；③ init 的 cols∈[4,32] 显式检查兜住单位漂移。此声明源自 PR #279 五 bot 检视（local-claude 意见），Self-Review 原文"范围检查 ✓"据实勘正为"bits 区间 + 派生 cols∈[4,32] 双重检查"。
 
 头部 includes：`#ifdef __aarch64__` 块内 `<sys/auxv.h>/<asm/hwcap.h>` 换成 `#include <device/cpu/arm64/arm64_vl.h>`（getauxval 手探不再需要）；docblock 重写：三重缺陷修复记载、Task 1 轴向/SMSTART 裁决引用（gem5 run 命令形态 + 16 run 表）、"first functional form"诚实声明。
 
@@ -444,8 +473,9 @@ instead of assuming one tier:
 - **Probe via the framework layer**: `#include
   <device/cpu/arm64/arm64_vl.h>` and call
   `arm64_require_sve_vl(test, min_bits, max_bits)` /
-  `arm64_require_sme_svl(...)` from `test_init`; a -1 return means the
-  helper already logged the skip — `return EXIT_SKIP` immediately. Do
+  `arm64_require_sme_svl(...)` from `test_init`; a negative return
+  (EXIT_SKIP, -255 — deliberately not a bare -1, see arm64_vl.h) means
+  the helper already logged the skip — `return EXIT_SKIP` immediately. Do
   not hand-write getauxval probes: `device_has_feature()` is
   short-circuited by compile-time `__ARM_FEATURE_*` macros in +sve/+sme
   TUs (docs/architecture.md).
@@ -482,9 +512,36 @@ instead of assuming one tier:
 
 ---
 
+## Erratum（2026-10-24，PR #279 五 bot 检视闭环）
+
+1. **`/32` 单位错误（Critical）**：原模板 init/run 两处 `svl / 32` 把
+   arm64_require_sme_svl 返回的 **SVL 字节**当作位处理，差 8×——128-bit 档
+   cols=0（空 golden + memcmp 长度 0 恒过的**无操作假 PASS** + st1w 向空缓冲
+   写的堆溢出），256-1024-bit 档前缀一致假 PASS + 越界写。实现分支
+   `feat/sme-fmopa-za-allvl` 提交 38faa1b3 已在代码侧修复（`/32→/4` + 显式
+   cols∈[4,32] 检查），本计划模板本节同步修正，并指出根因：**P2 计划模板
+   自相矛盾**（Interfaces 说明写"字节"，代码块写 `/32`）。
+2. **Task 1 两项裁决已落定**（原模板为未决占位）：**axis=COLUMN**
+   （`za0v.s[w12,0]` 读列 0）；**sm+za 双切强制**（za-only 下首条 FMOPA 即
+   陷阱，FMOPA 需 SVCR.SM=1）——证据 = gem5-fi `feat/fmopa-za-dual @
+   ebe08632` 四档 16 run 全绿。kernel 代码块已按裁决更新。
+3. **取证脚本取码修正**：原 `exit=$?` 取的是管道末 grep 的退出码而非
+   gem5 的（gem5 崩溃但有匹配行 → 假 exit=0 记录）；改 `PIPESTATUS[0]` +
+   overall 汇总。kernel 输出补 `checksum=` 标签（原裸十六进制行被自家
+   grep 过滤式排除）、axis 双失配时输出 UNKNOWN 而非武断 COLUMN、
+   fnv/比对 memcpy 化（消严格别名 UB、字节级 per-lane）。
+4. **跳过返回值契约勘误**：Interfaces 与 Task 3 政策原文"-1 = 已
+   log_skip"系错误——实际契约是 EXIT_SKIP(-255)（arm64_vl.h 头注明确
+   "not a bare -1"）。两处已改，Task 3 文本将进入 writing_tests.md 持久
+   指南，此处勘误杠杆最高。
+5. 评审出处：PR #279 五 bot 检视（coderabbit 6 条 / local-claude 6 条 /
+   pr-agent、codex、greptile 限额类），处置明细见 PR 描述。自检失配
+   "test bug, not SDC" 分类措辞中性化（自检走同一硬件路径，无独立 oracle
+   依据支撑分类断言）。
+
 ## Self-Review 记录
 
-- **Spec 覆盖**：§6 P2 四要素（新 API ✓Task2/范围检查 ✓/`#16` 寄存器化 ✓/dual kernel ✓Task1）；§7 协议落在 Task 1（16 run + 无回归锚的诚实替代：通道 A 四档 golden 逐字节一致）；§8 SME fmopa_za 行（标量累加 ✓——精确整数）；§9 SKIP 语义（require 助手内置）；§10 writing_tests.md（0c6c9c89 归属 ✓Task3）。✓
+- **Spec 覆盖**：§6 P2 四要素（新 API ✓Task2/bits 区间 + 派生 cols∈[4,32] 双重检查 ✓/`#16` 寄存器化 ✓/dual kernel ✓Task1）；§7 协议落在 Task 1（16 run + 无回归锚的诚实替代：通道 A 四档 golden 逐字节一致）；§8 SME fmopa_za 行（标量累加 ✓——精确整数）；§9 SKIP 语义（require 助手内置）；§10 writing_tests.md（0c6c9c89 归属 ✓Task3）。✓
 - **占位符**：Task 2 中两处"[Task 1 裁决]"是**跨任务数据依赖**（轴向/SMSTART 由实证决定，非 TBD——Task 1 产出明确定义）；其余无占位。✓
 - **类型一致性**：`fmopa_chain_asm(const float*, const float*, size_t, float*, size_t)` 与 golden/init/run 调用一致；`arm64_require_sme_svl/ arm64_sme_svl_bytes` 签名与 PR #277 一致。✓
 - **Review Focus 归属**：1/2→Task 1 Step 4；3→Task 1 通道 A + Task 2 自检；4→Task 2 Step 2/3；5→Task 1 设计不变式 + 16 run；6→Task 2 尺寸 + 四档 cols=32。✓
