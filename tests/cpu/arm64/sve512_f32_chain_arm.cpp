@@ -9,17 +9,22 @@
  * extraction of workload 3 from sve512_fma_arm.
  *
  * The same serial FMLA chain structure as sve512_f64_chain_arm but at f32
- * width (svmla_f32_x), exercising the 16-lane f32 FMA/predicate datapath
- * at full 512-bit width (16 f32 lanes on HiSilicon 0xd22).
+ * width (svmla_f32_x), exercising the f32 FMA/predicate datapath at the
+ * CPU's full runtime vector width (4..32 f32 lanes).
  *
  * The golden is recomputed in scalar C++ with the identical operation
  * order, so any lane flip in the wide f32 datapath is a byte-exact
  * mismatch.
  *
  * Compiled WITHOUT -msve-vector-bits so the sizeless svfloat32_t type
- * adopts the CPU runtime vector length. test_init probes HWCAP_SVE via
- * getauxval (no SVE instruction executes before the probe), returning a
- * clean EXIT_SKIP on SVE-less CPUs.
+ * adopts the CPU runtime vector length — all-VL (128..1024-bit, all-VL
+ * Phase 2 P3; the pre-P3 512-bit single-value gate and its issue #182
+ * caveat are cleared by the four-tier dual-kernel evidence in gem5-fi
+ * feat/sve512-dual). test_init gates via the framework layer
+ * (arm64_require_sve_vl: HWCAP_SVE capability + range check in one
+ * call, no SVE instruction executes before the probe), returning a
+ * clean EXIT_SKIP on SVE-less CPUs; test_run re-checks the VL and
+ * fails closed on drift.
  *
  * SDC detection: byte-exact lane compares against the deterministic
  * software reference, with per-lane golden/actual/XOR logging on mismatch.
@@ -37,12 +42,12 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
-// Serial FMA chain length per iteration.
+// Serial FMA chain length per iteration — VL-independent (a per-lane
+// dependency sequence; the lane count, not the length, scales with VL).
 static constexpr size_t CHAIN_STEPS = 512;
 
 // f32 finite patterns (|x| <= 2).
@@ -135,29 +140,27 @@ static int sve512_f32_chain_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    // Probe SVE availability BEFORE executing any SVE instruction.
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; "
-                 "sve512_f32_chain_arm requires SVE "
-                 "(e.g. HiSilicon 0xd22, 512-bit VL)");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call (the geometry has been svcnt-dynamic all
+       along; only the old single-value gate pinned one tier). The
+       historical VL=128 golden mismatch on a hosted CI runner
+       (issue #182) is cleared by the four-tier dual-kernel evidence
+       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       returns the VL in BYTES — f32 lanes = svl/4, range-checked
+       below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<SveF32ChainData>();
-        data->vl_w = svcntw();
+        data->vl_w = (size_t)svl / 4;   /* f32 lanes = SVL bytes / 4 */
+        if (data->vl_w < 4 || data->vl_w > 32) {
+            log_error("sve512_f32_chain_arm: f32 lanes %zu outside "
+                      "[4,32] — unit drift (svl %ld bytes)",
+                      data->vl_w, svl);
+            return EXIT_FAILURE;
+        }
 
         /* randomization hardening H12': framework RNG per run (-s
          * reproducible) instead of fixed splitmix/table indices; the
@@ -227,11 +230,19 @@ static int sve512_f32_chain_arm_run(struct test *test, int cpu)
 #ifndef __aarch64__
     (void)test;
     log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): aarch64 SVE-512 f32 FMLA "
-             "chain required");
+             "to be implemented (placeholder): aarch64 SVE required for "
+             "sve512_f32_chain_arm");
     return EXIT_SKIP;
 #else
     auto *d = static_cast<SveF32ChainData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift. */
+    if (svcntw() != d->vl_w) {
+        log_error("sve512_f32_chain_arm: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", d->vl_w, (unsigned)svcntw());
+        report_fail_msg("sve512_f32_chain_arm: SVE VL drifted between "
+                        "init and run");
+    }
 
     // Golden, recomputed each iteration (deterministic, same op order).
     std::vector<uint32_t> gold32(d->vl_w);
@@ -252,7 +263,7 @@ static int sve512_f32_chain_arm_run(struct test *test, int cpu)
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_f32_chain_arm: SVE-512 f32 FMLA chain SDC detected");
+                "sve512_f32_chain_arm: SVE f32 FMLA chain SDC detected");
             return EXIT_FAILURE;
         }
 
@@ -279,10 +290,10 @@ static int sve512_f32_chain_arm_cleanup(struct test *test)
 
 DECLARE_TEST(sve512_f32_chain_arm,
              "SVE full-vector-length f32 FMLA dependency chain SDC stress: "
-             "512-step serial svmla_f32_x chain (16-lane f32 datapath) at "
-             "the CPU's runtime SVE vector length (512-bit on HiSilicon "
-             "0xd22), byte-exact compared against a deterministic scalar "
-             "fmaf() reference")
+             "512-step serial svmla_f32_x chain at the CPU's runtime SVE "
+             "vector length (all-VL 128..1024-bit via "
+             "arm64_require_sve_vl), byte-exact compared against a "
+             "deterministic scalar fmaf() reference")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_f32_chain_arm_init,
     .test_run = sve512_f32_chain_arm_run,
