@@ -77,7 +77,9 @@
  *           readout[r] = sum_s a[s*cols+r] * b[s*cols]
  *
  * A one-step self-check runs before the chain (golden-vs-hardware on a
- * single FMOPA — a golden bug reports as a test bug, never as SDC).
+ * single FMOPA — no independent oracle: the check rides the same
+ * FMOPA/ZA datapath as the main chain, so a self-check mismatch could be
+ * a test-model bug or real SDC and must be investigated, not presumed).
  * test_run re-checks the SVL against the value recorded at init and
  * fails closed on drift (never continues with stale geometry).
  *
@@ -244,8 +246,9 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
         report_fail_msg("sme_fmopa_za_arm: SVL drifted between init and run");
     }
 
-    /* One-step self-check (golden-vs-hardware on a single FMOPA — a golden
-       bug reports as a test bug, never as SDC). */
+    /* One-step self-check (golden-vs-hardware on a single FMOPA — no
+       independent oracle, same FMOPA/ZA datapath: a mismatch could be a
+       test-model bug or real SDC, investigate before concluding). */
     {
         std::vector<float> one_a(cols, 2.0f), one_b(cols);
         for (size_t j = 0; j < cols; ++j)
@@ -254,8 +257,10 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
         std::vector<float> got(cols, -1.0f);
         fmopa_chain_asm(one_a.data(), one_b.data(), 1, got.data(), cols);
         if (memcmp(expect.data(), got.data(), cols * sizeof(float)) != 0) {
-            report_fail_msg("sme_fmopa_za_arm: golden tile-mapping "
-                            "self-check failed — test bug, not SDC");
+            report_fail_msg("sme_fmopa_za_arm: tile-mapping self-check "
+                            "mismatch — no independent oracle (same "
+                            "FMOPA/ZA datapath): test-model bug or real "
+                            "SDC, investigate");
         }
     }
 
