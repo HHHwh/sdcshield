@@ -12,8 +12,11 @@
  * is identical across streams but the chaining state evolves per stream,
  * so N HMACs run in parallel on SVE lanes (N = svcntw() for the 32-bit
  * family / svcntd() for the 64-bit family, all-VL Phase 2 P4) with
- * identical results to serial HMAC (verified against OpenSSL in the
- * standalone verifier).
+ * identical results to serial HMAC (the underlying SHA kernels are
+ * verified against OpenSSL in the standalone verifier,
+ * scripts/sve-sha-verify/verify.cpp — five SHA sections, no HMAC
+ * section; the HMAC construction itself follows RFC 2104 and is
+ * cross-checked init-vs-run inside the ipsec tests).
  */
 #ifndef SVE_HMAC_H
 #define SVE_HMAC_H
