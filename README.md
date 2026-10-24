@@ -61,7 +61,7 @@ bash scripts/run/sdc_detect.sh
 ```bash
 # 源码构建
 ./builddir/sdcshield --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
-# 预构建二进制（旧 tarball；clone 后进入对应 SP 的 built 目录）
+# 预构建二进制（旧 tarball，2026-09-12 构建 = eigen 满核假阳修复【2026-10-24】之前；clone 后进入对应 SP 的 built 目录）
 ./run-sdcshield.sh --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
 ```
 
@@ -71,7 +71,7 @@ bash scripts/run/sdc_detect.sh
 
 1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
 2. **停下且有 FAIL**：先看挂在哪个测试——
-   - 挂在 `eigen_svd_double` / `eigen_sparse`：**2026-10-24 已修复**（per-thread 同源 golden——每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；本机 64 核满跑 3×240s×3 seed + 10 分钟档×2 + 300s 换 seed 全绿，gem5-fi FS 双线程 `eigen_svd_double -n 2` pass）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑仍可用作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。历史"已知 ULP 级良性抖动"记录见 CLAUDE.md 平台怪癖条目（修复前行为）。
+   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**（per-thread 同源 golden——每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；本机 64 核满跑 3×240s×3 seed + 10 分钟档×2 + 300s 换 seed 全绿，gem5-fi FS 双线程 `eigen_svd_double -n 2` pass）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑仍可用作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。历史"已知 ULP 级良性抖动"记录见 CLAUDE.md 平台怪癖条目（修复前行为）。
    - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
@@ -123,6 +123,8 @@ sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断�
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
 预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（440）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
+
+> **旧二进制判读警示**：2026-09-12 预构建二进制是 `eigen_svd_double`/`eigen_sparse` 满核假阳修复（2026-10-24，feat/eigen-svd-multithread）**之前**的构建——其上这两个用例的满核 FAIL 仍按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；下节"满核挂 = SDC 嫌疑"的判读规则仅适用于含 2026-10-24 修复的构建。
 
 ```bash
 git clone --recurse-submodules <repo-url>   # 含子模块
