@@ -667,15 +667,12 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   f32 链/特殊值类别比对)lanes 逐档 2/4/8/16 与 4/8/16/32; sve512_gather_dual
   两模式(1d_tag 索引标签断言/2d_block whilelt 尾)gn=128..1024;
   stencil_axis_dual(bt=4..32, 7bed7f0e 全 VL 版+memcpy 告警修复)。**issue
-<<<<<<< HEAD
   #182 在 3 个代表性 kernel(chain/gather/stencil)上未复现**: 128-bit 档
   全部模式字节级全绿——历史 GH runner VL=128 golden 失配在 gem5-fi O3
   全 VL 语义下不复现;非全家族逐文件运行验证, 且本机无 SVE、真实 SVE
   主机验证未覆盖(结论口径收窄, PR #283 评审)。chain 16 checksum 互异;
-=======
   #182 疑点清除**: 128-bit 档全部模式字节级全绿——历史 GH runner VL=128
   golden 失配在 gem5-fi O3 全 VL 语义下不复现。chain 16 checksum 互异;
->>>>>>> 860edf6e (docs(all-vl2): P3 收尾——README SKIP 声明全 VL 化 + progress-log 实证条目)
   gather 同档 fixed/random checksum 相同系设计属性(FNV 按地址序, dst 内容
   与排列无关, 源码核实)。
 - **重构**(feat/sve512-allvl, 11 commit): 范本 f64_chain_arm(a08302c0)+
@@ -694,6 +691,10 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **承接**:P4(ipsec HMAC×17)计划已就绪(docs/superpowers/plans/
   2026-10-24-sve-sme-all-vl2-p4.md)。
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+
+>>>>>>> 853994d3 (docs(all-vl2): P4 收尾——README VL 政策段 all-VL 化 + progress-log 实证条目)
 ## 2026-10-24（all-VL Phase 2 P4：ipsec HMAC×17 流数参数化——两个既有缺陷随阶段修复）
 
 - **既有缺陷修复**(评估代理实证, 随 P4 落地): ①门控无上界——旧
@@ -718,6 +719,7 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **验证模式**: 16-run 与 20-commit 实施均由隔离 subagent 执行; 每文件
   TU 零告警+skip 干净(框架编译特性门)+终态全量构建零告警+zstd19 pass。
 - **诚实边界**: verify.cpp 的 5200 向量 OpenSSL 重验需 SVE 硬件(本机
+<<<<<<< HEAD
   仅编译验证, commit 正文记录); hmac 容量守卫的 init 侧失败类别已由
   20f73730 修正(compute_golden 经返回值传播, test_init 返回
   EXIT_FAILURE → 干净 Failed, 非 Skipped)——本条曾按旧形态记账, 评审
@@ -788,3 +790,11 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   [2,16] 范围、漂移比较操作数)已由同源 harness 逐档执行。
 =======
 >>>>>>> 860edf6e (docs(all-vl2): P3 收尾——README SKIP 声明全 VL 化 + progress-log 实证条目)
+=======
+  仅编译验证, commit 正文记录); hmac 容量守卫的 init 侧失败经
+  report_fail_msg 会表现为 Skipped("Unexpected OS error")而非干净
+  Failed——knob 钳制后不可达, 纯纵深防御, 记账。
+- **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
+  语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
+  遗留手探文件)待做。
+>>>>>>> 853994d3 (docs(all-vl2): P4 收尾——README VL 政策段 all-VL 化 + progress-log 实证条目)
