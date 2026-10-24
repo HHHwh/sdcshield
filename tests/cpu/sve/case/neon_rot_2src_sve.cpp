@@ -21,11 +21,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define NEON_ROT_2SRC_SVE_COUNT 1024   /* uint64 elements per buffer */
@@ -67,15 +63,14 @@ static size_t neon_rot_2src_sve_count(struct test *test)
 static int neon_rot_2src_sve_init(struct test *test) {
     size_t count = NEON_ROT_2SRC_SVE_COUNT;
 #if defined(__aarch64__)
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for neon_rot_2src_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
     count = neon_rot_2src_sve_count(test);
     /* asm ldr z/str z 全向量访问: count 向下取整到 svcntd() 的整倍数 (倍数约束保留) */
-    const size_t lanes = (size_t)svcntd();
+    const size_t lanes = (size_t)(svl / 8);   /* f64 lanes = SVL bytes / 8 */
     const size_t rem = count - count / lanes * lanes;   /* % 表达式触发 GCC SVE ICE, 改用除法组合 */
     if (rem != 0) {
         const size_t rounded = count - rem;

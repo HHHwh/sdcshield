@@ -40,11 +40,7 @@
  * SVE 架构最大 VL 2048bit = 256 字节 */
 #define SVE_MAX_VECTOR_BYTES 256
 #endif
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define NEON_ROT_U8X16_SVE_BYTES 16384   /* bytes per buffer */
@@ -82,23 +78,22 @@ static int neon_rot_u8x16_sve_init(struct test *test)
 {
     size_t buffer_bytes = NEON_ROT_U8X16_SVE_BYTES;
 #if defined(__aarch64__)
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for neon_rot_u8x16_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
     buffer_bytes = neon_rot_u8x16_sve_buffer_bytes(test);
     /* 全 VL ldr/str 访问 + aligned_alloc(64,·) 尺寸约束 (原 16/64 对齐保留):
      * 向下取整到 svcntb() 与 64 的公倍数 (均为 2 的幂, 取大者即公倍数) */
-    size_t align = (size_t)svcntb();
+    size_t align = (size_t)svl;   /* VL 字节 = SVL bytes (svcntb 同值) */
     if (align < 64)
         align = 64;
     if (buffer_bytes % align != 0) {
         const size_t rounded = buffer_bytes - buffer_bytes % align;
         log_warning("neon_rot_u8x16_sve: buffer_bytes=%zu 不是 svcntb()=%d 与 64 的公倍数, "
                     "向下取整为 %zu",
-                    buffer_bytes, (int)svcntb(), rounded);
+                    buffer_bytes, (int)svl, rounded);
         buffer_bytes = rounded;
     }
 #endif

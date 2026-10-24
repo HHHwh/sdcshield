@@ -33,11 +33,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define NEON_ROT_LDR_AT_TOP_ROWMAJOR_K5IR_SVE_SLOTS 1024
@@ -79,14 +75,18 @@ static size_t neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_slots(struct test *t
 
 static int neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_init(struct test *test) {
 #if defined(__aarch64__)
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
-    const int lanes = (int)svcntd();
+    const int lanes = (int)(svl / 8);   /* f64 lanes = SVL bytes / 8 */
+    if (lanes < 2 || lanes > 16) {
+        log_error("%s: f64 lanes %d outside [2,16] — unit drift (svl %ld bytes)",
+                  test->id, lanes, svl);
+        return EXIT_FAILURE;
+    }
     const size_t slots = neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_slots(test);
     const size_t elems = slots * (size_t)lanes;
 
