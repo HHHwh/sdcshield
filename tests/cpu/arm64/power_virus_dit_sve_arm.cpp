@@ -37,8 +37,11 @@
  * enhancement, not a requirement — the NEON version ships the same
  * way).
  *
- * test_init probes HWCAP_SVE and returns a clean EXIT_SKIP on SVE-less
- * CPUs. Any runtime vector length (full 512-bit on 0xd22). Built in
+ * test_init gates via the framework layer (arm64_require_sve_vl:
+ * HWCAP_SVE capability + 128..1024-bit range in one call, all-VL
+ * Phase 2 P6) and returns a clean EXIT_SKIP on SVE-less CPUs. The run
+ * side reads the VL fresh (svcntd) and derives the golden from the
+ * same lanes, so no init/run VL state exists to drift. Built in
  * tests_arm64_sve.
  * @endparblock
  */
@@ -51,9 +54,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 // Burst/stall sizes (matched duty cycle, power_virus_dit precedent).
@@ -74,14 +76,14 @@ static constexpr double B1 = -0.8333333333333333;  // 0xBFEAAAAAAAAAAAAA
 
 static int power_virus_dit_sve_arm_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; power_virus_dit_sve_arm "
-                 "requires SVE (full-width di/dt burst)");
+    /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
+       framework-layer call, replacing the getauxval hand-probe. Gate
+       only: the run side re-reads svcntd() and sizes its buffers and
+       golden from the same lanes (no init/run VL state to drift). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-    (void)test;
+    (void)svl;
     return EXIT_SUCCESS;
 }
 
@@ -214,8 +216,8 @@ DECLARE_TEST(power_virus_dit_sve_arm,
              "svmla_f64_x burst chains with alternating high-Hamming "
              "operands and periodic stack-reload SVE loads (address "
              "generation inside the burst window), alternating with yield "
-             "stalls — the SVE-512 port of power_virus_dit, byte-exact vs "
-             "a per-lane scalar fma golden")
+             "stalls — the full-width SVE port of power_virus_dit, "
+             "byte-exact vs a per-lane scalar fma golden")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = power_virus_dit_sve_arm_init,
     .test_run = power_virus_dit_sve_arm_run,
