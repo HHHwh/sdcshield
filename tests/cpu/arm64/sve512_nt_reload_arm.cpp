@@ -42,10 +42,12 @@
  * (sve512_stencil_axis_arm precedent — the NUMA3 signature corrupts
  * VA[55:48] while TCR.TBI0=1 silently ignores VA[63:56]).
  *
- * test_init probes HWCAP_SVE via getauxval before any SVE instruction,
- * returning a clean EXIT_SKIP on SVE-less CPUs. Any runtime vector length
- * is accepted (full 512-bit on HiSilicon 0xd22). ARM64-native; built only
- * on aarch64 (tests_arm64_sve library).
+ * test_init gates via the framework layer (arm64_require_sve_vl:
+ * HWCAP_SVE capability + 128..1024-bit range in one call, no SVE
+ * instruction executes before the gate, all-VL Phase 2 P6), returning a
+ * clean EXIT_SKIP on SVE-less CPUs; test_run re-checks the VL and fails
+ * closed on drift. ARM64-native; built only on aarch64 (tests_arm64_sve
+ * library).
  * @endparblock
  */
 
@@ -58,9 +60,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 // Full-vector steps per outer iteration.
@@ -216,18 +217,24 @@ static int sve512_nt_reload_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; "
-                 "sve512_nt_reload_arm requires SVE (ld1rd/ldnt1d/stnt1d "
-                 "are the NUMA3 VA-path fault trigger-instruction window)");
+    /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
+       framework-layer call, replacing the getauxval hand-probe (no SVE
+       instruction executes before the gate). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, range-checked below
+       (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<NtReloadData>();
-        data->vl_d = svcntd();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        if (data->vl_d < 2 || data->vl_d > 16) {
+            log_error("sve512_nt_reload_arm: f64 lanes %zu outside "
+                      "[2,16] — unit drift (svl %ld bytes)",
+                      data->vl_d, svl);
+            return EXIT_FAILURE;
+        }
         if (BUF_ELEMS % data->vl_d != 0) {
             // BUF_ELEMS is 4096; any power-of-two lane count divides it.
             // A non-power-of-two VL would make step vectors overlap; skip
@@ -300,6 +307,17 @@ static int sve512_nt_reload_arm_run(struct test *test, int cpu)
     return EXIT_SKIP;
 #else
     auto *d = static_cast<NtReloadData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift (buf/out/golden
+       are sized in init at its VL). */
+    if (svcntd() != d->vl_d) {
+        log_error("sve512_nt_reload_arm: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", d->vl_d,
+                  (unsigned)svcntd());
+        report_fail_msg("sve512_nt_reload_arm: SVE VL drifted between "
+                        "init and run");
+    }
+
     const size_t vl = d->vl_d;
 
     // Stack slots — the reload sources (fault ingredient).
