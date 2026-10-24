@@ -140,12 +140,13 @@ if host_machine.cpu_family() == 'aarch64'
     # +sve target, while the tests_arm64 baseline stays armv8.1-a+crc+crypto:
     # enabling +sve for the whole library could let GCC auto-vectorize the
     # NEON tests into SVE instructions, which would SIGILL on SVE-less CPUs
-    # such as this Kunpeng 920. Every test gates via the framework layer
-    # (arm64_require_sve_vl: HWCAP_SVE capability + 128..1024-bit range in
-    # one call, all-VL Phase 2) and returns a clean EXIT_SKIP on SVE-less
-    # CPUs, so their SVE
+    # such as this Kunpeng 920. Every test self-gates in test_init and
+    # returns a clean EXIT_SKIP on SVE-less CPUs, so their SVE
     # codegen only ever executes on SVE-capable hardware. Built only on
-    # aarch64.
+    # aarch64. (Gate split as of all-VL Phase 2: the P3 files gate via
+    # the framework layer — arm64_require_sve_vl: HWCAP_SVE capability +
+    # 128..1024-bit range in one call; the remaining legacy files still
+    # probe HWCAP_SVE by hand and migrate in P6.)
     #
     # NOTE: sve512_fma_arm.cpp is committed (ea879f68) but deliberately NOT
     # wired into any sources list yet — wiring + all-VL validation is
@@ -179,8 +180,9 @@ if host_machine.cpu_family() == 'aarch64'
             # chain, but the operand streams are walked through a 16x16
             # nested block traversal (BDCSVD-style block-of-matrix access)
             # over an SVD-scale allocation whose size is proportional to
-            # the runtime lane count (~5.9..47.3 MB per stream across
-            # 128..1024-bit, all-VL Phase 2). The per-iteration touched
+            # the runtime lane count (m+a streams total ~5.9..47.3 MB
+            # across 128..1024-bit, i.e. ~2.95..23.7 MB per stream;
+            # all-VL Phase 2). The per-iteration touched
             # set overflows L2 and pressures L3/TLB at every tier — the
             # first of eigen_svd_cdouble_sve's SVD-only trigger paths
             # (working set beyond L2).

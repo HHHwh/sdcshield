@@ -30,8 +30,10 @@
  *   svst1_scatter with svwhilelt tails, fma(v,v,1.5) in flight.
  * Phase C — verification: phase-A per-lane check against a scalar
  *   reference recomputed on the 1/8-exact grid (the pre-P3 closed-form
- *   constant 96.0*(jj+1) was bound to the 512-bit tile alignment and is
- *   replaced by the stencil_axis-style scalar golden), phase-B full
+ *   constant 96.0*(jj+1) happens to agree at every tier for the current
+ *   fill pattern, but binds to that pattern rather than the geometry —
+ *   the stencil_axis-style scalar golden is robust to fill changes),
+ *   phase-B full
  *   byte-compare against the init-time scalar golden (verified every
  *   sweep — the compare is ~0.1 ms, so no subset rotation is needed),
  *   and a pointer-table canary (workspace pointers byte-compared against
@@ -278,8 +280,9 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
            the per-call increment stays below 12 * 0.125 * bt <= 48, so
            both the hardware accumulation and this reference stay on the
            exact 1/8 grid below 2^53: bit-exact equality. (The pre-P3
-           closed-form constant 96.0*(jj+1) was bound to the 512-bit
-           tile alignment; this reference is alignment-free.) */
+           closed-form constant 96.0*(jj+1) agrees at every tier for the
+           current i%bt+1 fill; this reference is robust to fill
+           changes.) */
         double expected[kTileMax];
         for (size_t jj = 0; jj < bt; ++jj)
             expected[jj] = 0.0;

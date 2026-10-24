@@ -237,7 +237,9 @@ static bool park_window(LibompCtx *ctx, uint32_t *armed_seq)
         // operands, and the store keeps the batch from being optimized
         // away), then yield — the parked-thread rhythm between regions.
         // svst1 writes svcntd() doubles; the require gate caps VL at
-        // 1024-bit = 16 f64 lanes — 8 would overflow at 512/1024-bit.
+        // 1024-bit = 16 f64 lanes — the pre-P3 micro[8] was exactly full
+        // at 512-bit and overflowed only at 1024-bit (16 into 8); [16]
+        // covers the whole gated range.
         double micro[16];
         while (now < dl) {
             svfloat64_t v = svdup_f64(1.0);
