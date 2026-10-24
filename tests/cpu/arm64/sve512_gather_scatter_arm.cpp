@@ -43,8 +43,13 @@
  * indexes through the SAME indirection (a permutation does NOT commute
  * with the scatter, so the golden must map idx[i] -> dst, not linearly).
  *
- * test_init probes HWCAP_SVE via getauxval (no SVE instruction executes
- * before the probe), returning a clean EXIT_SKIP on SVE-less CPUs.
+ * All-VL 128..1024-bit via arm64_require_sve_vl (all-VL Phase 2 P3);
+ * the pre-P3 512-bit single-value gate and its issue #182 caveat are
+ * cleared by the four-tier dual-kernel evidence in gem5-fi
+ * feat/sve512-dual. test_init gates via the framework layer
+ * (HWCAP_SVE capability + range check in one call, no SVE instruction
+ * executes before the probe), returning a clean EXIT_SKIP on SVE-less
+ * CPUs; test_run re-checks the VL and fails closed on drift.
  * @endparblock
  */
 
@@ -58,9 +63,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static inline uint64_t splitmix64(uint64_t x)
@@ -73,8 +77,9 @@ static inline uint64_t splitmix64(uint64_t x)
 
 // Index-revealing encoding v2: the low 20 mantissa bits are the element
 // index tag (the wrong-offset assertion decodes exactly these bits), wide
-// enough for both the 512-entry gather table and the 256K-entry stride
-// table below.
+// enough for both the gather table (gn = 64 x lanes, i.e. 128..1024
+// entries across the 128..1024-bit VL tiers) and the 256K-entry stride
+// table below — IDX_TAG_MASK 0xFFFFF covers every tier.
 static constexpr uint64_t IDX_TAG_MASK = 0xFFFFFULL;
 
 // Wide-stride backing table: 256K f64 = 2 MiB — larger than the 64 KiB L1D
@@ -131,27 +136,27 @@ static void report_f64_lane_mismatch(const char *tag, size_t lane,
 
 static int sve512_gather_scatter_arm_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; "
-                 "sve512_gather_scatter_arm requires SVE");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call (the geometry has been svcnt-dynamic all
+       along; only the old single-value gate pinned one tier). The
+       historical VL=128 golden mismatch on a hosted CI runner
+       (issue #182) is cleared by the four-tier dual-kernel evidence
+       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, range-checked
+       below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<SveGatherScatterData>();
-        data->vl_d = svcntd();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        if (data->vl_d < 2 || data->vl_d > 16) {
+            log_error("sve512_gather_scatter_arm: f64 lanes %zu outside "
+                      "[2,16] — unit drift (svl %ld bytes)",
+                      data->vl_d, svl);
+            return EXIT_FAILURE;
+        }
 
         const size_t gn = 64 * data->vl_d;
         data->gather_src.resize(gn);
@@ -248,6 +253,15 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 {
     (void)cpu;
     const auto *d = static_cast<SveGatherScatterData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift. */
+    if (svcntd() != d->vl_d) {
+        log_error("sve512_gather_scatter_arm: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", d->vl_d, (unsigned)svcntd());
+        report_fail_msg("sve512_gather_scatter_arm: SVE VL drifted between "
+                        "init and run");
+    }
+
     const size_t gn = d->gather_idx.size();
     const size_t lanes = d->vl_d;
 
@@ -326,7 +340,7 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_gather_scatter_arm: SVE-512 gather/scatter SDC detected "
+                "sve512_gather_scatter_arm: SVE gather/scatter SDC detected "
                 "(wrong-offset read or scatter corruption)");
             return EXIT_FAILURE;
         }
@@ -369,7 +383,8 @@ DECLARE_TEST(sve512_gather_scatter_arm,
              "SVE full-vector-length gather/scatter SDC stress: "
              "svld1_gather_u64index_f64 + svmla_f64_x + "
              "svst1_scatter_u64index_f64 round-trip over a permuted index "
-             "table, byte-exact compared against a scalar golden")
+             "table (all-VL 128..1024-bit via arm64_require_sve_vl), "
+             "byte-exact compared against a scalar golden")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_gather_scatter_arm_init,
     .test_run = sve512_gather_scatter_arm_run,
