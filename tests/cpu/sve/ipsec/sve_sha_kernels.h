@@ -36,7 +36,13 @@
 
 /* All-VL Phase 2 P4: stream count = runtime lane count (one message per
    lane); arrays sized to the 1024-bit cap. The vector code itself is
-   lane-count-agnostic (ptrue auto-scales; the schedule is per-column). */
+   lane-count-agnostic (ptrue auto-scales; the schedule is per-column).
+   Precondition (review P1): callers must keep svcntw() <=
+   SVE_SHA_STREAMS_MAX_32 / svcntd() <= SVE_SHA_STREAMS_MAX_64 (i.e.
+   VL <= 1024-bit) — the W rows below and the callers' per-stream arrays
+   are dimensioned to these caps, so a 2048-bit host would overflow them.
+   Every entry point enforces this before touching the kernels: the
+   sve_hmac.h entries return -1, the standalone verifier exits 3. */
 #define SVE_SHA_STREAMS_MAX_32 32   /* svcntw() at VL=1024-bit */
 #define SVE_SHA_STREAMS_MAX_64 16   /* svcntd() at VL=1024-bit */
 

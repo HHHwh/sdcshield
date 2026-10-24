@@ -25,12 +25,20 @@
  * keys: N 条流的 HMAC 密钥(每条 HMAC_KEY_SIZE 字节, 可各不相同)。
  * msgs: N 条消息(各 msg_len 字节, msg_len < 2^32/8)。
  * out: out[s] 收到第 s 条流的 32 字节摘要(大端)。
- * 返回 0 成功; -1 容量溢出(组装消息超 2048B 缓冲)。 */
+ * 返回 0 成功; -1 容量溢出(流数超 1024-bit 定维上限, 或组装消息超
+ * 2048B 缓冲)。 */
 static inline int hmac_sha256_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
                                   const uint8_t *const keys[SVE_SHA_STREAMS_MAX_32], size_t key_len,
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32], size_t msg_len)
 {
     const int n = (int)svcntw();
+    /* Stream-count capacity guard (review P1): all per-stream arrays below
+       are dimensioned to SVE_SHA_STREAMS_MAX_32 (the 1024-bit cap) — a
+       2048-bit host (svcntw() == 64) would overflow them. Callers gate VL
+       to 128..1024-bit via arm64_require_sve_vl(); this is the shared-layer
+       backstop (same-type gate as verify.cpp's exit-3). */
+    if (n > SVE_SHA_STREAMS_MAX_32)
+        return -1;
     /* HMAC 密钥块 = 64 字节: key 补零后与 ipad(0x36)/opad(0x5c) 异或 */
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_32][64], opad_blk[SVE_SHA_STREAMS_MAX_32][64];
     /* Capacity guard, key side (adversarial review Minor-1): the ipad/opad
@@ -115,6 +123,13 @@ static inline int hmac_sha512_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][64],
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_64], size_t msg_len)
 {
     const int n = (int)svcntd();
+    /* Stream-count capacity guard (review P1): all per-stream arrays below
+       are dimensioned to SVE_SHA_STREAMS_MAX_64 (the 1024-bit cap) — a
+       2048-bit host (svcntd() == 32) would overflow them. Callers gate VL
+       to 128..1024-bit via arm64_require_sve_vl(); this is the shared-layer
+       backstop (same-type gate as verify.cpp's exit-3). */
+    if (n > SVE_SHA_STREAMS_MAX_64)
+        return -1;
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_64][128], opad_blk[SVE_SHA_STREAMS_MAX_64][128];
     /* Capacity guard, key side (see the 32-bit family note): the block is
        128 bytes in the SHA-512 family. */
@@ -182,6 +197,13 @@ static inline int hmac_sha1_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][20],
                                 const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32], size_t msg_len)
 {
     const int n = (int)svcntw();
+    /* Stream-count capacity guard (review P1): all per-stream arrays below
+       are dimensioned to SVE_SHA_STREAMS_MAX_32 (the 1024-bit cap) — a
+       2048-bit host (svcntw() == 64) would overflow them. Callers gate VL
+       to 128..1024-bit via arm64_require_sve_vl(); this is the shared-layer
+       backstop (same-type gate as verify.cpp's exit-3). */
+    if (n > SVE_SHA_STREAMS_MAX_32)
+        return -1;
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_32][64], opad_blk[SVE_SHA_STREAMS_MAX_32][64];
     /* Capacity guard, key side (adversarial review Minor-1): the ipad/opad
        XOR loops index keys[s][i] unbounded — key_len beyond the 64-byte
@@ -261,6 +283,13 @@ static inline int hmac_sha224_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][28],
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32], size_t msg_len)
 {
     const int n = (int)svcntw();
+    /* Stream-count capacity guard (review P1): all per-stream arrays below
+       are dimensioned to SVE_SHA_STREAMS_MAX_32 (the 1024-bit cap) — a
+       2048-bit host (svcntw() == 64) would overflow them. Callers gate VL
+       to 128..1024-bit via arm64_require_sve_vl(); this is the shared-layer
+       backstop (same-type gate as verify.cpp's exit-3). */
+    if (n > SVE_SHA_STREAMS_MAX_32)
+        return -1;
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_32][64], opad_blk[SVE_SHA_STREAMS_MAX_32][64];
     /* Capacity guard, key side (adversarial review Minor-1): the ipad/opad
        XOR loops index keys[s][i] unbounded — key_len beyond the 64-byte
@@ -339,6 +368,13 @@ static inline int hmac_sha384_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][48],
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_64], size_t msg_len)
 {
     const int n = (int)svcntd();
+    /* Stream-count capacity guard (review P1): all per-stream arrays below
+       are dimensioned to SVE_SHA_STREAMS_MAX_64 (the 1024-bit cap) — a
+       2048-bit host (svcntd() == 32) would overflow them. Callers gate VL
+       to 128..1024-bit via arm64_require_sve_vl(); this is the shared-layer
+       backstop (same-type gate as verify.cpp's exit-3). */
+    if (n > SVE_SHA_STREAMS_MAX_64)
+        return -1;
     uint8_t ipad_blk[SVE_SHA_STREAMS_MAX_64][128], opad_blk[SVE_SHA_STREAMS_MAX_64][128];
     /* Capacity guard, key side (see the 32-bit family note): the block is
        128 bytes in the SHA-512 family. */
