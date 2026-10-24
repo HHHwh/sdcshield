@@ -11,6 +11,7 @@
 import json
 import os
 import sys
+from datetime import timedelta
 
 import pytest
 
@@ -599,3 +600,188 @@ def test_collect_entries_include_local_claude_and_id():
     assert "[local-claude] Review" in titles
     assert "[local-claude] 行级评论" in titles and "id=12345" in titles
     assert "[local-claude] PR 评论" in titles
+
+
+# ---------------------------------------------------------------------------
+# PR #289 检视闭环: 时钟偏差容差收窄(仅回退锚)+ pr-agent issue 评论严格锚
+# 容差 + era_mark 口径对齐。
+
+_ANCHOR = pr_loop.parse_ts("2026-10-24T12:00:00Z")   # 锚定下界
+_TOL = pr_loop.CLOCK_SKEW_TOLERANCE                  # timedelta(seconds=300)
+
+
+def test_commit_strict_match_three_states():
+    head = "a" * 40
+    # 1) 锚定字段存在且 == head → True
+    assert pr_loop.commit_strict_match({"commit_id": head}, ("commit_id",), head)
+    # 2) 字段存在但 != head → False
+    assert not pr_loop.commit_strict_match(
+        {"commit_id": "b" * 40}, ("original_commit_id", "commit_id"), head)
+    # 3) 字段缺失 → False(严格锚不认缺失——区别于 commit_anchored 的回退 True)
+    assert not pr_loop.commit_strict_match({}, ("commit_id",), head)
+
+
+def test_head_anchored_skew_zero_is_strict():
+    """意见 1: push_time 锚(服务器钟)skew=0——锚前 1s 的严格匹配条目也排除,
+    防同 SHA 强推回退;锚后照常计入。"""
+    head = "a" * 40
+    before = {"commit_id": head, "submitted_at": "2026-10-24T11:59:59Z"}
+    assert not pr_loop.head_anchored(before, "submitted_at", _ANCHOR,
+                                     ("commit_id",), head, timedelta(0))
+    after = {"commit_id": head, "submitted_at": "2026-10-24T12:00:01Z"}
+    assert pr_loop.head_anchored(after, "submitted_at", _ANCHOR,
+                                 ("commit_id",), head, timedelta(0))
+
+
+def test_head_anchored_skew_300s_boundaries():
+    """回退锚容差边界: -300s(含)计入 / -301s 排除;窗口内字段缺失 False、
+    锚后字段缺失 True(commit_anchored 兜底);ts None False。"""
+    head = "a" * 40
+    # 锚前整 300s → 窗口下界含端点,计入(严格匹配)
+    at_bound = {"commit_id": head, "submitted_at": "2026-10-24T11:55:00Z"}
+    assert pr_loop.head_anchored(at_bound, "submitted_at", _ANCHOR,
+                                 ("commit_id",), head, _TOL)
+    # 锚前 301s → 排除
+    past_bound = {"commit_id": head, "submitted_at": "2026-10-24T11:54:59Z"}
+    assert not pr_loop.head_anchored(past_bound, "submitted_at", _ANCHOR,
+                                     ("commit_id",), head, _TOL)
+    # 窗口内但锚定字段缺失 → False(放宽以严格锚为前提,缺失无证据)
+    no_field = {"submitted_at": "2026-10-24T11:59:00Z"}
+    assert not pr_loop.head_anchored(no_field, "submitted_at", _ANCHOR,
+                                     ("commit_id",), head, _TOL)
+    # 锚后字段缺失 → True(常规路径维持 commit_anchored 的缺失回退)
+    no_field_after = {"submitted_at": "2026-10-24T12:01:00Z"}
+    assert pr_loop.head_anchored(no_field_after, "submitted_at", _ANCHOR,
+                                 ("commit_id",), head, _TOL)
+    # ts 缺失/畸形 → False
+    assert not pr_loop.head_anchored({"commit_id": head}, "submitted_at",
+                                     _ANCHOR, ("commit_id",), head, _TOL)
+
+
+def _pragent_issue_comment(head, comment_head, ts):
+    """构造一条 pr-agent 检视 issue 评论(标记 + 尾部 review-state JSON)。"""
+    return {"id": 999, "user": {"login": "github-actions[bot]"},
+            "body": "<!-- pr-agent:review:full -->\n检视意见\n"
+                    "<!-- pr-agent-review-state:v1 "
+                    '{"last_run": {"head_sha": "' + comment_head + '"}}'
+                    " -->",
+            "created_at": ts}
+
+
+def test_issue_comment_anchored_four_states():
+    """意见 2: issue 评论计入判定四态——锚后计入;窗口内 pr-agent 严格锚命中
+    计入;窗口内无绑定评论不放宽;窗口内 pr-agent 锚不命中不计入。"""
+    head = "a" * 40
+    # 1) ts ≥ anchor → 计入(任意 bot,无绑定字段的 coderabbit 也计入)
+    after = {"user": {"login": "coderabbitai[bot]"},
+             "body": "x", "created_at": "2026-10-24T12:00:00Z"}
+    assert pr_loop.issue_comment_anchored(after, _ANCHOR, head, _TOL)
+    # 2) 窗口内(锚前 120s)pr-agent 且 last_run.head_sha == head → 计入
+    pragent_ok = _pragent_issue_comment(head, head, "2026-10-24T11:58:00Z")
+    assert pr_loop.issue_comment_anchored(pragent_ok, _ANCHOR, head, _TOL)
+    # 3) 窗口内无 commit 绑定字段的评论 → 不计入(放宽须以可证属于当前 head 为前提)
+    unbound = {"user": {"login": "coderabbitai[bot]"},
+               "body": "x", "created_at": "2026-10-24T11:58:00Z"}
+    assert not pr_loop.issue_comment_anchored(unbound, _ANCHOR, head, _TOL)
+    # 4) 窗口内 pr-agent 但 last_run.head_sha != head(旧 head 检视)→ 不计入
+    pragent_old = _pragent_issue_comment(head, "b" * 40, "2026-10-24T11:58:00Z")
+    assert not pr_loop.issue_comment_anchored(pragent_old, _ANCHOR, head, _TOL)
+    # 补: push_time 锚 skew=0 → 窗口为空,pr-agent 严格命中也排除(同意见 1 语义)
+    assert not pr_loop.issue_comment_anchored(pragent_ok, _ANCHOR, head,
+                                              timedelta(0))
+    # 补: ts 缺失 → False
+    assert not pr_loop.issue_comment_anchored(
+        {"user": {"login": "coderabbitai[bot]"}, "body": "x"},
+        _ANCHOR, head, _TOL)
+
+
+def test_fetch_pr_skew_derived_from_push_time(monkeypatch):
+    """意见 1(端到端): 容差由锚来源推导——push_time 可得(服务器钟)时 skew=0,
+    锚前条目严格排除;events 翻不到回退 committer date(本机钟盖戳)时放宽
+    300s,严格 commit 锚命中的条目在锚前窗口内计入。"""
+    head = "e" * 40
+    # review 落在 committer date 前 60s(本机钟快于服务器的实证形态)、
+    # commit_id 严格匹配 head
+    review = {"id": 1, "user": {"login": "greptile-apps[bot]"},
+              "state": "COMMENTED", "commit_id": head,
+              "submitted_at": "2026-10-24T11:54:00Z", "body": "意见"}
+    pr_detail = {"number": 9, "title": "t", "state": "open", "draft": False,
+                 "head": {"sha": head, "ref": "feat/x",
+                          "repo": {"full_name": "test/repo"}},
+                 "base": {"ref": "main", "repo": {"full_name": "test/repo"}},
+                 "user": {"login": "wangxumarshall"},
+                 "html_url": "https://example.invalid/9"}
+    commit_detail = {"commit": {
+        "committer": {"date": "2026-10-24T11:55:00Z"},
+        "author": {"date": "2026-10-24T11:55:00Z"}}}
+    push_event = {"type": "PushEvent",
+                  "created_at": "2026-10-24T12:00:00Z",
+                  "payload": {"head": head, "ref": "refs/heads/feat/x"}}
+
+    def run_fetch(events):
+        def fake_gh_api(path):
+            if path == "repos/test/repo/pulls/9":
+                return pr_detail
+            if path == f"repos/test/repo/commits/{head}":
+                return commit_detail
+            if path.startswith("repos/test/repo/events"):
+                return events
+            raise AssertionError(f"意外 gh_api 调用: {path}")
+
+        def fake_paged(path, list_key=None):
+            if "check-runs" in path:
+                return []
+            if "/reviews" in path:
+                return [review]
+            if "/issues/9/comments" in path:
+                return []
+            if "/comments" in path:
+                return []
+            raise AssertionError(f"意外 gh_api_paged 调用: {path}")
+
+        monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+        monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+        pr_loop._EVENTS_CACHE.clear()   # events 进程内缓存,防两轮互相污染
+        return pr_loop.fetch_pr("test/repo", 9)
+
+    # A) push_time 可得(锚 12:00,skew=0): review 落锚前 6 分钟 → 严格排除
+    pr = run_fetch([push_event])
+    assert pr.push_time == pr_loop.parse_ts("2026-10-24T12:00:00Z")
+    assert pr.opinion_breakdown["review"] == 0
+    # B) events 翻不到 → 回退 committer date 锚(11:55,skew=300s):
+    #    review 落锚前 60s,严格 commit 锚命中 → 计入
+    pr2 = run_fetch([])
+    assert pr2.push_time is None
+    assert pr2.opinion_breakdown["review"] == 1
+
+
+def test_collect_era_mark_aligned_with_counting():
+    """era_mark 阈值与计数同口径: 回退锚容差窗口内(锚前 ≤300s)计入的条目
+    标「当前 head」;锚前 >300s 标「历史轮次」;push_time 锚(严格)下锚前
+    条目即使 <300s 也标「历史轮次」——与 head_anchored(skew=0)判定一致。"""
+    head = "a" * 40
+    pr = pr_loop.PRData(
+        number=9, title="t", state="open", draft=False, fork=False,
+        head_sha=head, head_ref="feat/x", base_ref="main",
+        head_time=pr_loop.parse_ts("2026-10-24T11:55:00Z"),
+        url="https://example.invalid/9", author="wangxumarshall",
+        reviews=[
+            {"id": 1, "user": {"login": "greptile-apps[bot]"},
+             "state": "COMMENTED", "commit_id": head,
+             "submitted_at": "2026-10-24T11:54:00Z", "body": "意见"},
+        ],
+    )
+    # push_time 缺失 → 回退锚 11:55 放宽 300s: 锚前 60s 计入 → 标「当前 head」
+    entries = pr_loop._collect_entries(pr)
+    assert len(entries) == 1
+    assert "当前 head" in entries[0][1]
+    assert "历史轮次" not in entries[0][1]
+    # 锚前 45 分钟(>300s)→ 排除且标「历史轮次」
+    pr.reviews[0]["submitted_at"] = "2026-10-24T11:10:00Z"
+    entries2 = pr_loop._collect_entries(pr)
+    assert "历史轮次" in entries2[0][1]
+    # push_time 可得(锚 12:00,skew=0): 锚前 60s 排除 → 也标「历史轮次」
+    pr.push_time = pr_loop.parse_ts("2026-10-24T12:00:00Z")
+    pr.reviews[0]["submitted_at"] = "2026-10-24T11:59:00Z"
+    entries3 = pr_loop._collect_entries(pr)
+    assert "历史轮次" in entries3[0][1]
