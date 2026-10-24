@@ -114,10 +114,18 @@ struct EigenSparseTestData {
 };
 
 /* Same generator semantics as the historical initialize_problem():
- * ~10% density symmetric off-diagonal entries in [0, 0.1), strictly
- * diagonally dominant (fabs + 0.05) so SimplicialCholesky stays
- * well-conditioned, b in [-1, 1). Operates on the CALLING thread's
- * objects — no shared state. */
+ * ~10% density symmetric off-diagonal entries in [0, 0.1), diagonal
+ * in [0.05, 1.05) (fabs + 0.05), b in [-1, 1). NOTE: the matrix is
+ * only *weakly* diagonally dominant — expected off-diagonal row sum
+ * is 0.005*(n-1) (10% hit × E[0,0.1)=0.05), which exceeds the 1.05
+ * diagonal cap for n ≳ 212, so Gershgorin positive-definiteness does
+ * NOT hold at production dims. This is fine for the solver actually
+ * used: SimplicialCholesky defaults to LDLT (m_LDLT(true), Eigen 5
+ * SparseCholesky/SimplicialCholesky.h), which tolerates the loss
+ * (numerical failure surfaces as info() != Success → report_fail);
+ * do NOT switch to LLT (setMode(SimplicialCholeskyLLT)) without
+ * re-validating. Operates on the CALLING thread's objects — no
+ * shared state. */
 static void generate_problem(size_t n,
                              Eigen::SparseMatrix<double> &A,
                              Eigen::VectorXd &b)
