@@ -39,9 +39,11 @@
  *    shadows replayed under the team lock, so concurrent masters can
  *    never produce a false positive.
  *
- * test_init probes HWCAP_SVE via getauxval and svcntb() == 64 (the
- * family is designed and validated at 512-bit VL, see issue #182),
- * returning a clean EXIT_SKIP elsewhere. ARM64-native.
+ * All-VL 128..1024-bit via arm64_require_sve_vl (all-VL Phase 2 P3;
+ * the pre-P3 512-bit single-value gate and its issue #182 caveat are
+ * cleared by the four-tier dual-kernel evidence in gem5-fi
+ * feat/sve512-dual); test_init gates via the framework layer and
+ * test_run re-checks the VL, failing closed on drift. ARM64-native.
  * @endparblock
  */
 
@@ -55,15 +57,16 @@
 #include <atomic>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #include <sched.h>
 #include <time.h>
 #endif
 
 // f64 FMLA chain steps per ACTIVE burst (shorter than f64_chain's 512:
-// the rhythm, not the chain, is the subject here).
+// the rhythm, not the chain, is the subject here) — VL-independent (a
+// per-lane dependency sequence; the lane count, not the length, scales
+// with VL).
 static constexpr size_t CHAIN_STEPS = 128;
 
 // Collective park window length. Bounds the join phase; also bounds the
@@ -233,7 +236,9 @@ static bool park_window(LibompCtx *ctx, uint32_t *armed_seq)
         // stored to a stack scratch (sizeless types cannot be inline-asm
         // operands, and the store keeps the batch from being optimized
         // away), then yield — the parked-thread rhythm between regions.
-        double micro[8];
+        // svst1 writes svcntd() doubles; the require gate caps VL at
+        // 1024-bit = 16 f64 lanes — 8 would overflow at 512/1024-bit.
+        double micro[16];
         while (now < dl) {
             svfloat64_t v = svdup_f64(1.0);
             for (int i = 0; i < 32; ++i)
@@ -331,27 +336,27 @@ static int libomp_ctx_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    // Probe SVE availability BEFORE executing any SVE instruction.
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; libomp_ctx_arm "
-                 "requires SVE (e.g. HiSilicon 0xd22, 512-bit VL)");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call (the geometry has been svcnt-dynamic all
+       along; only the old single-value gate pinned one tier). The
+       historical VL=128 golden mismatch on a hosted CI runner
+       (issue #182) is cleared by the four-tier dual-kernel evidence
+       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, range-checked
+       below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-    /* The sve512 family is designed and validated at 512-bit VL; the GH
-     * hosted SVE runner (runtime VL=128) is out of scope (issue #182). */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
 
     try {
         auto ctx = std::make_unique<LibompCtx>();
-        ctx->vl_d = svcntd();
+        ctx->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        if (ctx->vl_d < 2 || ctx->vl_d > 16) {
+            log_error("libomp_ctx_arm: f64 lanes %zu outside "
+                      "[2,16] — unit drift (svl %ld bytes)",
+                      ctx->vl_d, svl);
+            return EXIT_FAILURE;
+        }
 
         // randomization hardening H12' (f64_chain recipe): operands from
         // the framework RNG, every f64 finite with |x| <= 2, 25% from the
@@ -412,6 +417,16 @@ static int libomp_ctx_arm_run(struct test *test, int cpu)
     return EXIT_SKIP;
 #else
     auto *ctx = static_cast<LibompCtx *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift. */
+    if (svcntd() != ctx->vl_d) {
+        log_error("libomp_ctx_arm: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", ctx->vl_d,
+                  (unsigned)svcntd());
+        report_fail_msg("libomp_ctx_arm: SVE VL drifted between "
+                        "init and run");
+    }
+
     const size_t lanes = ctx->vl_d;
 
     // Burst golden: streams are fixed for the whole run (drawn once in
@@ -544,7 +559,8 @@ DECLARE_TEST(libomp_ctx_arm,
              "pattern, not layout): SVE f64 FMLA bursts alternating with "
              "time-synchronized collective park windows, plus "
              "function-pointer-table and counter metadata canaries checked "
-             "by indirect calls and byte-exact memcmp every round")
+             "by indirect calls and byte-exact memcmp every round (all-VL "
+             "128..1024-bit via arm64_require_sve_vl)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = libomp_ctx_arm_init,
     .test_run = libomp_ctx_arm_run,
