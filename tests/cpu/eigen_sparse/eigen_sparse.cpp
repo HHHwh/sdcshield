@@ -44,7 +44,10 @@
  * @endparblock
  */
 
+#include <cmath>
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 #include <sandstone.h>
 #include "sdc_stress_config.h"
