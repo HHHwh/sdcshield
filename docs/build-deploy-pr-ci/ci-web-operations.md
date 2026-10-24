@@ -49,3 +49,7 @@ nightly 跑完后 `benchmark-trend` job 自动维护 gh-pages 分支;
   例外允许 x86 runner 仅做分析注入(产物不发布)——勿静默改回。
 - gitleaks 若报 fork 历史(OpenDCDiag)遗留泄漏:立即处理泄漏本身
   (rotate 凭据),非仅修 workflow。
+- gitleaks 对「已公开的 NIST/FIPS 标准测试向量」误报已按值豁免
+  (`.gitleaks.toml`:`[extend] useDefault = true` 保留默认规则 + 逐值
+  allowlist,先例 FIPS-197 C.1 AES-128 key,run 38240202283)。豁免仅限
+  有公开出处的向量值,禁止按路径豁免;真实凭据仍走上一条原则。
