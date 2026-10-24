@@ -32,19 +32,28 @@
  *    hiding in cached operands;
  *  - byte-exact memcmp vs the recomputed golden on every iteration.
  *
- * Compiled only on aarch64 in the tests_sve set (-march=armv8.2-a+sve),
- * so Eigen's ARM SVE packet backend drives the GEMM kernels. x86-64
- * untouched (stock gemm_double_dynamic_square stays at M_DIM 256).
- * Non-aarch64 hosts: the file is not even in the build (meson guard).
+ * Compiled only on aarch64 in the tests_sve set
+ * (-march=armv8.2-a+sve -msve-vector-bits=128), so Eigen's ARM SVE
+ * packet backend drives the GEMM kernels. x86-64 untouched (stock
+ * gemm_double_dynamic_square stays at M_DIM 256). Non-aarch64 hosts:
+ * the file is not even in the build (meson guard).
  *
- * Run requirement: this TU compiles with -msve-vector-bits=128 like the
- * rest of tests_sve, so on a host whose runtime vector length differs
- * (Kunpeng 920 runs VL=256) it MUST run under the VL-pinning launcher
- * (prctl PR_SVE_SET_VL 16 | PR_SVE_VL_INHERIT before exec, the
- * scripts/eigen-sve-double/ precedent). Bare runs at mismatched VL
- * overflow SVE packet tails and heap-corrupt the process (observed as
- * free()/munmap_chunk aborts in validate4b; clean under pinning per
- * validate4c3).
+ * All-VL Phase 2 P5 (spike verdict): Eigen's SVE packet backend is
+ * compile-time fixed-width (arm_sve_vector_bits(EIGEN_ARM64_SVE_VL));
+ * VLA is un-compilable at the C++ language level (sizeless struct
+ * members / NumTraits sizeof — twice-confirmed spike), so this TU stays
+ * at the 128-bit lock and pins ITSELF instead: test_run pins the worker
+ * thread to the compile-time VL via arm64_sve_pin_vl(16) before any
+ * packet code runs, replacing the external VL-pinning launcher (prctl
+ * PR_SVE_SET_VL before exec, the scripts/eigen-sve-double/ precedent;
+ * the /tmp/vlrun tool no longer exists). The pin lives in test_run,
+ * NOT test_init: init runs on a throwaway aux thread whose prctl does
+ * not reach the per-CPU workers (they inherit the control thread's VL
+ * — the hard boundary documented in
+ * framework/device/cpu/arm64/arm64_vl.h). Bare runs at mismatched VL
+ * used to overflow SVE packet tails and heap-corrupt the process
+ * (free()/munmap_chunk aborts in validate4b; clean under pinning per
+ * validate4c3) — a failed pin now skips honestly instead.
  * @endparblock
  */
 
@@ -56,6 +65,9 @@
 #include <cmath>
 #include <cstdint>
 #include <unistd.h>
+
+#include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 
 using namespace Eigen;
 
@@ -132,8 +144,54 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
     return EXIT_SUCCESS;
 }
 
+/* All-VL Phase 2 P5: framework-layer capability + 128..1024-bit range
+ * gate (framework/device/cpu/arm64/arm64_vl.h). The HWCAP/rdvl probe
+ * executes no SVE instruction, and this TU has SVE instructions baked
+ * in, so a clean skip must be reachable before any of them; the
+ * framework's compiler_minimum_device gate already skips non-SVE hosts
+ * before init — this keeps a test-specific reason if that ordering ever
+ * changes. The GEMM payload itself is VL-agnostic except for the packet
+ * width, which test_run pins to the compile-time 128-bit. */
+static int eigen_gemm_double_max_arm_init(struct test *test)
+{
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
+        return EXIT_SKIP;
+    return EXIT_SUCCESS;
+}
+
 static int eigen_gemm_double_max_arm_run(struct test *test, int cpu)
 {
+    /* All-VL Phase 2 P5 (spike verdict): pin THIS worker thread to the
+     * compile-time 128-bit VL before any Eigen packet code runs —
+     * replacing the lost external VL-pinning launcher. In test_run, not
+     * test_init: init runs on a throwaway aux thread whose prctl never
+     * reaches the per-CPU workers (arm64_vl.h hard boundary — the
+     * kernel only propagates a pin to threads the pinning thread itself
+     * creates). */
+    const long pinned = arm64_sve_pin_vl(16);
+    if (pinned != 16) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: cannot pin the thread to the compile-time 128-bit "
+                 "VL (prctl returned %ld; kernel restriction?) — Eigen "
+                 "size-specific packets are undefined at other VLs",
+                 test->id, pinned);
+        return EXIT_SKIP;
+    }
+    /* fail-closed drift guard: prctl says 128-bit but the thread still
+     * disagrees — never run fixed-width packets in that state. Uses
+     * arm64_sve_vl_bytes() (.inst-encoded rdvl), NOT svcntb(): under
+     * -msve-vector-bits=128 GCC constant-folds svcntb() to 16, which
+     * would silently compile this guard away (verified: -O2 emits
+     * `mov w0, 0` for `svcntb() != 16`), while the raw rdvl reads the
+     * actual per-thread runtime VL. */
+    if (arm64_sve_vl_bytes() != 16) {
+        log_error("%s: SVE VL is %ld bytes after pinning (expected 16)",
+                  test->id, arm64_sve_vl_bytes());
+        report_fail_msg("%s: SVE VL drift after pin — Eigen packets are "
+                        "compiled for 128-bit", test->id);
+    }
+
     const int dim = g_dim;
     Mat l_lhs, l_rhs, l_prod;
     l_lhs.resize(dim, dim);
@@ -160,9 +218,10 @@ static int eigen_gemm_double_max_arm_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, dynamic, memory-safe max square, ARM64+SVE packet backend)")
+DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, dynamic, memory-safe max square, ARM64+SVE packet backend self-pinned to the compile-time 128-bit VL)")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_preinit = eigen_gemm_double_max_arm_preinit,
+  .test_init = eigen_gemm_double_max_arm_init,
   .test_run = eigen_gemm_double_max_arm_run,
   .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST
