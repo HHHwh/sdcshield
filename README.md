@@ -446,10 +446,12 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 ./builddir/sdcshield --quality=-1 -e eigen_svd_jacobi   # 跑 SKIP 用例
 ./builddir/sdcshield -l                                  # 用例 + 描述 + 分组
 ./builddir/sdcshield --list-groups                       # @compression / @ipsec / @math
-./builddir/sdcshield --dump-cpu-info                     # CPU + 特性 + 拓扑
+./builddir/sdcshield --dump-cpu-info                     # CPU + 特性 + 拓扑 + SVE/SME 向量长度(aarch64)
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv   # 崩溃回溯
 ./builddir/sdcshield --fatal-skips ...                   # skip 也按致命处理（不静默吞掉）
 ```
+
+`--dump-cpu-info` 在 aarch64 上额外输出 **SVE 向量长度**与 **SME streaming 向量长度**（有硬件时为实测 bits/bytes，无则显式 `n/a`）——二者是 per-thread 运行量，与进程级 feature 位图相互独立（`docs/architecture.md` 的 arm64_vl.h 层）。
 
 `scripts/run/` 狩猎脚本遵循**失败留证**口径：逐测试长时窗轮跑（如 `run-sdc-hunt-30min.sh`）逐用例 `-o` 落盘 YAML 日志并传 `--fatal-skips`（skip 也算失败，诚实可见）；无论有无 SDC/失败信号，日志一律保留供事后审计，汇总 CSV 中 `pass` 与日志内 SDC 记录双保险——`exit_rc=0` 但日志含 `miscompare` 记为 `sdc_log`，不误报为 `pass`。
 

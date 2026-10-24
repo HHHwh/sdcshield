@@ -550,3 +550,51 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   glibc 动态 mmap 阈值累积坑已记台账。
 - **完整报告**:~/sdc-campaigns/campaign-20261016_type-sdc/SDC_TYPE_REPORT.md
   (事件全清单/证据链/night2 建议)。
+
+## 2026-10-23（all-VL Phase 2 P0+P1：真相快修 + 框架 VL/SVL API）
+
+- **P0**(5 独立 PR):mla svundef 漏网补齐(#272)/sve_rot×5 构建真相(#273)/
+  孤儿标注(#274)/CLAUDE.md 环境修正(#275)/PR #242 补记(#276)。
+- **P1**(#277,5 commit 含双评审修复轮):arm64_vl.h(能力探测/VL 查询/自 pin/
+  require 助手)+ selftest×2 + --dump-cpu-info 输出 + 文档同步
+  (architecture/adding-tests/README)。
+- **本机(0xd01 无 SVE)**:~~TDD RED(缺头文件构建失败)→ GREEN [461/461] 0 告警~~
+  【2026-10-23 三 bot 评审修复轮复核:**原 GREEN 声明不可复现,按不实修正**——
+  本机 oe2203 kernel-headers(5.10.0-60.139)无 HWCAP2_SME 定义(止于
+  HWCAP2_RPRES),PR head 原样源码在本机以 build.sh/compile_commands 命令编译
+  必挂(arm64_vl.h:70 + selftest.cpp:961 'HWCAP2_SME was not declared',本轮
+  stash 对照实验复现),且当时 builddir 产物 mtime 早于全部 PR 提交、不含
+  selftest_arm64_vl 符号;真实 GREEN 由本轮 HWCAP2 回退补丁(cea49391)后达成:
+  build 零警告 + selftest_arm64_vl_api exit:pass + require_sve result:skip
+  (CpuNotSupported) + dump-cpu-info 两行 n/a + zstd19 回归 pass】。
+- **gem5 四档**:~~(gem5-fi feat/vl-api-probe @ 2e58aba5,vl_api_probe 8 run,O3,
+  --sve_vl/--sme_vl 1/2/4/8):rdvl=rdsvl=16/32/64/128 字节逐档精确;
+  SDCSHIELD_FAILS=0 ×8、gem5_exit=0 ×8;checksum 跨档互异~~
+  【2026-10-23 复核:**上记声明载体全部不可核验,按不可信处理**——本地 gem5-fi
+  仓库仅 main 分支,feat/vl-api-probe 分支与 2e58aba5 提交不存在,
+  workloads/sdcshield/ 无 vl_api_probe.c,全系统(/home/sdc /opt /data /myh
+  /share_from90, maxdepth 6)无任何 gem5.opt 构建,~/gem5-deps 不存在——
+  gem5 在本机当前不可用,rdvl/rdsvl .inst 编码的可用证据降级为 as+objdump
+  推导(头注释记录)+ 本轮 -U__linux__ 预处理隔离验证;若需四档实证须先在
+  有 gem5 的环境重建探针与运行】。
+- **诚实边界**:gem5 SE prctl=ignoreFunc 恒返 0(非真 GET_VL 值,findings.md 记录
+  不判定);auxv hwcap_sve=1/hwcap2_sme=1/hwcap2_sve2=0;全量 --selftests 止步
+  selftest_sigkill 系先于本改动的框架行为(其后 34 个既有 selftest 含 min_cpu
+  全系列同缺席,独立问题不在本战役范围);**pin 成功路径(SET_VL 生效)本机与
+  gem5 SE 双不可达,系内核文档行为而非实证**——~~评审修复轮已把 pin 部署进
+  selftest require-init,首个 SVE 主机运行即自动成为继承性证明~~【三 bot 修复
+  轮修正:init-pin 系 no-op 空转证明且按框架线程模型不达 worker(test_init 跑
+  一次性 aux 线程,worker 继承控制线程 VL);已改为 worker 线程 pin SVE_VL_MIN
+  + rdvl 读回往返,首个 SVE 主机运行即自动证明(含 prctl 返 0 的 SE 忽略降级
+  与 -EPERM 沙箱降级)】。
+- **验证模式**:gem5 四档验证由隔离 subagent 并行执行(用户指令,主 agent 不阻塞
+  开发);探针零修改 -Wall -Wextra 一次编译通过,单 run 1-2 秒。
+  【2026-10-23 复核:该 gem5 验证的产物与载体不可核验(见上),仅保留过程描述】。
+- **三 bot 评审修复轮(2026-10-23 下午,#277 第 2 轮)**:coderabbit+pr-agent+
+  local-claude 三 bot 12 条意见(codex/greptile 用量限额缺席),批判性处置
+  9 采纳/2 变通/1 驳回;6 commit: HWCAP2 回退修 20.03-LTS CI(cea49391)/
+  API 硬化(13eac566)/线程模型文档修正(b8b63b6e)/selftest 判别力改造
+  (91e8cf3a)/__linux__ 守卫(634982bc)/桩对称(6c118041)+本诚实修正;每项
+  独立验证(build 零新警告+selftest/zstd19 真实输出),20.03 编译失败用
+  v4.19 uapi 模拟复现+修复对照实证。
+- **承接**:P2(SME fmopa_za 收尾)起各阶段另行计划(spec §6)。

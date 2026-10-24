@@ -116,8 +116,11 @@ reconfigure，plain ninja 感知不到），`./builddir/sdcshield --quality=0 --
 另外几个独立 static_library（带专属 march）：
 - `tests_crc`（aarch64）：`-march=armv8.1-a+crc`——arm_acle CRC intrinsics
 - `tests_arm64`（`tests/cpu/arm64/meson.build`）：`-march=armv8.1-a+crc+crypto`——NEON+AES
-- `tests_arm64_sve`（同文件）：`-march=armv8.2-a+sve`——SVE 全长向量族（每测试 init 里探
-  HWCAP_SVE，无 SVE 硬件干净 skip）
+- `tests_arm64_sve`（同文件）：`-march=armv8.2-a+sve`——SVE 全长向量族（每测试 init 里
+  `#include <device/cpu/arm64/arm64_vl.h>` 后调
+  `arm64_require_sve_vl(test, min_bits, max_bits)` 一行完成能力+范围探测，跳过时它返回
+  `EXIT_SKIP`(-255)——用 `if (vl < 0) return EXIT_SKIP;` 承接（成功侧 vl 是字节数，需保存）；
+  无 SVE 硬件干净 skip）
 - vendored 库探测（openblas/sleef/isa-l/openssl）：`install/` 存在才加，**缺失给 message
   + 空列表，绝不用 disabler()**（会静默杀掉整个二进制的依赖链）
 
@@ -150,7 +153,7 @@ ARM NEON/CRC/Crypto/inline-asm 专属？
      （整个子目录只在 aarch64 进构建，x86 完全不编）
 需要 SVE（<arm_sve.h> / svmla_*）？
   → tests/cpu/arm64/ 源文件 + 加进 tests_arm64_sve 库（+sve march）
-     且 init 里必须探 HWCAP_SVE → EXIT_SKIP（鲲鹏 920 无 SVE）
+     且 init 里必须 arm64_require_sve_vl()，负返回值即 EXIT_SKIP（本机 0xd01 无 SVE）
 依赖 Eigen 且要 SVE 后端？
   → tests_set_sve（EigenSVE 命名空间隔离）
 系统级/架构无关跨设备（mce_check, smi_count 类）

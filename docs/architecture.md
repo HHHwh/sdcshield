@@ -79,6 +79,49 @@ arches. `detect_cpu()` (`cpuid_internal.h`) fills the global `device_features`;
 `dump_device_info()` (`cpu_device.cpp`) and `device_features_to_string()`
 consume the generated tables.
 
+## SVE/SME vector-length layer (arm64_vl.h)
+
+`framework/device/cpu/arm64/arm64_vl.h` is the single entry point for
+per-thread SVE vector length (VL) and SME streaming vector length (SVL):
+
+- capability probes (`arm64_cpu_has_sve/sve2/sme`) — honest runtime
+  `getauxval(AT_HWCAP/HWCAP2)` checks that, unlike `device_has_feature()`,
+  are not short-circuited by compile-time `__ARM_FEATURE_*` macros in
+  +sve/+sme-compiled TUs;
+- current-thread VL/SVL queries (`arm64_sve_vl_bytes` /
+  `arm64_sme_svl_bytes`) — rdvl/rdsvl via `.inst`, so any aarch64 TU can
+  use them without a +sve march;
+- self-pinning (`arm64_sve_pin_vl` / `arm64_sme_pin_vl`, prctl) for
+  size-specific TUs. Pin on the thread that needs the VL — inside
+  `test_run` workers. Pinning from `test_init` does **not** reach the
+  workers: ordinary tests run `test_init` on a throwaway aux thread
+  (`sandstone_run.cpp`, `init_in_aux_thread=true`), and the per-CPU
+  workers are created by the control thread, inheriting *its* (unpinned)
+  default VL. The kernel's rule that a newly created thread inherits its
+  *creator's* VL still holds — the framework's thread structure is simply
+  not "test_init creates the workers" (only `test_in_parent` /
+  `test_init_in_parent` flagged tests differ);
+- test-flow helpers (`arm64_require_sve_vl` / `arm64_require_sme_svl`)
+  folding capability check + range check + log_skip into one call.
+
+VL/SVL are deliberately **not** part of `device_features`: they are
+per-thread runtime quantities, while feature bits are process-wide.
+Verification: the `.inst` encodings (rdvl/rdsvl) are derived via
+`as`+`objdump` (recorded in the header comments) and included in every
+aarch64 build — but the instructions only *execute* where the capability
+probes pass, so their runtime verification still awaits an SVE/SME host
+(the probes and SKIP paths do run on this host).
+Verification boundary, stated honestly: an earlier "validated at all four
+tiers in gem5-fi" claim could not be verified on audit (the referenced
+probe/branch no longer exists locally and no gem5 build is present on
+this machine), and gem5 SE maps prctl to ignoreFunc, so the pin success
+path (SET_VL taking effect) is kernel-documented but not yet empirically
+executed anywhere — `selftest_arm64_vl_require_sve` pins an alternate VL
+on the worker thread and reads it back via rdvl, so the first SVE-host
+selftest run *attempts* the round-trip proof; where prctl is blocked
+(-EPERM), ignored (-ENOSYS), or no alternate VL exists, the test degrades
+to a logged warning rather than claiming the proof.
+
 ## Sysdeps layering
 
 ```
@@ -129,7 +172,9 @@ The vendored Eigen 5.0 SVE backend carries `double`/`complex<double>` packets
 (`PacketXd` in `arch/SVE/PacketMath.h`, `PacketXcd` + `arch/SVE/Complex.h`),
 making `eigen_svd_cdouble_sve` run vectorized SVD (~0.7 s at M_DIM 300 vs
 >10 min scalar). **Runtime-VL rule**: size-specific SVE code requires the
-process vector length to equal the compile-time `-msve-vector-bits`; this host
-is VL=256 while `tests_sve` compiles at 128, so the SVD SVE test must run via
-the `prctl(PR_SVE_SET_VL, 16)` launcher in `scripts/eigen-sve-double/`.
-`sleef_sve` compiles at 128 by design.
+process vector length to equal the compile-time `-msve-vector-bits`. The
+earlier "this host is VL=256" record was written on the cortex x3b machine;
+the current host (0xd01, Kunpeng 920) has no SVE at all, so the SVD SVE test
+cleanly skips here — on SVE hosts with VL≠128 it needs a
+`prctl(PR_SVE_SET_VL, 16)` pin (see `scripts/eigen-sve-double/` and
+`arm64_sve_pin_vl()`). `sleef_sve` compiles at 128 by design.

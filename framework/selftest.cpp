@@ -40,6 +40,10 @@
 #  include "amx_common.h"
 #elif defined(__aarch64__)
 #  include <arm_neon.h>
+#  if defined(__linux__) /* the VL layer probes Linux auxv/prctl; Windows
+#                           ARM64 falls back to arm64_vl.h's stubs */
+#    include <device/cpu/arm64/arm64_vl.h>
+#  endif
 #endif
 
 #ifdef _WIN32
@@ -938,6 +942,128 @@ static int selftest_sme_sigill_probe_run(struct test *test, int)
     log_warning("selftest_sme_sigill_probe: unexpected child status %d",
                 status);
     return EXIT_FAILURE;
+}
+#endif
+
+#if defined(__aarch64__) && defined(__linux__)
+// All-VL Phase 2 P1: arm64_vl.h API invariants. On SVE-less hosts (this
+// Kunpeng 920) queries must report absence (false/0, pin -EINVAL) and agree
+// with getauxval ground truth; on SVE hosts VL must be a 16-byte multiple in
+// [16,256]. Functional SVE behavior (pin round-trip) is proven automatically
+// by the first SVE-host run of selftest_arm64_vl_require_sve — the earlier
+// "validated in gem5-fi" claim could not be verified on audit (see the
+// 2026-10-23 entry in docs/research/progress-log.md).
+static int selftest_arm64_vl_api_run(struct test *test, int cpu)
+{
+    (void)cpu;
+
+    /* The discriminative checks for the .inst query path are the VL/SVL
+       range checks below (real query output judged against architectural
+       invariants) plus the pin round-trip in
+       selftest_arm64_vl_require_sve_run. The former capability-vs-getauxval
+       consistency checks were removed: they compared the probes against
+       expressions identical to their own definitions (X != X, tautologies
+       that could never fire). */
+    long vl = arm64_sve_vl_bytes();
+    if (arm64_cpu_has_sve()) {
+        if (vl < 16 || vl > 256 || (vl % 16) != 0)
+            report_fail_msg("%s: SVE VL %ld bytes is not 16-aligned in [16,256]", test->id, vl);
+    } else if (vl != 0) {
+        report_fail_msg("%s: arm64_sve_vl_bytes() returned %ld without SVE", test->id, vl);
+    }
+
+    long svl = arm64_sme_svl_bytes();
+    if (arm64_cpu_has_sme()) {
+        if (svl < 16 || svl > 256 || (svl % 16) != 0)
+            report_fail_msg("%s: SME SVL %ld bytes is not 16-aligned in [16,256]", test->id, svl);
+    } else if (svl != 0) {
+        report_fail_msg("%s: arm64_sme_svl_bytes() returned %ld without SME", test->id, svl);
+    }
+
+    /* The pin round-trip proof lives in selftest_arm64_vl_require_sve_run:
+       pinning belongs on the worker thread (test_run), NOT in test_init —
+       see that test's comment and arm64_vl.h's header. Here we only assert
+       the no-capability guards (the only pin paths actually executable on
+       capability-less hosts like this one). */
+    if (!arm64_cpu_has_sve() && arm64_sve_pin_vl(16) != -EINVAL)
+        report_fail_msg("%s: arm64_sve_pin_vl() succeeded on an SVE-less host", test->id);
+    if (!arm64_cpu_has_sme() && arm64_sme_pin_vl(16) != -EINVAL)
+        report_fail_msg("%s: arm64_sme_pin_vl() succeeded on an SME-less host", test->id);
+
+    return EXIT_SUCCESS;
+}
+
+// The require-helper path: on SVE-less hosts the framework must report a
+// clean EXIT_SKIP from init (never a crash). On SVE hosts the worker-side
+// check below is the pin round-trip proof: pin an alternate VL on the worker
+// thread itself and read it back with rdvl. SVE_VL_MIN (16 bytes) is a
+// kernel-guaranteed supported length (the SVE_VQ_MIN bit is WARN_ON-checked
+// in fpsimd.c), so pin(16) is valid on every SVE host not already at the
+// minimum; the read-back then proves SET_VL actually changed this thread's
+// VL and that rdvl observes it — unlike pinning the current VL, which is a
+// no-op and proves nothing. Pinning here (test_run) rather than in test_init
+// is deliberate: test_init runs on a throwaway aux thread whose pinning
+// never reaches the workers (see arm64_vl.h's header comment).
+static int selftest_arm64_vl_require_sve_init(struct test *test)
+{
+    /* 128..2048 bits = the full SVE1 architectural range (matches the api
+       test's 16..256-byte acceptance below) — a 2048-bit top-tier host must
+       run this test too, not skip on an artificial 1024-bit ceiling. */
+    long vl = arm64_require_sve_vl(test, 128, 2048);
+    if (vl < 0)
+        return EXIT_SKIP; /* log_skip already emitted with the reason */
+
+    test->data = (void *)(uintptr_t)vl;
+    return EXIT_SUCCESS;
+}
+
+static int selftest_arm64_vl_require_sve_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    long vl_at_init = (long)(uintptr_t)test->data;
+    if (arm64_sve_vl_bytes() != vl_at_init)
+        report_fail_msg("%s: SVE VL drifted between init (%ld) and run (%ld)",
+                        test->id, vl_at_init, arm64_sve_vl_bytes());
+
+    /* Pin round-trip on this worker thread: request a VL DIFFERENT from the
+       current one (16 unless we are already at the minimum, then 32 — not
+       guaranteed supported, but the round-down kernel then reports what it
+       did and the no-op check below degrades loudly instead of silently).
+       The kernel rounds down to the largest supported length not exceeding
+       the request; a healthy SVE host must apply exactly what it reports
+       and rdvl must observe it. All degradation paths use log_warning: a
+       silently-degraded pass is the "no-op test reporting pass" antipattern
+       (CLAUDE.md rule 6), so the forfeited proof must be visible at -v. */
+    long candidate = (vl_at_init == 16) ? 32 : 16;
+    long applied = arm64_sve_pin_vl(candidate);
+    if (applied == -EPERM) {
+        log_warning("%s: prctl(PR_SVE_SET_VL) returned -EPERM (seccomp?); pin "
+                    "round-trip proof skipped, require path still verified",
+                    test->id);
+        return EXIT_SUCCESS;
+    }
+    if (applied == -ENOSYS) {
+        log_warning("%s: prctl(PR_SVE_SET_VL) was ignored by the execution "
+                    "layer; pin round-trip proof skipped", test->id);
+        return EXIT_SUCCESS;
+    }
+    if (applied < 0) {
+        log_error("%s: pin to VL %ld failed with %ld", test->id, candidate, applied);
+        return EXIT_FAILURE;
+    }
+    long readback = arm64_sve_vl_bytes();
+    if (readback != applied)
+        report_fail_msg("%s: pin applied VL %ld but rdvl reads %ld",
+                        test->id, applied, readback);
+    if (applied == vl_at_init) {
+        /* Round-down landed back on the current VL (e.g. host is at the
+           minimum and does not support our alternate): the round-trip
+           degenerated into a no-op and proved nothing — say so. */
+        log_warning("%s: no alternate VL available (pin %ld rounded down to "
+                    "the current VL); round-trip proof degenerated",
+                    test->id, candidate);
+    }
+    return EXIT_SUCCESS;
 }
 #endif
 
@@ -2550,6 +2676,32 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
 },
+#if defined(__aarch64__) && defined(__linux__)
+/* Registered BEFORE the uncatchable-death selftests: a killed *child* does
+   not stop the sweep (all sigsegv/sigill/sigtrap/abort selftests crash their
+   child and the run continues) — what terminates a plain --selftests run is
+   SIGKILL/Windows fastfail being uncatchable, which invalidates the whole
+   run (measured 2026-10-23: full sweep, 35548 lines). These two are the only
+   runtime gates for the arm64_vl.h .inst encodings and the pin round-trip,
+   and must stay ahead of that line to remain reachable by default. */
+{
+    .id = "selftest_arm64_vl_api",
+    .description = "arm64_vl.h API invariants (VL/SVL query range checks, no-capability pin guard)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_arm64_vl_api_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_arm64_vl_require_sve",
+    .description = "arm64_require_sve_vl() clean-skip path + worker-thread pin round-trip proof (SVE hosts)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_init = selftest_arm64_vl_require_sve_init,
+    .test_run = selftest_arm64_vl_require_sve_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
 #ifdef _WIN32
 {
     .id = "selftest_fastfail",
