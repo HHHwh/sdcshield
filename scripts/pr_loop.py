@@ -44,6 +44,10 @@
 #   意见#22 先例);仅回退 committer date(本机钟盖戳,可快/慢于服务器)时,对
 #   commit 锚严格匹配(锚定字段存在且 == head,字段缺失不算)的条目放宽——
 #   严格匹配的条目不可能早于 head 存在,放宽不影响甄别目标(意见 1)。
+#   pr-agent 检视评论是 issue 评论中唯一例外: 尾部 review-state JSON 的
+#   last_run.head_sha 是可证属于当前 head 的严格锚,回退锚容差窗口内严格命中
+#   者计入(与 review/行级评论的 commit_strict_match 前提同构);无 commit 绑定
+#   字段的其余 issue 评论不放宽(意见 2)。
 #
 # 意见计数与「信号」分开: 摘要/LGTM 类不计入待处置意见——APPROVED/DISMISSED
 # review、coderabbit walkthrough/汇总评论(其发现以行级评论另行计入)、bot-coverage
@@ -318,13 +322,6 @@ def bot_of(item: dict) -> Optional[str]:
     return LOGIN_TO_BOT.get((item.get("user") or {}).get("login") or "")
 
 
-def is_after_head(item: dict, ts_key: str, anchor_time: datetime) -> bool:
-    """时间锚定: 条目时间 ≥ 锚定下界(甄别 GitHub 重锚定的旧意见;
-    anchor_time = 当前 head 的 push 时间(可得)或 committer date(回退))。"""
-    ts = parse_ts(item.get(ts_key))
-    return ts is not None and ts >= anchor_time
-
-
 def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
     """commit 锚定: 条目锚定的 commit 匹配当前 head 才计入。
     sha_keys 按优先级取第一个非空字段(review 用 commit_id;行级评论用
@@ -362,8 +359,8 @@ def commit_strict_match(item: dict, sha_keys: tuple, head_sha: str) -> bool:
 
 def head_anchored(item: dict, ts_key: str, anchor: datetime,
                   sha_keys: tuple, head_sha: str, skew: timedelta) -> bool:
-    """双锚定组合判定(时钟偏差加固版),替代各调用点的
-    「is_after_head(...) and commit_anchored(...)」:
+    """双锚定组合判定(时钟偏差加固版),替代旧实现各调用点
+    「时间锚定(is_after_head,已删)+ commit_anchored」的分离组合:
     - 常规路径(时间 ≥ anchor): 维持原语义(commit_anchored 含字段缺失回退);
     - anchor 前 skew 内: 仅 commit 锚严格匹配时计入。
     skew 由锚来源决定(意见 1,见 fetch_pr 推导): push_time 锚(服务器钟,与
@@ -501,6 +498,36 @@ def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
                             item.get("body") or ""):
         return "local-claude"
     return None
+
+
+def pragent_strict_head(item: dict, head_sha: str) -> bool:
+    """pr-agent 评论的严格 commit 锚: 尾部 review-state JSON 的 last_run.head_sha
+    存在且 == 当前 head。区别于 issue_comment_bot 的「head 为 None 回退时间锚定」
+    语义——head 缺失/解析失败时无证据可证属于当前 head,不构成放宽时间锚的
+    依据(与 review/行级评论的 commit_strict_match 同前提)。"""
+    head = pragent_comment_head(item)
+    return head is not None and head == head_sha
+
+
+def issue_comment_anchored(item: dict, anchor: datetime,
+                           head_sha: str, skew: timedelta) -> bool:
+    """issue(PR)评论的计入判定(时钟偏差加固版,意见 2 收窄):
+    - ts ≥ anchor → 计入(常规路径,全体 bot);
+    - anchor 前 skew 窗口内: 仅 pr-agent 检视评论且严格锚命中
+      (last_run.head_sha 存在且 == head)才计入;
+    - 其余(窗口外/无绑定/锚不命中)→ 不计入。
+    无 commit 绑定字段的评论(codex/coderabbit/greptile/local-claude 的 issue
+    评论)不放宽: 放宽的依据是「条目可证属于当前 head」(严格锚),无绑定字段
+    就没有这个证据——窗口内旧 head 的 issue 评论一旦放进,误计损失大于时钟
+    偏差场景下的误杀。"""
+    ts = parse_ts(item.get("created_at"))
+    if ts is None:
+        return False
+    if ts >= anchor:
+        return True
+    return (ts >= anchor - skew
+            and pragent_comment(item)
+            and pragent_strict_head(item, head_sha))
 
 
 # ============ 拉取与判定 ============
@@ -670,6 +697,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # ---- PR(issue)评论: pr-agent 评论按内容标记纳入(head_sha 锚定见 issue_comment_bot) ----
     # issue 评论无 commit 绑定字段,时间锚定下界用 push 时间(意见#22: commit→push
     # 窗口内旧 head 的评论不得计入;push 时间不可得时 anchor 已回退 committer date)。
+    # 唯一例外(意见 2): pr-agent 评论有 last_run.head_sha 严格锚,回退锚容差
+    # 窗口内严格命中者计入——见 issue_comment_anchored。
     for c in issue_comments:
         bot = issue_comment_bot(c, head_sha)
         if bot is None:
@@ -677,7 +706,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
         ts = parse_ts(c.get("created_at"))
         data.signals.append(Signal(
             bot=bot, kind="issue_comment", time=ts or anchor,
-            counted=ts is not None and ts >= anchor,
+            counted=issue_comment_anchored(c, anchor, head_sha, skew),
             detail='PR 评论',
         ))
 
@@ -734,7 +763,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
     for c in issue_comments:
         body = (c.get("body") or "")
         if (issue_comment_bot(c, head_sha)
-                and is_after_head(c, "created_at", anchor)
+                and issue_comment_anchored(c, anchor, head_sha, skew)
                 and body.strip() and not is_summary_text(body)):
             if pragent_comment(c):
                 # pr-agent: 按尾部 JSON 的 ACTIVE findings 计(outside-diff 的
@@ -865,7 +894,7 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
     for c in pr.issue_comments:
         body = c.get("body") or ""
         if not (issue_comment_bot(c, pr.head_sha)
-                and is_after_head(c, "created_at", anchor)
+                and issue_comment_anchored(c, anchor, pr.head_sha, skew)
                 and body.strip() and not is_summary_text(body)):
             continue
         if pragent_comment(c):
