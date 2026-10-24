@@ -296,6 +296,11 @@ class PRData:
     opinion_count: int = 0                                  # 当前 head 的实质意见数
     opinion_breakdown: dict = field(default_factory=dict)
     annotations_fetch_failed: bool = False
+    # 超带诊断(意见 5): list[(kind, ts, 偏差秒)]——commit 锚严格匹配却被时间锚
+    # 排除、且落在锚前 >容差 的条目。此类条目「可证属于当前 head」却早于锚,
+    # 只剩两种解释: 时钟超带(本机钟远快于服务器)或同 SHA 强推回退,均须人工
+    # 甄别,如实告警而非静默丢弃。
+    skew_suspects: list = field(default_factory=list)
 
 
 # ============ 工具函数 ============
@@ -519,7 +524,7 @@ def issue_comment_anchored(item: dict, anchor: datetime,
     无 commit 绑定字段的评论(codex/coderabbit/greptile/local-claude 的 issue
     评论)不放宽: 放宽的依据是「条目可证属于当前 head」(严格锚),无绑定字段
     就没有这个证据——窗口内旧 head 的 issue 评论一旦放进,误计损失大于时钟
-    偏差场景下的误杀。"""
+    偏差场景下的误杀(超带场景由 skew_suspects 诊断告警)。"""
     ts = parse_ts(item.get("created_at"))
     if ts is None:
         return False
@@ -671,6 +676,10 @@ def fetch_pr(slug: str, number: int) -> PRData:
         ts = parse_ts(r.get("submitted_at"))
         counted = head_anchored(r, "submitted_at", anchor,
                                 ("commit_id",), head_sha, skew)
+        if (not counted and ts is not None and ts < anchor - skew
+                and commit_strict_match(r, ("commit_id",), head_sha)):
+            data.skew_suspects.append(
+                ("review", ts, (anchor - ts).total_seconds()))
         data.signals.append(Signal(
             bot=bot, kind="review", time=ts or anchor, counted=counted,
             detail=f'review({r.get("state")})',
@@ -688,6 +697,11 @@ def fetch_pr(slug: str, number: int) -> PRData:
         counted = head_anchored(c, "created_at", anchor,
                                 ("original_commit_id", "commit_id"),
                                 head_sha, skew)
+        if (not counted and ts is not None and ts < anchor - skew
+                and commit_strict_match(c, ("original_commit_id", "commit_id"),
+                                        head_sha)):
+            data.skew_suspects.append(
+                ("review_comment", ts, (anchor - ts).total_seconds()))
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
         data.signals.append(Signal(
             bot=bot, kind="review_comment", time=ts or anchor, counted=counted,
@@ -704,9 +718,14 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
+        counted = issue_comment_anchored(c, anchor, head_sha, skew)
+        if (not counted and ts is not None and ts < anchor - skew
+                and pragent_comment(c) and pragent_strict_head(c, head_sha)):
+            data.skew_suspects.append(
+                ("issue_comment", ts, (anchor - ts).total_seconds()))
         data.signals.append(Signal(
             bot=bot, kind="issue_comment", time=ts or anchor,
-            counted=issue_comment_anchored(c, anchor, head_sha, skew),
+            counted=counted,
             detail='PR 评论',
         ))
 
@@ -997,6 +1016,18 @@ def fmt_bots(pr: PRData) -> str:
     return "".join("✓" if pr.bot_done.get(b) else "✗" for b in BOT_ORDER)
 
 
+def format_skew_warning(pr: PRData) -> Optional[str]:
+    """超带诊断行(意见 5): 严格锚定却落在锚前 >容差 的条目汇总,无则 None。
+    阈值随锚来源走(与计入判定同口径): 回退锚 300s / push_time 锚 0s。"""
+    if not pr.skew_suspects:
+        return None
+    worst = max(delta for _, _, delta in pr.skew_suspects)
+    tol = int((timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE)
+              .total_seconds())
+    return (f"⚠ 疑似时钟超带或同 SHA 回退: {len(pr.skew_suspects)} 条严格锚定"
+            f"条目落在锚前 >{tol}s(最远 {int(worst)}s)——请人工甄别,勿静默丢弃")
+
+
 def print_opinions(pr: PRData) -> None:
     bd = pr.opinion_breakdown
     print(f"  当前 head 待处置意见: {pr.opinion_count} 条"
@@ -1046,6 +1077,9 @@ def print_detail(pr: PRData, slug: str, quiet: int) -> None:
         age = int((now - pr.latest_signal).total_seconds())
         print(f"  最新信号: {fmt_ts(pr.latest_signal)}(距今 {age}s,静默窗 {quiet}s)")
     print_opinions(pr)
+    warn = format_skew_warning(pr)
+    if warn:
+        print(f"  {warn}")
     if pr.check_runs:
         print(f"  check runs({len(pr.check_runs)} 个):")
         for e in pr.check_runs:
@@ -1288,6 +1322,9 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
       f"摘要/LGTM 类不计)")
     if pr.annotations_fetch_failed:
         A("- 注意: 部分 annotations 拉取失败,annotations 计数可能低估")
+    warn = format_skew_warning(pr)
+    if warn:
+        A(f"- {warn}")
     A("")
     A("## 五 bot 完成度(当前 head)")
     for bot in BOT_ORDER:

@@ -785,3 +785,80 @@ def test_collect_era_mark_aligned_with_counting():
     pr.reviews[0]["submitted_at"] = "2026-10-24T11:59:00Z"
     entries3 = pr_loop._collect_entries(pr)
     assert "历史轮次" in entries3[0][1]
+
+
+def test_fetch_pr_records_skew_suspects(monkeypatch, capsys):
+    """意见 5(超带诊断): commit 锚严格匹配却落在锚前 >容差(回退锚 300s)的
+    条目记入 skew_suspects(kind, ts, 偏差秒);status 单 PR 详情与 collect
+    元信息均给出告警(条数 + 最远偏差秒);无超带时无告警。"""
+    head = "e" * 40
+    # 回退锚 = committer date 11:55(本机钟盖戳):
+    # - 超带条目: 11:48:20(锚前 400s,> 300s 容差,commit_id 严格匹配)→ 记诊断;
+    # - 正常计入条目: 11:54:00(锚前 60s,容差窗口内)→ 不记。
+    suspect = {"id": 1, "user": {"login": "greptile-apps[bot]"},
+               "state": "COMMENTED", "commit_id": head,
+               "submitted_at": "2026-10-24T11:48:20Z", "body": "超带意见"}
+    counted = {"id": 2, "user": {"login": "coderabbitai[bot]"},
+               "state": "COMMENTED", "commit_id": head,
+               "submitted_at": "2026-10-24T11:54:00Z", "body": "窗口内意见"}
+    pr_detail = {"number": 9, "title": "t", "state": "open", "draft": False,
+                 "head": {"sha": head, "ref": "feat/x",
+                          "repo": {"full_name": "test/repo"}},
+                 "base": {"ref": "main", "repo": {"full_name": "test/repo"}},
+                 "user": {"login": "wangxumarshall"},
+                 "html_url": "https://example.invalid/9"}
+    commit_detail = {"commit": {
+        "committer": {"date": "2026-10-24T11:55:00Z"},
+        "author": {"date": "2026-10-24T11:55:00Z"}}}
+
+    def fake_gh_api(path):
+        if path == "repos/test/repo/pulls/9":
+            return pr_detail
+        if path == f"repos/test/repo/commits/{head}":
+            return commit_detail
+        if path.startswith("repos/test/repo/events"):
+            return []   # events 翻不到 → 回退锚(committer date),skew=300s
+        raise AssertionError(f"意外 gh_api 调用: {path}")
+
+    def fake_paged(path, list_key=None):
+        if "check-runs" in path:
+            return []
+        if "/reviews" in path:
+            return [suspect, counted]
+        if "/issues/9/comments" in path:
+            return []
+        if "/comments" in path:
+            return []
+        raise AssertionError(f"意外 gh_api_paged 调用: {path}")
+
+    monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    pr_loop._EVENTS_CACHE.clear()
+    pr = pr_loop.fetch_pr("test/repo", 9)
+
+    # 仅超带条目记入(窗口内计入的不记),偏差 = 锚 - ts = 400s
+    assert len(pr.skew_suspects) == 1
+    kind, ts, delta = pr.skew_suspects[0]
+    assert kind == "review"
+    assert ts == pr_loop.parse_ts("2026-10-24T11:48:20Z")
+    assert delta == 400.0
+    # 超带条目被时间锚排除(不计入意见),诊断如实告警而非静默丢弃
+    assert pr.opinion_breakdown["review"] == 1
+
+    warn = pr_loop.format_skew_warning(pr)
+    assert warn is not None
+    assert "疑似时钟超带或同 SHA 回退" in warn
+    assert "1 条" in warn and ">300s" in warn and "400s" in warn
+
+    # status 单 PR 详情打印告警
+    pr_loop.print_detail(pr, "test/repo", 900)
+    out = capsys.readouterr().out
+    assert "疑似时钟超带或同 SHA 回退" in out
+
+    # collect 元信息同样给出告警行
+    md = pr_loop.render_collect(pr, "test/repo", 900)
+    assert "疑似时钟超带或同 SHA 回退" in md
+
+    # 无超带(全部条目锚后/窗口内)→ 无告警
+    pr.skew_suspects.clear()
+    assert pr_loop.format_skew_warning(pr) is None
