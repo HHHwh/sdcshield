@@ -16,10 +16,14 @@
  * implementations.
  *
  * Compiled WITHOUT -msve-vector-bits so the sizeless svfloat64_t type
- * adopts the CPU runtime vector length — the full 512-bit datapath on
- * HiSilicon 0xd22 (sve_default_vector_length=64). test_init probes
- * HWCAP_SVE via getauxval (no SVE instruction executes before the probe),
- * returning a clean EXIT_SKIP on SVE-less CPUs.
+ * adopts the CPU runtime vector length — all-VL (128..1024-bit, all-VL
+ * Phase 2 P3; the pre-P3 512-bit single-value gate and its issue #182
+ * caveat are cleared by the four-tier dual-kernel evidence in gem5-fi
+ * feat/sve512-dual). test_init gates via the framework layer
+ * (arm64_require_sve_vl: HWCAP_SVE capability + range check in one
+ * call, no SVE instruction executes before the probe), returning a
+ * clean EXIT_SKIP on SVE-less CPUs; test_run re-checks the VL and
+ * fails closed on drift.
  *
  * SDC detection: per-lane category compare against the deterministic
  * software reference, with per-lane golden/actual/XOR logging on mismatch.
@@ -37,12 +41,13 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
-// Special-value (category-checked) chain length.
+// Special-value (category-checked) chain length — VL-independent (a
+// per-lane dependency sequence; the lane count, not the length, scales
+// with VL).
 static constexpr size_t SPECIAL_CHAIN_STEPS = 64;
 
 // Special-value table for the category-checked chain.
@@ -153,29 +158,27 @@ static int sve512_f64_special_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    // Probe SVE availability BEFORE executing any SVE instruction.
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; "
-                 "sve512_f64_special_arm requires SVE "
-                 "(e.g. HiSilicon 0xd22, 512-bit VL)");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call (the geometry has been svcnt-dynamic all
+       along; only the old single-value gate pinned one tier). The
+       historical VL=128 golden mismatch on a hosted CI runner
+       (issue #182) is cleared by the four-tier dual-kernel evidence
+       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, range-checked
+       below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<SveF64SpecialData>();
-        data->vl_d = svcntd();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        if (data->vl_d < 2 || data->vl_d > 16) {
+            log_error("sve512_f64_special_arm: f64 lanes %zu outside "
+                      "[2,16] — unit drift (svl %ld bytes)",
+                      data->vl_d, svl);
+            return EXIT_FAILURE;
+        }
 
         /* randomization hardening H12': seeds from the framework RNG
          * (per-run fresh, -s reproducible); the special VALUE table stays
@@ -216,11 +219,19 @@ static int sve512_f64_special_arm_run(struct test *test, int cpu)
 #ifndef __aarch64__
     (void)test;
     log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): aarch64 SVE-512 f64 "
-             "special-value chain required");
+             "to be implemented (placeholder): aarch64 SVE required for "
+             "sve512_f64_special_arm");
     return EXIT_SKIP;
 #else
     auto *d = static_cast<SveF64SpecialData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift. */
+    if (svcntd() != d->vl_d) {
+        log_error("sve512_f64_special_arm: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", d->vl_d, (unsigned)svcntd());
+        report_fail_msg("sve512_f64_special_arm: SVE VL drifted between "
+                        "init and run");
+    }
 
     // Golden, recomputed each iteration (deterministic, same op order).
     std::vector<uint64_t> golds64(d->vl_d);
@@ -241,7 +252,7 @@ static int sve512_f64_special_arm_run(struct test *test, int cpu)
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_f64_special_arm: SVE-512 f64 special-value chain "
+                "sve512_f64_special_arm: SVE f64 special-value chain "
                 "SDC detected");
             return EXIT_FAILURE;
         }
@@ -271,8 +282,9 @@ DECLARE_TEST(sve512_f64_special_arm,
              "SVE full-vector-length f64 special-value chain SDC stress: "
              "64-step serial svmla_f64_x chain over the IEEE-754 special "
              "table (NaN/sNaN/±Inf/±0/±1) at the CPU's runtime SVE vector "
-             "length (512-bit on HiSilicon 0xd22), per-lane category "
-             "compared against a deterministic scalar fma() reference")
+             "length (all-VL 128..1024-bit via arm64_require_sve_vl), "
+             "per-lane category compared against a deterministic scalar "
+             "fma() reference")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_f64_special_arm_init,
     .test_run = sve512_f64_special_arm_run,
