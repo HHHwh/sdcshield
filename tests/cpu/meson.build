@@ -10,6 +10,10 @@ tests_set_base = setmod.source_set()
 tests_set_hsw = setmod.source_set()
 tests_set_skx = setmod.source_set()
 tests_set_sve = setmod.source_set()
+# All-VL Phase 2 P5: true-VLA SVE tests (sleef_sve + the sve_rot probe
+# family) — compiled in their own library WITHOUT -msve-vector-bits (see
+# the tests_sve_vla build block near the tests_sve one).
+tests_set_sve_vla = setmod.source_set()
 
 tests_common_c_args = [
     debug_c_flags,
@@ -442,9 +446,18 @@ tests_set_skx.add(
     )
 )
 
-# ARM64 SVE-backed SVD variant (counterpart of eigen_svd_cdouble). Compiled
-# against Eigen's SVE packet backend and renamed Eigen namespace; only built
-# on aarch64 (see the SVE build block below).
+# ARM64 SVE-backed Eigen pair (gemm + the SVD counterpart of
+# eigen_svd_cdouble). Compiled against Eigen's SVE packet backend and
+# renamed Eigen namespace; only built on aarch64 (see the SVE build block
+# below). All-VL Phase 2 P5 verdict: these two are the ONLY members left
+# in tests_sve compiling at fixed 128-bit — Eigen's SVE packet backend is
+# compile-time fixed-width (arm_sve_vector_bits(EIGEN_ARM64_SVE_VL)) and
+# VLA is un-compilable at the C++ language level (sizeless struct members
+# / NumTraits sizeof, twice-confirmed spike), so the tests stay at the
+# 128-bit lock and self-pin their worker threads to the compile-time VL
+# inside test_run (arm64_sve_pin_vl, replacing the external VL-pinning
+# launcher — see the TUs and
+# framework/device/cpu/arm64/arm64_vl.h).
 tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
@@ -454,20 +467,21 @@ tests_set_sve.add(
 )
 
 # ARM64-only SVE SDC probes: SVE/SVE2 ports of the core-179 NEON attribution
-# family (tests/cpu/misc/neon_rot_ldr_at_top*.cpp). They are registered in
-# tests_set_sve, which compiles them with -march=armv8.2-a+sve
-# -msve-vector-bits=128 (see the tests_sve build block below): fixed 128-bit
-# SVE semantics, guaranteed correct only at runtime VL == 128 (the
-# size-specific rule in docs/architecture.md); on VL != 128 silicon their
-# behavior is in the same undefined class documented for
-# eigen_gemm/gemm_double_max_arm.cpp:40-47. The framework auto-skips them on
-# non-SVE hardware via compiler_minimum_device (framework/sandstone_run.cpp).
-# The Eigen namespace-rename macros on that library are inert for these
-# files (they never include Eigen). Scheduled: migrate to a true-VLA library
-# in all-VL Phase 2 P5 (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md
-# §6). x86-64 untouched.
+# family (tests/cpu/misc/neon_rot_ldr_at_top*.cpp). All-VL Phase 2 P5 —
+# the migration the previous comment here scheduled is DONE: they compile
+# in the dedicated true-VLA tests_sve_vla library
+# (-march=armv8.2-a+sve, NO -msve-vector-bits), so the sizeless types
+# adopt the runtime VL and the svcnt-stepped/whilelt-tailed geometry is
+# exact at every tier 128..1024-bit (spike evidence: three-state compile
+# probe 128/256/no-flag, zero warnings; the geometry has been
+# svcnt-dynamic since birth — only the library lock was 128-bit). The
+# framework auto-skips them on non-SVE hardware via
+# compiler_minimum_device (framework/sandstone_run.cpp); the
+# test_init arm64_require_sve_vl gate keeps a test-specific skip reason
+# even if that ordering ever changes. No Eigen macros reach them (they
+# never include Eigen). x86-64 untouched.
 if host_machine.cpu_family() == 'aarch64'
-    tests_set_sve.add(
+    tests_set_sve_vla.add(
         files(
             'sve/sve_rot_ldr_at_top.cpp',
             'sve/sve_rot_ldr_at_top_rowmajor.cpp',
@@ -584,11 +598,15 @@ if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
             'sleef/sleef_neon.cpp',
         )
     )
-    # SVE variant goes into the dedicated tests_sve static library (compiled
-    # with -march=armv8.2-a+sve -msve-vector-bits=128), NOT the NEON baseline:
-    # SVE object code in tests_base would SIGILL on non-SVE silicon. Runtime
-    # HWCAP_SVE gate in sleef_sve.cpp skips cleanly there.
-    tests_set_sve.add(
+    # SVE variant goes into the dedicated true-VLA tests_sve_vla static
+    # library (compiled with -march=armv8.2-a+sve, NO -msve-vector-bits —
+    # all-VL Phase 2 P5 migration), NOT the NEON baseline: SVE object code
+    # in tests_base would SIGILL on non-SVE silicon. Both this TU and the
+    # vendored SLEEF library are pure VLA (spike: three-state compile
+    # probe 128/256/no-flag with zero warnings; libsleef.a disassembly
+    # shows cntd/cntp/rdvl and no ptrue_pat fixed-width patterns), so the
+    # test runs at any runtime VL inside its 128..1024-bit gate range.
+    tests_set_sve_vla.add(
         when : sleef_dep,
         if_true : files(
             'sleef/sleef_sve.cpp',
@@ -998,9 +1016,15 @@ if host_machine.cpu_family() == 'x86_64'
 endif
 
 # ARM64 SVE build block: mirror of the x86 SKX/HSW blocks above. Compiles the
-# SVD SVE variant against Eigen's SVE packet backend (-DEIGEN_ARM64_USE_SVE)
-# with a fixed vector length, and renames the Eigen namespace so it links
-# beside the NEON baseline without symbol clashes.
+# Eigen SVE pair (gemm_double_max_arm + svd_cdouble_sve) against Eigen's SVE
+# packet backend (-DEIGEN_ARM64_USE_SVE) with a fixed vector length, and
+# renames the Eigen namespace so it links beside the NEON baseline without
+# symbol clashes. All-VL Phase 2 P5: these two are the library's ONLY
+# members — the fixed 128-bit lock stays because Eigen's SVE packets are
+# compile-time fixed-width (VLA is un-compilable at the C++ language level,
+# twice-confirmed spike); the tests self-pin their worker threads to the
+# compile-time VL inside test_run (arm64_sve_pin_vl), replacing the
+# external VL-pinning launcher.
 if host_machine.cpu_family() == 'aarch64'
     march_sve = [
         '-march=armv8.2-a+sve',
@@ -1017,7 +1041,6 @@ if host_machine.cpu_family() == 'aarch64'
             dependencies: [
                 tests_config_sve.dependencies(),
                 boost_dep,
-                sleef_dep,
             ],
             build_by_default: false,
             include_directories: [
@@ -1035,6 +1058,46 @@ if host_machine.cpu_family() == 'aarch64'
             ],
         )
         sandstone_tests += [tests_sve_a]
+    endif
+endif
+
+# All-VL Phase 2 P5: true-VLA SVE tests — sleef_sve (the vendored SLEEF
+# static library is pure VLA, disassembly-verified: cntd/cntp/rdvl, no
+# ptrue_pat fixed-width patterns) and the sve_rot core-179 probe family
+# (geometry svcnt-dynamic since birth). Migrated off the 128-bit-locked
+# tests_sve library above; spike evidence: three-state compile probe
+# (128 / 256 / no flag) with zero warnings for every TU. No Eigen macros:
+# none of these TUs includes Eigen. sve_sanitize_exempt mirrors the
+# tests/cpu/sve sibling libraries (GCC 12.3 SVE-intrinsics + sanitizer
+# codegen ICE). x86-64 untouched (aarch64 guard).
+if host_machine.cpu_family() == 'aarch64'
+    tests_config_sve_vla = tests_set_sve_vla.apply(tests_config)
+    tests_sve_vla_sources = tests_config_sve_vla.sources()
+
+    if tests_sve_vla_sources.length() > 0
+        tests_sve_vla_a = static_library(
+            'tests_sve_vla',
+            sources : tests_sve_vla_sources,
+            dependencies: [
+                tests_config_sve_vla.dependencies(),
+                boost_dep,
+                sleef_dep,
+            ],
+            build_by_default: false,
+            include_directories: [
+                tests_common_incdirs,
+            ],
+            c_args : [
+                tests_common_c_args,
+                '-march=armv8.2-a+sve',
+            ],
+            cpp_args : [
+                tests_common_cpp_args,
+                '-march=armv8.2-a+sve',
+                sve_sanitize_exempt,
+            ],
+        )
+        sandstone_tests += [tests_sve_vla_a]
     endif
 endif
 
