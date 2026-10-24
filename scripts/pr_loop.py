@@ -39,6 +39,11 @@
 #   另要求 head_sha 匹配且 status == completed。PR(issue)评论无 commit 绑定字段,
 #   只能时间锚定——push 时间已是可作下界的最强锚定(timeline 的 committed 事件
 #   无 created_at 字段、head_ref_force_pushed 仅 force push 产生,均实证)。
+# 时钟偏差容差(±300s,见 CLOCK_SKEW_TOLERANCE)仅限回退锚: push_time 与条目
+#   时间同属 GitHub 服务器钟,无本机偏差可言,锚定保持严格(防同 SHA 强推回退,
+#   意见#22 先例);仅回退 committer date(本机钟盖戳,可快/慢于服务器)时,对
+#   commit 锚严格匹配(锚定字段存在且 == head,字段缺失不算)的条目放宽——
+#   严格匹配的条目不可能早于 head 存在,放宽不影响甄别目标(意见 1)。
 #
 # 意见计数与「信号」分开: 摘要/LGTM 类不计入待处置意见——APPROVED/DISMISSED
 # review、coderabbit walkthrough/汇总评论(其发现以行级评论另行计入)、bot-coverage
@@ -333,12 +338,15 @@ def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
 
 
 # 时钟偏差容差: 条目锚定的 commit 严格匹配当前 head 时,时间锚放宽的下界。
-# 背景(2026-10-24 九个 open PR 实证): 本机时钟快于 GitHub 服务器约 1 分钟,
-# commit 的 committer date 由本机钟盖戳;events 窗口(约 300 条)被 9 个 PR 的
-# bot/CI 事件挤掉 PushEvent 后,时间锚回退 committer date → 合法 bot 信号
-# (greptile 对全部 9 个 PR 当前 head 的 review,commit_id 精确匹配)落在锚前
-# 数十秒被整批误杀。commit 锚严格匹配的条目不可能早于 head 存在,时间锚仅
-# 防 force-push 回退同 SHA 等病态场景,按此容差放宽不影响甄别目标。
+# **仅限回退锚**(committer date,意见 1): push_time 与条目时间同属 GitHub
+# 服务器钟,无本机偏差可言,push_time 锚不放宽(严格锚防同 SHA 强推回退,
+# 意见#22 先例)。背景(2026-10-24 九个 open PR 实证): 本机时钟快于 GitHub
+# 服务器约 1 分钟,commit 的 committer date 由本机钟盖戳;events 窗口(约
+# 300 条)被 9 个 PR 的 bot/CI 事件挤掉 PushEvent 后,时间锚回退 committer
+# date → 合法 bot 信号(greptile 对全部 9 个 PR 当前 head 的 review,
+# commit_id 精确匹配)落在锚前数十秒被整批误杀。commit 锚严格匹配的条目
+# 不可能早于 head 存在,时间锚仅防 force-push 回退同 SHA 等病态场景,按此
+# 容差放宽不影响甄别目标。
 CLOCK_SKEW_TOLERANCE = timedelta(seconds=300)
 
 
@@ -353,17 +361,21 @@ def commit_strict_match(item: dict, sha_keys: tuple, head_sha: str) -> bool:
 
 
 def head_anchored(item: dict, ts_key: str, anchor: datetime,
-                  sha_keys: tuple, head_sha: str) -> bool:
+                  sha_keys: tuple, head_sha: str, skew: timedelta) -> bool:
     """双锚定组合判定(时钟偏差加固版),替代各调用点的
     「is_after_head(...) and commit_anchored(...)」:
     - 常规路径(时间 ≥ anchor): 维持原语义(commit_anchored 含字段缺失回退);
-    - anchor 前 CLOCK_SKEW_TOLERANCE 内: 仅 commit 锚严格匹配时计入。"""
+    - anchor 前 skew 内: 仅 commit 锚严格匹配时计入。
+    skew 由锚来源决定(意见 1,见 fetch_pr 推导): push_time 锚(服务器钟,与
+    条目时间同源无偏差)→ timedelta(0) 严格不放宽,防同 SHA 强推回退
+    (意见#22 先例);仅回退 committer date 锚(本机钟盖戳,可快/慢于服务器)
+    → CLOCK_SKEW_TOLERANCE。"""
     ts = parse_ts(item.get(ts_key))
     if ts is None:
         return False
     if ts >= anchor:
         return commit_anchored(item, sha_keys, head_sha)
-    return (ts >= anchor - CLOCK_SKEW_TOLERANCE
+    return (ts >= anchor - skew
             and commit_strict_match(item, sha_keys, head_sha))
 
 
@@ -558,6 +570,10 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # 不可得时回退 committer date(行为不劣于修复前)。
     push_time = fetch_push_time(slug, head.get("ref") or "", head_sha)
     anchor = push_time or head_time
+    # 时钟偏差容差仅限回退锚(意见 1): push_time 与条目时间同属 GitHub 服务器
+    # 钟,无本机偏差可言,锚定保持严格(防同 SHA 强推回退,意见#22 先例);仅
+    # 回退 committer date(本机钟盖戳,可快/慢于服务器)时放宽 300s。
+    skew = timedelta(0) if push_time else CLOCK_SKEW_TOLERANCE
 
     reviews = gh_api_paged(f"repos/{slug}/pulls/{number}/reviews")
     review_comments = gh_api_paged(f"repos/{slug}/pulls/{number}/comments")
@@ -627,7 +643,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
             continue
         ts = parse_ts(r.get("submitted_at"))
         counted = head_anchored(r, "submitted_at", anchor,
-                                ("commit_id",), head_sha)
+                                ("commit_id",), head_sha, skew)
         data.signals.append(Signal(
             bot=bot, kind="review", time=ts or anchor, counted=counted,
             detail=f'review({r.get("state")})',
@@ -643,7 +659,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
             continue
         ts = parse_ts(c.get("created_at"))
         counted = head_anchored(c, "created_at", anchor,
-                                ("original_commit_id", "commit_id"), head_sha)
+                                ("original_commit_id", "commit_id"),
+                                head_sha, skew)
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
         data.signals.append(Signal(
             bot=bot, kind="review_comment", time=ts or anchor, counted=counted,
@@ -689,7 +706,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
         if not head_anchored(r, "submitted_at", anchor,
-                             ("commit_id",), head_sha):
+                             ("commit_id",), head_sha, skew):
             continue
         if not body or is_summary_text(body):
             continue
@@ -711,7 +728,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None:
             continue
         if head_anchored(c, "created_at", anchor,
-                         ("original_commit_id", "commit_id"), head_sha):
+                         ("original_commit_id", "commit_id"), head_sha, skew):
             n_rcomment += 1
     n_icomment = 0
     for c in issue_comments:
@@ -802,6 +819,9 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
     供 verify_reply_completeness 做双向集合差——真实数据,不是自产数组。
     """
     anchor = pr.push_time or pr.head_time
+    # 容差推导与 fetch_pr 同口径(意见 1): push_time 锚严格(timedelta(0)),
+    # 仅回退 committer date 锚放宽 CLOCK_SKEW_TOLERANCE。
+    skew = timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE
     inline = set()
     for c in pr.review_comments:
         bot = bot_of(c)
@@ -811,7 +831,8 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
         if bot is None:
             continue
         if not head_anchored(c, "created_at", anchor,
-                             ("original_commit_id", "commit_id"), pr.head_sha):
+                             ("original_commit_id", "commit_id"),
+                             pr.head_sha, skew):
             continue
         path = c.get("path") or ""
         line = c.get("line")
@@ -831,7 +852,7 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
         if not head_anchored(r, "submitted_at", anchor,
-                             ("commit_id",), pr.head_sha):
+                             ("commit_id",), pr.head_sha, skew):
             continue
         if not raw_body.strip() or is_summary_text(raw_body):
             continue
