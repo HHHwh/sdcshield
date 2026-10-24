@@ -46,8 +46,10 @@
  * per rotation compares golden vs hardware before the chain runs — a
  * golden bug reports as a test bug, never as SDC.
  *
- * test_init probes HWCAP_SVE and returns a clean EXIT_SKIP on SVE-less
- * CPUs. Any runtime vector length. Built in tests_arm64_sve
+ * test_init gates via the framework layer (arm64_require_sve_vl:
+ * HWCAP_SVE capability + 128..1024-bit range in one call, all-VL
+ * Phase 2 P6) and returns a clean EXIT_SKIP on SVE-less CPUs; test_run
+ * re-checks the VL and fails closed on drift. Built in tests_arm64_sve
  * (armv8.2-a+sve — FCMLA is SVE1).
  * @endparblock
  */
@@ -61,9 +63,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static constexpr size_t CHAIN_STEPS = 512;
@@ -165,17 +166,25 @@ static int sve512_fcmla_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve512_fcmla_arm requires SVE "
-                 "(complex FMA FCMLA is SVE1)");
+    /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
+       framework-layer call, replacing the getauxval hand-probe (the
+       framework-level compiler_minimum_device gate already skips no-SVE
+       hosts before init; this keeps a test-specific skip reason if that
+       gate ordering ever changes). arm64_require_sve_vl returns the VL
+       in BYTES — f64 lanes = svl/8, range-checked below
+       (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<FcmlaData>();
-        data->vl_d = svcntd();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        if (data->vl_d < 2 || data->vl_d > 16) {
+            log_error("sve512_fcmla_arm: f64 lanes %zu outside [2,16] "
+                      "— unit drift (svl %ld bytes)", data->vl_d, svl);
+            return EXIT_FAILURE;
+        }
 
         const size_t pairs = data->vl_d / 2;   // complex lane pairs
         // b/c operand streams: pair-major [pair*2 + {e,i}]
@@ -219,6 +228,16 @@ static int sve512_fcmla_arm_run(struct test *test, int cpu)
     return EXIT_SKIP;
 #else
     auto *d = static_cast<FcmlaData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift (init sized the
+       golden lanes at its VL). */
+    if (svcntd() != d->vl_d) {
+        log_error("sve512_fcmla_arm: VL drifted between init (%zu lanes) "
+                  "and run (%u lanes)", d->vl_d, (unsigned)svcntd());
+        report_fail_msg("sve512_fcmla_arm: SVE VL drifted between init "
+                        "and run");
+    }
+
     const size_t vl_d = d->vl_d;
     const size_t pairs = vl_d / 2;
 
