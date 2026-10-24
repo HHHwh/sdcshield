@@ -5,20 +5,28 @@
  *
  * @test @b sve512_f64_chain_svd
  * @parblock
- * SVD-format f64 FMLA dependency chain SDC stress — the SVE-512 datapath
+ * SVD-format f64 FMLA dependency chain SDC stress — the SVE datapath
  * with an SVD-scale working set.
  *
  * Differs from sve512_f64_chain_arm:
- *   - working set 1.44 MB (300x300 complex<double>-equivalent) vs 64 KB,
- *     so it overflows L2 (512 KB) and forces continuous L1D<->L2<->L3
- *     traffic, mirroring eigen_svd_cdouble_sve's memory footprint;
+ *   - working set scales with the lanes (5.9..47.3 MB across m and a
+ *     over the 128..1024-bit tiers) vs 64 KB, so it overflows L2
+ *     (512 KB) at every tier and forces continuous L1D<->L2<->L3
+ *     traffic, mirroring eigen_svd_cdouble_sve's complex<double>
+ *     300x300 footprint;
  *   - nested block traversal (BLOCK_ROWS x BLOCK_COLS) matching Eigen
  *     BDCSVD's block-of-matrix access pattern instead of a flat stream.
  *
  * Still a serial svmla_f64_x chain (512 steps), byte-exact compared to a
  * scalar std::fma reference. Compiled WITHOUT -msve-vector-bits so it uses
- * the CPU runtime vector length (512-bit on HiSilicon 0xd22). Non-SVE CPUs
- * return a clean EXIT_SKIP.
+ * the CPU runtime vector length — all-VL (128..1024-bit, all-VL Phase 2
+ * P3; the pre-P3 512-bit single-value gate and its issue #182 caveat are
+ * cleared by the four-tier dual-kernel evidence in gem5-fi
+ * feat/sve512-dual). test_init gates via the framework layer
+ * (arm64_require_sve_vl: HWCAP_SVE capability + range check in one call,
+ * no SVE instruction executes before the probe), returning a clean
+ * EXIT_SKIP on SVE-less CPUs; test_run re-checks the VL and fails closed
+ * on drift.
  * @endparblock
  */
 
@@ -31,11 +39,12 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
+// Serial FMA chain length per iteration — VL-independent (a per-lane
+// dependency sequence; the lane count, not the length, scales with VL).
 static constexpr size_t CHAIN_STEPS = 512;
 
 // SVD-scale working set: 300x300 doubles = 720 KB. With two operand
@@ -137,26 +146,27 @@ static void report_f64_lane_mismatch(const char *tag, size_t lane,
 
 static int sve512_f64_chain_svd_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve512_f64_chain_svd requires SVE");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call (the geometry has been svcnt-dynamic all
+       along; only the old single-value gate pinned one tier). The
+       historical VL=128 golden mismatch on a hosted CI runner
+       (issue #182) is cleared by the four-tier dual-kernel evidence
+       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, range-checked
+       below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<SveF64ChainSvdData>();
-        data->vl_d = svcntd();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        if (data->vl_d < 2 || data->vl_d > 16) {
+            log_error("sve512_f64_chain_svd: f64 lanes %zu outside "
+                      "[2,16] — unit drift (svl %ld bytes)",
+                      data->vl_d, svl);
+            return EXIT_FAILURE;
+        }
 
         /* randomization hardening H12': framework RNG per run (-s
          * reproducible) instead of fixed splitmix/table indices; the
@@ -194,9 +204,11 @@ static int sve512_f64_chain_svd_init(struct test *test)
 
         // SVD-scale operand streams, block-major: one contiguous
         // CHAIN_STEPS x VL slab per 16x16 block origin, 19x19 blocks.
-        // = 361 * 512 * VL f64 elements (~11.8 MB per stream at a 512-bit
-        // VL, 23.7 MB across m and a — 46x L2, matching the SVD working-
-        // set goal without the old layout's 2.7 GiB-per-stream blowup).
+        // = 361 * 512 * VL f64 elements — the working set is proportional
+        // to the lanes: across m and a the four tiers (128/256/512/1024-
+        // bit) total 5.9/11.8/23.7/47.3 MB, every tier far beyond L2,
+        // keeping the SVD overflow intent (and staying far from the old
+        // layout's 2.7 GiB-per-stream blowup).
         const size_t n_blocks_r = (SVD_ROWS + SVD_BLOCK_ROWS - 1) / SVD_BLOCK_ROWS;
         const size_t n_blocks_c = (SVD_COLS + SVD_BLOCK_COLS - 1) / SVD_BLOCK_COLS;
         const size_t total = n_blocks_r * n_blocks_c * CHAIN_STEPS * data->vl_d;
@@ -222,6 +234,15 @@ static int sve512_f64_chain_svd_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *d = static_cast<SveF64ChainSvdData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift. */
+    if (svcntd() != d->vl_d) {
+        log_error("sve512_f64_chain_svd: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", d->vl_d, (unsigned)svcntd());
+        report_fail_msg("sve512_f64_chain_svd: SVE VL drifted between "
+                        "init and run");
+    }
+
     std::vector<uint64_t> gold64(d->vl_d);
     std::vector<uint64_t> hw(d->vl_d);
 
@@ -246,7 +267,7 @@ static int sve512_f64_chain_svd_run(struct test *test, int cpu)
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_f64_chain_svd: SVE-512 f64 chain SDC detected");
+                "sve512_f64_chain_svd: SVE f64 chain SDC detected");
             return EXIT_FAILURE;
         }
     } while (test_time_condition(test));
@@ -263,8 +284,9 @@ static int sve512_f64_chain_svd_cleanup(struct test *test)
 #endif // __aarch64__
 
 DECLARE_TEST(sve512_f64_chain_svd,
-             "SVD-format SVE-512 f64 FMLA chain: 1.44 MB working set + "
-             "nested block traversal, byte-exact vs scalar fma()")
+             "SVD-format SVE f64 FMLA chain: lanes-proportional SVD-scale "
+             "working set + nested block traversal (all-VL 128..1024-bit "
+             "via arm64_require_sve_vl), byte-exact vs scalar fma()")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_f64_chain_svd_init,
     .test_run = sve512_f64_chain_svd_run,
