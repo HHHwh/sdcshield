@@ -134,7 +134,7 @@ static int aes192_ctr_hmac_sha1_sve_init(struct test *test) {
         /* 工作集字节数: -O ipsec_aes192_ctr_hmac_sha1_sve.data_size=N /
          * SDC_IPSEC_AES192_CTR_HMAC_SHA1_SVE_DATA_SIZE 环境变量 / 自适应:
          * 每线程明文+密文+golden 密文+解密缓冲+变体消息 ~= (3+nstreams-1)x,
-         * 占物理内存 60%, clamp [1024, 1900]——上限闭环 8.4: HMAC 组装
+         * 三通道(-O 旋钮/环境变量/自适应)均钳制于 [1024, 1900](自适应名义按物理内存 60% 定标, 实际被此钳位钉在 1900; 大消息档恢复见流式组装后续单元), clamp [1024, 1900]——上限闭环 8.4: HMAC 组装
          * 缓冲 full[N][2048], 2048-64-9=1975B 安全边界。线性缓冲用 sdc_auto_linear_count（sqrt 缩放会欠缩放压力）。历史硬编码 1024。CTR 流式
          * 无需分组对齐, 统一 16B 对齐无害, 对齐后 < 1024 取 1024。 */
         d->data_size = ipsec_data_size(test);
