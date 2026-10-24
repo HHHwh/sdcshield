@@ -82,7 +82,7 @@ static void aes_ctr_decrypt(const uint8_t *key, const uint8_t *iv, const uint8_t
     s_EVP_CIPHER_CTX_free(ctx);
 }
 
-static void aes192_ctr_hmac_sha224_sve_compute_golden(struct test *test, struct aes192_ctr_hmac_sha224_sve_data *d) {
+static int aes192_ctr_hmac_sha224_sve_compute_golden(struct test *test, struct aes192_ctr_hmac_sha224_sve_data *d) {
     aes_ctr_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, d->data_size);
     /* SVE 多流 HMAC: lane0=密文(主语义), lane1..N-1=变体 */
     const int n = (int)svcntw();   /* 与 kernel 内部推导一致 */
@@ -103,8 +103,9 @@ static void aes192_ctr_hmac_sha224_sve_compute_golden(struct test *test, struct 
     }
     if (hmac_sha224_x8(d->golden_mac, keys, 28, msgs, d->data_size) != 0) {
         log_error("%s: HMAC capacity overflow (data_size too large)", test->id);
-        report_fail_msg("%s: hmac assembly over capacity", test->id);
+        return -1;
     }
+    return 0;
 }
 
 static int aes192_ctr_hmac_sha224_sve_init(struct test *test) {
@@ -159,7 +160,20 @@ static int aes192_ctr_hmac_sha224_sve_init(struct test *test) {
         memset_random(d->aes_iv, AES_IV_SIZE_V);
         memset_random(d->hmac_key, 28);
         memset_random(d->plaintext, d->data_size);
-        aes192_ctr_hmac_sha224_sve_compute_golden(test, d);
+        if (aes192_ctr_hmac_sha224_sve_compute_golden(test, d) != 0) {
+            /* P2a (review Minor): init-side failure propagates via the
+             * return value so the framework reports a clean Failed
+             * (sandstone_run.cpp: ret > 0 -> TestResult::Failed).
+             * report_fail_msg is a noreturn thread-cancel that only
+             * belongs in the test_run worker context — in test_init it
+             * would surface as Skipped("Unexpected OS error"). */
+            free(d->plaintext);
+            free(d->golden_ciphertext);
+            for (int s = 0; s < d->nstreams - 1; ++s)
+                free(d->variant_msg[s]);
+            free(d);
+            return EXIT_FAILURE;
+        }
         test->data = d;
         return EXIT_SUCCESS;
     } else {
@@ -261,7 +275,8 @@ static int aes192_ctr_hmac_sha224_sve_run(struct test *test, int cpu) {
             /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
              * SVE HMAC recomputed for this thread's data) */
             memset_random(local_d.plaintext, d->data_size);
-            aes192_ctr_hmac_sha224_sve_compute_golden(test, &local_d);
+            if (aes192_ctr_hmac_sha224_sve_compute_golden(test, &local_d) != 0)
+                report_fail_msg("%s: hmac assembly over capacity", test->id);
             aes_ctr_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, d->data_size);
             memcmp_or_fail(ciphertext, local_d.golden_ciphertext, d->data_size, "ciphertext mismatch (SVE)");
             aes_ctr_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, d->data_size);
