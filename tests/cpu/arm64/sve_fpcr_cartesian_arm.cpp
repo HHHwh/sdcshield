@@ -15,9 +15,12 @@
  * golden with FZ flush mirrored in software. mrs/msr only between
  * configurations. FPCR saved/restored/verified.
  *
- * test_init probes HWCAP_SVE and returns a clean EXIT_SKIP on SVE-less
- * CPUs (e.g. this Kunpeng 920 dev host). Any runtime vector length.
- * Built in tests_arm64_sve.
+ * test_init gates via the framework layer (arm64_require_sve_vl:
+ * HWCAP_SVE capability + 128..1024-bit range in one call, all-VL
+ * Phase 2 P6) and returns a clean EXIT_SKIP on SVE-less CPUs (e.g.
+ * this Kunpeng 920 dev host). The run side reads the VL fresh (svcntw)
+ * and sizes its operand buffers from the same lanes, so no init/run VL
+ * state exists to drift. Built in tests_arm64_sve.
  * @endparblock
  */
 
@@ -30,9 +33,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static const uint32_t SPECIAL_F32[] = {
@@ -111,13 +113,14 @@ static int sve_fpcr_cartesian_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve_fpcr_cartesian_arm "
-                 "requires SVE (SVE-side rounding network)");
+    /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
+       framework-layer call, replacing the getauxval hand-probe. Gate
+       only: the run side re-reads svcntw() and sizes its buffers from
+       the same lanes (no init/run VL state to drift). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
+    (void)svl;
     return EXIT_SUCCESS;
 #endif
 }
