@@ -1160,7 +1160,13 @@ def _collect_entries(pr: PRData) -> list:
     entries = []
 
     def era_mark(ts: datetime) -> str:
-        if ts >= pr.head_time:
+        # 阈值与意见计数同口径: 时间锚下界 = push_time(可得,严格)或 head_time
+        # (回退,放宽 CLOCK_SKEW_TOLERANCE)。否则回退锚容差窗口内(锚前 ≤300s)
+        # 被计入的条目会被标「历史轮次勿重复处置」——计入了却叫人勿处置,自相
+        # 矛盾(自检发现);push_time 锚下窗口为空,同样与计数一致。
+        anchor = pr.push_time or pr.head_time
+        skew = timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE
+        if ts >= anchor - skew:
             return "当前 head"
         return "历史轮次(GitHub 重锚定: 产生于当前 head 之前,仅供参考,勿重复处置)"
 
