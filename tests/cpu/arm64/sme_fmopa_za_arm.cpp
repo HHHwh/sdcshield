@@ -40,10 +40,13 @@
  *   smstop za + smstop sm — leave both (ZA inaccessible, streaming off)
  * w12 is zeroed (slice selector 0); z0/z1/z2/p0/w12 are clobbers.
  *
- * All-VL Phase 2 P2 rework (spec
- * docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6): the
- * pre-P2 form had never executed on any hardware and carried four
- * independent defects, fixed here:
+ * All-VL Phase 2 P2 rework (campaign log: docs/research/progress-log.md,
+ * "2026-10-23 (all-VL Phase 2 P2)" entry; the P2 spec itself,
+ * docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md, reached main
+ * via PR #271 and is not carried by this branch): the pre-P2 form had
+ * never executed on any hardware and carried four independent defects
+ * (1-4 below); the first P2 cut added a fifth (5), caught by adversarial
+ * review — five fixes total in this PR:
  *   1. `rdsvl %0, 0` (imm 0) always returned 0 -> tile_cols 0 -> empty
  *      golden and a heap overflow on real SME hardware (RDSVL multiplies
  *      SVL_bytes by the immediate);
@@ -54,7 +57,12 @@
  *      four tiers in PR #242, established za0v = column/transpose);
  *   4. `smstart za` alone cannot execute FMOPA (SVCR.SM=1 required) —
  *      the sm+za double-switch is mandatory (four-tier gem5 verdict,
- *      dual kernel ebe08632).
+ *      dual kernel ebe08632);
+ *   5. the first P2 cut divided the helper's SVL-in-BYTES return by 32
+ *      (bits) — an 8x unit error replaying defect 1's geometry at 128-bit
+ *      and overruns at larger tiers; caught by adversarial review
+ *      (Critical-1), fixed as /4 plus a release-effective cols in [4,32]
+ *      check (assert is compiled out under NDEBUG).
  * The rework: SVL via the framework layer (`arm64_require_sme_svl`,
  * 128..1024-bit range check — the helper returns the SVL in BYTES),
  * per-step operand WINDOWS of cols = SVL_bits/32 = SVL_bytes/4 f32
@@ -72,7 +80,7 @@
  * and gem5's fplib double-rounding (F4) coincides with hardware.
  * The readout vector golden_readout[r] follows the axis verdict of the
  * same-source dual kernel (gem5-fi workloads/sdcshield/
- * sme_fmopa_za_dual.c, four tiers x {fixed, random x3}):
+ * sme_fmopa_dual.c, four tiers x {fixed, random x3}):
  *   COLUMN: mova za0v.s[w12,0] w12=0 reads column 0 —
  *           readout[r] = sum_s a[s*cols+r] * b[s*cols]
  *
@@ -128,6 +136,15 @@ static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
                             size_t steps, float *out_vec, size_t cols)
 {
     const size_t stride = cols * sizeof(float);
+    /* Operand-constraint contract: [a]/[b]/[n] are written inside the loop
+       BEFORE [o]/[s] are consumed (st1w to [o] happens after the loop) —
+       in theory that makes them early clobbers, so the correct form is
+       "+&r" (the compiler must not assign [o]/[s] the same registers).
+       The current "+r" is the four-tier gem5-verified form, byte-identical
+       to the dual kernel at ebe08632; hardening to "+&r" (plus a four-tier
+       re-run to re-anchor the evidence) is deliberately deferred to a
+       follow-up commit — this batch documents the contract without
+       changing the encoding. */
     __asm__ volatile(
         "smstart sm\n\t"
         "smstart za\n\t"
@@ -152,7 +169,7 @@ static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
 }
 
 // Scalar golden over the operand windows, exact integer accumulation.
-// Axis verdict (gem5-fi sme_fmopa_za_dual @ ebe08632, four tiers x
+// Axis verdict (gem5-fi sme_fmopa_dual @ ebe08632, four tiers x
 // {fixed, random x3} = 16 runs, SDCSHIELD_FAILS=0): mova
 // za0v.s[w12,0] with w12=0 reads COLUMN 0 —
 //   readout[r] = ZA[r][0] = sum_s z0[r] * z1[0] = sum_s a[s*cols+r] * b[s*cols]
@@ -189,10 +206,11 @@ static int sme_fmopa_za_arm_init(struct test *test)
     return EXIT_SUCCESS;
 #else
     /* Framework layer: HWCAP2_SME capability + 128..1024-bit SVL range
-       check in one call; -1 means the skip was already logged. The
+       check in one call; a negative return means the helper already
+       log_skip'ed — init translates it to EXIT_SKIP (-255). The
        return value is the SVL in BYTES; cols = SVL_bits/32 = svl_bytes/4
        (f32 lanes per tile row) — the exact mapping the dual kernel uses
-       (sme_fmopa_za_dual.c: cols = svl_bytes/4). The explicit range
+       (sme_fmopa_dual.c: cols = svl_bytes/4). The explicit range
        check below catches any unit drift on the first SME host to run
        this, release builds included (assert() is compiled out under
        NDEBUG; adversarial review Critical-1: the pre-fix form divided
