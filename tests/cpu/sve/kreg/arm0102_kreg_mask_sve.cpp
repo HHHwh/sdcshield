@@ -29,11 +29,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define ARM0102_KREG_MASK_SVE_COUNT 1024   /* elements per buffer (uint32) */
@@ -107,12 +103,11 @@ static inline svuint32_t kreg_expand_rotating(svbool_t pg, svuint32_t a, svuint3
 }
 
 static int arm0102_kreg_mask_sve_init(struct test *test) {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for arm0102_kreg_mask_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     auto *data = static_cast<Arm0102KregMaskSveData *>(malloc(sizeof(Arm0102KregMaskSveData)));
     const int count = (int)arm0102_kreg_mask_sve_count(test);
@@ -126,7 +121,7 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
 
     /* golden: 同一旋转组合, 在相同 SVE 单元上预计算 */
     [[maybe_unused]] svbool_t pg = svptrue_b32();
-    const int lanes = svcntw();
+    const int lanes = (int)(svl / 4);   /* f32 lanes = SVL bytes / 4 */
     for (int base = 0; base < count; base += lanes) {
         int n = (count - base < lanes) ? (count - base) : lanes;
         [[maybe_unused]] svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
