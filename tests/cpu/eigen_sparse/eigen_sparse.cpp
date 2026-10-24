@@ -27,8 +27,11 @@
  * iterations; the old "deliberately NOT re-rolled" freeze existed only
  * to protect the shared-golden structure and is obsolete with it.
  *
- * @note Although the test should run fine on a single thread, it is
- * only expected to catch defects if run on at least 2 cores.
+ * @note Detection works at any core count: the per-thread same-source
+ * repeat (recompute + memcmp against the golden produced on the same
+ * thread) catches transient/intermittent non-determinism even when
+ * single-threaded; multi-core only raises the concurrent-exposure
+ * probability. Full-core is the recommended detection posture.
  * @endparblock
  */
 
