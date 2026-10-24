@@ -1066,7 +1066,13 @@ endif
 # ptrue_pat fixed-width patterns) and the sve_rot core-179 probe family
 # (geometry svcnt-dynamic since birth). Migrated off the 128-bit-locked
 # tests_sve library above; spike evidence: three-state compile probe
-# (128 / 256 / no flag) with zero warnings for every TU. No Eigen macros:
+# (128 / 256 / no flag) with zero warnings for every TU. Runtime evidence
+# (sleef_sve half): gem5-fi sleef_vla_dual 16-run matrix all green with
+# cross-tier byte-identity (feat/sleef-vla-dual @ 6d740525); sve_rot
+# family stays compile-probe-only — shallow self-written kernels (bare
+# z-ldr/str + integer _x operators) whose instruction face is not
+# exercised by the sleef matrix (library-vs-kernel risk asymmetry,
+# recorded in progress-log 2026-10-24). No Eigen macros:
 # none of these TUs includes Eigen. sve_sanitize_exempt mirrors the
 # tests/cpu/sve sibling libraries (GCC 12.3 SVE-intrinsics + sanitizer
 # codegen ICE). x86-64 untouched (aarch64 guard).

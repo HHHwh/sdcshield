@@ -691,10 +691,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **承接**:P4(ipsec HMAC×17)计划已就绪(docs/superpowers/plans/
   2026-10-24-sve-sme-all-vl2-p4.md)。
 <<<<<<< HEAD
-<<<<<<< HEAD
-=======
-
->>>>>>> 853994d3 (docs(all-vl2): P4 收尾——README VL 政策段 all-VL 化 + progress-log 实证条目)
 ## 2026-10-24（all-VL Phase 2 P4：ipsec HMAC×17 流数参数化——两个既有缺陷随阶段修复）
 
 - **既有缺陷修复**(评估代理实证, 随 P4 落地): ①门控无上界——旧
@@ -795,6 +791,35 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   report_fail_msg 会表现为 Skipped("Unexpected OS error")而非干净
   Failed——knob 钳制后不可达, 纯纵深防御, 记账。
 - **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
+<<<<<<< HEAD
   语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
   遗留手探文件)待做。
 >>>>>>> 853994d3 (docs(all-vl2): P4 收尾——README VL 政策段 all-VL 化 + progress-log 实证条目)
+=======
+  语言级不可编译); P6 存量迁移(含本阶段 6 个遗留手探文件)待做。
+
+## 2026-10-24 · P5 sleef 半侧实证收口(PR #286 检视闭环)
+
+- **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
+  gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
+  (128/256/512/1024-bit)×{fixed,random×3},全部 SDCSHIELD_FAILS=0;
+  同一输入集 checksum 四档逐位一致(跨档字节同一性成立,per-lane 纯度
+  +尾精确的设计预期);三重保真闭环——gem5 向量 vs 标量 worst 0.00 ulp
+  + 真硬件标量锚(宿主用同一 libsleef.a 逐位一致),阴性对照(金标准/
+  输入 1-ulp 毒化)确认检测链非空转。内核直链 vendored libsleef.a
+  (与 tests_sve_vla 同一机器码),12 函数矩阵镜像 sleef_sve.cpp。
+- **sve_rot×5 家族归并裁定**(诚实边界):与 sleef_sve 同批迁入真 VLA
+  库、迁移机制同构(同库同 flag),但**风险面不同构**——sleef 拉入整库
+  VLA 机器码(深),sve_rot 是自写浅内核(裸 z-ldr/str + 整数 _x 算子,
+  无 whilelt 尾无库代码);本矩阵可背书"库迁移模式"半边,**不能**当作
+  sve_rot 指令面验证。sve_rot 维持 compile-probe-only,若需收口应补
+  小型 sve_rot_vla_dual(z-ldr/str + 整数算子 × 四档)——登记为后续
+  可选工作项,不阻塞本 PR。
+- **gem5 SE 边界新实证**:guest 退出码不传播(exit(7)→gem5 退 0),
+  "真实退出码"记 gem5 进程码;F3(SVE2_MOVI 读回 DEVIATION)根因 open
+  (上下文相关 O3 现象,孤立复现失败),SLEEF 不受影响由价值级证据独立
+  证明——均入档 gem5-fi findings.md。
+- **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
+  现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
+  (git-sanity)+ 本实证收口。
+>>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
