@@ -10,9 +10,10 @@
  *
  * Design: SHA compression is serial *within* one message (block i+1 chains
  * on block i's state) but independent *across* messages. The kernels
- * process 8 independent messages in parallel — one per 32-bit SVE lane
- * (SHA-256 family) or 4 per 64-bit lane (SHA-512 family) — with message
- * schedules and round state entirely in SVE registers.
+ * process N independent messages in parallel — one per 32-bit SVE lane
+ * (SHA-256 family) or one per 64-bit lane (SHA-512 family), N =
+ * svcntw()/svcntd() at the caller's runtime VL (all-VL Phase 2 P4) — with
+ * message schedules and round state entirely in SVE registers.
  *
  * Correctness gate: verified against OpenSSL EVP digests on a large
  * vector set (see the standalone verifier) before use as a golden base.
@@ -32,6 +33,12 @@
     svorr_u32_x(pg, svlsl_n_u32_x(pg, (x), (n)), svlsr_n_u32_x(pg, (x), 32 - (n)))
 #define SVE_ROTR64(pg, x, n) \
     svorr_u64_x(pg, svlsr_n_u64_x(pg, (x), (n)), svlsl_n_u64_x(pg, (x), 64 - (n)))
+
+/* All-VL Phase 2 P4: stream count = runtime lane count (one message per
+   lane); arrays sized to the 1024-bit cap. The vector code itself is
+   lane-count-agnostic (ptrue auto-scales; the schedule is per-column). */
+#define SVE_SHA_STREAMS_MAX_32 32   /* svcntw() at VL=1024-bit */
+#define SVE_SHA_STREAMS_MAX_64 16   /* svcntd() at VL=1024-bit */
 
 /* ================= SHA-256 family (SHA-224/SHA-256), 8×32-bit lanes ================= */
 
@@ -53,14 +60,17 @@ static const uint32_t sha224_iv[8] = {
     0xc1059ed8,0x367cd507,0x3070dd17,0xf70e5939,0xffc00b31,0x68581511,0x64f98fa7,0xbefa4fa4
 };
 
-/* 8 条等长消息并行压缩。msgs: 8 条消息指针(各 nblocks*64B, 已含 padding 与长度);
- * out: out[s] 写第 s 条消息的 8 个状态字(小端 uint32)。
- * 要求 svcntw() >= 8 (VL>=256)。 */
-static inline void sha256_compress_x8(uint32_t out[8][8],   /* [word][stream] */
-                                      const uint8_t *const msgs[8],
+/* N 条等长消息并行压缩 (N = svcntw(), 32-bit lane 每条一流)。msgs: N 条消息
+ * 指针(各 nblocks*64B, 已含 padding 与长度); out: out[w][s] 写第 s 条消息的
+ * 8 个状态字(小端 uint32)。streams = svcntw() at the caller's runtime VL
+ * (all-VL Phase 2: 调用方 128..1024-bit 门控, 此处 n∈[4,32] 由 VL 决定)。 */
+static inline void sha256_compress_x8(uint32_t out[8][SVE_SHA_STREAMS_MAX_32],   /* [word][stream] */
+                                      const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32],
                                       uint32_t nblocks,
                                       const uint32_t iv[8])
 {
+    /* 流数 = 运行时 lane 数(内部推导): 向量通路按 VL 动作, n≡lane 数。 */
+    const int n = (int)svcntw();
     svbool_t pg = svptrue_b32();
 
     svuint32_t a = svdup_u32(iv[0]), b = svdup_u32(iv[1]),
@@ -73,11 +83,12 @@ static inline void sha256_compress_x8(uint32_t out[8][8],   /* [word][stream] */
         svuint32_t a0 = a, b0 = b, c0 = c, d0 = d, e0 = e, f0 = f, g0 = g, h0 = h;
 
         /* SVE 类型不能做数组元素(可变长度类型禁入聚合) —— 消息调度字表
-         * 驻留内存 uint32_t[64][8] (lane=流), 每步用 svld1/svst1 往返。
-         * 调度展开与轮函数仍在 SVE 8-lane 向量里算。 */
-        uint32_t W[64][8];
+         * 驻留内存 uint32_t[64][SVE_SHA_STREAMS_MAX_32] (lane=流, 行宽按
+         * 1024-bit 上限定维——修复旧 [8] 定维在 VL>=512 时的越界栈写),
+         * 每步用 svld1/svst1 往返。调度展开与轮函数仍在 SVE 向量里算。 */
+        uint32_t W[64][SVE_SHA_STREAMS_MAX_32];
         for (int t = 0; t < 16; ++t) {
-            for (int s = 0; s < 8; ++s) {
+            for (int s = 0; s < n; ++s) {
                 const uint8_t *p = msgs[s] + (size_t)blk * 64 + (size_t)t * 4;
                 W[t][s] = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
@@ -172,13 +183,17 @@ static const uint64_t sha384_iv[8] = {
     0x67332667ffc00b31ULL,0x8eb44a8768581511ULL,0xdb0c2e0d64f98fa7ULL,0x47b5481dbefa4fa4ULL
 };
 
-/* 4 条等长消息并行压缩 (64-bit lane)。msgs: 4 条消息指针(各 nblocks*128B);
- * out[word][stream]: 8 个字 × 4 条流。要求 svcntd() >= 4 (VL>=256)。 */
-static inline void sha512_compress_x4(uint64_t out[8][4],   /* [word][stream] */
-                                      const uint8_t *const msgs[4],
+/* N 条等长消息并行压缩 (64-bit lane, N = svcntd())。msgs: N 条消息指针(各
+ * nblocks*128B); out[word][stream]: 8 个字 × N 条流。streams = svcntd() at
+ * the caller's runtime VL (all-VL Phase 2: 调用方 128..1024-bit 门控, 此处
+ * n∈[2,16] 由 VL 决定)。 */
+static inline void sha512_compress_x4(uint64_t out[8][SVE_SHA_STREAMS_MAX_64],   /* [word][stream] */
+                                      const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_64],
                                       uint32_t nblocks,
                                       const uint64_t iv[8])
 {
+    /* 流数 = 运行时 lane 数(内部推导): 向量通路按 VL 动作, n≡lane 数。 */
+    const int n = (int)svcntd();
     svbool_t pg = svptrue_b64();
 
     svuint64_t a = svdup_u64(iv[0]), b = svdup_u64(iv[1]),
@@ -189,9 +204,9 @@ static inline void sha512_compress_x4(uint64_t out[8][4],   /* [word][stream] */
     for (uint32_t blk = 0; blk < nblocks; ++blk) {
         svuint64_t a0 = a, b0 = b, c0 = c, d0 = d, e0 = e, f0 = f, g0 = g, h0 = h;
 
-        uint64_t W[80][4];
+        uint64_t W[80][SVE_SHA_STREAMS_MAX_64];
         for (int t = 0; t < 16; ++t) {
-            for (int s = 0; s < 4; ++s) {
+            for (int s = 0; s < n; ++s) {
                 const uint8_t *p = msgs[s] + (size_t)blk * 128 + (size_t)t * 8;
                 uint64_t w = 0;
                 for (int k = 0; k < 8; ++k)
@@ -254,15 +269,20 @@ static inline void sha512_compress_x4(uint64_t out[8][4],   /* [word][stream] */
     svst1_u64(pg, out[7], h);
 }
 
-/* ================= SHA-1 (HMAC-SHA1-96 用), 8×32-bit lanes ================= */
+/* ================= SHA-1 (HMAC-SHA1-96 用), N×32-bit lanes ================= */
 
-/* 4 条等长消息并行 (64-bit lane)。msgs: 4 条消息指针(各 nblocks*128B);
- * out[s]: 8 个 uint64 状态。要求 svcntd() >= 4 (VL>=256)。 */
+/* N 条等长消息并行压缩 (32-bit lane, N = svcntw())。msgs: N 条消息指针(各
+ * nblocks*64B); out[w][s]: 5 个状态字 × N 条流。streams = svcntw() at the
+ * caller's runtime VL (all-VL Phase 2: 调用方 128..1024-bit 门控, 此处
+ * n∈[4,32] 由 VL 决定)。(旧注释 "4 条 64-bit lane" 系 sha512 段复制残留,
+ * 实况一直是 32-bit lane。) */
 
-static inline void sha1_compress_x8(uint32_t out[5][8],   /* [word][stream] */
-                                    const uint8_t *const msgs[8],
+static inline void sha1_compress_x8(uint32_t out[5][SVE_SHA_STREAMS_MAX_32],   /* [word][stream] */
+                                    const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32],
                                     uint32_t nblocks)
 {
+    /* 流数 = 运行时 lane 数(内部推导): 向量通路按 VL 动作, n≡lane 数。 */
+    const int n = (int)svcntw();
     static const uint32_t iv[5] = {0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0};
     svbool_t pg = svptrue_b32();
 
@@ -273,9 +293,9 @@ static inline void sha1_compress_x8(uint32_t out[5][8],   /* [word][stream] */
     for (uint32_t blk = 0; blk < nblocks; ++blk) {
         svuint32_t a0 = a, b0 = b, c0 = c, d0 = d, e0 = e;
 
-        uint32_t W[80][8];
+        uint32_t W[80][SVE_SHA_STREAMS_MAX_32];
         for (int t = 0; t < 16; ++t) {
-            for (int s = 0; s < 8; ++s) {
+            for (int s = 0; s < n; ++s) {
                 const uint8_t *p = msgs[s] + (size_t)blk * 64 + (size_t)t * 4;
                 W[t][s] = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                           ((uint32_t)p[2] << 8) | (uint32_t)p[3];

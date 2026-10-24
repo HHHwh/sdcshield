@@ -84,7 +84,7 @@ static void aes_ctr_decrypt(const uint8_t *key, const uint8_t *iv, const uint8_t
     s_EVP_CIPHER_CTX_free(ctx);
 }
 
-static void aes192_ctr_hmac_sha1_sve_compute_golden(struct aes192_ctr_hmac_sha1_sve_data *d) {
+static void aes192_ctr_hmac_sha1_sve_compute_golden(struct test *test, struct aes192_ctr_hmac_sha1_sve_data *d) {
     aes_ctr_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, d->data_size);
     /* SVE 多流 HMAC: lane0=密文(主语义), lane1..7=变体 */
     const uint8_t *keys[NSTREAM], *msgs[NSTREAM];
@@ -102,7 +102,10 @@ static void aes192_ctr_hmac_sha1_sve_compute_golden(struct aes192_ctr_hmac_sha1_
             d->variant_msg[s-1][i] = d->golden_ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
         msgs[s] = d->variant_msg[s-1];
     }
-    hmac_sha1_x8(d->golden_mac, keys, 20, msgs, d->data_size);
+    if (hmac_sha1_x8(d->golden_mac, keys, 20, msgs, d->data_size) != 0) {
+        log_error("%s: HMAC capacity overflow (data_size too large)", test->id);
+        report_fail_msg("%s: hmac assembly over capacity", test->id);
+    }
 }
 
 static int aes192_ctr_hmac_sha1_sve_init(struct test *test) {
@@ -160,7 +163,7 @@ static int aes192_ctr_hmac_sha1_sve_init(struct test *test) {
         memset_random(d->aes_iv, AES_IV_SIZE_V);
         memset_random(d->hmac_key, 20);
         memset_random(d->plaintext, d->data_size);
-        aes192_ctr_hmac_sha1_sve_compute_golden(d);
+        aes192_ctr_hmac_sha1_sve_compute_golden(test, d);
         test->data = d;
         return EXIT_SUCCESS;
     } else {
@@ -244,7 +247,10 @@ static int aes192_ctr_hmac_sha1_sve_run(struct test *test, int cpu) {
                         variant_msg[(s-1)*d->data_size + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
                     msgs[s] = variant_msg + (s-1)*d->data_size;
                 }
-                hmac_sha1_x8(mac, keys, 20, msgs, d->data_size);
+                if (hmac_sha1_x8(mac, keys, 20, msgs, d->data_size) != 0) {
+                    log_error("%s: HMAC capacity overflow (data_size too large)", test->id);
+                    report_fail_msg("%s: hmac assembly over capacity", test->id);
+                }
             }
             for (int s = 0; s < NSTREAM; ++s)
                 memcmp_or_fail(mac[s], d->golden_mac[s], 12, "HMAC-SHA1-96 digest mismatch (frozen replay)");
@@ -252,7 +258,7 @@ static int aes192_ctr_hmac_sha1_sve_run(struct test *test, int cpu) {
             /* re-roll: fresh plaintext + same-iteration golden (EVP encrypt +
              * SVE HMAC recomputed for this thread's data) */
             memset_random(local_d.plaintext, d->data_size);
-            aes192_ctr_hmac_sha1_sve_compute_golden(&local_d);
+            aes192_ctr_hmac_sha1_sve_compute_golden(test, &local_d);
             aes_ctr_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, d->data_size);
             memcmp_or_fail(ciphertext, local_d.golden_ciphertext, d->data_size, "ciphertext mismatch (SVE)");
             aes_ctr_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, d->data_size);
@@ -273,7 +279,10 @@ static int aes192_ctr_hmac_sha1_sve_run(struct test *test, int cpu) {
                         variant_msg[(s-1)*d->data_size + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
                     msgs[s] = variant_msg + (s-1)*d->data_size;
                 }
-                hmac_sha1_x8(mac, keys, 20, msgs, d->data_size);
+                if (hmac_sha1_x8(mac, keys, 20, msgs, d->data_size) != 0) {
+                    log_error("%s: HMAC capacity overflow (data_size too large)", test->id);
+                    report_fail_msg("%s: hmac assembly over capacity", test->id);
+                }
             }
             for (int s = 0; s < NSTREAM; ++s)
                 memcmp_or_fail(mac[s], local_d.golden_mac[s], 12, "HMAC-SHA1-96 digest mismatch (SVE)");
