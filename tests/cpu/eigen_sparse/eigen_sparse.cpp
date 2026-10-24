@@ -205,10 +205,13 @@ static int eigen_sparse_run(struct test *test, int cpu) {
             report_fail(test);
             return EXIT_FAILURE;
         }
-        if (x != golden) {
-            report_fail(test);
-            return EXIT_FAILURE;
-        }
+        /* bit-exact compare (memcmp_or_fail 的 count 语义是元素数,
+         * 内部乘 sizeof(double)): Eigen 的 operator!= 走 IEEE ==,
+         * 存在两类失真——(a) +0.0 == -0.0 视为相等(符号位盲区);
+         * (b) 同位 NaN 的 x != golden 恒真(同源重算位级一致的合法
+         * 结果被误报 FAIL)。same-source repeat 的验证属性是位级
+         * 一致, memcmp 语义与之精确匹配。 */
+        memcmp_or_fail(x.data(), golden.data(), n, "sparse Cholesky solution");
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;
