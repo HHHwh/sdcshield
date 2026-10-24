@@ -44,8 +44,10 @@
  *    datapath itself.) FMAXV tree reduction (order-independent, exactly
  *    checkable) over the whilelt-masked prefix.
  *
- * test_init probes HWCAP_SVE and returns a clean EXIT_SKIP on SVE-less
- * CPUs. Any runtime vector length. Built in tests_arm64_sve.
+ * test_init gates via the framework layer (arm64_require_sve_vl:
+ * HWCAP_SVE capability + 128..1024-bit range in one call, all-VL
+ * Phase 2 P6) and returns a clean EXIT_SKIP on SVE-less CPUs; test_run
+ * re-checks the VL and fails closed on drift. Built in tests_arm64_sve.
  * @endparblock
  */
 
@@ -58,9 +60,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static constexpr size_t FADDA_STEPS = 256;
@@ -82,17 +83,23 @@ static int sve512_pred_ops_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve512_pred_ops_arm requires "
-                 "SVE (predicate network is SVE-specific silicon)");
+    /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
+       framework-layer call, replacing the getauxval hand-probe.
+       arm64_require_sve_vl returns the VL in BYTES — f64 lanes =
+       svl/8, range-checked below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<PredOpsData>();
-        data->vl_d = svcntd();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        if (data->vl_d < 2 || data->vl_d > 16) {
+            log_error("sve512_pred_ops_arm: f64 lanes %zu outside "
+                      "[2,16] — unit drift (svl %ld bytes)",
+                      data->vl_d, svl);
+            return EXIT_FAILURE;
+        }
         data->src.resize(data->vl_d);
         for (size_t j = 0; j < data->vl_d; ++j)
             data->src[j] = (double)(j % 4) - 1.5;   // exact values
@@ -117,6 +124,17 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
     return EXIT_SKIP;
 #else
     auto *d = static_cast<PredOpsData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift (src and the
+       density-sweep buffers are sized in init at its VL). */
+    if (svcntd() != d->vl_d) {
+        log_error("sve512_pred_ops_arm: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", d->vl_d,
+                  (unsigned)svcntd());
+        report_fail_msg("sve512_pred_ops_arm: SVE VL drifted between "
+                        "init and run");
+    }
+
     const size_t vl = d->vl_d;
     const svbool_t all = svptrue_b64();
     bool all_passed = true;
