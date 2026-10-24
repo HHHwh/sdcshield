@@ -63,20 +63,28 @@ static size_t sparse_n(struct test *test)
         int calibrated;
         try {
             calibrated = sdc_calibrated_dim(
-                64, mem_dim, 2000, test->id, "n", 2.0, [](int n) {
+                64, mem_dim, 2000, test->id, "n", 3.0, [](int n) {
                 /* 散列伪随机放置(~10% 密度, 空间散乱非带状)——带状/规则
                  * 结构的 Cholesky fill-in 极少, 会把 probe 成本低估几个
                  * 数量级(实测规则 probe 64 档仅 0.1ms vs 真实随机 ~ms 级),
-                 * 必须模拟真实随机分布的 fill-in 结构。 */
+                 * 必须模拟真实随机分布的 fill-in 结构。
+                 * 64-bit mix(splitmix 风格乘法双射 + 高半混合): 旧 32 位
+                 * 散列 (i*0x9E3779B1 ^ j*0x9E37) 的 bit0 = i奇偶^j奇偶,
+                 * 异奇偶 (i,j) 恒不命中(实测 0/16777216), 同奇偶密度翻倍
+                 * → 奇偶行列重排后呈置换块对角, fill-in 低估 ~2x/flops
+                 * ~4x(实测 n=1024: 旧 probe 0.22x real, 新 0.95x)。 */
                 Eigen::SparseMatrix<double> A(n, n);
                 std::vector<Eigen::Triplet<double>> trip;
                 for (int i = 0; i < n; ++i)
-                    for (int j = i + 1; j < n; ++j)
-                        if ((((uint32_t)i * 2654435761u)
-                             ^ ((uint32_t)j * 40503u)) % 10 == 0) {
+                    for (int j = i + 1; j < n; ++j) {
+                        uint64_t h = (uint64_t)i * 0x9E3779B97F4A7C15ull
+                                   ^ (uint64_t)j * 0xC2B2AE3D27D4EB4Full;
+                        h ^= h >> 32;
+                        if (h % 10 == 0) {
                             trip.push_back(Eigen::Triplet<double>(i, j, 0.05));
                             trip.push_back(Eigen::Triplet<double>(j, i, 0.05));
                         }
+                    }
                 for (int i = 0; i < n; ++i)
                     trip.push_back(Eigen::Triplet<double>(i, i, i + 1.05));
                 A.setFromTriplets(trip.begin(), trip.end());

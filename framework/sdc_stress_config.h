@@ -400,10 +400,12 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
     double k = std::log2(t2 / t1);
     if (k < 1.5) k = 1.5;
     if (k > 4.0) k = 4.0;
-    /* k_floor: 求解器理论复杂度下限(稠密 SVD ~3.0, 稀疏 Cholesky ~2.0)。
-     * 小档 probe 的实测 k 偏低(BDCSVD 64→128 实测 1.8——预处理开销
-     * 主导的小尺度行为), 直接外推会把大维度单次求解低估几个数量级
-     * (实测外推出 2048 维"1 秒内", 实际数分钟)。取 max(实测, 理论)。 */
+    /* k_floor: 求解器复杂度下限(稠密 SVD ~3.0; 随机 ~10% 密度稀疏
+     * Cholesky 的 fill-in 近稠密, 理论同 ~3.0——随机谱系实测
+     * 3.3~3.5, 而旧口径误写 2.0)。小档 probe 的实测 k 偏低(BDCSVD
+     * 64→128 实测 1.8——预处理开销主导的小尺度行为), 直接外推会把
+     * 大维度单次求解低估几个数量级(实测外推出 2048 维"1 秒内",
+     * 实际数分钟)。取 max(实测, 理论)。 */
     if (k < k_floor) k = k_floor;
     double budget = (double)max_single_ms * 0.5;   /* 安全系数 0.5 */
     int dim = (int)((double)p1 * std::pow(budget / t1, 1.0 / k));
