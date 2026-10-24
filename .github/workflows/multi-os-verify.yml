@@ -199,14 +199,17 @@ jobs:
           echo "$out" | grep -qi 'exit: pass'
 
       # ---- 全量参数功能验证(脚本见 scripts/gha/verify-params.py) ----
+      # 注意: shell: bash 展开为 bash -e -o pipefail, 失败行会即刻终止 step,
+      # 后续 rc=$?/tail 根本到不了(run 38242267210 的 4 个 verify job 因此
+      # 在 CI 日志里零诊断输出); 必须 || rc=$? 接住退出码再打摘要。
       - name: Verify (full parameter sweep)
         if: ${{ inputs.verify_depth != 'smoke' }}
         shell: bash
         run: |
           mkdir -p results
+          rc=0
           python3 -u scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" \
-            > verify.log 2>&1
-          rc=$?
+            > verify.log 2>&1 || rc=$?
           tail -40 verify.log
           exit $rc
 
@@ -216,20 +219,21 @@ jobs:
         shell: bash
         run: |
           mkdir -p results
+          rc=0
           python3 -u scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" --smoke \
-            > verify.log 2>&1
-          rc=$?
+            > verify.log 2>&1 || rc=$?
           tail -40 verify.log
           exit $rc
 
       # ---- 跨 OS 基准(固定 loop 数,同工作量墙钟对比) ----
+      # 同上: bash -e 下 cat benchmark.log 需 || rc=$? 接住才能在失败时打出。
       - name: Benchmark (fixed loop count)
         shell: bash
         run: |
           mkdir -p benchmark
+          rc=0
           bash scripts/gha/benchmark.sh "$(pwd)/builddir/sdcshield" "$(pwd)/benchmark" \
-            > benchmark.log 2>&1
-          rc=$?
+            > benchmark.log 2>&1 || rc=$?
           cat benchmark.log
           exit $rc
 
