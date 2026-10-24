@@ -71,7 +71,7 @@ bash scripts/run/sdc_detect.sh
 
 1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
 2. **停下且有 FAIL**：先看挂在哪个测试——
-   - 挂在 `eigen_svd_double` / `eigen_sparse`：大核数机器全核多线程下的已知 ULP 级良性抖动。用 `-e <测试名> -t 5000 -n 1` 单线程复跑（源码树 `./builddir/sdcshield`、预构建 `./run-sdcshield.sh`）：**单线程过 = 良性**（假阳性），单线程也挂 = 真嫌疑。
+   - 挂在 `eigen_svd_double` / `eigen_sparse`：**2026-10-24 已修复**（per-thread 同源 golden——每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；本机 64 核满跑 3×240s×3 seed + 10 分钟档×2 + 300s 换 seed 全绿，gem5-fi FS 双线程 `eigen_svd_double -n 2` pass）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑仍可用作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。历史"已知 ULP 级良性抖动"记录见 CLAUDE.md 平台怪癖条目（修复前行为）。
    - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
