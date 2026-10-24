@@ -65,17 +65,29 @@ template <typename SVD, int Dim> struct EigenSVDTest
             return mem_dim;   /* quick mode / tiny host — nothing to calibrate */
         /* dense SVD is O(n^3)-dominated: the small-probe measured k runs
          * low (preprocessing-dominated at 64..128), so floor it at 3.0 */
-        return sdc_calibrated_dim(lo, mem_dim, kMaxSingleSolveMs, test->id,
-                                  "mdim", 3.0, [](int n) {
-            /* deterministic fill — timing probe only, no RNG dependency */
-            Mat m(n, n);
-            for (int r = 0; r < n; ++r)
-                for (int c = 0; c < n; ++c)
-                    m(r, c) = (typename Mat::Scalar)(((r * 31 + c * 17) % 13) - 6)
-                              / (typename Mat::Scalar)7;
-            Mat u, v;
-            calculate_once(m, u, v);
-        });
+        int calibrated;
+        try {
+            calibrated = sdc_calibrated_dim(
+                lo, mem_dim, kMaxSingleSolveMs, test->id, "mdim", 3.0,
+                [](int n) {
+                /* deterministic fill — timing probe only, no RNG dependency */
+                Mat m(n, n);
+                for (int r = 0; r < n; ++r)
+                    for (int c = 0; c < n; ++c)
+                        m(r, c) = (typename Mat::Scalar)(((r * 31 + c * 17) % 13) - 6)
+                                  / (typename Mat::Scalar)7;
+                Mat u, v;
+                calculate_once(m, u, v);
+            });
+        } catch (...) {
+            /* probe 期分配异常(如 ASAN 构建的 OOM): init 不 crash,
+             * 退回内存自适应档并诚实记录(时间上限失守的后果与显式
+             * knob 同级, 由 -t SIGQUIT 兜底)。 */
+            log_warning("[时间校准] %s.%s: 试解异常 → 退回内存上限 %d",
+                        test->id, "mdim", mem_dim);
+            calibrated = mem_dim;
+        }
+        return calibrated;
     }
 
     template <typename FP> static inline std::enable_if_t<boost::is_complex<FP>::value>

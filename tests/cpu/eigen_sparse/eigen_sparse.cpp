@@ -59,29 +59,41 @@ static size_t sparse_n(struct test *test)
      * cannot interrupt;实测自适应档满核 600s SIGQUIT timed out) — cap it
      * so TERM is honoured. Deterministic pattern fill, ~10% density,
      * diagonally dominant; probe-only, results discarded. */
-    if (mem_dim > 64)
-        mem_dim = sdc_calibrated_dim(64, mem_dim, 2000, test->id, "n",
-                                     2.0, [](int n) {
-            /* 散列伪随机放置(~10% 密度, 空间散乱非带状)——带状/规则
-             * 结构的 Cholesky fill-in 极少, 会把 probe 成本低估几个
-             * 数量级(实测规则 probe 64 档仅 0.1ms vs 真实随机 ~ms 级),
-             * 必须模拟真实随机分布的 fill-in 结构。 */
-            Eigen::SparseMatrix<double> A(n, n);
-            std::vector<Eigen::Triplet<double>> trip;
-            for (int i = 0; i < n; ++i)
-                for (int j = i + 1; j < n; ++j)
-                    if ((((uint32_t)i * 2654435761u)
-                         ^ ((uint32_t)j * 40503u)) % 10 == 0) {
-                        trip.push_back(Eigen::Triplet<double>(i, j, 0.05));
-                        trip.push_back(Eigen::Triplet<double>(j, i, 0.05));
-                    }
-            for (int i = 0; i < n; ++i)
-                trip.push_back(Eigen::Triplet<double>(i, i, i + 1.05));
-            A.setFromTriplets(trip.begin(), trip.end());
-            Eigen::VectorXd b = Eigen::VectorXd::Constant(n, 0.5);
-            Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
-            solver.compute(A).solve(b);
-        });
+    if (mem_dim > 64) {
+        int calibrated;
+        try {
+            calibrated = sdc_calibrated_dim(
+                64, mem_dim, 2000, test->id, "n", 2.0, [](int n) {
+                /* 散列伪随机放置(~10% 密度, 空间散乱非带状)——带状/规则
+                 * 结构的 Cholesky fill-in 极少, 会把 probe 成本低估几个
+                 * 数量级(实测规则 probe 64 档仅 0.1ms vs 真实随机 ~ms 级),
+                 * 必须模拟真实随机分布的 fill-in 结构。 */
+                Eigen::SparseMatrix<double> A(n, n);
+                std::vector<Eigen::Triplet<double>> trip;
+                for (int i = 0; i < n; ++i)
+                    for (int j = i + 1; j < n; ++j)
+                        if ((((uint32_t)i * 2654435761u)
+                             ^ ((uint32_t)j * 40503u)) % 10 == 0) {
+                            trip.push_back(Eigen::Triplet<double>(i, j, 0.05));
+                            trip.push_back(Eigen::Triplet<double>(j, i, 0.05));
+                        }
+                for (int i = 0; i < n; ++i)
+                    trip.push_back(Eigen::Triplet<double>(i, i, i + 1.05));
+                A.setFromTriplets(trip.begin(), trip.end());
+                Eigen::VectorXd b = Eigen::VectorXd::Constant(n, 0.5);
+                Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
+                solver.compute(A).solve(b);
+            });
+        } catch (...) {
+            /* probe 期分配异常(如 ASAN 构建的 OOM): init 不 crash,
+             * 退回内存自适应档并诚实记录——时间上限失守交由 run() 的
+             * SKIP 防护与 -t SIGQUIT 兜底(与显式 knob 同级后果)。 */
+            log_warning("[时间校准] %s.%s: 试解异常 → 退回内存上限 %ld",
+                        test->id, "n", (long)mem_dim);
+            calibrated = mem_dim;
+        }
+        mem_dim = calibrated;
+    }
     return (size_t)mem_dim;
 }
 
