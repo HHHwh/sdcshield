@@ -28,20 +28,22 @@
  *   sve512_gather_scatter_svd: 300x300 doubles (720 KB, L2-overflow),
  *   2-D 16x16 block permutation (clamped tail blocks), svld1_gather /
  *   svst1_scatter with svwhilelt tails, fma(v,v,1.5) in flight.
- * Phase C — verification: phase-A per-lane check against a scalar
- *   reference recomputed on the 1/8-exact grid (the pre-P3 closed-form
- *   constant 96.0*(jj+1) happens to agree at every tier for the current
- *   fill pattern, but binds to that pattern rather than the geometry —
- *   the stencil_axis-style scalar golden is robust to fill changes),
- *   phase-B full
+ * Phase C — verification: phase-A per-lane byte-compare against the
+ *   init-frozen scalar golden (computed once in test_init from the src
+ *   fill with the stencil_axis reference math — an independent golden:
+ *   at-rest src corruption after init drives the hardware result away
+ *   from the frozen copy, whereas a per-sweep recompute from the same
+ *   corrupted src would agree with it; the pre-P3 closed-form constant
+ *   96.0*(jj+1) had the same independence but bound to the fill
+ *   pattern), phase-B full
  *   byte-compare against the init-time scalar golden (verified every
  *   sweep — the compare is ~0.1 ms, so no subset rotation is needed),
  *   and a pointer-table canary (workspace pointers byte-compared against
  *   their sweep-0 images, each checked for VA[63:48] == 0).
  *
- * Goldens are SVE-independent: phase A is a scalar reference over the
- * bt-wide tile, phase B is precomputed by a scalar C loop in test_init
- * (framework-side). All-VL (128..1024-bit via arm64_require_sve_vl);
+ * Goldens are SVE-independent: phase A is an init-frozen scalar reference
+ * over the bt-wide tile, phase B is precomputed by a scalar C loop in
+ * test_init (framework-side). All-VL (128..1024-bit via arm64_require_sve_vl);
  * the pre-P3 512-bit single-value gate and its issue #182 caveat are
  * cleared by the four-tier dual-kernel evidence.
  * @endparblock
@@ -66,6 +68,7 @@ using std::ptrdiff_t;
 // Phase A geometry (identical to sve512_stencil_axis_arm, all-VL form).
 constexpr size_t RADIUS = 6;
 constexpr size_t kTileMax = 32;   /* 1024-bit cap: bt = 2*svcntd() <= 32 */
+static constexpr double AXIS_COEFF = 0.125;   /* stencil coefficient (r=1..6) */
 static constexpr size_t coord = 10;
 static constexpr size_t extent = 56;
 static constexpr size_t stride = 64;
@@ -85,6 +88,7 @@ struct XlswaveCtxData {
     const double *s_base = nullptr;     // coord=10 layer's first tile
     size_t bt = 0;                      // tile width = 2*svcntd() lanes
     size_t vl_d = 0;
+    std::vector<double> axis_expected;  // init-frozen Phase A golden
     std::vector<uint64_t> gather_src;
     std::vector<uint64_t> gather_idx;
     std::vector<uint64_t> scatter_golden;  // init-time scalar golden
@@ -174,6 +178,35 @@ static int sve512_xlswave_ctx_arm_init(struct test *test)
             data->src[i] = static_cast<double>(i % data->bt + 1);
         data->s_base = data->src.data() + coord * stride * data->bt;
 
+        /* Phase A golden, frozen here (review F1): the geometry (coord/
+           extent/stride/RADIUS), the 0.125 coefficients, K_AXIS_CALLS and
+           the src fill are all init-fixed, so the expected tile is
+           loop-invariant — computing it once restores an independent
+           golden. A per-sweep recompute reads the same src the hardware
+           just consumed, so at-rest src corruption reconciles both sides
+           and goes unnoticed; the frozen copy cannot. Exactness (the
+           stencil_axis idiom): every term is an exact multiple of 1/8 and
+           the per-call increment stays below 12 * 0.125 * bt <= 48, so
+           after ×K_AXIS_CALLS both the hardware accumulation and this
+           reference stay on the exact 1/8 grid below 2^53 — bit-exact
+           equality, byte-compared per lane in run. */
+        data->axis_expected.resize(data->bt);
+        for (size_t jj = 0; jj < data->bt; ++jj)
+            data->axis_expected[jj] = 0.0;
+        for (size_t r = 1; r <= RADIUS; ++r) {
+            const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * data->bt;
+            for (size_t jj = 0; jj < data->bt; ++jj) {
+                double delta = 0.0;
+                if (coord >= r)
+                    delta += data->s_base[-off + static_cast<ptrdiff_t>(jj)];
+                if (coord + r < extent)
+                    delta += data->s_base[+off + static_cast<ptrdiff_t>(jj)];
+                data->axis_expected[jj] += AXIS_COEFF * delta;
+            }
+        }
+        for (size_t jj = 0; jj < data->bt; ++jj)
+            data->axis_expected[jj] *= static_cast<double>(K_AXIS_CALLS);
+
         // Phase B workspace + 2-D block permutation (framework RNG, H12').
         const size_t gn = SVD_ROWS * SVD_COLS;
         data->gather_src.resize(gn);
@@ -234,7 +267,7 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
     // Stack-local coefficient table (the svdup_f64 / ld1rd source).
     double coeff[RADIUS + 1] = {};
     for (size_t r = 1; r <= RADIUS; ++r)
-        coeff[r] = 0.125;
+        coeff[r] = AXIS_COEFF;
 
     const double* s_base = d->s_base;
     const svbool_t ptrue = svptrue_b64();
@@ -273,38 +306,16 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
         svst1(ptrue, result, res0);
         svst1(ptrue, result + lanes, res1);
 
-        /* Scalar reference (stencil_axis idiom): one kernel call adds,
-           per lane jj, sum over r of coeff[r] * (s_base[-off+jj] +
-           s_base[+off+jj]); coord=10 and RADIUS=6 make both directions
-           valid for every r. Every term is an exact multiple of 1/8 and
-           the per-call increment stays below 12 * 0.125 * bt <= 48, so
-           both the hardware accumulation and this reference stay on the
-           exact 1/8 grid below 2^53: bit-exact equality. (The pre-P3
-           closed-form constant 96.0*(jj+1) agrees at every tier for the
-           current i%bt+1 fill; this reference is robust to fill
-           changes.) */
-        double expected[kTileMax];
-        for (size_t jj = 0; jj < bt; ++jj)
-            expected[jj] = 0.0;
-        for (size_t r = 1; r <= RADIUS; ++r) {
-            const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * bt;
-            for (size_t jj = 0; jj < bt; ++jj) {
-                double delta = 0.0;
-                if (coord >= r)
-                    delta += s_base[-off + static_cast<ptrdiff_t>(jj)];
-                if (coord + r < extent)
-                    delta += s_base[+off + static_cast<ptrdiff_t>(jj)];
-                expected[jj] += 0.125 * delta;
-            }
-        }
-        for (size_t jj = 0; jj < bt; ++jj)
-            expected[jj] *= static_cast<double>(K_AXIS_CALLS);
-
+        /* Phase A verification: per-lane byte-exact compare against the
+           init-frozen golden (the values are exact 1/8-grid quantities,
+           so != and memcmp agree; memcmp keeps the byte-exact golden
+           discipline of phases B/C). */
         for (size_t jj = 0; jj < bt; ++jj) {
-            if (result[jj] != expected[jj]) {
+            if (memcmp(&result[jj], &d->axis_expected[jj], sizeof(double))
+                    != 0) {
                 log_warning("sve512_xlswave_ctx: axis lane %2zu "
                             "result=%.1f expected=%.1f",
-                            jj, result[jj], expected[jj]);
+                            jj, result[jj], d->axis_expected[jj]);
                 report_fail_msg("sve512_xlswave_ctx_arm: phase A "
                                 "(stencil axis) SDC detected");
                 return EXIT_FAILURE;
