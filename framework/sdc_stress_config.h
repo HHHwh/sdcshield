@@ -47,6 +47,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <chrono>
 #include <map>
 #include <string>
 #include <unistd.h>
@@ -347,6 +348,70 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
                     expect / gib, 100.0 * expect / phys);
     }
     return n;
+}
+
+/*
+ * 时间校准模型 (sdc_calibrated_dim):
+ *   内存自适应(sdc_auto_square_dim)只约束 RSS, 不约束单次求解时长——
+ *   大维度下单次 SVD/Cholesky 求解可达分钟级, -t 到时后 TERM 无法打断
+ *   迭代内计算, 框架只能 SIGQUIT 判 timed out(实测 eigen_sparse 自适应
+ *   档满核 600s 仍无法退出; eigen SVD mdim=2048 单次数分钟)。
+ *   本函数在自适应路径上叠加时间上限: 在 lo 与 2*lo 两档各完整求解一次
+ *   (结果丢弃, 只为计时), 幂律 t(n)=c*n^k 拟合指数 k, 外推使单次求解
+ *   <= max_single_ms 的维度, 再乘安全系数 0.5 吸收外推偏差。
+ *   k clamp [1.5, 4.0] 抑制小档计时噪声; 试解总成本仅两小档(秒级)。
+ *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
+ * 调用契约:
+ *   int dim = sdc_auto_square_dim(...);        // 内存上限
+ *   if (dim > lo)
+ *       dim = sdc_calibrated_dim(lo, dim, max_single_ms,
+ *                                test_id, knob, k_floor, solve_once);
+ */
+template <typename F>
+static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
+                                     const char *test_id, const char *knob,
+                                     double k_floor, F solve_once)
+{
+    if (hi <= lo)
+        return lo;
+    auto probe = [&](int n) -> double {
+        auto t0 = std::chrono::steady_clock::now();
+        solve_once(n);
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - t0).count();
+    };
+    /* probe 档自适应抬升: 小档求解太快(<1ms)时计时噪声淹没幂律拟合,
+     * 翻倍 probe 档直到可测量(>=1ms)或触及 hi——否则外推基数失真
+     * (实测稀疏 Cholesky 规则带状 probe 在 64 档仅 0.1ms, 外推失控)。 */
+    int p1 = lo;
+    double t1 = probe(p1);
+    while (t1 < 1.0 && p1 * 2 <= hi) {
+        p1 *= 2;
+        t1 = probe(p1);
+    }
+    int mid = (p1 * 2 <= hi) ? p1 * 2 : hi;
+    double t2 = probe(mid);
+    if (t1 <= 0.0 || t2 <= 0.0) {
+        /* 计时分辨率不足(极快求解)——时间不是约束, 交还内存上限 */
+        log_warning("[时间校准] %s.%s: 试解计时不足(%.2f/%.2fms) → 维持内存上限 %ld",
+                    test_id, knob, t1, t2, (long)hi);
+        return hi;
+    }
+    double k = std::log2(t2 / t1);
+    if (k < 1.5) k = 1.5;
+    if (k > 4.0) k = 4.0;
+    /* k_floor: 求解器理论复杂度下限(稠密 SVD ~3.0, 稀疏 Cholesky ~2.0)。
+     * 小档 probe 的实测 k 偏低(BDCSVD 64→128 实测 1.8——预处理开销
+     * 主导的小尺度行为), 直接外推会把大维度单次求解低估几个数量级
+     * (实测外推出 2048 维"1 秒内", 实际数分钟)。取 max(实测, 理论)。 */
+    if (k < k_floor) k = k_floor;
+    double budget = (double)max_single_ms * 0.5;   /* 安全系数 0.5 */
+    int dim = (int)((double)p1 * std::pow(budget / t1, 1.0 / k));
+    if (dim < lo) dim = lo;
+    if (dim > hi) dim = hi;
+    log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, k=%.2f) → %d",
+                test_id, knob, max_single_ms, p1, t1, mid, t2, k, dim);
+    return dim;
 }
 
 /*

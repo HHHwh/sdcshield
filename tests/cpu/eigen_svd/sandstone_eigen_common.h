@@ -14,6 +14,7 @@
 #define EIGEN_NO_DEPRECATED_WARNING
 
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 
 #include <boost/type_traits/is_complex.hpp>
 #include <Eigen/Eigenvalues>
@@ -43,6 +44,38 @@ template <typename SVD, int Dim> struct EigenSVDTest
         SVD fullSvd(orig_matrix, Eigen::ComputeFullU | Eigen::ComputeFullV);
         u = fullSvd.matrixU();
         v = fullSvd.matrixV();
+    }
+
+    /* P2 time calibration: the memory-adaptive mdim only caps RSS — one
+     * full SVD at a large dim can run for minutes inside a single loop
+     * iteration, past which the -t TERM cannot interrupt (framework
+     * SIGQUITs the child as "timed out"). Two-probe power-law
+     * extrapolation caps ONE solve at kMaxSingleSolveMs so TERM is
+     * honoured. Explicit -O mdim / env skips this (user-owned). */
+    static constexpr long kMaxSingleSolveMs = 2000;
+
+    static int calibrated_auto_dim(struct test *test, int bytes_per_elem,
+                                   int matrices_per_thread, double rss_ratio,
+                                   int mem_fraction_permille, int lo, int hi)
+    {
+        int mem_dim = sdc_auto_square_dim(bytes_per_elem, matrices_per_thread,
+                                          rss_ratio, mem_fraction_permille,
+                                          thread_count(), lo, hi, test->id, "mdim");
+        if (mem_dim <= lo)
+            return mem_dim;   /* quick mode / tiny host — nothing to calibrate */
+        /* dense SVD is O(n^3)-dominated: the small-probe measured k runs
+         * low (preprocessing-dominated at 64..128), so floor it at 3.0 */
+        return sdc_calibrated_dim(lo, mem_dim, kMaxSingleSolveMs, test->id,
+                                  "mdim", 3.0, [](int n) {
+            /* deterministic fill — timing probe only, no RNG dependency */
+            Mat m(n, n);
+            for (int r = 0; r < n; ++r)
+                for (int c = 0; c < n; ++c)
+                    m(r, c) = (typename Mat::Scalar)(((r * 31 + c * 17) % 13) - 6)
+                              / (typename Mat::Scalar)7;
+            Mat u, v;
+            calculate_once(m, u, v);
+        });
     }
 
     template <typename FP> static inline std::enable_if_t<boost::is_complex<FP>::value>

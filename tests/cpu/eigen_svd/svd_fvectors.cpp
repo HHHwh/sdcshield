@@ -46,7 +46,7 @@ static int eigen_svd_fvectors_init(struct test *test) {
     if (v == 0)
         sdc_env_knob_int_clamped("eigen_svd_fvectors", "mdim", &v, 64, 2048);
     d->dim = (v > 0) ? (int)v
-                     : sdc_auto_square_dim(4, 6, 12.0, 650, thread_count(), 64, 2048, test->id, "mdim");
+                     : eigen_svd_fvectors_test::calibrated_auto_dim(test, 4, 6, 12.0, 650, 64, 2048);
     test->data = d;
     return EXIT_SUCCESS;
 }
