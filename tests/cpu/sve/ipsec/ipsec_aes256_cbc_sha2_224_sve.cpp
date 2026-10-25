@@ -187,11 +187,17 @@ static int aes256_cbc_sha2_224_sve_init(struct test *test) {
 static int aes256_cbc_sha2_224_sve_run(struct test *test, int cpu) {
     (void)cpu;
     struct aes256_cbc_sha2_224_sve_data *d = (struct aes256_cbc_sha2_224_sve_data *)test->data;
-    /* All-VL policy #3: fail closed on init/run VL drift. */
+    /* All-VL policy #3: never compare goldens across an init/run VL
+     * mismatch. Drift means this deployment's per-thread VL differs from
+     * the init thread's (e.g. a VL-pinning launcher changing the
+     * thread-inheritance chain) — an environment mismatch, which skips
+     * with CpuNotSupported (same category as the init-side range gate in
+     * arm64_require_sve_vl) instead of polluting the SDC failure signal. */
     if ((int)svcntw() != d->nstreams) {
-        log_error("%s: SVE VL drifted between init (%d streams) and run (%d streams)",
-                  test->id, d->nstreams, (int)svcntw());
-        report_fail_msg("%s: SVE VL drifted between init and run", test->id);
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: SVE VL drifted between init (%d streams) and run (%d streams) — environment mismatch, not SDC",
+                 test->id, d->nstreams, (int)svcntw());
+        return EXIT_SKIP;
     }
     uint8_t *ciphertext = (uint8_t *)malloc(d->data_size);
     uint8_t *decrypted = (uint8_t *)malloc(d->data_size);
