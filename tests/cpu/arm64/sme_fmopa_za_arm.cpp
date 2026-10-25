@@ -225,11 +225,16 @@ static int sme_fmopa_za_arm_init(struct test *test)
     return EXIT_SUCCESS;
 #else
     /* Framework layer: HWCAP2_SME capability + 128..1024-bit SVL range
-       check in one call; a negative return means the helper already
-       log_skip'ed — init translates it to EXIT_SKIP (-255). The
-       return value is the SVL in BYTES; cols = SVL_bits/32 = svl_bytes/4
+       check in one call; on skip the helper itself log_skip'ed the
+       reason and returned EXIT_SKIP (-255) — the unified require
+       contract (arm64_vl.h via PR #277/main; never a bare -1, which the
+       framework's init handling would decorate with a misleading
+       strerror). The `< 0` check below is the value-agnostic consumption
+       rule (compare < 0, never == -1 / == EXIT_SKIP), so this caller is
+       safe under either contract formulation. The return value is the
+       SVL in BYTES; cols = SVL_bits/32 = svl_bytes/4
        (f32 lanes per tile row) — the exact mapping the dual kernel uses
-       (sme_fmopa_dual.c: cols = svl_bytes/4). The explicit range
+       (sme_fmopa_za_dual.c: cols = svl_bytes/4). The explicit range
        check below catches any unit drift on the first SME host to run
        this, release builds included (assert() is compiled out under
        NDEBUG; adversarial review Critical-1: the pre-fix form divided
