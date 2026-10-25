@@ -71,7 +71,7 @@ static size_t sve_rot_ldr_at_top_slots(struct test *test, size_t vl_bytes)
 
 struct SveRotLdrAtTopData {
     int      vl_slots;   /* element count in full z-register widths */
-    size_t   vl_bytes;   /* svcntb() at init */
+    size_t   vl_bytes;   /* init-time VL bytes returned by arm64_require_sve_vl */
     uint8_t *srcA;
     uint8_t *srcB;
     uint8_t *scratch;

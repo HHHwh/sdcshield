@@ -787,13 +787,18 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   Failed——knob 钳制后不可达, 纯纵深防御, 记账。
 - **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
 <<<<<<< HEAD
+- **承接**:P5(SLEEF/Eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
   语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
   遗留手探文件)待做。
 <<<<<<< HEAD
 =======
   语言级不可编译); P6 存量迁移(含本阶段 6 个遗留手探文件)待做。
 
+<<<<<<< HEAD
 ## 2026-10-24 · P5 sleef 半侧实证收口(PR #286 检视闭环)
+=======
+## 2026-10-24（all-VL Phase 2 P5：SLEEF/Eigen×8 按 spike 证据分流——真 VLA 迁移 + 自 pin 回退）
+>>>>>>> 51679200 (docs(all-vl2): 检视精度两处——vl_bytes 来源注释 + progress-log 库名大小写)
 
 - **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
   gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
