@@ -143,6 +143,21 @@ static int neon_rot_u8x16_sve_run(struct test *test, int cpu)
     (void)cpu;
     auto *data = static_cast<NeonRotU8x16SveData *>(test->data);
 
+    /* All-VL policy #3 (hardening): init rounds buffer_bytes down to a
+     * multiple of max(svcntb(), 64) — a VL drift here would misalign the
+     * full-vector ldr z walks against the sized buffers. */
+    {
+        size_t align = (size_t)svcntb();
+        if (align < 64)
+            align = 64;
+        if (data->buffer_bytes % align != 0) {
+            log_error("neon_rot_u8x16_sve: buffer_bytes %zu no longer a "
+                      "multiple of max(svcntb(),64)=%zu — VL drifted since "
+                      "init", data->buffer_bytes, align);
+            report_fail_msg("neon_rot_u8x16_sve: SVE VL drifted between init and run");
+        }
+    }
+
     uint8_t *temp = static_cast<uint8_t *>(aligned_alloc(64, data->buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK));
     uint8_t *dst  = static_cast<uint8_t *>(aligned_alloc(64, data->buffer_bytes));
     const int lanes = svcntb();   /* bytes per vector */

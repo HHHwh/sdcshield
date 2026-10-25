@@ -117,10 +117,12 @@ static int movmskpspd_sve_init(struct test *test)
  */
 static inline uint32_t do_movmskps_sve(const float *p)
 {
-    const int lanes = svcntw();
     float vals[32];
     uint32_t out[32];
-    svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)(lanes < 32 ? lanes : 32));
+    /* Clamp to the x86 MOVMSKPS row width (FPS_LANES=4): the source
+     * row holds 4 floats — a full-width load would read past the LAST
+     * row into the heap at any VL > 128 (all-VL hardening). */
+    svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)4);
     svfloat32_t v = svld1_f32(pg, p);
     /* 谓词 = 符号位置位 lane。注意不能用浮点比较 svcmplt_f32(v, 0):
      * -0.0 < +0.0 为 false 会漏检负零; 按原版语义用符号位(整数比较)。 */
@@ -136,9 +138,10 @@ static inline uint32_t do_movmskps_sve(const float *p)
 
 static inline uint32_t do_movmskpd_sve(const double *p)
 {
-    const int lanes = svcntd();
     uint64_t out[16];
-    svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)(lanes < 16 ? lanes : 16));
+    /* Clamp to the x86 MOVMSKPD row width (FPD_LANES=2) — same
+     * last-row OOB hazard as the f32 form above. */
+    svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)2);
     svfloat64_t v = svld1_f64(pg, p);
     svbool_t neg = svcmpge_n_u64(pg, svreinterpret_u64_f64(v), 0x8000000000000000ull);
     svuint64_t bits = svsel_u64(neg, svdup_u64(1ull), svdup_u64(0));

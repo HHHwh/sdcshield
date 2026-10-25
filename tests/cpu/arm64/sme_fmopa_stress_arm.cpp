@@ -240,7 +240,13 @@ static int sme_fmopa_stress_arm_run(struct test *test, int cpu)
      * is sized kTileNMax*kTileNMax and the kernel writes n*n into it, so
      * pin init's invariant (n within [4, kTileNMax]) before any buffer
      * math (PR #242 review, coderabbit). */
-    assert(n >= 4 && n <= kTileNMax);
+    /* Release-effective replacement for the original assert (assert is
+     * compiled out under NDEBUG — the P2 finding); same invariant. */
+    if (!(n >= 4 && n <= kTileNMax)) {
+        log_error("sme_fmopa_stress_arm: init invariant n=%ld outside "
+                  "[4,%d]", (long)n, (int)kTileNMax);
+        report_fail_msg("sme_fmopa_stress_arm: tile geometry invariant broken");
+    }
     /* All-VL policy #3: fail closed on init/run SVL drift — the shared
      * golden is sized at init's n, and the assert above only pins the
      * stored invariant (NDEBUG-sensitive); this check is

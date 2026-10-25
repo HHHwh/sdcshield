@@ -49,10 +49,11 @@ static void sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *ou
     svbool_t pg = svptrue_b64();
     for (int i = 0; i < NUM_WORDS; ++i) {
         /* a[i] 广播后与整个 b 向量 svmul —— 一条向量乘法做 8 个部分积低半 */
-        uint64_t ai[8]; for (int k = 0; k < 8; ++k) ai[k] = a[i];
+        /* 1024-bit gate: svcntd() <= 16 — broadcast fills all lanes */
+        uint64_t ai[16]; for (int k = 0; k < 16; ++k) ai[k] = a[i];
         svuint64_t va = svld1_u64(pg, ai);
         svuint64_t vb = svld1_u64(pg, b);
-        uint64_t lo_vec[8];
+        uint64_t lo_vec[16];   /* 1024-bit gate */
         svst1_u64(pg, lo_vec, svmul_u64_x(pg, va, vb));
 
         uint64_t carry = 0;

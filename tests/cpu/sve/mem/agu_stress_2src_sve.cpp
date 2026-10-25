@@ -120,7 +120,7 @@ static int agu_stress_2src_sve_run(struct test *test, int cpu) {
                 svuint64_t r_eor = sveor_u64_x(pg, a, b);
                 svuint64_t r_and = svand_u64_x(pg, a, b);
                 svuint64_t r_orr = svorr_u64_x(pg, a, b);
-                uint64_t phase[8];
+                uint64_t phase[16];   /* 1024-bit gate: n <= lanes <= 16 */
                 int n = (count - base < (size_t)lanes) ? (int)(count - base) : lanes;
                 for (int k = 0; k < n; ++k) phase[k] = (base + k) % 4;
                 svbool_t pgn = svwhilelt_b64((uint64_t)0, (uint64_t)n);

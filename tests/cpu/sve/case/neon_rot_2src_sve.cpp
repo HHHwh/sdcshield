@@ -114,6 +114,16 @@ static int neon_rot_2src_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<NeonRot2srcSveData *>(test->data);
 
+    /* All-VL policy #3 (hardening): init rounds count down to a multiple
+     * of init-time svcntd() — a VL drift here would make the loop below
+     * walk different strides than the buffers/golden were sized for. */
+    if (data->count % (size_t)svcntd() != 0) {
+        log_error("neon_rot_2src_sve: count %zu no longer a multiple of "
+                  "svcntd()=%zu — VL drifted since init", data->count,
+                  (size_t)svcntd());
+        report_fail_msg("neon_rot_2src_sve: SVE VL drifted between init and run");
+    }
+
     uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
     uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
     const int lanes = svcntd();

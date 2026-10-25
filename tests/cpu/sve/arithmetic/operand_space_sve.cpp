@@ -107,7 +107,7 @@ static void sve_add_words(const uint64_t *a, const uint64_t *b, uint64_t *res)
         svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)cnt);
         svuint64_t va = svld1_u64(pg, a + base);
         svuint64_t vb = svld1_u64(pg, b + base);
-        uint64_t vsum[8];
+        uint64_t vsum[16];   /* 1024-bit gate: svcntd() <= 16 */
         svst1_u64(pg, vsum, svadd_u64_x(pg, va, vb));
         for (int i = 0; i < cnt; ++i) {
             unsigned __int128 s = (unsigned __int128)vsum[i] + c;

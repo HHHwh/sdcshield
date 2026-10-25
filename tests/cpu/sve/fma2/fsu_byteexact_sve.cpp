@@ -147,7 +147,10 @@ static int fsu_byteexact_sve_run(struct test *test, int cpu)
     (void)cpu;
     (void)test;
 
-    uint8_t *vbuf = static_cast<uint8_t *>(aligned_alloc_safe(CACHE_LINE, CACHE_LINE * 2));
+    /* 128B slack: the cross-line store below writes svcntb() bytes
+       starting at CACHE_LINE-8 (1024-bit gate: svcntb() <= 128) —
+       56 + 128 = 184 exceeds the old 2-line buffer. */
+    uint8_t *vbuf = static_cast<uint8_t *>(aligned_alloc_safe(CACHE_LINE, CACHE_LINE * 2 + 128));
     if (!vbuf) {
         log_skip(TestResourceIssueSkipCategory,
                  "fsu_byteexact_sve: vbuf alloc failed");
