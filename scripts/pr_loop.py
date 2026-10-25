@@ -956,7 +956,10 @@ def _format_reply(reply) -> str:
 
 def _real_opinion_inventory(pr: PRData) -> tuple:
     """从 PRData 提取当前 head 的真实待处置意见集(与 fetch_pr 的意见计数同口径:
-    双锚定 + 双条件判据):
+    双锚定 + 双条件判据;锚定分支 = 计入(counted)**或**超容差严格锚(over)——
+    后者即 pending_skew_opinions 的来源,意见与计数/阻断同集,reply 完整性校验
+    须同样要求逐条答复,否则处置了阻断合并的意见却被判「多答」、答复通道断裂
+    (检视意见 R2-#27)):
       inline     = {(path, line, id)}  全部 bot 的行级评论(逐条可 reply 的载体);
       body_count = 全部 bot 的非行级待处置意见(reviews body findings + 待处置
                    issue 评论 + check annotations 的 failure/warning 级)。
@@ -972,9 +975,9 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
             bot = "local-claude"
         if bot is None:
             continue
-        if not head_anchored(c, "created_at", anchor,
-                             ("original_commit_id", "commit_id"),
-                             pr.head_sha, skew):
+        counted, over = classify_anchor(c, "review_comment", anchor,
+                                        pr.head_sha, skew)
+        if not (counted or over):
             continue
         path = c.get("path") or ""
         line = c.get("line")
@@ -993,8 +996,8 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
             bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
-        if not head_anchored(r, "submitted_at", anchor,
-                             ("commit_id",), pr.head_sha, skew):
+        counted, over = classify_anchor(r, "review", anchor, pr.head_sha, skew)
+        if not (counted or over):
             continue
         if not raw_body.strip() or is_summary_text(raw_body):
             continue
@@ -1006,8 +1009,9 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
     # 摘要评论计 1——与 fetch_pr 的 n_icomment 同口径。
     for c in pr.issue_comments:
         body = c.get("body") or ""
-        if not (issue_comment_bot(c, pr.head_sha)
-                and issue_comment_anchored(c, anchor, pr.head_sha, skew)
+        counted, over = classify_anchor(c, "issue_comment", anchor,
+                                        pr.head_sha, skew)
+        if not (issue_comment_bot(c, pr.head_sha) and (counted or over)
                 and body.strip() and not is_summary_text(body)):
             continue
         if pragent_comment(c):

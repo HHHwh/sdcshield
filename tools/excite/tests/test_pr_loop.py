@@ -1102,6 +1102,81 @@ def test_pending_skew_opinions_excludes_non_opinion_suspects(monkeypatch):
     assert pr.opinion_count == 0
 
 
+def test_reply_covers_pending_skew_opinions_end_to_end(monkeypatch, tmp_path):
+    """意见 R2-#27(端到端): 超容差严格锚意见(pending,阻断 READY_TO_MERGE)
+    纳入 reply 完整性校验的真实意见集——fetch_pr 计数与 inventory 同集
+    (pending 3 = 1 行级 + 2 ACTIVE),处置全覆盖 → cmd_reply exit 0(修复前
+    判「多答」拒绝,答复通道断裂);漏答其中任一条 → GhError 不结案。"""
+    head = "e" * 40
+    over_inline = {"id": 101, "user": {"login": "coderabbitai[bot]"},
+                   "body": "超带行级意见", "created_at": "2026-10-24T11:48:20Z",
+                   "original_commit_id": head, "commit_id": head,
+                   "path": "scripts/a.py", "line": 7}
+    pragent_body = ("<!-- pr-agent:review:full -->\n检视意见\n"
+                    "<!-- pr-agent-review-state:v1 "
+                    '{"last_run": {"head_sha": "' + head + '"}, '
+                    '"findings": [{"state": "ACTIVE"}, {"state": "ACTIVE"}, '
+                    '{"state": "DISMISSED"}]} -->')
+    over_issue = {"id": 999, "user": {"login": "github-actions[bot]"},
+                  "body": pragent_body, "created_at": "2026-10-24T11:48:20Z"}
+    fake_gh_api, fake_paged = _fetch_pr_with([], [], [over_inline], [over_issue])
+    monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    pr_loop._EVENTS_CACHE.clear()
+    pr = pr_loop.fetch_pr("test/repo", 9)
+    # 计数侧: 1 行级 + 2 ACTIVE 计 pending(意见 6 口径),计入路径意见为 0
+    assert pr.pending_skew_opinions == 3 and pr.opinion_count == 0
+    # 清单侧同集: 行级入 inline,body 计 2(修复前两者均漏——多答/条数不符)
+    inline_real, body_real = pr_loop._real_opinion_inventory(pr)
+    assert inline_real == {("scripts/a.py", 7, 101)}
+    assert body_real == 2
+
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "fetch_pr", lambda slug, num: pr)
+    posted = []
+    monkeypatch.setattr(pr_loop, "reply_to_findings",
+                        lambda n, f, r: posted.append((f, r)))
+    sha = "f" * 40
+
+    def _disp(entries):
+        path = tmp_path / "disp.json"
+        path.write_text(json.dumps(entries))
+        return pr_loop.build_parser().parse_args(["reply", "9", "-f", str(path)])
+
+    # 全覆盖(1 行级 + 2 body)→ exit 0,答复通道不再断裂
+    ok = _disp([
+        {"path": "scripts/a.py", "line": 7, "id": 101, "conclusion": "采纳",
+         "reason": "r", "evidence": "已修复于 commit " + sha},
+        {"path": "scripts/b.py", "line": None, "conclusion": "采纳",
+         "reason": "r", "evidence": "已修复于 commit " + sha},
+        {"path": "scripts/c.py", "line": None, "conclusion": "驳回",
+         "reason": "误报", "evidence": "实证: ninja 零警告"},
+    ])
+    assert pr_loop.cmd_reply(ok) == 0 and len(posted) == 1
+
+    # 漏答超带行级意见 → 报错(阻断合并的意见不答不结案)
+    miss_inline = _disp([
+        {"path": "scripts/b.py", "line": None, "conclusion": "驳回",
+         "reason": "误报", "evidence": "实证: ninja 零警告"},
+        {"path": "scripts/c.py", "line": None, "conclusion": "驳回",
+         "reason": "误报", "evidence": "实证: ninja 零警告"},
+    ])
+    with pytest.raises(pr_loop.GhError) as exc:
+        pr_loop.cmd_reply(miss_inline)
+    assert "漏答" in str(exc.value)
+
+    # 漏答 1 条超带 body(ACTIVE)→ body 条数不符报错
+    miss_body = _disp([
+        {"path": "scripts/a.py", "line": 7, "id": 101, "conclusion": "采纳",
+         "reason": "r", "evidence": "已修复于 commit " + sha},
+        {"path": "scripts/b.py", "line": None, "conclusion": "驳回",
+         "reason": "误报", "evidence": "实证: ninja 零警告"},
+    ])
+    with pytest.raises(pr_loop.GhError) as exc2:
+        pr_loop.cmd_reply(miss_body)
+    assert "body 意见条数不符" in str(exc2.value)
+
+
 def test_collect_era_mark_uses_actual_anchoring():
     """意见 7: era_mark 标注 = 计入判定的锚定结果(非时间阈值)——回退锚容差
     窗口内被计数排除的条目(无绑定 issue 评论/旧 commit review)标「历史轮次」,
