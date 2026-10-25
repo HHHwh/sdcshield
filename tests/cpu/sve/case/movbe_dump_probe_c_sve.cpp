@@ -24,6 +24,12 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
+
+#ifndef SVE_MAX_VECTOR_BYTES
+/* GCC 12 的 arm_sve.h 不提供该 ACLE 宏 (movbe_dump_golden 同款自定义):
+ * SVE 架构最大 VL 2048bit = 256 字节 */
+#define SVE_MAX_VECTOR_BYTES 256
+#endif
 #include <device/cpu/arm64/arm64_vl.h>
 #endif
 
@@ -65,11 +71,14 @@ static int movbe_dump_probe_c_sve_run(struct test *test, int cpu)
     static const uint8_t idx4[4] = {3, 2, 1, 0};
 
     const int lanes = svcntw();
-    uint8_t vidx_bytes[64];
-    for (int i = 0; i < lanes && i < 16; ++i)
+    /* 索引按运行时 VL 定容: svcntw()*4 = svcntb() ≤ 256 = 架构最大 VL
+     * (movbe_dump_golden/slf_sweep VL-portable 范式); 原 64 字节 cap 在
+     * lanes>16 时使尾部 lane 索引为垃圾 → 确定性误报 + 失败路径栈越界 */
+    uint8_t vidx_bytes[SVE_MAX_VECTOR_BYTES];
+    for (int i = 0; i < lanes; ++i)
         for (int b = 0; b < 4; ++b)
             vidx_bytes[i * 4 + b] = (uint8_t)(i * 4 + idx4[b]);
-    svbool_t pg_batch = svwhilelt_b8((uint64_t)0, (uint64_t)(lanes < 16 ? lanes * 4 : 64));
+    svbool_t pg_batch = svwhilelt_b8((uint64_t)0, (uint64_t)lanes * 4);
     svuint8_t vidx = svld1_u8(pg_batch, vidx_bytes);
 
     /* 每线程私有副本 (SLF 探针, 消除多写者竞争) */
@@ -85,7 +94,7 @@ static int movbe_dump_probe_c_sve_run(struct test *test, int cpu)
             svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)(n * 4));
 
             /* 载入 n 个 32-bit 元素 (向量) → 字节级重排 */
-            uint8_t in_bytes[64];
+            uint8_t in_bytes[SVE_MAX_VECTOR_BYTES];
             memcpy(in_bytes, priv_input + base, n * 4);
             svuint8_t vswapped = svtbl_u8(svld1_u8(pg, in_bytes), vidx);
 
@@ -101,11 +110,11 @@ static int movbe_dump_probe_c_sve_run(struct test *test, int cpu)
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
             svuint8_t vrestored = svtbl_u8(reloaded, vidx);
-            uint8_t out_bytes[64];
+            uint8_t out_bytes[SVE_MAX_VECTOR_BYTES];
             svst1_u8(pg, out_bytes, vrestored);
 
             /* 校验: 还原值 == 输入值; ONLY on failure: dump input/golden/actual/xor + 字节分解 */
-            uint32_t restored[16];
+            uint32_t restored[SVE_MAX_VECTOR_BYTES / 4];
             memcpy(restored, out_bytes, n * 4);
             for (int i = 0; i < n; ++i) {
                 if (restored[i] != data->input[base + i]) {
