@@ -54,6 +54,10 @@
 
 #include <Eigen/Sparse>
 
+/* 时间校准下限(与 sdc_calibrated_dim 的 lo 实参一致; probe 异常
+ * 兜底退守到此, 见 sparse_n 内注释)。 */
+static constexpr int kCalibLo = 64;
+
 /*
  * 问题规模 n: 统一配置链:
  *   1. -O eigen_sparse.n=N / 配置文件 (sdc_stress.conf) 同名条目
@@ -74,11 +78,11 @@ static size_t sparse_n(struct test *test)
      * cannot interrupt;实测自适应档满核 600s SIGQUIT timed out) — cap it
      * so TERM is honoured. Deterministic pattern fill, ~10% density,
      * diagonally dominant; probe-only, results discarded. */
-    if (mem_dim > 64) {
+    if (mem_dim > kCalibLo) {
         int calibrated;
         try {
             calibrated = sdc_calibrated_dim(
-                64, mem_dim, 2000, test->id, "n", 3.0, [](int n) {
+                kCalibLo, mem_dim, 2000, test->id, "n", 3.0, [](int n) {
                 /* 散列伪随机放置(~10% 密度, 空间散乱非带状)——带状/规则
                  * 结构的 Cholesky fill-in 极少, 会把 probe 成本低估几个
                  * 数量级(实测规则 probe 64 档仅 0.1ms vs 真实随机 ~ms 级),
@@ -114,11 +118,15 @@ static size_t sparse_n(struct test *test)
             });
         } catch (...) {
             /* probe 期分配异常(如 ASAN 构建的 OOM): init 不 crash,
-             * 退回内存自适应档并诚实记录——时间上限失守交由 run() 的
-             * SKIP 防护与 -t SIGQUIT 兜底(与显式 knob 同级后果)。 */
-            log_warning("[时间校准] %s.%s: 试解异常 → 退回内存上限 %ld",
-                        test->id, "n", (long)mem_dim);
-            calibrated = mem_dim;
+             * 退守校准下限并诚实记录(检视 #40)。计划文档 P2 原则
+             * 『上限宁小勿大』: 退内存自适应档在异常为环境性/瞬时性
+             * (ASAN 配额、init 期外部内存压力解除)时会静默复活
+             * 『单解分钟级、TERM 打不断』的老问题; 退 lo 保证 TERM
+             * 可兑现, 压力变小但口径诚实, 且 run() 仍执行同一指令
+             * 路径(ASAN 场景优于整测 SKIP)。 */
+            log_warning("[时间校准] %s.%s: 试解异常 → 退守校准下限 %d",
+                        test->id, "n", kCalibLo);
+            calibrated = kCalibLo;
         }
         mem_dim = calibrated;
     }

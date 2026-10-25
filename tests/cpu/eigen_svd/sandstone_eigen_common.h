@@ -81,11 +81,13 @@ template <typename SVD, int Dim> struct EigenSVDTest
             });
         } catch (...) {
             /* probe 期分配异常(如 ASAN 构建的 OOM): init 不 crash,
-             * 退回内存自适应档并诚实记录(时间上限失守的后果与显式
-             * knob 同级, 由 -t SIGQUIT 兜底)。 */
-            log_warning("[时间校准] %s.%s: 试解异常 → 退回内存上限 %d",
-                        test->id, "mdim", mem_dim);
-            calibrated = mem_dim;
+             * 退守校准下限并诚实记录(检视 #40; 计划文档 P2 原则
+             * 『上限宁小勿大』——退内存自适应档会在异常为环境性/
+             * 瞬时性时静默复活『单解分钟级、TERM 打不断』的老问题,
+             * 退 lo 保证 TERM 可兑现且 run() 仍执行同一指令路径)。 */
+            log_warning("[时间校准] %s.%s: 试解异常 → 退守校准下限 %d",
+                        test->id, "mdim", lo);
+            calibrated = lo;
         }
         return calibrated;
     }
