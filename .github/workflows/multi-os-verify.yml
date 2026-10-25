@@ -158,7 +158,15 @@ jobs:
           fi
           echo "list-tests: $N"
           [ "$N" -gt 100 ] || { echo "::error::too few tests ($N)"; exit 1; }
-          builddir/sdcshield --dump-cpu-info | head -1
+          # --dump-cpu-info | head -1 的 SIGPIPE 陷阱:写端输出超过 stdio 缓冲后,
+          # head 取完首行即退出,写端后续 write 全部 EPIPE(141)→ pipefail + -e
+          # 在此行零诊断死亡(下行 ::endgroup:: 不可达)。96 核 kunpeng920 实测
+          # 全量输出 4143 字节、200 次中 199 次写端 141;GHA 4 核 runner(~300
+          # 字节,单次 write)暂不触发,但本 workflow 顶部注释明示可切 self-hosted
+          # kunpeng920。改为落盘再取首行:无管道无竞态;dump-cpu-info 自身失败
+          # 仍按 -e 语义红(stderr 未重定向,现场直接在 step 日志)。
+          builddir/sdcshield --dump-cpu-info > /tmp/dump-cpu-info.txt
+          head -1 /tmp/dump-cpu-info.txt
           echo "::endgroup::"
 
       # ---- 打包自包含 built/(bin+libs+脚本+元数据),与本地 podman 链路的
