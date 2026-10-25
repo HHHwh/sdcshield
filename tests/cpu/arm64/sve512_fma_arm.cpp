@@ -45,7 +45,11 @@
  *      them to a scratch region; the region is byte-compared against the
  *      scalar-computed golden. This drives the SVE memory pipeline
  *      (gather/scatter AGU + lane reordering) that per-lane FMA loops
- *      never touch.
+ *      never touch. The mutable scatter scratch is worker-private
+ *      (allocated in test_run): the framework shares one test->data
+ *      across all worker threads, so a shared scatter buffer would race
+ *      under -n>1 (one worker's post-compare reset vs another's in-flight
+ *      scatter — a software-induced false SDC).
  *
  * SDC detection: byte-exact lane compares against deterministic software
  * references, with per-lane golden/actual/XOR logging on mismatch.
@@ -151,11 +155,12 @@ struct SveFmaData {
     std::vector<uint32_t> m_f32;
     std::vector<uint32_t> a_f32;
 
-    // Gather/scatter round-trip buffers (f64 workspace).
+    // Gather/scatter round-trip buffers (f64 workspace). scatter scratch
+    // itself is deliberately NOT here: it is per-worker mutable state (see
+    // test_run — the framework shares one test->data across all worker
+    // threads, so a shared scatter buffer would race under -n>1).
     std::vector<uint64_t> gather_src;     // source pool
     std::vector<uint64_t> gather_idx;     // u64 element indices (permuted)
-    std::vector<uint64_t> scatter_dst;    // hardware scatter destination
-    std::vector<uint64_t> scatter_golden; // scalar golden destination
 };
 
 #ifdef __aarch64__
@@ -292,7 +297,7 @@ static void f32_chain_hw(const SveFmaData *d, uint32_t *out)
 
 // Scalar golden for the gather/scatter round-trip (identical per-element
 // op: v = v * v + 1.5, matching svmla(v, v, 1.5)).
-static void gather_scatter_golden(SveFmaData *d)
+static void gather_scatter_golden(const SveFmaData *d, uint64_t *golden_out)
 {
     // The hardware scatter writes dst[idx[off + lane]] for each vector
     // lane — the golden must index through the same indirection, not
@@ -301,11 +306,11 @@ static void gather_scatter_golden(SveFmaData *d)
         double v;
         memcpy(&v, &d->gather_src[d->gather_idx[i]], 8);
         v = std::fma(v, v, 1.5);
-        memcpy(&d->scatter_golden[d->gather_idx[i]], &v, 8);
+        memcpy(&golden_out[d->gather_idx[i]], &v, 8);
     }
 }
 
-static void gather_scatter_hw(SveFmaData *d)
+static void gather_scatter_hw(const SveFmaData *d, uint64_t *dst_out)
 {
     const size_t n = d->gather_idx.size();
     const size_t lanes = d->vl_d;
@@ -316,7 +321,7 @@ static void gather_scatter_hw(SveFmaData *d)
         svfloat64_t v = svld1_gather_u64index_f64(pg, reinterpret_cast<const double *>(d->gather_src.data()),
                                                   vidx);
         v = svmla_f64_x(pg, one_half, v, v);
-        svst1_scatter_u64index_f64(pg, reinterpret_cast<double *>(d->scatter_dst.data()), vidx, v);
+        svst1_scatter_u64index_f64(pg, reinterpret_cast<double *>(dst_out), vidx, v);
     }
 }
 
@@ -407,8 +412,6 @@ static int sve512_fma_arm_init(struct test *test)
         const size_t gn = 64 * data->vl_d;
         data->gather_src.resize(gn);
         data->gather_idx.resize(gn);
-        data->scatter_dst.assign(gn, 0);
-        data->scatter_golden.resize(gn);
         for (size_t i = 0; i < gn; ++i) {
             data->gather_src[i] = data->seeds_f64[i % data->vl_d];
             data->gather_idx[i] = i;
@@ -474,6 +477,16 @@ static int sve512_fma_arm_run(struct test *test, int cpu)
     f64_special_golden(d, golds64.data());
     f32_chain_golden(d, gold32.data());
 
+    // Gather/scatter scratch is per-worker mutable state, allocated here in
+    // test_run — NOT in the shared test->data: under -n>1 every worker
+    // thread shares one test->data, and a shared scatter destination would
+    // let one worker's post-compare reset (std::fill) race another worker's
+    // in-flight scatter/compare, reporting a software-induced false SDC
+    // (sve512_gather_scatter_arm fixpoint, same pattern).
+    const size_t gn = d->gather_idx.size();
+    std::vector<uint64_t> scatter_dst(gn, 0);
+    std::vector<uint64_t> scatter_golden(gn, 0);
+
     do {
         bool all_passed = true;
 
@@ -518,18 +531,18 @@ static int sve512_fma_arm_run(struct test *test, int cpu)
 
         // ---- (4) gather/scatter round-trip.
         {
-            gather_scatter_hw(d);
-            gather_scatter_golden(d);
-            for (size_t i = 0; i < d->scatter_dst.size(); ++i) {
-                if (d->scatter_dst[i] != d->scatter_golden[i]) {
+            gather_scatter_hw(d, scatter_dst.data());
+            gather_scatter_golden(d, scatter_golden.data());
+            for (size_t i = 0; i < scatter_dst.size(); ++i) {
+                if (scatter_dst[i] != scatter_golden[i]) {
                     report_f64_lane_mismatch("sve512_gather_scatter", i,
-                                             d->scatter_golden[i],
-                                             d->scatter_dst[i]);
+                                             scatter_golden[i],
+                                             scatter_dst[i]);
                     all_passed = false;
                 }
             }
             // Reset the destination for the next iteration.
-            std::fill(d->scatter_dst.begin(), d->scatter_dst.end(), 0);
+            std::fill(scatter_dst.begin(), scatter_dst.end(), 0);
         }
 
         if (!all_passed) {
