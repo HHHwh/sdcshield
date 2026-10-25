@@ -361,6 +361,15 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  *   <= max_single_ms 的维度, 再乘安全系数 0.5 吸收外推偏差。
  *   外推后再实测选定维度一次, 超预算按实测幂律收缩并复验——构造性
  *   保证 one solve <= max_single_ms(外推/安全系数失准的兜底)。
+ *   口径(检视 #44/#45): (1) probe 的计时单位 = 构造 + 一次完整求解,
+ *   与 run 期迭代同构(保守方向——构造被计入预算); (2) 该保证是
+ *   单线程探针口径。run 期满核并发时 memory-bound 求解受带宽/缓存
+ *   竞争显著放大——2026-10-25 鲲鹏 920(128 CPUs)实测: n=1191 稀疏
+ *   Cholesky 单解 574ms(单线程) → 14268ms(128 线程, ~24.9×), 含
+ *   reroll 的最坏迭代 ~29s; -t 的 TERM 兑现最终由框架硬宽限保证
+ *   (sandstone.cpp test_timeout = max(5×-t + 30s, 300s) 后才
+ *   SIGQUIT), 校准的作用是把未校准档的分钟级(600s)压到 O(10s)
+ *   量级、远低于该宽限。
  *   k clamp [1.5, 4.0] 抑制小档计时噪声; 试解总成本两小档+一验证档
  *   (秒级, 失准收缩时验证档可至 max_single_ms 量级)。
  *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
@@ -438,7 +447,9 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
     log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
                 "k=%.2f) → %d (验证 %.1fms%s)",
                 test_id, knob, max_single_ms, p1, t1, mid, t2, k, dim, td,
-                td > (double)max_single_ms ? ", lo 档仍超预算" : "");
+                td > (double)max_single_ms
+                    ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
+                    : "");
     return dim;
 }
 
