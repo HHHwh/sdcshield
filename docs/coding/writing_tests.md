@@ -646,10 +646,19 @@ instead of assuming one tier:
 - **Probe via the framework layer**: `#include
   <device/cpu/arm64/arm64_vl.h>` and call
   `arm64_require_sve_vl(test, min_bits, max_bits)` /
-  `arm64_require_sme_svl(...)` from `test_init`; a negative return
-  (EXIT_SKIP, -255 — the unified require contract) means the helper
-  already logged the skip — `return EXIT_SKIP` immediately (consume
-  with `< 0`, never `== -1` / `== EXIT_SKIP`). Do
+<<<<<<< HEAD
+  `arm64_require_sme_svl(...)` from `test_init`; on skip the helper
+  already logged the reason and returns `EXIT_SKIP` (a negative value,
+  −255 — the unified require contract, never a bare −1: any other
+  negative would surface as a misleading "Unexpected OS error") —
+  `return EXIT_SKIP` immediately (consume with `< 0`, never `== -1`
+  / `== EXIT_SKIP`). Do
+=======
+  `arm64_require_sme_svl(...)` from `test_init`; on skip the helper
+  returns `EXIT_SKIP` (a negative value, −255 — not a bare −1: any other
+  negative would surface as a misleading "Unexpected OS error") after
+  logging the reason — `return EXIT_SKIP` immediately. Do
+>>>>>>> 52c2d755 (docs(coding): writing_tests.md all-VL 政策返回值措辞修正——EXIT_SKIP 而非 -1 (PR #288 检视 round 2))
   not hand-write getauxval probes: `device_has_feature()` is
   short-circuited by compile-time `__ARM_FEATURE_*` macros in +sve/+sme
   TUs (docs/architecture.md).
