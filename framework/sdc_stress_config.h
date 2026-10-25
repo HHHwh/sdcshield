@@ -419,16 +419,16 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
      * 落点单解 8.3s >> 2s)。在选定 dim 再实测一次, 超预算按实测幂律
      * 收缩并复验——构造性保证 one solve ≤ max_single_ms; 收缩到 lo
      * 仍超限则如实记录(机器极慢/lo 过大, 后果与显式 knob 同级)。
-     * nd 强制单调递减吸收计时噪声, 轮数上限 4 防抖动。 */
+     * newdim 强制单调递减吸收计时噪声, 轮数上限 4 防抖动。 */
     int xdim = dim;
     double td = probe(dim);
     double td0 = td;
     int shrinks = 0;
     while (td > (double)max_single_ms && dim > lo && shrinks < 4) {
-        int nd = (int)((double)dim * std::pow(budget / td, 1.0 / k));
-        if (nd >= dim) nd = dim - 1;
-        if (nd < lo) nd = lo;
-        dim = nd;
+        int newdim = (int)((double)dim * std::pow(budget / td, 1.0 / k));
+        if (newdim >= dim) newdim = dim - 1;
+        if (newdim < lo) newdim = lo;
+        dim = newdim;
         ++shrinks;
         td = probe(dim);
     }
