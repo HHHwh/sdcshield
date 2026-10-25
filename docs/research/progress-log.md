@@ -711,9 +711,10 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **验证模式**: 16-run 与 20-commit 实施均由隔离 subagent 执行; 每文件
   TU 零告警+skip 干净(框架编译特性门)+终态全量构建零告警+zstd19 pass。
 - **诚实边界**: verify.cpp 的 5200 向量 OpenSSL 重验需 SVE 硬件(本机
-  仅编译验证, commit 正文记录); hmac 容量守卫的 init 侧失败经
-  report_fail_msg 会表现为 Skipped("Unexpected OS error")而非干净
-  Failed——knob 钳制后不可达, 纯纵深防御, 记账。
+  仅编译验证, commit 正文记录); hmac 容量守卫的 init 侧失败类别已由
+  20f73730 修正(compute_golden 经返回值传播, test_init 返回
+  EXIT_FAILURE → 干净 Failed, 非 Skipped)——本条曾按旧形态记账, 评审
+  二轮勘误同步。
 - **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
   语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
   遗留手探文件)待做。
@@ -747,3 +748,34 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   真实运行 pass;selftest_arm64_vl_require_sve 走 helper log_skip
   原文 skip;zstd19 -t 2000 -n 1 回归 pass;x86-64 零触及
   (全部变更位于 #elif __aarch64__/arm64 专属文件)。
+## 2026-10-25（all-VL Phase 2 P4 评审二轮：移交项落地 + 真同源 gem5 实证 + 守卫/文档精度）
+
+- **移交项落地(PR #282 处置确认)**: sve_hmac.h 五入口 msg_len 前置
+  上界守卫——body=64/128+msg_len 与 padded 均为 size_t 运算先于检查,
+  msg_len 邻近 SIZE_MAX 时回绕回 2048 以内骗过 padded 后置单检,
+  memcpy 巨量溢出; 前置钳 SVE_HMAC_MSG_MAX_32=1975/_64=1903
+  (1f3b4869)。
+- **真同源 gem5 实证**(评审二轮 Important 采纳: 原证据载体 sve_sha_dual
+  是镜像副本, 非同源): 新 harness **sve_hmac_dual** 直接 #include 仓库
+  实际 sve_hmac.h(+sve_sha_kernels.h)——被测机器码与 17 测试同源。
+  四档 16-run(128/256/512/1024-bit × {fixed, random×3})全绿: 流数逐档
+  4/8/16/32 与 2/4/8/16 精确; RFC 2202/4231 六已知答案向量双侧(oracle+
+  SVE)锚定公开值(hex 经 python3 hmac 与 openssl 双独立核验); 8 长度×
+  逐流字节精确(含 1900/1830 knob 上限与 1975/1903 精确边界); 守卫探测
+  msg 21+14/key 6+4 全部 -1; 16 checksum 互异。**阴性对照**: 还原无
+  守卫形态, 同 harness 在 msg_len=SIZE_MAX 探针处页表错误崩溃
+  (0x7fffff0000, gem5 exit 134)——回绕缺口与守卫负载性正反双向实证
+  (gem5-fi feat/pr284-hmac-dual @ 805838f6, findings.md P4 二轮条目)。
+- **守卫/文档精度**(评审二轮 Minor 三条采纳): ①17 文件流数上界字面量
+  32/16 → SVE_SHA_STREAMS_MAX_32/64 宏, 解除数组定维/检查界限失同步
+  耦合(e8ccec8e); ②init/run VL 漂移守卫 report_fail_msg 硬失败改
+  log_skip(CpuNotSupported)+EXIT_SKIP——部署侧 per-thread VL pinting
+  形态下按环境不支持跳过而非污染 SDC 失败信号, fail-closed 核心语义
+  保留(3aeb7aa3); ③meson+17 docblock 验证宣称口径修正——OpenSSL 位级
+  验证属原固定 8/4 流形态(5200+1360 向量, VL=256 主机), 参数化形态由
+  真同源 dual 承载, OpenSSL 重验需 SVE 主机(b155ab02)。
+- **诚实边界(更新)**: 17 测试文件的框架胶水(fork/TEST_LOOP/
+  arm64_require_sve_vl 的 log_skip 类别机制)仍为宿主编译+SKIP 验证——
+  完整 sdcshield 二进制(fork+96 线程+OpenSSL)不可入 gem5 SE 单进程
+  配置; 胶水依赖的算术不变式(lanes 换算 svl/4==svcntw()、[4,32]/
+  [2,16] 范围、漂移比较操作数)已由同源 harness 逐档执行。
