@@ -1245,3 +1245,49 @@ def test_anchor_and_skew_single_source():
     assert ">300s" in pr_loop.format_skew_warning(pr)
     pr.push_time = push
     assert ">0s" in pr_loop.format_skew_warning(pr)
+
+
+# ---------------------------------------------------------------------------
+# PR #289 第三轮检视闭环(当前 head d3d880c7): pending 意见 collect 可处置化
+# (意见 R2-#30)。#27/#31 的护栏测试见上方 R2-#27 / classify_anchor 用例。
+
+def test_collect_marks_pending_skew_opinions_actionable(monkeypatch):
+    """意见 R2-#30: 超容差待处置意见(pending,阻断 READY_TO_MERGE)在 collect
+    明细标「当前 head(超容差待处置)」而非「历史轮次」——阻断合并的意见不再
+    被处置提示「勿重复处置」跳过(不动点: READY_TO_FIX、意见 0、subagent
+    无事可做、不 push、pending 由不可变元数据推导永不自清)。非可行动超带
+    条目(摘要类)仍标「历史轮次」,不虚增处置负担。"""
+    head = "e" * 40
+    over_actionable = {"id": 1, "user": {"login": "greptile-apps[bot]"},
+                       "state": "COMMENTED", "commit_id": head,
+                       "submitted_at": "2026-10-24T11:48:20Z", "body": "超带意见"}
+    over_summary = {"id": 2, "user": {"login": "coderabbitai[bot]"},
+                    "state": "COMMENTED", "commit_id": head,
+                    "submitted_at": "2026-10-24T11:48:20Z",
+                    "body": "walkthrough … summarize by coderabbit.ai …"}
+    fake_gh_api, fake_paged = _fetch_pr_with(
+        [], [over_actionable, over_summary], [], [])
+    monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    pr_loop._EVENTS_CACHE.clear()
+    pr = pr_loop.fetch_pr("test/repo", 9)
+
+    # 计数侧: 仅可行动条目计 pending(且记 (kind, id) 定位),摘要类只进 suspects
+    assert pr.pending_skew_opinions == 1
+    assert pr.pending_skew_ids == {("review", 1)}
+    assert len(pr.skew_suspects) == 2
+
+    titles = [t for _, t, _ in pr_loop._collect_entries(pr)]
+    t_actionable = [t for t in titles if "greptile" in t][0]
+    t_summary = [t for t in titles if "coderabbit" in t][0]
+    # 可行动超带意见: 标「当前 head(超容差待处置)」,绝不标「历史轮次」
+    assert "当前 head(超容差待处置" in t_actionable
+    assert "历史轮次" not in t_actionable
+    # 非可行动(摘要类)超带条目: 仍标「历史轮次」(诊断告警覆盖,不虚增阻断)
+    assert "历史轮次" in t_summary
+    assert "当前 head(超容差待处置" not in t_summary
+
+    # render_collect 元信息同步给出处置路径提示(不再只说「人工甄别」)
+    md = pr_loop.render_collect(pr, "test/repo", 900)
+    assert "处置与答复口径同常规意见" in md
+    assert "当前 head(超容差待处置)" in md
