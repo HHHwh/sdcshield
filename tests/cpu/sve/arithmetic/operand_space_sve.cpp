@@ -123,13 +123,16 @@ static void sve_add_words(const uint64_t *a, const uint64_t *b, uint64_t *res)
  * (svmulh 是 SVE2 指令, 本机 SVE1 无) */
 static void sve_mul_words(uint64_t a, uint64_t b, uint64_t *lo, uint64_t *hi)
 {
-    svbool_t pg = svptrue_b64();
+    /* 谓词钳制到 4-lane 行宽 (ai/bi/out 的容量): 原版 svptrue 在
+     * VL>256 (svcntd()>4) 时 svld1/svst1 越界读写这 4 元素栈数组
+     * (512-bit 档 8 lane, 1024-bit 档 16 lane)。out[0] 恒在首 lane,
+     * 语义不变。 */
+    svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)4);
     uint64_t ai[4] = {a, a, a, a}, bi[4] = {b, b, b, b}, out[4];
     svst1_u64(pg, out, svmul_u64_x(pg, svld1_u64(pg, ai), svld1_u64(pg, bi)));
     *lo = out[0];
     unsigned __int128 prod = (unsigned __int128)a * b;
     *hi = (uint64_t)(prod >> 64);
-    (void)prod;
 }
 
 /* slf 探针保持原版 inline-asm str/ldr (标量转发通路) */
