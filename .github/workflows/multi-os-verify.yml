@@ -394,6 +394,16 @@ jobs:
         run: |
           tsv=$(ls bench/benchmark/benchmark.tsv 2>/dev/null || ls bench/*/benchmark/benchmark.tsv 2>/dev/null | head -1)
           [ -n "$tsv" ] || { echo "no benchmark.tsv (unexpected) — skip trend update"; exit 0; }
+          # 消费侧闸门:verify job 的 benchmark 步骤全表 skip 时本 job 仍以
+          # !cancelled() 运行,upload if: always() 的 all-skip TSV 会被转成
+          # 空 JSON([])交给 auto-push 的 benchmark-action——坏数据照常流入
+          # gh-pages,verify 侧闸门只报警不拦流。在此拦截:全 skip 不 push
+          # (verify 已红,本 job 定位是趋势更新非闸门,不重复报警)。
+          ok=$(awk -F'\t' 'NR>1 && $2 != "skip" {n++} END{print n+0}' "$tsv")
+          if [ "$ok" -eq 0 ]; then
+            echo "::warning::benchmark.tsv 全表 skip(verify 闸门已红)— 不更新 gh-pages 趋势"
+            exit 0
+          fi
           python3 scripts/gha/benchmark-to-json.py "$tsv" bench/benchmark.json
       - uses: benchmark-action/github-action-benchmark@v1
         with:
