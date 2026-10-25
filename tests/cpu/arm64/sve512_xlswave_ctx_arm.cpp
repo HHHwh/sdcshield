@@ -97,7 +97,7 @@ struct XlswaveCtxData {
 
 #ifdef __aarch64__
 
-inline void axis_generic_16x2(
+inline void axis_generic_dual(
     const double* s_base, const size_t coord,
     const size_t extent, const size_t stride,
     const svbool_t ptrue, const double* coeff, const size_t bt,
@@ -297,7 +297,7 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
                 log_warning("sve512_xlswave_ctx: axis iter=%zu &res0=%p",
                             j, static_cast<void *>(&res0));
             }
-            axis_generic_16x2(s_base, coord, extent, stride, ptrue, coeff,
+            axis_generic_dual(s_base, coord, extent, stride, ptrue, coeff,
                               bt, res0, res1);
         }
         double result[kTileMax];
