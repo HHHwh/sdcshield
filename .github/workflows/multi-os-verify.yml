@@ -217,9 +217,20 @@ jobs:
           fi
           echo "pristine list-tests: $N"
           [ "$N" -gt 100 ] || { echo "::error::pristine too few tests ($N)"; exit 1; }
-          out=$($PKG/sdcshield -e zstd19 -t 2000 -n 1 2>&1 | grep -iE 'exit:' | tail -1 || echo "exit: unknown")
+          # 同上: zstd19 实跑是本步骤「包损坏」场景的主闸门, 但 2>&1 合流进
+          # grep 后崩溃现场(loader 错误/fail 细节行)全被过滤, 诊断只剩判定行;
+          # 且 pipefail 下二进制非零会连带触发 || echo "exit: unknown", 把 out
+          # 污染成两行。改为全量落盘、判定行从落盘提取、失败时回放现场。
+          rc=0
+          $PKG/sdcshield -e zstd19 -t 2000 -n 1 > /tmp/pristine-zstd19.log 2>&1 || rc=$?
+          out=$(grep -iE 'exit:' /tmp/pristine-zstd19.log | tail -n 1) || out=""
+          [ -n "$out" ] || out="exit: unknown"
           echo "pristine zstd19: $out"
-          echo "$out" | grep -qi 'exit: pass'
+          if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -qi 'exit: pass'; then
+            echo "::error::pristine zstd19 failed (rc=$rc); full output:"
+            cat /tmp/pristine-zstd19.log
+            exit 1
+          fi
 
       # ---- 全量参数功能验证(脚本见 scripts/gha/verify-params.py) ----
       # 注意: shell: bash 展开为 bash -e -o pipefail, 失败行会即刻终止 step,
