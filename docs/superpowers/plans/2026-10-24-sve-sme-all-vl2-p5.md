@@ -92,7 +92,7 @@ exit $overall
 ### Task 4: 文档收尾 + PR
 
 - [x] 文档同步（spec §10 六处表口径）：meson 注释、README（sleef 行 + Eigen SVD 段 launcher 表述）、**CLAUDE.md**（Known platform quirks 两处被本计划推翻的陈述："eigen SVD test needs a VL-pinning launcher（`/tmp/vlrun`）"与 "`sleef_sve` stays at 128 by design"）、**docs/architecture.md**（Eigen 5.0 SVE packets 节 runtime-VL 规则段：process→thread VL 语义、删 "sleef_sve compiles at 128 by design"）、docs/research/adding-tests.md（sourceset 表补 `tests_sve_vla` 行）、progress-log（P5 条目：双 spike 结论、分流裁定、16-run 实录、Eigen 死结档案引用）。与 #286 的实际同步范围（88d42767〔rebase 前 4991fc03〕：README/architecture.md/adding-tests.md/CLAUDE.md 四处 + progress-log 11cdd2c5/679c4610 P5 条目）对齐。PR 正文（含分流归属表：sleef 行锚点 = §6 P5 + §11.2、**不适用 §11.1**；eigen 行 = §11.1 (c) 撞墙回退被行使）。
-- [ ] **spec 自身回写（二轮检视补）**：spec §6 P5 交付物「spike 报告（spec 附录）」与 §8 golden 表 sleef/eigen×8 行「结论写入本 spec 附录」在原计划中无任何步骤兑现（Task 4 原清单止于六处同步，Self-Review 原文「Spec §6 P5 全覆盖」因此不实）——增补：spec 新增附录 B（双 spike 结论 + 分流裁定 + golden 策略结论 + 验证口径），§8 表行与 §6 P5 行同步指向。由本 PR 后续 commit 兑现后勾选。
+- [x] **spec 自身回写（二轮检视补）**：spec §6 P5 交付物「spike 报告（spec 附录）」与 §8 golden 表 sleef/eigen×8 行「结论写入本 spec 附录」在原计划中无任何步骤兑现（Task 4 原清单止于六处同步，Self-Review 原文「Spec §6 P5 全覆盖」因此不实）——增补：spec 新增附录 B（双 spike 结论 + 分流裁定 + golden 策略结论 + 验证口径），§8 表行与 §6 P5 行同步指向。已由本 PR 增补 commit 兑现。
 
 ## Self-Review
 
@@ -107,5 +107,5 @@ exit $overall
   3. Task 1 kernel 规格按强于计划的形态实现（12 函数矩阵、NELEMS=1028 尾截断、双 noinline golden 抗 CSE、有限性哨兵、阴性对照、保真闭环）——按原文规格实现会造出检测链更弱的 kernel，见 Task 1。
   4. 16-run 门禁脚本初版漏带 P2 闭环版已有的 fails_ok 门禁、且缺日志在场与 random 互异两条——二轮补齐三条程序化门禁；已执行证据（6d740525）在记录列上逐项满足三条门禁所断言的事实，修脚本不追认旧证据、不必为补门禁重跑（权威证据 = kernel stdout FAILS/checksum 列，P2 先例 Erratum 3 同款）。
   5. 正文原引用 8bb2904c / 0e7b69a4 / 1ec37655 / 4991fc03 为 rebase 前对象（不在 #286 分支祖先链）——已改引 on-branch 等价 SHA（a96fff38 / fd3e258e / 3b82b533 / 88d42767）。
-  6. Task 4 原六处同步清单遗漏 spec 自身回写（spec §6 P5 交付物「spike 报告（spec 附录）」）——二轮检视补，由本 PR 后续 commit 兑现（附录 B）。
+  6. Task 4 原六处同步清单遗漏 spec 自身回写（spec §6 P5 交付物「spike 报告（spec 附录）」）——二轮检视补，已由本 PR 增补 commit 兑现（附录 B）。
 - **G5 路径勘误**：Task 1 脚本原写 `/home/sdc/wangxu/code-review/gem5-fi/...`，本机实际为 `/home/sdc/wangxu/operator/gem5-fi/...`（gem5.opt 在位实证）——已改。
