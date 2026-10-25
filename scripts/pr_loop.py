@@ -531,7 +531,18 @@ def pragent_strict_head(item: dict, head_sha: str) -> bool:
     """pr-agent 评论的严格 commit 锚: 尾部 review-state JSON 的 last_run.head_sha
     存在且 == 当前 head。区别于 issue_comment_bot 的「head 为 None 回退时间锚定」
     语义——head 缺失/解析失败时无证据可证属于当前 head,不构成放宽时间锚的
-    依据(与 review/行级评论的 commit_strict_match 同前提)。"""
+    依据(与 review/行级评论的 commit_strict_match 同前提)。
+
+    信任边界(检视意见 9,2026-10-25 评估后维持现状): last_run.head_sha 是
+    评论正文自declare的证据(HTML 注释 JSON),强度弱于 review 的 API 级
+    commit_id 字段——理论上能以 github-actions[bot] 身份发评论的仓库 workflow
+    可伪造。经查本仓库无此攻击路径: pr-agent.yml 显式排除 fork PR
+    (head.repo.full_name != repository 时 if 短路),bot-coverage.yml 走
+    pull_request 触发(fork PR 的 GITHUB_TOKEN 只读,发不了评论)且正文是
+    固定模板不回显 PR 可控内容,仓库无 pull_request_target;且锚后评论的
+    正文信任是存量行为,容差窗口带来的攻击面增量≈0、伪造后果方向保守
+    (伪造 ACTIVE findings 只会 READY_TO_FIX,不可能伪造 READY_TO_MERGE
+    推动错误合并——本工具绝不自动 merge,人工 merge 门兜底)。"""
     head = pragent_comment_head(item)
     return head is not None and head == head_sha
 
