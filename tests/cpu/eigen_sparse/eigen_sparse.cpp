@@ -58,6 +58,15 @@
  * 兜底退守到此, 见 sparse_n 内注释)。 */
 static constexpr int kCalibLo = 64;
 
+/* —— 校准 probe 与 generate_problem 的负载形状契约(检视 #43) ——
+ * 两处独立构造同一个负载形状, 以下参数必须同步演化: 非对角密度支配
+ * Cholesky fill-in(= 校准的计时基数), 对角值域支配数值性状。单边
+ * 改动会使校准计时静默失真——改这里必须同时核对另一处。probe 的
+ * 非对角取常值 0.05 = generate 值域 [0, 0.1) 的均值(计时近似)。 */
+static constexpr int kOffDiagDensityDenom = 10; /* 命中率 1/10 (~10% 密度) */
+static constexpr double kDiagBase = 0.05;       /* generate: |x|+base ∈ [0.05,1.05);
+                                                   probe: i+1+base 强对角占优恒正定 */
+
 /*
  * 问题规模 n: 统一配置链:
  *   1. -O eigen_sparse.n=N / 配置文件 (sdc_stress.conf) 同名条目
@@ -99,13 +108,13 @@ static size_t sparse_n(struct test *test)
                         uint64_t h = (uint64_t)i * 0x9E3779B97F4A7C15ull
                                    ^ (uint64_t)j * 0xC2B2AE3D27D4EB4Full;
                         h ^= h >> 32;
-                        if (h % 10 == 0) {
+                        if (h % kOffDiagDensityDenom == 0) {
                             trip.push_back(Eigen::Triplet<double>(i, j, 0.05));
                             trip.push_back(Eigen::Triplet<double>(j, i, 0.05));
                         }
                     }
                 for (int i = 0; i < n; ++i)
-                    trip.push_back(Eigen::Triplet<double>(i, i, i + 1.05));
+                    trip.push_back(Eigen::Triplet<double>(i, i, i + 1.0 + kDiagBase));
                 A.setFromTriplets(trip.begin(), trip.end());
                 Eigen::VectorXd b = Eigen::VectorXd::Constant(n, 0.5);
                 Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
@@ -161,7 +170,7 @@ static void generate_problem(size_t n,
     for (size_t i = 0; i < n; ++i) {
         for (size_t j = i + 1; j < n; ++j) {
             double x = frandom_scale(1.0);
-            if (x < 0.1) {
+            if (x < 1.0 / kOffDiagDensityDenom) {
                 trip.push_back(Eigen::Triplet<double>(i, j, x));
                 if (j > i)
                     trip.push_back(Eigen::Triplet<double>(j, i, x));
@@ -169,7 +178,7 @@ static void generate_problem(size_t n,
         }
     }
     for (size_t i = 0; i < n; ++i) {
-        double x = fabs(frandom_scale(1.0)) + 0.05;
+        double x = fabs(frandom_scale(1.0)) + kDiagBase;
         trip.push_back(Eigen::Triplet<double>(i, i, x));
     }
     A.setFromTriplets(trip.begin(), trip.end());
