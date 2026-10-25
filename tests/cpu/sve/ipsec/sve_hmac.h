@@ -40,7 +40,7 @@
  * out: out[s] 收到第 s 条流的 32 字节摘要(大端)。
  * 返回 0 成功; -1 容量溢出(流数超 1024-bit 定维上限, key_len 超密钥块,
  * 或 msg_len 超 SVE_HMAC_MSG_MAX_32 装配界)。 */
-static inline int hmac_sha256_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
+static inline int hmac_sha256_xn(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
                                   const uint8_t *const keys[SVE_SHA_STREAMS_MAX_32], size_t key_len,
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32], size_t msg_len)
 {
@@ -101,7 +101,7 @@ static inline int hmac_sha256_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
     const uint8_t *mp[SVE_SHA_STREAMS_MAX_32];
     for (int s = 0; s < n; ++s) mp[s] = full[s];
     uint32_t st[8][SVE_SHA_STREAMS_MAX_32];
-    sha256_compress_x8(st, mp, nblocks, sha256_iv);
+    sha256_compress_xn(st, mp, nblocks, sha256_iv);
 
     /* ---- 外层: out[s] = SHA256(K^opad[s] || inner_digest[s](32B)) ----
      * 消息 = opad 块(64) + 32 字节摘要 → 2 块 */
@@ -122,7 +122,7 @@ static inline int hmac_sha256_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
             full[s][127 - i] = (uint8_t)(bits >> (8 * i));
     }
     uint32_t st2[8][SVE_SHA_STREAMS_MAX_32];
-    sha256_compress_x8(st2, mp, 2, sha256_iv);
+    sha256_compress_xn(st2, mp, 2, sha256_iv);
 
     for (int s = 0; s < n; ++s)
         for (int w = 0; w < 8; ++w) {
@@ -136,7 +136,7 @@ static inline int hmac_sha256_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
 }
 
 /* SHA-512 家族 HMAC: N 条流并行 (N = svcntd(), 128 字节密钥块, 64 字节摘要) */
-static inline int hmac_sha512_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][64],
+static inline int hmac_sha512_xn(uint8_t out[SVE_SHA_STREAMS_MAX_64][64],
                                   const uint8_t *const keys[SVE_SHA_STREAMS_MAX_64], size_t key_len,
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_64], size_t msg_len)
 {
@@ -191,7 +191,7 @@ static inline int hmac_sha512_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][64],
     const uint8_t *mp[SVE_SHA_STREAMS_MAX_64];
     for (int s = 0; s < n; ++s) mp[s] = full[s];
     uint64_t st[8][SVE_SHA_STREAMS_MAX_64];
-    sha512_compress_x4(st, mp, nblocks, sha512_iv);
+    sha512_compress_xn(st, mp, nblocks, sha512_iv);
 
     for (int s = 0; s < n; ++s) {
         memcpy(full[s], opad_blk[s], 128);
@@ -205,7 +205,7 @@ static inline int hmac_sha512_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][64],
         for (int i = 0; i < 8; ++i) full[s][255 - i] = (uint8_t)(bits >> (8 * i));
     }
     uint64_t st2[8][SVE_SHA_STREAMS_MAX_64];
-    sha512_compress_x4(st2, mp, 2, sha512_iv);
+    sha512_compress_xn(st2, mp, 2, sha512_iv);
 
     for (int s = 0; s < n; ++s)
         for (int w = 0; w < 8; ++w)
@@ -215,7 +215,7 @@ static inline int hmac_sha512_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][64],
 }
 
 /* SHA-1 HMAC: N 条流并行 (N = svcntw(), 64B 密钥块, 20 字节摘要) */
-static inline int hmac_sha1_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][20],
+static inline int hmac_sha1_xn(uint8_t out[SVE_SHA_STREAMS_MAX_32][20],
                                 const uint8_t *const keys[SVE_SHA_STREAMS_MAX_32], size_t key_len,
                                 const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32], size_t msg_len)
 {
@@ -272,7 +272,7 @@ static inline int hmac_sha1_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][20],
     const uint8_t *mp[SVE_SHA_STREAMS_MAX_32];
     for (int s = 0; s < n; ++s) mp[s] = full[s];
     uint32_t st[5][SVE_SHA_STREAMS_MAX_32];
-    sha1_compress_x8(st, mp, nblocks);
+    sha1_compress_xn(st, mp, nblocks);
 
     for (int s = 0; s < n; ++s) {
         memcpy(full[s], opad_blk[s], 64);
@@ -291,7 +291,7 @@ static inline int hmac_sha1_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][20],
             full[s][127 - i] = (uint8_t)(bits >> (8 * i));
     }
     uint32_t st2[5][SVE_SHA_STREAMS_MAX_32];
-    sha1_compress_x8(st2, mp, 2);
+    sha1_compress_xn(st2, mp, 2);
 
     for (int s = 0; s < n; ++s)
         for (int w = 0; w < 5; ++w) {
@@ -306,7 +306,7 @@ static inline int hmac_sha1_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][20],
 
 
 /* SHA-224 HMAC: 与 SHA-256 HMAC 同构但用 sha224_iv, 摘要 7 字(28 字节)。 */
-static inline int hmac_sha224_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][28],
+static inline int hmac_sha224_xn(uint8_t out[SVE_SHA_STREAMS_MAX_32][28],
                                   const uint8_t *const keys[SVE_SHA_STREAMS_MAX_32], size_t key_len,
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32], size_t msg_len)
 {
@@ -363,7 +363,7 @@ static inline int hmac_sha224_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][28],
     const uint8_t *mp[SVE_SHA_STREAMS_MAX_32];
     for (int s = 0; s < n; ++s) mp[s] = full[s];
     uint32_t st[8][SVE_SHA_STREAMS_MAX_32];
-    sha256_compress_x8(st, mp, nblocks, sha224_iv);
+    sha256_compress_xn(st, mp, nblocks, sha224_iv);
 
     for (int s = 0; s < n; ++s) {
         memcpy(full[s], opad_blk[s], 64);
@@ -382,7 +382,7 @@ static inline int hmac_sha224_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][28],
             full[s][127 - i] = (uint8_t)(bits >> (8 * i));
     }
     uint32_t st2[8][SVE_SHA_STREAMS_MAX_32];
-    sha256_compress_x8(st2, mp, 2, sha224_iv);
+    sha256_compress_xn(st2, mp, 2, sha224_iv);
 
     for (int s = 0; s < n; ++s)
         for (int w = 0; w < 7; ++w) {
@@ -396,7 +396,7 @@ static inline int hmac_sha224_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][28],
 }
 
 /* SHA-384 HMAC: SHA-512 内核 + sha384_iv, 摘要 6 字(48 字节)。 */
-static inline int hmac_sha384_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][48],
+static inline int hmac_sha384_xn(uint8_t out[SVE_SHA_STREAMS_MAX_64][48],
                                   const uint8_t *const keys[SVE_SHA_STREAMS_MAX_64], size_t key_len,
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_64], size_t msg_len)
 {
@@ -451,7 +451,7 @@ static inline int hmac_sha384_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][48],
     const uint8_t *mp[SVE_SHA_STREAMS_MAX_64];
     for (int s = 0; s < n; ++s) mp[s] = full[s];
     uint64_t st[8][SVE_SHA_STREAMS_MAX_64];
-    sha512_compress_x4(st, mp, nblocks, sha384_iv);
+    sha512_compress_xn(st, mp, nblocks, sha384_iv);
 
     for (int s = 0; s < n; ++s) {
         memcpy(full[s], opad_blk[s], 128);
@@ -465,7 +465,7 @@ static inline int hmac_sha384_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][48],
         for (int i = 0; i < 8; ++i) full[s][255 - i] = (uint8_t)(bits >> (8 * i));
     }
     uint64_t st2[8][SVE_SHA_STREAMS_MAX_64];
-    sha512_compress_x4(st2, mp, 2, sha384_iv);
+    sha512_compress_xn(st2, mp, 2, sha384_iv);
 
     for (int s = 0; s < n; ++s)
         for (int w = 0; w < 6; ++w)

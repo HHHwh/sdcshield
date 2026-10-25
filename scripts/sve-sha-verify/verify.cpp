@@ -77,7 +77,7 @@ int main() {
             mp[s] = padded[s].data();
         }
         uint32_t st[8][SVE_SHA_STREAMS_MAX_32];
-        sha256_compress_x8(st, mp, (uint32_t)nblocks, sha256_iv);
+        sha256_compress_xn(st, mp, (uint32_t)nblocks, sha256_iv);
 
         for (int s = 0; s < n; ++s) {
             uint8_t digest[32];
@@ -115,7 +115,7 @@ int main() {
             mp[s] = padded[s].data();
         }
         uint32_t st[8][SVE_SHA_STREAMS_MAX_32];
-        sha256_compress_x8(st, mp, (uint32_t)nblocks, sha224_iv);
+        sha256_compress_xn(st, mp, (uint32_t)nblocks, sha224_iv);
         for (int s = 0; s < n; ++s) {
             uint8_t digest[28];
             unsigned dlen = 0;
@@ -149,7 +149,7 @@ int main() {
             mp[s] = padded[s].data();
         }
         uint64_t st[8][SVE_SHA_STREAMS_MAX_64];
-        sha512_compress_x4(st, mp, (uint32_t)nblocks, sha512_iv);
+        sha512_compress_xn(st, mp, (uint32_t)nblocks, sha512_iv);
         for (int s = 0; s < n; ++s) {
             uint8_t digest[64];
             unsigned dlen = 0;
@@ -180,7 +180,7 @@ int main() {
             mp[s] = padded[s].data();
         }
         uint64_t st[8][SVE_SHA_STREAMS_MAX_64];
-        sha512_compress_x4(st, mp, (uint32_t)nblocks, sha384_iv);
+        sha512_compress_xn(st, mp, (uint32_t)nblocks, sha384_iv);
         for (int s = 0; s < n; ++s) {
             uint8_t digest[48];
             unsigned dlen = 0;
@@ -211,7 +211,7 @@ int main() {
             mp[s] = padded[s].data();
         }
         uint32_t st[5][SVE_SHA_STREAMS_MAX_32];
-        sha1_compress_x8(st, mp, (uint32_t)nblocks);
+        sha1_compress_xn(st, mp, (uint32_t)nblocks);
         for (int s = 0; s < n; ++s) {
             uint8_t digest[20];
             unsigned dlen = 0;
