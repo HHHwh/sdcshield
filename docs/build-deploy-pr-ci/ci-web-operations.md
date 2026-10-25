@@ -50,6 +50,8 @@ nightly 跑完后 `benchmark-trend` job 自动维护 gh-pages 分支;
 - gitleaks 若报 fork 历史(OpenDCDiag)遗留泄漏:立即处理泄漏本身
   (rotate 凭据),非仅修 workflow。
 - gitleaks 对「已公开的 NIST/FIPS 标准测试向量」误报已按值豁免
-  (`.gitleaks.toml`:`[extend] useDefault = true` 保留默认规则 + 逐值
-  allowlist,先例 FIPS-197 C.1 AES-128 key,run 38240202283)。豁免仅限
-  有公开出处的向量值,禁止按路径豁免;真实凭据仍走上一条原则。
+  (`.gitleaks.toml`:`[extend] useDefault = true` 保留默认规则 + 整值
+  锚定(`(?i)^…$`)的逐值 allowlist,先例 FIPS-197 C.1 AES-128 key,run
+  38240202283)。豁免仅限有公开出处、整值匹配的向量值——未锚定正则会
+  连「内嵌该片段的更长真实凭据」一并豁免(PR #292 检视实证),禁止按
+  路径豁免;真实凭据仍走上一条原则。

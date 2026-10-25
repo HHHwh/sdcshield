@@ -14,6 +14,11 @@
 #    真实凭据泄漏漏检。真实泄漏的处理原则(rotate 凭据优先)见
 #    docs/build-deploy-pr-ci/ci-web-operations.md「已知事项」。
 # 3. 新增豁免值必须给出公开出处(FIPS/NIST 文档号 + 附录/章节)。
+# 4. 每条豁免正则必须整值锚定 `(?i)^…$`(allowlist 的 regexTarget 缺省
+#    作用于提取出的 secret 本身,不锚定则「包含该片段的更长真实凭据」
+#    也会被静默豁免——PR #292 检视实证:AWS/GitHub-PAT 形态密钥前拼/内嵌
+#    公开向量即可逃逸全部规则)。(?i) 覆盖同一向量的十六进制大小写等价
+#    写法,堵住大写形态再误红的复燃路径;两者均不放宽到子串。
 
 [extend]
 useDefault = true
@@ -22,6 +27,8 @@ useDefault = true
 description = "Published NIST/FIPS crypto test vectors used as golden baselines (not credentials)"
 regexes = [
     # FIPS-197 Appendix C.1 AES-128 vector key — 亦为 NIST SP 800-38A 全模式
-    # (ECB/CBC/CFB/OFB/CTR) 测试向量的共用 key,NIST 公开发布。
-    '''2b7e151628aed2a6abf7158809cf4f3c''',
+    # (ECB/CBC/CFB/OFB/CTR) 测试向量的共用 key,NIST 公开发布。整值锚定
+    # + (?i):只豁免与该公开值完全等价的 secret(含 hex 大小写各形),
+    # 内嵌该片段的更长真实凭据仍被检出。
+    '''(?i)^2b7e151628aed2a6abf7158809cf4f3c$''',
 ]
