@@ -146,7 +146,16 @@ jobs:
           ninja -C builddir
           echo "::endgroup::"
           echo "::group::self-check"
-          N="$(builddir/sdcshield --list-tests 2>/dev/null | wc -l)"
+          # 同 verify 步骤的 -e 陷阱: 2>/dev/null + pipefail 下二进制崩溃 → 赋值语句
+          # 非零 → step 在此行零诊断死亡(下行 echo/闸门均不可达)。stderr 落盘、
+          # 失败时回放, 崩溃现场不再丢。
+          rc=0
+          N="$(builddir/sdcshield --list-tests 2>/tmp/selfcheck-list.err | wc -l)" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::list-tests exited $rc (stderr:)"
+            cat /tmp/selfcheck-list.err
+            exit 1
+          fi
           echo "list-tests: $N"
           [ "$N" -gt 100 ] || { echo "::error::too few tests ($N)"; exit 1; }
           builddir/sdcshield --dump-cpu-info | head -1
@@ -168,8 +177,11 @@ jobs:
           # 自诊断:失败时日志里直接有环境现场(uid/工具/目录),不再盲猜
           echo "pkg-debug: uid=$(id -u) tar=$(command -v tar || echo MISSING) bsdtar=$(command -v bsdtar || echo MISSING) strip=$(command -v strip || echo MISSING) ldd=$(command -v ldd || echo MISSING) git=$(command -v git || echo MISSING) readlink=$(command -v readlink || echo MISSING)"
           echo "pkg-debug: builddir/sdcshield: $(ls -la builddir/sdcshield 2>&1)"
-          bash -x scripts/gha/package-built.sh builddir "dist/$OS_TAG" "$SERIES" "$SP" 2>&1 | tee /tmp/pkg-trace.log
-          rc=${PIPESTATUS[0]}
+          # pipefail + -e 下管道失败时 step 在管道行即死, 原 rc=${PIPESTATUS[0]}
+          # 与 pkg-debug 回放是失败路径上的死代码(成功路径才执行)。改用
+          # || rc=$? 接住(与 verify/benchmark 步骤同款), 失败诊断才真正可达。
+          rc=0
+          bash -x scripts/gha/package-built.sh builddir "dist/$OS_TAG" "$SERIES" "$SP" 2>&1 | tee /tmp/pkg-trace.log || rc=$?
           echo "pkg-debug: exit=$rc; dist 树:"
           find dist -maxdepth 3 2>/dev/null || true
           exit $rc
@@ -185,13 +197,24 @@ jobs:
           # 与 package-built.sh 的归一化同语义(非 LTS 时剥 LTS- 前缀)。
           [ "$SP" != "LTS" ] && SP="${SP#LTS-}"
           OS_TAG="openEuler-${SERIES}$(case "$SP" in LTS) echo LTS;; SP*) echo LTS_$SP;; esac)"
-          TARBALL=$(ls dist/$OS_TAG/sdcshield-$OS_TAG-*.tar.gz 2>/dev/null | sed -n 1p)
+          # ls 无匹配时 pipefail 使替换非零 → -e 在赋值行零诊断死亡(下行设计好的
+          # ::error:: 闸门永不可达); || true 接住, 空值交给既有 -n 闸门报错。
+          TARBALL=$(ls dist/$OS_TAG/sdcshield-$OS_TAG-*.tar.gz 2>/dev/null | sed -n 1p || true)
           [ -n "$TARBALL" ] || { echo "::error::no tarball in dist/$OS_TAG (package step output above)"; exit 1; }
           rm -rf /tmp/pristine && mkdir -p /tmp/pristine
           tar -xzf "$TARBALL" -C /tmp/pristine 2>/dev/null || bsdtar -xzf "$TARBALL" -C /tmp/pristine
           PKG="/tmp/pristine/$OS_TAG"
           export LD_LIBRARY_PATH="$PKG/libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          N="$($PKG/sdcshield --list-tests 2>/dev/null | wc -l)"
+          # 同 Build self-check: 解包产物损坏时 --list-tests 崩溃 → 原 2>/dev/null +
+          # pipefail + -e 在赋值行零诊断死亡(本步骤是「失败即红」的产物闸门,
+          # 恰在最该抓的包损坏场景上无诊断)。stderr 落盘、失败时回放。
+          rc=0
+          N="$($PKG/sdcshield --list-tests 2>/tmp/pristine-list.err | wc -l)" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::pristine list-tests exited $rc (stderr:)"
+            cat /tmp/pristine-list.err
+            exit 1
+          fi
           echo "pristine list-tests: $N"
           [ "$N" -gt 100 ] || { echo "::error::pristine too few tests ($N)"; exit 1; }
           out=$($PKG/sdcshield -e zstd19 -t 2000 -n 1 2>&1 | grep -iE 'exit:' | tail -1 || echo "exit: unknown")
