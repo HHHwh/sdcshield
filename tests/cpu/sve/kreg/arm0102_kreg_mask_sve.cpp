@@ -139,9 +139,13 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
     for (int base = 0; base < count; base += lanes) {
         int n = (count - base < lanes) ? (count - base) : lanes;
         [[maybe_unused]] svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
-        /* 与 run 完全相同的 4 元素子块结构 + 相位 (base+sub)%4 */
+        /* 与 run 完全相同的 4 元素子块结构 + 相位按子块旋转 */
         for (int sub = 0; sub < n; sub += 4) {
-            int phase = (base + sub) % 4;
+            /* 相位 = 子块序号 (base+sub)/KREG_SVE_SUBLANES, 按子块旋转;
+             * 原式 (base+sub)%4 恒为 0 (base 是 svcntw() 倍数、sub 是 4
+             * 的倍数) —— 4 谓词路径只覆盖 eq, gt/eq-u/tst 全部死代码
+             * (426dc5c6 家族同款修法, kreg_logic/not/select/fma 均已改)。 */
+            const int phase = (base + sub) / KREG_SVE_SUBLANES;
             /* 单 lane 组: 用标量嵌入向量 */
             uint32_t av[8], bv[8], ov[8];
             for (int k = 0; k < 4 && sub + k < n; ++k) {
@@ -172,7 +176,7 @@ static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
 
     TEST_LOOP(test, 1 << 13) {
         /* 与 golden 完全相同的 4 元素子块结构: 每 SVE 向量批内按 4 元素子块,
-         * 相位 = (base+sub) % 4 (与 init 的 golden 循环逐字一致) */
+         * 相位 = 子块序号 (base+sub)/KREG_SVE_SUBLANES (与 init 一致) */
         for (int base = 0; base < count; base += svcntw()) {
             int n = (count - base < svcntw()) ? (count - base) : svcntw();
             for (int sub = 0; sub < n; sub += 4) {
@@ -182,7 +186,8 @@ static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
                 svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)4);
 
                 /* 载荷: 谓词比较掩码扩展 + svsel (相位与 golden 一致) */
-                svuint32_t res = kreg_expand_rotating(pg4, a, b, base + sub);
+                svuint32_t res = kreg_expand_rotating(pg4, a, b,
+                                                      (base + sub) / KREG_SVE_SUBLANES);
 
                 /* 放大器: str z -> ldr z -> str z */
                 store_vec_sve(temp + base + sub, res);
