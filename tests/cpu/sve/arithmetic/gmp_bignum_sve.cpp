@@ -46,23 +46,27 @@ static void sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *ou
     uint64_t acc[NUM_WORDS * 2];
     memset(acc, 0, sizeof(acc));
 
-    svbool_t pg = svptrue_b64();
     for (int i = 0; i < NUM_WORDS; ++i) {
-        /* a[i] 广播后与整个 b 向量 svmul —— 一条向量乘法做 8 个部分积低半 */
-        /* 1024-bit gate: svcntd() <= 16 — broadcast fills all lanes */
-        uint64_t ai[16]; for (int k = 0; k < 16; ++k) ai[k] = a[i];
-        svuint64_t va = svld1_u64(pg, ai);
-        svuint64_t vb = svld1_u64(pg, b);
-        uint64_t lo_vec[16];   /* 1024-bit gate */
-        svst1_u64(pg, lo_vec, svmul_u64_x(pg, va, vb));
+        /* a[i] 广播后与 b 分块 svmul —— 谓词 svwhilelt 限定在 NUM_WORDS
+         * 个字内: 128-bit 档 svcntd()=2 分 4 块, 512-bit 档单块 8 lane,
+         * 1024-bit 档单块前 8 lane, 任意档不越界 —— 原版 svptrue 全宽
+         * svld1_u64(pg, b) 在 VL>512 时越界读 8 元素堆缓冲 64 字节。 */
+        uint64_t lo_row[NUM_WORDS];
+        for (uint64_t j0 = 0; j0 < (uint64_t)NUM_WORDS; j0 += (uint64_t)svcntd()) {
+            svbool_t pgj = svwhilelt_b64(j0, (uint64_t)NUM_WORDS);
+            svuint64_t va = svdup_n_u64(a[i]);
+            svuint64_t vb = svld1_u64(pgj, b + j0);
+            svst1_u64(pgj, lo_row + j0, svmul_u64_x(pgj, va, vb));
+        }
 
         uint64_t carry = 0;
         for (int j = 0; j < NUM_WORDS; ++j) {
             unsigned __int128 prod = (unsigned __int128)a[i] * b[j];   /* 高半折叠 */
-            uint64_t lo = lo_vec[j];                                     /* SVE 低半 */
-            (void)lo;
-            /* acc[i+j] += low(prod) + carry; carry = high + 溢出 */
-            unsigned __int128 s = (unsigned __int128)acc[i + j] + (uint64_t)prod + carry;
+            /* acc[i+j] += low(SVE 积) + carry; carry = high + 溢出。
+             * SVE 低半积直接参与累加 —— 原版 (void)lo 把它丢弃, SVE
+             * 乘法从不影响输出 (乘法器 SDC 不可检); 健康硬件上
+             * lo_row[j] == (uint64_t)prod, 结果逐位不变。 */
+            unsigned __int128 s = (unsigned __int128)acc[i + j] + lo_row[j] + carry;
             acc[i + j] = (uint64_t)s;
             carry = (uint64_t)(prod >> 64) + (uint64_t)(s >> 64);
         }
