@@ -150,13 +150,9 @@ static int sve512_gather_scatter_arm_init(struct test *test)
 
     try {
         auto data = std::make_unique<SveGatherScatterData>();
-        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
-        if (data->vl_d < 2 || data->vl_d > 16) {
-            log_error("sve512_gather_scatter_arm: f64 lanes %zu outside "
-                      "[2,16] — unit drift (svl %ld bytes)",
-                      data->vl_d, svl);
-            return EXIT_FAILURE;
-        }
+        data->vl_d = arm64_sve_f64_lanes_checked(test, svl);
+        if (data->vl_d == 0)
+            return EXIT_FAILURE;   /* lanes out of range — reason logged */
 
         const size_t gn = 64 * data->vl_d;
         data->gather_src.resize(gn);
@@ -254,13 +250,9 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
     (void)cpu;
     const auto *d = static_cast<SveGatherScatterData *>(test->data);
 
-    /* All-VL policy #3: fail closed on init/run VL drift. */
-    if (svcntd() != d->vl_d) {
-        log_error("sve512_gather_scatter_arm: VL drifted between init (%zu "
-                  "lanes) and run (%u lanes)", d->vl_d, (unsigned)svcntd());
-        report_fail_msg("sve512_gather_scatter_arm: SVE VL drifted between "
-                        "init and run");
-    }
+    /* All-VL policy #3: fail closed on init/run VL drift (single source,
+       framework/device/cpu/arm64/arm64_vl.h). */
+    ARM64_SVE_VL_DRIFT_CHECK_F64(test, d->vl_d);
 
     const size_t gn = d->gather_idx.size();
     const size_t lanes = d->vl_d;

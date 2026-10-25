@@ -352,13 +352,9 @@ static int libomp_ctx_arm_init(struct test *test)
 
     try {
         auto ctx = std::make_unique<LibompCtx>();
-        ctx->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
-        if (ctx->vl_d < 2 || ctx->vl_d > 16) {
-            log_error("libomp_ctx_arm: f64 lanes %zu outside "
-                      "[2,16] — unit drift (svl %ld bytes)",
-                      ctx->vl_d, svl);
-            return EXIT_FAILURE;
-        }
+        ctx->vl_d = arm64_sve_f64_lanes_checked(test, svl);
+        if (ctx->vl_d == 0)
+            return EXIT_FAILURE;   /* lanes out of range — reason logged */
 
         // randomization hardening H12' (f64_chain recipe): operands from
         // the framework RNG, every f64 finite with |x| <= 2, 25% from the
@@ -420,14 +416,9 @@ static int libomp_ctx_arm_run(struct test *test, int cpu)
 #else
     auto *ctx = static_cast<LibompCtx *>(test->data);
 
-    /* All-VL policy #3: fail closed on init/run VL drift. */
-    if (svcntd() != ctx->vl_d) {
-        log_error("libomp_ctx_arm: VL drifted between init (%zu "
-                  "lanes) and run (%u lanes)", ctx->vl_d,
-                  (unsigned)svcntd());
-        report_fail_msg("libomp_ctx_arm: SVE VL drifted between "
-                        "init and run");
-    }
+    /* All-VL policy #3: fail closed on init/run VL drift (single source,
+       framework/device/cpu/arm64/arm64_vl.h). */
+    ARM64_SVE_VL_DRIFT_CHECK_F64(test, ctx->vl_d);
 
     const size_t lanes = ctx->vl_d;
 

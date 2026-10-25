@@ -230,6 +230,43 @@ static inline long arm64_require_sme_svl(struct test *test, long min_bits, long 
     return bits / 8;
 }
 
+/* ---- all-VL policy #3: single-source VL guards (PR #283 review) ----
+ *
+ * The sve512 family (10 files) repeats the same two guards per file,
+ * hand-copied with a f64/f32 triple asymmetry — svcntd/vl_d/[2,16] with
+ * divisor 8 vs svcntw/vl_w/[4,32] with divisor 4. All 10 copies were
+ * verified correct, but every future all-VL migration (P4+) re-faces
+ * the same copy-paste trap; both guards now live here, with the width
+ * carried in the name so the counter, the divisor and the range can
+ * never be mis-paired again.
+ *
+ * arm64_sve_f64_lanes_checked / arm64_sve_f32_lanes_checked: init-side
+ * conversion of an arm64_require_sve_vl result (bytes) into the lane
+ * count, range-checked for the 128..1024-bit all-VL span
+ * (release-effective, NDEBUG-proof); returns 0 and logs the reason when
+ * out of range — callers fail closed with EXIT_FAILURE. */
+static inline size_t arm64_sve_f64_lanes_checked(struct test *test, long svl)
+{
+    size_t lanes = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+    if (lanes < 2 || lanes > 16) {
+        log_error("%s: f64 lanes %zu outside [2,16] — unit drift "
+                  "(svl %ld bytes)", test->id, lanes, svl);
+        return 0;
+    }
+    return lanes;
+}
+
+static inline size_t arm64_sve_f32_lanes_checked(struct test *test, long svl)
+{
+    size_t lanes = (size_t)svl / 4;   /* f32 lanes = SVL bytes / 4 */
+    if (lanes < 4 || lanes > 32) {
+        log_error("%s: f32 lanes %zu outside [4,32] — unit drift "
+                  "(svl %ld bytes)", test->id, lanes, svl);
+        return 0;
+    }
+    return lanes;
+}
+
 #else /* !(__aarch64__ && __linux__): include-safety stubs. Covers x86-64
        * (untouched by design) and Windows ARM64, whose toolchains have no
        * <sys/auxv.h>/<asm/hwcap.h>/prctl — coding_style_guide requires
@@ -247,6 +284,12 @@ static inline long arm64_sve_vl_bytes(void)  { return 0; }
 static inline long arm64_sme_svl_bytes(void) { return 0; }
 static inline long arm64_sve_pin_vl(long bytes)  { (void)bytes; return -EINVAL; }
 static inline long arm64_sme_pin_vl(long bytes)  { (void)bytes; return -EINVAL; }
+/* No SVE on these platforms -> no valid lane count (mirrors the
+ * capability stubs above; callers fail closed). */
+static inline size_t arm64_sve_f64_lanes_checked(struct test *test, long svl)
+{ (void)test; (void)svl; return 0; }
+static inline size_t arm64_sve_f32_lanes_checked(struct test *test, long svl)
+{ (void)test; (void)svl; return 0; }
 static inline long arm64_require_sve_vl(struct test *test, long min_bits, long max_bits)
 {
     (void)min_bits; (void)max_bits;
@@ -263,4 +306,42 @@ static inline long arm64_require_sme_svl(struct test *test, long min_bits, long 
 }
 
 #endif /* __aarch64__ && __linux__ */
+
+/* ---- all-VL policy #3, run side: init/run VL-drift fail-closed check ----
+ *
+ * ARM64_SVE_VL_DRIFT_CHECK_F64 / _F32: verifies inside test_run that the
+ * calling worker thread's VL still yields the lane count recorded at
+ * init, and fails closed otherwise. Macros rather than functions on
+ * purpose: svcntd()/svcntw() come from <arm_sve.h>, which this header
+ * deliberately does not include (it must stay usable from any aarch64
+ * TU regardless of -march) — the intrinsics resolve at the expansion
+ * site, i.e. only inside SVE-compiled TUs; expanding them anywhere else
+ * is a compile error, which is the intended fail-loud behavior.
+ * report_fail_msg() is noreturn (kills the calling worker thread), so
+ * the drift path never falls through into vector code. init_lanes is
+ * evaluated exactly once; pass a plain member read. */
+#define ARM64_SVE_VL_DRIFT_CHECK_F64(test, init_lanes)                        \
+    do {                                                                      \
+        const size_t arm64_vl_init_lanes_ = (init_lanes);                     \
+        if (svcntd() != arm64_vl_init_lanes_) {                               \
+            log_error("%s: VL drifted between init (%zu lanes) and run "      \
+                      "(%u lanes)", (test)->id, arm64_vl_init_lanes_,         \
+                      (unsigned)svcntd());                                    \
+            report_fail_msg("%s: SVE VL drifted between init and run",        \
+                            (test)->id);                                      \
+        }                                                                     \
+    } while (0)
+
+#define ARM64_SVE_VL_DRIFT_CHECK_F32(test, init_lanes)                        \
+    do {                                                                      \
+        const size_t arm64_vl_init_lanes_ = (init_lanes);                     \
+        if (svcntw() != arm64_vl_init_lanes_) {                               \
+            log_error("%s: VL drifted between init (%zu lanes) and run "      \
+                      "(%u lanes)", (test)->id, arm64_vl_init_lanes_,         \
+                      (unsigned)svcntw());                                    \
+            report_fail_msg("%s: SVE VL drifted between init and run",        \
+                            (test)->id);                                      \
+        }                                                                     \
+    } while (0)
+
 #endif /* SANDSTONE_ARM64_VL_H */

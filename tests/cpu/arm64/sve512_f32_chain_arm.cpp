@@ -154,13 +154,9 @@ static int sve512_f32_chain_arm_init(struct test *test)
 
     try {
         auto data = std::make_unique<SveF32ChainData>();
-        data->vl_w = (size_t)svl / 4;   /* f32 lanes = SVL bytes / 4 */
-        if (data->vl_w < 4 || data->vl_w > 32) {
-            log_error("sve512_f32_chain_arm: f32 lanes %zu outside "
-                      "[4,32] — unit drift (svl %ld bytes)",
-                      data->vl_w, svl);
-            return EXIT_FAILURE;
-        }
+        data->vl_w = arm64_sve_f32_lanes_checked(test, svl);
+        if (data->vl_w == 0)
+            return EXIT_FAILURE;   /* lanes out of range — reason logged */
 
         /* randomization hardening H12': framework RNG per run (-s
          * reproducible) instead of fixed splitmix/table indices; the
@@ -236,13 +232,9 @@ static int sve512_f32_chain_arm_run(struct test *test, int cpu)
 #else
     auto *d = static_cast<SveF32ChainData *>(test->data);
 
-    /* All-VL policy #3: fail closed on init/run VL drift. */
-    if (svcntw() != d->vl_w) {
-        log_error("sve512_f32_chain_arm: VL drifted between init (%zu "
-                  "lanes) and run (%u lanes)", d->vl_w, (unsigned)svcntw());
-        report_fail_msg("sve512_f32_chain_arm: SVE VL drifted between "
-                        "init and run");
-    }
+    /* All-VL policy #3: fail closed on init/run VL drift (single source,
+       framework/device/cpu/arm64/arm64_vl.h). */
+    ARM64_SVE_VL_DRIFT_CHECK_F32(test, d->vl_w);
 
     // Golden, recomputed each iteration (deterministic, same op order).
     std::vector<uint32_t> gold32(d->vl_w);

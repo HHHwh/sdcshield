@@ -147,13 +147,9 @@ static int sve512_f64_special_svd_init(struct test *test)
 
     try {
         auto data = std::make_unique<SveF64SpecialSvdData>();
-        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
-        if (data->vl_d < 2 || data->vl_d > 16) {
-            log_error("sve512_f64_special_svd: f64 lanes %zu outside "
-                      "[2,16] — unit drift (svl %ld bytes)",
-                      data->vl_d, svl);
-            return EXIT_FAILURE;
-        }
+        data->vl_d = arm64_sve_f64_lanes_checked(test, svl);
+        if (data->vl_d == 0)
+            return EXIT_FAILURE;   /* lanes out of range — reason logged */
         /* randomization hardening H12': seeds from the framework RNG;
          * the special VALUE table stays by design, but which special each
          * step draws is now a random index. */
@@ -191,13 +187,9 @@ static int sve512_f64_special_svd_run(struct test *test, int cpu)
     (void)cpu;
     auto *d = static_cast<SveF64SpecialSvdData *>(test->data);
 
-    /* All-VL policy #3: fail closed on init/run VL drift. */
-    if (svcntd() != d->vl_d) {
-        log_error("sve512_f64_special_svd: VL drifted between init (%zu "
-                  "lanes) and run (%u lanes)", d->vl_d, (unsigned)svcntd());
-        report_fail_msg("sve512_f64_special_svd: SVE VL drifted between "
-                        "init and run");
-    }
+    /* All-VL policy #3: fail closed on init/run VL drift (single source,
+       framework/device/cpu/arm64/arm64_vl.h). */
+    ARM64_SVE_VL_DRIFT_CHECK_F64(test, d->vl_d);
 
     std::vector<uint64_t> golds64(d->vl_d);
     std::vector<uint64_t> hw(d->vl_d);

@@ -164,14 +164,14 @@ static int sve512_xlswave_ctx_arm_init(struct test *test)
 
     try {
         auto data = std::make_unique<XlswaveCtxData>();
-        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        data->vl_d = arm64_sve_f64_lanes_checked(test, svl);
         data->bt = 2 * data->vl_d;
-        if (data->vl_d < 2 || data->vl_d > 16 || data->bt > kTileMax) {
-            log_error("sve512_xlswave_ctx_arm: lanes %zu / bt %zu outside "
-                      "[2,16]/[4,32] — unit drift (svl %ld bytes)",
-                      data->vl_d, data->bt, svl);
+        /* bt = 2*lanes <= kTileMax whenever lanes is in range; the
+           belt-and-braces bt guard keeps the kTileMax-sized stack
+           buffers' invariant explicit (out-of-range lanes are already
+           logged by the helper). */
+        if (data->vl_d == 0 || data->bt > kTileMax)
             return EXIT_FAILURE;
-        }
 
         // Phase A workspace: [extent][stride][bt], tile values {1..bt}.
         data->src.resize(extent * stride * data->bt);
@@ -255,13 +255,9 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
     (void)cpu;
     auto *d = static_cast<XlswaveCtxData *>(test->data);
 
-    /* All-VL policy #3: fail closed on init/run VL drift. */
-    if (svcntd() != d->vl_d) {
-        log_error("sve512_xlswave_ctx_arm: VL drifted between init (%zu "
-                  "lanes) and run (%u lanes)", d->vl_d, (unsigned)svcntd());
-        report_fail_msg("sve512_xlswave_ctx_arm: SVE VL drifted between "
-                        "init and run");
-    }
+    /* All-VL policy #3: fail closed on init/run VL drift (single source,
+       framework/device/cpu/arm64/arm64_vl.h). */
+    ARM64_SVE_VL_DRIFT_CHECK_F64(test, d->vl_d);
     const size_t bt = d->bt;
     const size_t lanes = d->vl_d;
 
