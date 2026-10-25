@@ -72,6 +72,13 @@ static int neon_rot_store_only_sve_init(struct test *test)
     count = neon_rot_store_only_sve_count(test);
     /* asm ldr z 全向量源加载: count 向下取整到 svcntd() 的整倍数 (倍数约束保留) */
     const size_t lanes = (size_t)(svl / 8);   /* f64 lanes = SVL bytes / 8 */
+    /* arm64_vl.h unit convention: release-effective range check catches
+     * a wrong-divisor drift (e.g. svl/4 here would compile silently). */
+    if (lanes < 2 || lanes > 16) {
+        log_error("%s: f64 lanes %zu outside [2,16] — unit drift (svl %ld bytes)",
+                  test->id, lanes, svl);
+        return EXIT_FAILURE;
+    }
     const size_t rem = count - count / lanes * lanes;   /* % 表达式触发 GCC SVE ICE, 改用除法组合 */
     if (rem != 0) {
         const size_t rounded = count - rem;

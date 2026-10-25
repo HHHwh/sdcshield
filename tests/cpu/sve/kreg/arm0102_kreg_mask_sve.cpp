@@ -122,6 +122,13 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
     /* golden: 同一旋转组合, 在相同 SVE 单元上预计算 */
     [[maybe_unused]] svbool_t pg = svptrue_b32();
     const int lanes = (int)(svl / 4);   /* f32 lanes = SVL bytes / 4 */
+    /* arm64_vl.h unit convention: release-effective range check catches
+     * a wrong-divisor drift (e.g. svl/8 here would compile silently). */
+    if (lanes < 4 || lanes > 32) {
+        log_error("%s: f32 lanes %d outside [4,32] — unit drift (svl %ld bytes)",
+                  test->id, lanes, svl);
+        return EXIT_FAILURE;
+    }
     for (int base = 0; base < count; base += lanes) {
         int n = (count - base < lanes) ? (count - base) : lanes;
         [[maybe_unused]] svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
