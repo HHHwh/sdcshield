@@ -122,7 +122,7 @@ static int aes128_cbc_sha2_224_sve_init(struct test *test) {
         if (svl < 0)
             return EXIT_SKIP;
         const int nstreams = (int)svl / 4;   /* one stream per 32-bit lane (svcntw) */
-        if (nstreams < 4 || nstreams > 32) { /* [4,32], release-effective, NDEBUG-proof */
+        if (nstreams < 4 || nstreams > SVE_SHA_STREAMS_MAX_32) { /* [4, SVE_SHA_STREAMS_MAX_32], release-effective, NDEBUG-proof */
             log_error("%s: streams %d outside range — unit drift", test->id, nstreams);
             return EXIT_FAILURE;
         }

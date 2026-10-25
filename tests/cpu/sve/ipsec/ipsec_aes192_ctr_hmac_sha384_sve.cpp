@@ -120,7 +120,7 @@ static int aes192_ctr_hmac_sha384_sve_init(struct test *test) {
         if (svl < 0)
             return EXIT_SKIP;
         const int nstreams = (int)svl / 8;   /* one stream per 64-bit lane (svcntd) */
-        if (nstreams < 2 || nstreams > 16) { /* [2,16], release-effective, NDEBUG-proof */
+        if (nstreams < 2 || nstreams > SVE_SHA_STREAMS_MAX_64) { /* [2, SVE_SHA_STREAMS_MAX_64], release-effective, NDEBUG-proof */
             log_error("%s: streams %d outside range — unit drift", test->id, nstreams);
             return EXIT_FAILURE;
         }
