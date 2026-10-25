@@ -301,6 +301,12 @@ class PRData:
     # 只剩两种解释: 时钟超带(本机钟远快于服务器)或同 SHA 强推回退,均须人工
     # 甄别,如实告警而非静默丢弃。
     skew_suspects: list = field(default_factory=list)
+    # 超容差疑似误杀的可行动意见数(检视意见 6): 严格锚定当前 head、却落在
+    # 锚前 >容差 被时间锚排除的可行动意见(与 opinion_count 完全同口径的
+    # 正文/摘要/ACTIVE 判据,仅锚定分支不同)。classify_state 据此阻断
+    # READY_TO_MERGE——严格锚可证其属于当前 head,不因超带静默丢意见后
+    # 误判「零意见可合并」。
+    pending_skew_opinions: int = 0
 
 
 # ============ 工具函数 ============
@@ -551,6 +557,24 @@ def issue_comment_anchored(item: dict, anchor: datetime,
             and pragent_strict_head(item, head_sha))
 
 
+def over_skew_strict(item: dict, ts_key: str, sha_keys: Optional[tuple],
+                     anchor: datetime, head_sha: str, skew: timedelta) -> bool:
+    """超容差严格锚判定(意见 5 诊断与检视意见 6 阻断共用,单一真源):
+    条目落在锚前 >skew(容差带外)且「可证属于当前 head」——review/行级评论
+    用 commit 字段严格匹配(sha_keys 给定),issue 评论用 pr-agent 标记 +
+    last_run.head_sha 严格锚(sha_keys=None)。返回 True = 时钟超带(本机钟
+    远快于服务器)或同 SHA 强推回退场景下被时间锚排除、但证据上属于当前
+    head 的条目: 信号循环记 skew_suspects 诊断(意见 5),意见计数循环记
+    pending_skew_opinions 阻断 READY_TO_MERGE(检视意见 6)——可行动意见
+    不因超带被静默丢弃后误判「零意见可合并」。"""
+    ts = parse_ts(item.get(ts_key))
+    if ts is None or ts >= anchor - skew:
+        return False
+    if sha_keys is None:
+        return pragent_comment(item) and pragent_strict_head(item, head_sha)
+    return commit_strict_match(item, sha_keys, head_sha)
+
+
 # ============ 拉取与判定 ============
 
 _EVENTS_CACHE: dict = {}   # slug → events 列表(进程内缓存;status 总览多 PR 只拉一次)
@@ -690,8 +714,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
         ts = parse_ts(r.get("submitted_at"))
         counted = head_anchored(r, "submitted_at", anchor,
                                 ("commit_id",), head_sha, skew)
-        if (not counted and ts is not None and ts < anchor - skew
-                and commit_strict_match(r, ("commit_id",), head_sha)):
+        if not counted and over_skew_strict(r, "submitted_at", ("commit_id",),
+                                            anchor, head_sha, skew):
             data.skew_suspects.append(
                 ("review", ts, (anchor - ts).total_seconds()))
         data.signals.append(Signal(
@@ -711,9 +735,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
         counted = head_anchored(c, "created_at", anchor,
                                 ("original_commit_id", "commit_id"),
                                 head_sha, skew)
-        if (not counted and ts is not None and ts < anchor - skew
-                and commit_strict_match(c, ("original_commit_id", "commit_id"),
-                                        head_sha)):
+        if not counted and over_skew_strict(
+                c, "created_at", ("original_commit_id", "commit_id"),
+                anchor, head_sha, skew):
             data.skew_suspects.append(
                 ("review_comment", ts, (anchor - ts).total_seconds()))
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
@@ -733,8 +757,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
             continue
         ts = parse_ts(c.get("created_at"))
         counted = issue_comment_anchored(c, anchor, head_sha, skew)
-        if (not counted and ts is not None and ts < anchor - skew
-                and pragent_comment(c) and pragent_strict_head(c, head_sha)):
+        if not counted and over_skew_strict(c, "created_at", None,
+                                            anchor, head_sha, skew):
             data.skew_suspects.append(
                 ("issue_comment", ts, (anchor - ts).total_seconds()))
         data.signals.append(Signal(
@@ -757,6 +781,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
     data.latest_signal = max(counted_times) if counted_times else None
 
     # ---- 意见计数(当前 head,双锚定;摘要/LGTM 类不计,见文件头「意见计数」注释) ----
+    # 检视意见 6: 被时间锚超容差排除、但严格锚命中(可证属于当前 head)的可行动
+    # 意见计入 pending_skew_opinions——判据与下方三处计入完全同口径(仅锚定
+    # 分支不同),阻断 READY_TO_MERGE,不因超带静默丢意见。
     n_review = 0
     for r in reviews:
         raw_body = r.get("body") or ""
@@ -767,8 +794,12 @@ def fetch_pr(slug: str, number: int) -> PRData:
             bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
-        if not head_anchored(r, "submitted_at", anchor,
-                             ("commit_id",), head_sha, skew):
+        counted = head_anchored(r, "submitted_at", anchor,
+                                ("commit_id",), head_sha, skew)
+        over = (not counted
+                and over_skew_strict(r, "submitted_at", ("commit_id",),
+                                     anchor, head_sha, skew))
+        if not counted and not over:
             continue
         if not body or is_summary_text(body):
             continue
@@ -778,9 +809,13 @@ def fetch_pr(slug: str, number: int) -> PRData:
             # 复用 count_local_claude_findings 的 body 口径(单一真源,避免与
             # _local_claude_body_findings 两处漂移);list reviews 端点不返回
             # comments,此处即 body findings 数。
-            n_review += count_local_claude_findings(r)
+            n = count_local_claude_findings(r)
         else:
-            n_review += 1
+            n = 1
+        if counted:
+            n_review += n
+        else:
+            data.pending_skew_opinions += n
     n_rcomment = 0
     for c in review_comments:
         bot = bot_of(c)
@@ -792,24 +827,37 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if head_anchored(c, "created_at", anchor,
                          ("original_commit_id", "commit_id"), head_sha, skew):
             n_rcomment += 1
+        elif over_skew_strict(c, "created_at",
+                              ("original_commit_id", "commit_id"),
+                              anchor, head_sha, skew):
+            data.pending_skew_opinions += 1
     n_icomment = 0
     for c in issue_comments:
         body = (c.get("body") or "")
-        if (issue_comment_bot(c, head_sha)
-                and issue_comment_anchored(c, anchor, head_sha, skew)
-                and body.strip() and not is_summary_text(body)):
-            if pragent_comment(c):
-                # pr-agent: 按尾部 JSON 的 ACTIVE findings 计(outside-diff 的
-                # actionable finding 只在正文里,不会另行变行级评论);解析失败按 1 条。
-                state = pragent_state_json(body)
-                findings = state.get("findings") if state else None
-                if isinstance(findings, list):
-                    n_icomment += sum(1 for f in findings
-                                      if isinstance(f, dict) and f.get("state") == "ACTIVE")
-                else:
-                    n_icomment += 1
+        counted = issue_comment_anchored(c, anchor, head_sha, skew)
+        over = (not counted
+                and over_skew_strict(c, "created_at", None,
+                                     anchor, head_sha, skew))
+        if not (issue_comment_bot(c, head_sha) and (counted or over)):
+            continue
+        if not body.strip() or is_summary_text(body):
+            continue
+        if pragent_comment(c):
+            # pr-agent: 按尾部 JSON 的 ACTIVE findings 计(outside-diff 的
+            # actionable finding 只在正文里,不会另行变行级评论);解析失败按 1 条。
+            state = pragent_state_json(body)
+            findings = state.get("findings") if state else None
+            if isinstance(findings, list):
+                n = sum(1 for f in findings
+                        if isinstance(f, dict) and f.get("state") == "ACTIVE")
             else:
-                n_icomment += 1
+                n = 1
+        else:
+            n = 1
+        if counted:
+            n_icomment += n
+        else:
+            data.pending_skew_opinions += n
     # check annotations: 仅 failure/warning 级计入待处置意见——notice 级是信息性
     # 提示(GitHub Annotations API 三级枚举 notice/warning/failure),不构成意见;
     # collect 导出仍全量含 notice 级,不丢数据。
@@ -838,7 +886,11 @@ def classify_state(pr: PRData, quiet: int, now: datetime) -> str:
         return "QUIET_WINDOW"
     # annotations 拉取失败 → 计数可能低估,数据不完整时不给 READY_TO_MERGE
     # (诚实性: 不在无法确认「零意见」时提示合并),转 READY_TO_FIX 由人工复核。
-    if pr.opinion_count > 0 or pr.annotations_fetch_failed:
+    # 超容差疑似误杀的可行动意见(pending_skew_opinions,检视意见 6)同理:
+    # 严格锚可证其属于当前 head,只是被超带时间锚排除——存在此类意见时同样
+    # 不能确认「零意见」,不给 READY_TO_MERGE。
+    if (pr.opinion_count > 0 or pr.pending_skew_opinions > 0
+            or pr.annotations_fetch_failed):
         return "READY_TO_FIX"
     return "READY_TO_MERGE"
 
@@ -1048,6 +1100,10 @@ def print_opinions(pr: PRData) -> None:
           f"摘要/LGTM 类不计)")
     if pr.annotations_fetch_failed:
         print("  注意: 部分 annotations 拉取失败,annotations 计数可能低估")
+    if pr.pending_skew_opinions:
+        print(f"  注意: 另有 {pr.pending_skew_opinions} 条疑似超带误杀的可行动意见"
+              "(严格锚定当前 head 却落在锚前 >容差,未计入上述意见数)"
+              "——状态已按待处置阻断,请人工甄别")
 
 
 def print_timeline(pr: PRData) -> None:
@@ -1190,6 +1246,11 @@ def cmd_wait(args: argparse.Namespace) -> int:
             print(f"== 五 bot 检视完成(PR #{pr.number},head {pr.head_sha[:8]})==")
             print_timeline(pr)
             print_opinions(pr)
+            # 检视意见 6: wait 终端输出与 status 详情/collect 同样携带超带
+            # 诊断——否则该分支是唯一看不到告警的出口,疑似误杀意见被静默。
+            warn = format_skew_warning(pr)
+            if warn:
+                print(f"  {warn}")
             print(f"  状态: {state}")
             print(f"  建议: {SUGGESTIONS[state].replace('<PR>', str(pr.number))}")
             return 0
@@ -1222,6 +1283,9 @@ def cmd_wait(args: argparse.Namespace) -> int:
                 missing = [b for b in BOT_ORDER if pr.bot_done.get(b) is None]
                 print(f"  缺失信号的 bot: {', '.join(missing)}")
             print_opinions(pr)
+            warn = format_skew_warning(pr)
+            if warn:
+                print(f"  {warn}")
             return 1
         time.sleep(args.interval)
 
@@ -1334,6 +1398,10 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
       f"摘要/LGTM 类不计)")
     if pr.annotations_fetch_failed:
         A("- 注意: 部分 annotations 拉取失败,annotations 计数可能低估")
+    if pr.pending_skew_opinions:
+        A(f"- 注意: 另有 {pr.pending_skew_opinions} 条疑似超带误杀的可行动意见"
+          "(严格锚定当前 head 却落在锚前 >容差,未计入待处置意见数)"
+          "——状态已按待处置阻断,须人工甄别")
     warn = format_skew_warning(pr)
     if warn:
         A(f"- {warn}")
