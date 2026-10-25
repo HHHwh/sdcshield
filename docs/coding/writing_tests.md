@@ -646,8 +646,10 @@ instead of assuming one tier:
 - **Probe via the framework layer**: `#include
   <device/cpu/arm64/arm64_vl.h>` and call
   `arm64_require_sve_vl(test, min_bits, max_bits)` /
-  `arm64_require_sme_svl(...)` from `test_init`; a -1 return means the
-  helper already logged the skip — `return EXIT_SKIP` immediately. Do
+  `arm64_require_sme_svl(...)` from `test_init`; a negative return
+  (EXIT_SKIP, -255 — the unified require contract) means the helper
+  already logged the skip — `return EXIT_SKIP` immediately (consume
+  with `< 0`, never `== -1` / `== EXIT_SKIP`). Do
   not hand-write getauxval probes: `device_has_feature()` is
   short-circuited by compile-time `__ARM_FEATURE_*` macros in +sve/+sme
   TUs (docs/architecture.md).
