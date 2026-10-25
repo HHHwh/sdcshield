@@ -414,9 +414,14 @@ jobs:
           path: bench
           merge-multiple: true
       - name: Convert to benchmark JSON
+        id: convert
         run: |
           tsv=$(ls bench/benchmark/benchmark.tsv 2>/dev/null || ls bench/*/benchmark/benchmark.tsv 2>/dev/null | head -1)
-          [ -n "$tsv" ] || { echo "no benchmark.tsv (unexpected) — skip trend update"; exit 0; }
+          if [ -z "$tsv" ]; then
+            echo "no benchmark.tsv (unexpected) — skip trend update"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # 消费侧闸门:verify job 的 benchmark 步骤全表 skip 时本 job 仍以
           # !cancelled() 运行,upload if: always() 的 all-skip TSV 会被转成
           # 空 JSON([])交给 auto-push 的 benchmark-action——坏数据照常流入
@@ -425,10 +430,17 @@ jobs:
           ok=$(awk -F'\t' 'NR>1 && $2 != "skip" {n++} END{print n+0}' "$tsv")
           if [ "$ok" -eq 0 ]; then
             echo "::warning::benchmark.tsv 全表 skip(verify 闸门已红)— 不更新 gh-pages 趋势"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           python3 scripts/gha/benchmark-to-json.py "$tsv" bench/benchmark.json
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+      # publish 门控:Convert 在无 TSV / 全 skip 路径 exit 0 且不产
+      # bench/benchmark.json, 无条件运行的 benchmark-action 会因读取缺失的
+      # output-file-path 失败, 把本「非闸门」job 染红成下游症状(run 39577407937
+      # 实发: Convert success + benchmark-action failure)——只在可发布时运行。
       - uses: benchmark-action/github-action-benchmark@v1
+        if: ${{ steps.convert.outputs.publish == 'true' }}
         with:
           name: sdcshield benchmark (24.03-LTS-SP3)
           tool: customSmallerIsBetter
