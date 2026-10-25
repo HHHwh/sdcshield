@@ -34,9 +34,22 @@
  *   - hiham >> rand -> transition density matters (physical coupling).
  *
  * SVE/Tag note: each z-register slot holds vl_bytes/8 64b words; the
- * GPS tag byte_off counts bytes from the start of the buffer, so at
- * 256b VL the maximum byte_off is 1023*32+24 = 32760 < 65535 — the
- * 16b byte_off field still fits for any VL up to 512b inclusive.
+ * GPS tag byte_off counts bytes from the start of the buffer. The
+ * NEON tag's single 16b byte_off field only covered up to 512b VL at
+ * the default 1024 slots (max byte_off 65528 < 65535); the all-VL
+ * 128..1024-bit gate — and any tier once the slots knob pushes
+ * slots*vl_bytes past 64 KiB — overflowed it, so positions exactly
+ * 64 KiB apart received IDENTICAL tags: the misread was undetectable
+ * there and the dump classifier decoded aliased offsets (review
+ * round 1, PR #286). The tag therefore splits byte_off across 32
+ * bits: low 16b in the classic field (complement check unchanged),
+ * high 16b in the field the NEON tag reserved for a generation
+ * counter (always 0 here). That covers the whole knob domain
+ * (1M slots x 128B = 128 MiB < 4 GiB) with zero aliasing at every
+ * tier. No k7p dump predates this layout (the test had never run on
+ * SVE hardware before the all-VL migration), so no forensic archive
+ * is invalidated; the field-substitution classifier must decode k7p
+ * tags as byte_off = (bits[15:0] << 16) | bits[47:32].
  *
  * Build note: all-VL Phase 2 P5 migration DONE — compiled in the
  * true-VLA tests_sve_vla library (-march=armv8.2-a+sve, no
@@ -119,11 +132,16 @@ static inline svuint64_t rot_alu(int i, svuint64_t a, svuint64_t b) {
 
 #endif
 
-static inline uint64_t sve_gps_tag(uint64_t magic, uint64_t byte_off, uint64_t gen) {
-    return (magic                      << 48)
-         | ((byte_off        & 0xFFFFULL) << 32)
-         | ((~byte_off       & 0xFFFFULL) << 16)
-         |  (gen             & 0xFFFFULL);
+/* 32-bit byte_off split across the tag (see header SVE/Tag note):
+ * bits[47:32] = byte_off low 16b (classic field, complement check in
+ * bits[63:48] magic / [31:16] unchanged), bits[15:0] = byte_off high
+ * 16b (formerly the always-0 generation counter). Zero aliasing over
+ * the whole slots knob domain at every VL tier. */
+static inline uint64_t sve_gps_tag(uint64_t magic, uint64_t byte_off) {
+    return (magic                       << 48)
+         | ((byte_off         & 0xFFFFULL) << 32)
+         | ((~byte_off        & 0xFFFFULL) << 16)
+         |  ((byte_off >> 16) & 0xFFFFULL);
 }
 
 /* pattern fill: P_RAND_GPS keeps the GPS tag structure (classifier
@@ -134,7 +152,7 @@ static uint64_t sve_pattern_word(enum SveK7Pattern p, int which, uint64_t byte_o
         case P_ONE:      return 0xFFFFFFFFFFFFFFFFULL;
         case P_RAND_GPS: {
             const uint64_t magic = (which == 0) ? 0xA5A5ULL : ((which == 1) ? 0x5A5AULL : 0x0F0FULL);
-            return sve_gps_tag(magic, byte_off, 0);
+            return sve_gps_tag(magic, byte_off);
         }
         case P_HIHAM: {
             /* high-Hamming with position info: alternate 0x55/0xAA per
