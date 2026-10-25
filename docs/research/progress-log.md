@@ -786,19 +786,16 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   report_fail_msg 会表现为 Skipped("Unexpected OS error")而非干净
   Failed——knob 钳制后不可达, 纯纵深防御, 记账。
 - **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
-<<<<<<< HEAD
+## 2026-10-24 · P5 sleef 半侧实证收口(PR #286 检视闭环)
+=======
+## 2026-10-24（all-VL Phase 2 P5：SLEEF/Eigen×8 按 spike 证据分流——真 VLA 迁移 + 自 pin 回退）
 - **承接**:P5(SLEEF/Eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
   语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
   遗留手探文件)待做。
 <<<<<<< HEAD
-=======
   语言级不可编译); P6 存量迁移(含本阶段 6 个遗留手探文件)待做。
 
 <<<<<<< HEAD
-## 2026-10-24 · P5 sleef 半侧实证收口(PR #286 检视闭环)
-=======
-## 2026-10-24（all-VL Phase 2 P5：SLEEF/Eigen×8 按 spike 证据分流——真 VLA 迁移 + 自 pin 回退）
->>>>>>> 51679200 (docs(all-vl2): 检视精度两处——vl_bytes 来源注释 + progress-log 库名大小写)
 
 - **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
   gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
@@ -884,4 +881,33 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   终态 477 测试构建零告警+zstd19 pass; 全仓审计如上。
 - **战役状态**: P0-P6 全部落地; PR 编队 #277→#283→#284→#286→#288
   (+计划文档 #279/#281/#282/#285/#287)等人工 merge 门。
+<<<<<<< HEAD
 >>>>>>> a9c1f08c (docs(progress): all-VL Phase 2 P6 收官条目 + 战役状态总览)
+=======
+
+## 2026-10-25（all-VL Phase 2 收尾硬化单元——终审递延清单清零）
+
+- **六类先存越界修复**(f7716fcf, 20 文件): vsum[8]→[16]×10(adcx/adox
+  家族+gmp_bigadd+operand_space——svst1 写 svcntd() 个 double, VL>512
+  溢出)/ai[8]/lo_vec[8]→[16](bigint_mulx/gmp_bignum)/phase[8]→[16]
+  (agu_stress_2src)/chunk[64]→[128](arm64_sdc, svcntb 字节)/fsu
+  cross-line vbuf+128B 余量(56+128=184>旧 128B)/movmskpspd 谓词钳制
+  到行宽 4/2(消除 VL>128 即触发的末行堆越界读, 与 x86 MOVMSKS/PD
+  原语义逐位一致)。全部为 1024-bit 门内闭包扩容或行为收缩, 零压力
+  语义变化。
+- **守卫与 assert**: neon_rot 2src/store_only 补 count%svcntd 守卫,
+  u8x16 补 buffer_bytes%max(svcntb,64) 守卫(init 取整不变式);
+  sme_fmopa_stress run 侧 assert→release 生效显式检查(NDEBUG 蒸发,
+  P2 实证同类)。
+- **x8/x4 改名**(2ea9069c, 20 文件): 3 内核+5 hmac 包装 → _xn 后缀,
+  与 P4 的 N=svcntw()/svcntd() 运行时语义一致; x86 零触碰(x86_64 文件
+  命中系前缀子串已核非调用方)。
+- **孤儿接线**(3b293d9b): sve512_fma_arm 自 ea879f68(2026-10-11)首次
+  进入构建——P6 批 C 已迁门控(d8e6f625)+终审独立编译探针零告警;
+  四工作负载 kernel 形态已由 chain_dual/gather_dual 四档实证覆盖
+  (家族级 scoping)。--list-tests 477→478。
+- **验证**: 全量构建零告警; 9+3+1 受影响测试全部干净 skip; verify.cpp
+  独立编译零告警; zstd19 → exit: pass。
+- **战役终态**: P0-P6 + 收尾硬化全部落地; 12 个 PR(#272-#288 + 硬化
+  PR)等人工 merge 门; 累计 gem5 四档实证 ~200 run 全绿。
+>>>>>>> 6c4dc121 (docs(progress): 收尾硬化单元条目 + 战役终态总览)
