@@ -862,3 +862,262 @@ def test_fetch_pr_records_skew_suspects(monkeypatch, capsys):
     # 无超带(全部条目锚后/窗口内)→ 无告警
     pr.skew_suspects.clear()
     assert pr_loop.format_skew_warning(pr) is None
+
+
+# ---------------------------------------------------------------------------
+# PR #289 第二轮检视闭环: 超容差可行动意见阻断(意见 6)/ suspect 三分支
+# 覆盖(意见 20)/ era_mark 实际锚定(意见 7)/ anchor_and_skew 单一真源(意见 8)。
+
+def test_over_skew_strict_two_sha_key_kinds():
+    """意见 6/20: 超容差严格锚判定的两种口径——review/行级评论用 commit
+    字段严格匹配(sha_keys 给定),issue 评论用 pr-agent 严格锚(sha_keys=None)。"""
+    head = "a" * 40
+    # review 口径: 锚前 400s(>300s 容差)+ commit_id 严格匹配 → True
+    assert pr_loop.over_skew_strict(
+        {"commit_id": head, "submitted_at": "2026-10-24T11:48:20Z"},
+        "submitted_at", ("commit_id",), _ANCHOR, head, _TOL)
+    # 容差带内(锚前 200s)→ False(那是计入窗口,不是超带)
+    assert not pr_loop.over_skew_strict(
+        {"commit_id": head, "submitted_at": "2026-10-24T11:56:40Z"},
+        "submitted_at", ("commit_id",), _ANCHOR, head, _TOL)
+    # 超带但 commit 字段缺失(无严格锚证据)→ False
+    assert not pr_loop.over_skew_strict(
+        {"submitted_at": "2026-10-24T11:48:20Z"},
+        "submitted_at", ("commit_id",), _ANCHOR, head, _TOL)
+    # 超带但 commit 不匹配 head(旧 head)→ False
+    assert not pr_loop.over_skew_strict(
+        {"commit_id": "b" * 40, "submitted_at": "2026-10-24T11:48:20Z"},
+        "submitted_at", ("commit_id",), _ANCHOR, head, _TOL)
+    # issue 评论口径(sha_keys=None): 超带 + pr-agent 严格锚 → True
+    pragent = _pragent_issue_comment(head, head, "2026-10-24T11:48:20Z")
+    assert pr_loop.over_skew_strict(pragent, "created_at", None,
+                                    _ANCHOR, head, _TOL)
+    # issue 评论口径: pr-agent 但 last_run.head_sha 不匹配 → False
+    pragent_old = _pragent_issue_comment(head, "b" * 40, "2026-10-24T11:48:20Z")
+    assert not pr_loop.over_skew_strict(pragent_old, "created_at", None,
+                                        _ANCHOR, head, _TOL)
+    # issue 评论口径: 非 pr-agent 评论(无绑定)→ False
+    assert not pr_loop.over_skew_strict(
+        {"user": {"login": "coderabbitai[bot]"}, "body": "x",
+         "created_at": "2026-10-24T11:48:20Z"},
+        "created_at", None, _ANCHOR, head, _TOL)
+    # ts 缺失 → False
+    assert not pr_loop.over_skew_strict(
+        {"commit_id": head}, "submitted_at", ("commit_id",), _ANCHOR, head, _TOL)
+
+
+def _fetch_pr_with(events, reviews, inline, issue, head="e" * 40,
+                   committer_date="2026-10-24T11:55:00Z"):
+    """离线 fetch_pr 夹具: 固定 PR 元数据 + 可变 events/三类检视数据。
+    events 为空 → 回退锚(committer date,skew=300s)。"""
+    pr_detail = {"number": 9, "title": "t", "state": "open", "draft": False,
+                 "head": {"sha": head, "ref": "feat/x",
+                          "repo": {"full_name": "test/repo"}},
+                 "base": {"ref": "main", "repo": {"full_name": "test/repo"}},
+                 "user": {"login": "wangxumarshall"},
+                 "html_url": "https://example.invalid/9"}
+    commit_detail = {"commit": {
+        "committer": {"date": committer_date},
+        "author": {"date": committer_date}}}
+
+    def fake_gh_api(path):
+        if path == "repos/test/repo/pulls/9":
+            return pr_detail
+        if path == f"repos/test/repo/commits/{head}":
+            return commit_detail
+        if path.startswith("repos/test/repo/events"):
+            return events
+        raise AssertionError(f"意外 gh_api 调用: {path}")
+
+    def fake_paged(path, list_key=None):
+        if "check-runs" in path:
+            return []
+        if "/reviews" in path:
+            return reviews
+        if "/issues/9/comments" in path:
+            return issue
+        if "/comments" in path:
+            return inline
+        raise AssertionError(f"意外 gh_api_paged 调用: {path}")
+
+    return fake_gh_api, fake_paged
+
+
+def test_fetch_pr_skew_suspects_all_three_kinds(monkeypatch):
+    """意见 20: skew_suspects 三个记诊断分支(review / review_comment /
+    issue_comment)全覆盖——含 ts < anchor - skew 边界与严格锚合取条件,
+    分支写错(如 kind 错标/边界差一)不再有测试盲区。"""
+    head = "e" * 40
+    # 回退锚 = committer date 11:55(本机钟盖戳),skew=300s:
+    # 三条超带条目(锚前 400s,严格锚命中)分属三个 kind
+    suspect_review = {"id": 1, "user": {"login": "greptile-apps[bot]"},
+                      "state": "COMMENTED", "commit_id": head,
+                      "submitted_at": "2026-10-24T11:48:20Z", "body": "超带 review"}
+    suspect_inline = {"id": 101, "user": {"login": "coderabbitai[bot]"},
+                      "body": "超带行级意见", "created_at": "2026-10-24T11:48:20Z",
+                      "original_commit_id": head, "commit_id": head,
+                      "path": "scripts/a.py", "line": 7}
+    pragent_body = ("<!-- pr-agent:review:full -->\n检视意见\n"
+                    "<!-- pr-agent-review-state:v1 "
+                    '{"last_run": {"head_sha": "' + head + '"}, '
+                    '"findings": [{"state": "ACTIVE"}]} -->')
+    suspect_issue = {"id": 999, "user": {"login": "github-actions[bot]"},
+                     "body": pragent_body,
+                     "created_at": "2026-10-24T11:48:20Z"}
+    # 边界对照: 锚前恰好 300s(含端点)在容差带内 → 计入,不记 suspect
+    inside_review = {"id": 2, "user": {"login": "greptile-apps[bot]"},
+                     "state": "COMMENTED", "commit_id": head,
+                     "submitted_at": "2026-10-24T11:50:00Z", "body": "带内 review"}
+    fake_gh_api, fake_paged = _fetch_pr_with(
+        [], [suspect_review, inside_review], [suspect_inline], [suspect_issue])
+    monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    pr_loop._EVENTS_CACHE.clear()
+    pr = pr_loop.fetch_pr("test/repo", 9)
+
+    kinds = sorted(k for k, _, _ in pr.skew_suspects)
+    assert kinds == ["issue_comment", "review", "review_comment"]
+    for kind, ts, delta in pr.skew_suspects:
+        assert ts == pr_loop.parse_ts("2026-10-24T11:48:20Z")
+        assert delta == 400.0
+    # 带内条目计入意见,不进 suspect
+    assert pr.opinion_breakdown["review"] == 1
+    # 三条超带条目均为可行动意见 → pending(意见 6): review 1 + 行级 1 +
+    # pr-agent ACTIVE 1 = 3
+    assert pr.pending_skew_opinions == 3
+
+
+def test_pending_skew_opinions_block_ready_to_merge(monkeypatch, capsys):
+    """意见 6(端到端): 回退锚下唯一意见是超带 pr-agent ACTIVE 评论(严格锚
+    命中)→ opinion_count=0 但 pending>0,classify_state 不给 READY_TO_MERGE;
+    pending 清零后恢复 READY_TO_MERGE(回归)。print_opinions 给出 pending
+    提示行,不静默。"""
+    head = "e" * 40
+    body = ("<!-- pr-agent:review:full -->\n检视意见\n"
+            "<!-- pr-agent-review-state:v1 "
+            '{"last_run": {"head_sha": "' + head + '"}, '
+            '"findings": [{"state": "ACTIVE"}, {"state": "ACTIVE"}, '
+            '{"state": "DISMISSED"}]} -->')
+    over_issue = [{"id": 999, "user": {"login": "github-actions[bot]"},
+                   "body": body, "created_at": "2026-10-24T11:48:20Z"}]
+    fake_gh_api, fake_paged = _fetch_pr_with([], [], [], over_issue)
+    monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    pr_loop._EVENTS_CACHE.clear()
+    pr = pr_loop.fetch_pr("test/repo", 9)
+
+    # 2 条 ACTIVE 计 pending,DISMISSED 不计;计入路径意见为 0
+    assert pr.opinion_count == 0
+    assert pr.pending_skew_opinions == 2
+
+    # 五 bot 完成 + 静默窗已过: 有 pending → READY_TO_FIX(绝不 READY_TO_MERGE)
+    now = pr_loop.now_utc()
+    pr.bot_done = {b: now for b in pr_loop.BOT_ORDER}
+    pr.latest_signal = now - timedelta(seconds=1000)
+    assert pr_loop.classify_state(pr, 0, now) == "READY_TO_FIX"
+
+    # pending 清零(人工甄别后)→ READY_TO_MERGE 回归不受影响
+    pr.pending_skew_opinions = 0
+    assert pr_loop.classify_state(pr, 0, now) == "READY_TO_MERGE"
+
+    # print_opinions 输出 pending 提示,不静默
+    pr.pending_skew_opinions = 2
+    pr_loop.print_opinions(pr)
+    out = capsys.readouterr().out
+    assert "疑似超带误杀的可行动意见" in out and "2 条" in out
+
+
+def test_pending_skew_opinions_excludes_non_opinion_suspects(monkeypatch):
+    """意见 6 边界: 超带但非可行动意见的条目(摘要类 review / 空正文)只进
+    skew_suspects 诊断,不虚增 pending——阻断范围是意见口径,不是 suspect 全集。"""
+    head = "e" * 40
+    summary_review = {"id": 1, "user": {"login": "coderabbitai[bot]"},
+                      "state": "COMMENTED", "commit_id": head,
+                      "submitted_at": "2026-10-24T11:48:20Z",
+                      "body": "walkthrough … summarize by coderabbit.ai …"}
+    empty_review = {"id": 2, "user": {"login": "greptile-apps[bot]"},
+                    "state": "COMMENTED", "commit_id": head,
+                    "submitted_at": "2026-10-24T11:48:20Z", "body": "  "}
+    # APPROVED 是结论性信号非意见: 信号循环记 suspect,计数循环不进 pending
+    approved_review = {"id": 3, "user": {"login": "coderabbitai[bot]"},
+                       "state": "APPROVED", "commit_id": head,
+                       "submitted_at": "2026-10-24T11:48:20Z", "body": "ok"}
+    fake_gh_api, fake_paged = _fetch_pr_with(
+        [], [summary_review, empty_review, approved_review], [], [])
+    monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    pr_loop._EVENTS_CACHE.clear()
+    pr = pr_loop.fetch_pr("test/repo", 9)
+    assert len(pr.skew_suspects) == 3
+    assert pr.pending_skew_opinions == 0
+    assert pr.opinion_count == 0
+
+
+def test_collect_era_mark_uses_actual_anchoring():
+    """意见 7: era_mark 标注 = 计入判定的锚定结果(非时间阈值)——回退锚容差
+    窗口内被计数排除的条目(无绑定 issue 评论/旧 commit review)标「历史轮次」,
+    pr-agent 显式错误 last_run.head_sha 的锚后评论同样标「历史轮次」
+    (issue_comment_bot 的排除语义);严格锚命中的窗口内条目仍标「当前 head」。"""
+    head = "a" * 40
+    old = "b" * 40
+    pr = pr_loop.PRData(
+        number=9, title="t", state="open", draft=False, fork=False,
+        head_sha=head, head_ref="feat/x", base_ref="main",
+        head_time=pr_loop.parse_ts("2026-10-24T12:00:00Z"),
+        url="https://example.invalid/9", author="wangxumarshall",
+        reviews=[
+            # 旧 commit_id review 落窗口内(锚前 200s): 计数侧 head_anchored
+            # 为 False → 须标「历史轮次」(修复前自相矛盾标「当前 head」)
+            {"id": 1, "user": {"login": "greptile-apps[bot]"},
+             "state": "COMMENTED", "commit_id": old,
+             "submitted_at": "2026-10-24T11:56:40Z", "body": "旧 head review"},
+            # 对照: 严格锚命中 → 「当前 head」
+            {"id": 2, "user": {"login": "greptile-apps[bot]"},
+             "state": "COMMENTED", "commit_id": head,
+             "submitted_at": "2026-10-24T11:56:40Z", "body": "当前 head review"},
+        ],
+        issue_comments=[
+            # 无绑定字段的 coderabbit 评论落窗口内: issue_comment_anchored
+            # 为 False → 须标「历史轮次」(修复前标「当前 head」且无括注)
+            {"id": 900, "user": {"login": "coderabbitai[bot]"},
+             "body": "意见", "created_at": "2026-10-24T11:56:40Z"},
+            # pr-agent 显式错误 last_run.head_sha,锚后评论: 计数侧
+            # issue_comment_bot 排除 → 须标「历史轮次」
+            dict(_pragent_issue_comment(head, old, "2026-10-24T12:05:00Z")),
+        ],
+    )
+    titles = [t for _, t, _ in pr_loop._collect_entries(pr)]
+
+    def is_current(title):
+        return " — 当前 head" in title
+
+    t_old_review = [t for t in titles if "Review" in t and "bbbbbbbb" in t][0]
+    t_cur_review = [t for t in titles if "Review" in t and "bbbbbbbb" not in t][0]
+    t_unbound = [t for t in titles if "coderabbit" in t][0]
+    t_pragent_wrong = [t for t in titles if "pr-agent" in t][0]
+
+    assert not is_current(t_old_review) and "历史轮次" in t_old_review
+    assert is_current(t_cur_review) and "历史轮次" not in t_cur_review
+    assert not is_current(t_unbound) and "历史轮次" in t_unbound
+    # pr-agent 错误 head: 标「历史轮次」且保留「检视 head bbbbbbbb(非当前 head)」括注
+    assert not is_current(t_pragent_wrong) and "历史轮次" in t_pragent_wrong
+    assert "bbbbbbbb" in t_pragent_wrong
+
+
+def test_anchor_and_skew_single_source():
+    """意见 8: (anchor, skew) 推导两态——push_time 可得严格(push_time, 0);
+    缺失回退 (head_time, CLOCK_SKEW_TOLERANCE)。四处调用点共用该真源。"""
+    push = pr_loop.parse_ts("2026-10-24T12:00:00Z")
+    head_t = pr_loop.parse_ts("2026-10-24T11:55:00Z")
+    assert pr_loop.anchor_and_skew(push, head_t) == (push, timedelta(0))
+    assert pr_loop.anchor_and_skew(None, head_t) == (
+        head_t, pr_loop.CLOCK_SKEW_TOLERANCE)
+    # format_skew_warning 的容差阈值随锚来源走(与计入判定同口径)
+    pr = pr_loop.PRData(
+        number=9, title="t", state="open", draft=False, fork=False,
+        head_sha="a" * 40, head_ref="feat/x", base_ref="main",
+        head_time=head_t, url="", author="a",
+        skew_suspects=[("review", head_t, 400.0)])
+    assert ">300s" in pr_loop.format_skew_warning(pr)
+    pr.push_time = push
+    assert ">0s" in pr_loop.format_skew_warning(pr)
