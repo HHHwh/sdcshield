@@ -105,7 +105,12 @@ static size_t sparse_n(struct test *test)
                 A.setFromTriplets(trip.begin(), trip.end());
                 Eigen::VectorXd b = Eigen::VectorXd::Constant(n, 0.5);
                 Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
-                solver.compute(A).solve(b);
+                /* solve() 返回惰性表达式(SparseSolverBase::solve →
+                 * Solve<> 模板), 丢弃返回值则三角回代根本不执行,
+                 * probe 只计了 compute(分解)。必须落入具体向量才
+                 * 与 run() 的 "x = compute(A).solve(b)" 同构(检视
+                 * #44)。 */
+                Eigen::VectorXd y = solver.compute(A).solve(b);
             });
         } catch (...) {
             /* probe 期分配异常(如 ASAN 构建的 OOM): init 不 crash,
@@ -181,7 +186,9 @@ static int eigen_sparse_cleanup(struct test *test) {
 }
 
 /* Input re-roll cadence (H11' alignment with the EigenSVDTest template:
- * same-source repeat, fresh operands). */
+ * same-source repeat, fresh operands). reroll 档迭代的真实成本 ≈
+ * 构造 + 2×求解(golden 重算 + 下一轮 x), TERM 等待窗口按此口径
+ * 估计——见 sdc_stress_config.h 的满核实测注记。 */
 static constexpr int kRerollEvery = 16;
 
 static int eigen_sparse_run(struct test *test, int cpu) {
