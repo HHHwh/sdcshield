@@ -24,12 +24,22 @@
 #include "sve_sha_kernels.h"
 #include <cstring>
 
+/* msg_len 前置上界 (PR #282 处置移交, P4 落地): 下面各入口的
+ * body = 块 + msg_len 与 padded = ((body + 9/17 + 63/127) / 块) * 块 都是
+ * size_t 运算且先于任何上界检查执行 —— msg_len 接近 SIZE_MAX 时
+ * body/padded 回绕回 2048 以内, 后置的 padded 单检通过, 随后
+ * memcpy(full[s] + 块, msgs[s], msg_len) 巨量溢出。前置钳制 msg_len:
+ * padded <= 2048 (full[] 行宽) 等价于 32-bit 族 64 + msg_len + 9 <= 2048
+ * (msg_len <= 1975)、64-bit 族 128 + msg_len + 17 <= 2048 (msg_len <= 1903)。 */
+#define SVE_HMAC_MSG_MAX_32 (2048 - 64 - 9)    /* 1975 */
+#define SVE_HMAC_MSG_MAX_64 (2048 - 128 - 17)  /* 1903 */
+
 /* SHA-256 家族 HMAC: N 条流并行 (N = svcntw(), 内部推导)。
  * keys: N 条流的 HMAC 密钥(每条 HMAC_KEY_SIZE 字节, 可各不相同)。
- * msgs: N 条消息(各 msg_len 字节, msg_len < 2^32/8)。
+ * msgs: N 条消息(各 msg_len 字节, msg_len <= SVE_HMAC_MSG_MAX_32)。
  * out: out[s] 收到第 s 条流的 32 字节摘要(大端)。
- * 返回 0 成功; -1 容量溢出(流数超 1024-bit 定维上限, 或组装消息超
- * 2048B 缓冲)。 */
+ * 返回 0 成功; -1 容量溢出(流数超 1024-bit 定维上限, key_len 超密钥块,
+ * 或 msg_len 超 SVE_HMAC_MSG_MAX_32 装配界)。 */
 static inline int hmac_sha256_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
                                   const uint8_t *const keys[SVE_SHA_STREAMS_MAX_32], size_t key_len,
                                   const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32], size_t msg_len)
@@ -62,6 +72,11 @@ static inline int hmac_sha256_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][32],
 
     /* ---- 内层: inner[s] = SHA256(K^ipad[s] || msgs[s]) ----
      * 每流消息 = ipad 块(64B) + msg(msg_len) → padding 后总块数 */
+    /* Capacity guard, message side (PR #282 handover): bound msg_len BEFORE
+       the body/padded arithmetic — a near-SIZE_MAX msg_len wraps both back
+       under 2048 and slips past the padded check below. */
+    if (msg_len > SVE_HMAC_MSG_MAX_32)
+        return -1;
     size_t body = 64 + msg_len;
     size_t padded = ((body + 9 + 63) / 64) * 64;
     uint32_t nblocks = (uint32_t)(padded / 64);
@@ -148,6 +163,11 @@ static inline int hmac_sha512_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][64],
         }
     }
 
+    /* Capacity guard, message side (PR #282 handover): bound msg_len BEFORE
+       the body/padded arithmetic — a near-SIZE_MAX msg_len wraps both back
+       under 2048 and slips past the padded check below. */
+    if (msg_len > SVE_HMAC_MSG_MAX_64)
+        return -1;
     size_t body = 128 + msg_len;
     size_t padded = ((body + 17 + 127) / 128) * 128;
     uint32_t nblocks = (uint32_t)(padded / 128);
@@ -224,6 +244,11 @@ static inline int hmac_sha1_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][20],
         }
     }
 
+    /* Capacity guard, message side (PR #282 handover): bound msg_len BEFORE
+       the body/padded arithmetic — a near-SIZE_MAX msg_len wraps both back
+       under 2048 and slips past the padded check below. */
+    if (msg_len > SVE_HMAC_MSG_MAX_32)
+        return -1;
     size_t body = 64 + msg_len;
     size_t padded = ((body + 9 + 63) / 64) * 64;
     uint32_t nblocks = (uint32_t)(padded / 64);
@@ -310,6 +335,11 @@ static inline int hmac_sha224_x8(uint8_t out[SVE_SHA_STREAMS_MAX_32][28],
         }
     }
 
+    /* Capacity guard, message side (PR #282 handover): bound msg_len BEFORE
+       the body/padded arithmetic — a near-SIZE_MAX msg_len wraps both back
+       under 2048 and slips past the padded check below. */
+    if (msg_len > SVE_HMAC_MSG_MAX_32)
+        return -1;
     size_t body = 64 + msg_len;
     size_t padded = ((body + 9 + 63) / 64) * 64;
     uint32_t nblocks = (uint32_t)(padded / 64);
@@ -393,6 +423,11 @@ static inline int hmac_sha384_x4(uint8_t out[SVE_SHA_STREAMS_MAX_64][48],
         }
     }
 
+    /* Capacity guard, message side (PR #282 handover): bound msg_len BEFORE
+       the body/padded arithmetic — a near-SIZE_MAX msg_len wraps both back
+       under 2048 and slips past the padded check below. */
+    if (msg_len > SVE_HMAC_MSG_MAX_64)
+        return -1;
     size_t body = 128 + msg_len;
     size_t padded = ((body + 17 + 127) / 128) * 128;
     uint32_t nblocks = (uint32_t)(padded / 128);
