@@ -690,7 +690,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   fracture_loop_count 一致性问题记账未动。
 - **承接**:P4(ipsec HMAC×17)计划已就绪(docs/superpowers/plans/
   2026-10-24-sve-sme-all-vl2-p4.md)。
-<<<<<<< HEAD
 ## 2026-10-24（all-VL Phase 2 P4：ipsec HMAC×17 流数参数化——两个既有缺陷随阶段修复）
 
 - **既有缺陷修复**(评估代理实证, 随 P4 落地): ①门控无上界——旧
@@ -785,8 +784,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   配置; 胶水依赖的算术不变式(lanes 换算 svl/4==svcntw()、[4,32]/
   [2,16] 范围、漂移比较操作数)已由同源 harness 逐档执行。
 =======
->>>>>>> 860edf6e (docs(all-vl2): P3 收尾——README SKIP 声明全 VL 化 + progress-log 实证条目)
-=======
   仅编译验证, commit 正文记录); hmac 容量守卫的 init 侧失败经
   report_fail_msg 会表现为 Skipped("Unexpected OS error")而非干净
   Failed——knob 钳制后不可达, 纯纵深防御, 记账。
@@ -822,4 +819,38 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
   现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
   (git-sanity)+ 本实证收口。
+<<<<<<< HEAD
 >>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
+=======
+
+## 2026-10-25 · PR #286 检视 round 1 处置(head 11cdd2c5,当前 head 5 条意见)
+
+- **意见清单与裁定**:当前 head 待处置 5 条——k7pattern GPS tag 16-bit
+  byte_off 1024-bit 档溢出(采纳,修复+gem5 16-run 实证);xlswave Phase A
+  golden 硬编码 0.125 未绑 coeff[r](采纳,数值恒等替换);codex/coderabbit
+  两条为 usage-limit/操作状态消息(无需处置)。历史轮次:pr-agent "VL drift
+  无 return 堆溢出"驳回(report_fail_common 为 noreturn,
+  framework/sandstone_run.cpp:178,drift 分支不落地执行);xlswave 位型 dump
+  (3a5e2f80)/meson 硬件描述(e8bb1817)/sleef gem5 pending 注释(11cdd2c5)
+  三项确认已由中间提交处置;ipsec data_size 钳制为显式登记的流式组装后续
+  单元;sve_hmac.h 容量纵深防御与 NSTREAM 三处锁步为 Minor 重构建议,当前
+  17 调用方 require_sve_vl+drift guard 双保险,搁置不扩散。
+- **k7pattern GPS tag 32 位拆分**(099945ff):低 16 位保留经典字段+补码
+  校验,高 16 位占用 NEON tag 恒 0 的原 generation 字段,覆盖 1M slots ×
+  128B = 128 MiB < 4 GiB 全 knob 域零混叠;弃选 k3res 式槽内偏移(会使
+  任意槽间同 lane 错位读不可检,盲区更大且丢弃 A-track 位置信息)。仅
+  k7pattern 受影响(其余 sve_rot 家族 memset_random 无 tag/k3res 已槽内)。
+- **sve_rot_vla_dual 16-run 全绿**(gem5-fi feat/sve-rot-vla-dual @ faae123f,
+  收口本文件 2026-10-24 预登记的后续工作项):四档 × 四 cell 全部
+  SDCSHIELD_FAILS=0;fixed 拆分编码四档 tag dups=0;legacy 对照 1024-bit
+  档 dups=8192(= 512 slots × 16 lanes,byte_off 恰差 65536 位置对——检视
+  意见的混叠数学在四档真实执行中逐位实证),512-bit 档 65528 < 65536
+  dups=0 与原头注 "fits up to 512b inclusive" 边界精确吻合(kernel 镜像
+  保真度交叉验证);zero/one/hiham 十二 run 全绿(不经 tag,纯回归佐证)。
+- **xlswave golden 绑定 coeff[r]**(c11abc11):数值恒等(coeff[] run 期
+  初始化 0.125 后不变,同一表达式树 IEEE754 逐位相同),纯表达式来源替换,
+  无行为变化无需 gem5(如实声明)。
+- **验证**:build.sh 零新警告;本机四 k7p cell + xlswave SKIP 路径不变
+  (CpuNotSupported, 'test compiled with sve');zstd19 -t 2000 -n 1 pass;
+  x86-64 非回归(纯 aarch64 段内改动)。
+>>>>>>> 679c4610 (docs(progress): PR #286 检视 round 1 处置记录——k7pattern tag 32 位拆分 + sve_rot_vla_dual 16-run 实证)
