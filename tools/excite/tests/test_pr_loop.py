@@ -906,6 +906,55 @@ def test_over_skew_strict_two_sha_key_kinds():
         {"commit_id": head}, "submitted_at", ("commit_id",), _ANCHOR, head, _TOL)
 
 
+def test_classify_anchor_single_source_pairs():
+    """意见 R2-#31: (counted, over) 配对分类单一真源——三 kind 的 ts_key/sha_keys
+    映射与「over 蕴含 not counted」合取集中一处;fetch_pr 信号/计数六处调用点
+    不再手工复制配对与字面量(797d10ef 式复制漂移的再引入,漏改一处即静默丢
+    suspect/pending)。"""
+    head = "a" * 40
+    # review 口径: 锚后 → 计入;超带严格锚 → over;超带旧 head / 带内字段缺失
+    # → 两者皆 False
+    assert pr_loop.classify_anchor(
+        {"commit_id": head, "submitted_at": "2026-10-24T12:00:01Z"},
+        "review", _ANCHOR, head, _TOL) == (True, False)
+    assert pr_loop.classify_anchor(
+        {"commit_id": head, "submitted_at": "2026-10-24T11:48:20Z"},
+        "review", _ANCHOR, head, _TOL) == (False, True)
+    assert pr_loop.classify_anchor(
+        {"commit_id": "b" * 40, "submitted_at": "2026-10-24T11:48:20Z"},
+        "review", _ANCHOR, head, _TOL) == (False, False)
+    assert pr_loop.classify_anchor(
+        {"submitted_at": "2026-10-24T11:59:00Z"},
+        "review", _ANCHOR, head, _TOL) == (False, False)
+    # review_comment 口径: original_commit_id 严格锚——超带 over / 带内计入
+    assert pr_loop.classify_anchor(
+        {"original_commit_id": head, "created_at": "2026-10-24T11:48:20Z"},
+        "review_comment", _ANCHOR, head, _TOL) == (False, True)
+    assert pr_loop.classify_anchor(
+        {"original_commit_id": head, "created_at": "2026-10-24T11:56:40Z"},
+        "review_comment", _ANCHOR, head, _TOL) == (True, False)
+    # issue_comment 口径: 超带 pr-agent 严格锚 over / 锚后计入 / 超带无绑定不 over
+    assert pr_loop.classify_anchor(
+        _pragent_issue_comment(head, head, "2026-10-24T11:48:20Z"),
+        "issue_comment", _ANCHOR, head, _TOL) == (False, True)
+    assert pr_loop.classify_anchor(
+        _pragent_issue_comment(head, head, "2026-10-24T12:00:01Z"),
+        "issue_comment", _ANCHOR, head, _TOL) == (True, False)
+    assert pr_loop.classify_anchor(
+        {"user": {"login": "coderabbitai[bot]"}, "body": "x",
+         "created_at": "2026-10-24T11:48:20Z"},
+        "issue_comment", _ANCHOR, head, _TOL) == (False, False)
+    # push 锚(skew=0)同口径收紧: 锚前 1s 严格锚不计入,但落入「锚前 >0s」
+    # 即超带 → over=True(同 SHA 强推回退场景,其可行动子集同样阻断——与
+    # anchor_and_skew/over_skew_strict 的零容差语义一致)
+    assert pr_loop.classify_anchor(
+        {"commit_id": head, "submitted_at": "2026-10-24T11:59:59Z"},
+        "review", _ANCHOR, head, timedelta(0)) == (False, True)
+    # 未知 kind → ValueError(映射集中一处,错配显式失败不静默)
+    with pytest.raises(ValueError):
+        pr_loop.classify_anchor({}, "check_run", _ANCHOR, head, _TOL)
+
+
 def _fetch_pr_with(events, reviews, inline, issue, head="e" * 40,
                    committer_date="2026-10-24T11:55:00Z"):
     """离线 fetch_pr 夹具: 固定 PR 元数据 + 可变 events/三类检视数据。

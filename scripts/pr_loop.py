@@ -586,6 +586,37 @@ def over_skew_strict(item: dict, ts_key: str, sha_keys: Optional[tuple],
     return commit_strict_match(item, sha_keys, head_sha)
 
 
+def classify_anchor(item: dict, kind: str, anchor: datetime,
+                    head_sha: str, skew: timedelta) -> tuple:
+    """锚定分类的单一真源(检视意见 R2-#31,防配对复制漂移): 返回
+    (counted, over) 二元组——
+    - counted: 条目计入当前 head(head_anchored / issue_comment_anchored 语义);
+    - over: 严格锚命中却落在锚前 >容差(over_skew_strict 语义,skew_suspects
+      诊断与 pending_skew_opinions 阻断同源),over 蕴含 not counted。
+    kind → (ts_key, sha_keys) 映射集中本函数一处: review = submitted_at /
+    commit_id,review_comment = created_at / original_commit_id(+commit_id
+    兜底),issue_comment = created_at / pr-agent 严格锚(sha_keys=None)。
+    此前「head_anchored(...) / not counted and over_skew_strict(...)」配对
+    与 ts_key/sha_keys 字面量在 fetch_pr 手工复制 6 处——正是 anchor_and_skew
+    docstring 声明要根除的 797d10ef 式复制漂移的再引入,漏改一处即静默丢
+    suspect/pending。"""
+    if kind == "review":
+        ts_key, sha_keys = "submitted_at", ("commit_id",)
+    elif kind == "review_comment":
+        ts_key, sha_keys = "created_at", ("original_commit_id", "commit_id")
+    elif kind == "issue_comment":
+        ts_key, sha_keys = "created_at", None
+    else:
+        raise ValueError(f"未知锚定分类 kind: {kind}")
+    if sha_keys is None:
+        counted = issue_comment_anchored(item, anchor, head_sha, skew)
+    else:
+        counted = head_anchored(item, ts_key, anchor, sha_keys, head_sha, skew)
+    over = (not counted
+            and over_skew_strict(item, ts_key, sha_keys, anchor, head_sha, skew))
+    return counted, over
+
+
 # ============ 拉取与判定 ============
 
 _EVENTS_CACHE: dict = {}   # slug → events 列表(进程内缓存;status 总览多 PR 只拉一次)
@@ -723,10 +754,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
-        counted = head_anchored(r, "submitted_at", anchor,
-                                ("commit_id",), head_sha, skew)
-        if not counted and over_skew_strict(r, "submitted_at", ("commit_id",),
-                                            anchor, head_sha, skew):
+        counted, over = classify_anchor(r, "review", anchor, head_sha, skew)
+        if over:
             data.skew_suspects.append(
                 ("review", ts, (anchor - ts).total_seconds()))
         data.signals.append(Signal(
@@ -743,12 +772,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
-        counted = head_anchored(c, "created_at", anchor,
-                                ("original_commit_id", "commit_id"),
-                                head_sha, skew)
-        if not counted and over_skew_strict(
-                c, "created_at", ("original_commit_id", "commit_id"),
-                anchor, head_sha, skew):
+        counted, over = classify_anchor(c, "review_comment", anchor,
+                                        head_sha, skew)
+        if over:
             data.skew_suspects.append(
                 ("review_comment", ts, (anchor - ts).total_seconds()))
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
@@ -767,9 +793,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
-        counted = issue_comment_anchored(c, anchor, head_sha, skew)
-        if not counted and over_skew_strict(c, "created_at", None,
-                                            anchor, head_sha, skew):
+        counted, over = classify_anchor(c, "issue_comment", anchor,
+                                        head_sha, skew)
+        if over:
             data.skew_suspects.append(
                 ("issue_comment", ts, (anchor - ts).total_seconds()))
         data.signals.append(Signal(
@@ -805,11 +831,7 @@ def fetch_pr(slug: str, number: int) -> PRData:
             bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
-        counted = head_anchored(r, "submitted_at", anchor,
-                                ("commit_id",), head_sha, skew)
-        over = (not counted
-                and over_skew_strict(r, "submitted_at", ("commit_id",),
-                                     anchor, head_sha, skew))
+        counted, over = classify_anchor(r, "review", anchor, head_sha, skew)
         if not counted and not over:
             continue
         if not body or is_summary_text(body):
@@ -835,20 +857,17 @@ def fetch_pr(slug: str, number: int) -> PRData:
             bot = "local-claude"
         if bot is None:
             continue
-        if head_anchored(c, "created_at", anchor,
-                         ("original_commit_id", "commit_id"), head_sha, skew):
+        counted, over = classify_anchor(c, "review_comment", anchor,
+                                        head_sha, skew)
+        if counted:
             n_rcomment += 1
-        elif over_skew_strict(c, "created_at",
-                              ("original_commit_id", "commit_id"),
-                              anchor, head_sha, skew):
+        elif over:
             data.pending_skew_opinions += 1
     n_icomment = 0
     for c in issue_comments:
         body = (c.get("body") or "")
-        counted = issue_comment_anchored(c, anchor, head_sha, skew)
-        over = (not counted
-                and over_skew_strict(c, "created_at", None,
-                                     anchor, head_sha, skew))
+        counted, over = classify_anchor(c, "issue_comment", anchor,
+                                        head_sha, skew)
         if not (issue_comment_bot(c, head_sha) and (counted or over)):
             continue
         if not body.strip() or is_summary_text(body):
