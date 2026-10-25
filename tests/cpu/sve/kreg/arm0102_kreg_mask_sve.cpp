@@ -112,12 +112,6 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
     auto *data = static_cast<Arm0102KregMaskSveData *>(malloc(sizeof(Arm0102KregMaskSveData)));
     const int count = (int)arm0102_kreg_mask_sve_count(test);
     data->count = count;
-    data->srcA = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
-    data->srcB = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
-    data->expected = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
-
-    memset_random(data->srcA, (size_t)count * sizeof(uint32_t));
-    memset_random(data->srcB, (size_t)count * sizeof(uint32_t));
 
     /* golden: 同一旋转组合, 在相同 SVE 单元上预计算 */
     [[maybe_unused]] svbool_t pg = svptrue_b32();
@@ -129,6 +123,19 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
                   test->id, lanes, svl);
         return EXIT_FAILURE;
     }
+    /* 尾批 asm 全宽读松弛 = lanes (kreg_logic 同款, a6f753ce): run 侧
+     * ldr z 按 svcntb() 全宽载, 最末子块最多读到 (count-1)+svcntw()
+     * 个元素, slack=lanes 严格充分 (任意 VL)。aligned_alloc_safe 为
+     * 795e0d55 家族契约修法 (total 未必是 64 的倍数)。 */
+    const int slack = lanes;
+    const size_t total = (size_t)(count + slack) * sizeof(uint32_t);
+    data->srcA = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
+    data->srcB = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
+    data->expected = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
+
+    memset_random(data->srcA, total);
+    memset_random(data->srcB, total);
+
     for (int base = 0; base < count; base += lanes) {
         int n = (count - base < lanes) ? (count - base) : lanes;
         [[maybe_unused]] svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
@@ -158,8 +165,10 @@ static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
     auto *data = static_cast<Arm0102KregMaskSveData *>(test->data);
     const int count = data->count;
 
-    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
-    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
+    /* run 侧 temp/dst 同享尾批松弛: load_vec_sve 的 asm ldr z 全宽读
+     * 最末子块, (count + svcntw()) 与 init 的 total 同界 (kreg_logic 同款)。 */
+    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
+    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
 
     TEST_LOOP(test, 1 << 13) {
         /* 与 golden 完全相同的 4 元素子块结构: 每 SVE 向量批内按 4 元素子块,
