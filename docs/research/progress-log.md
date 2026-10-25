@@ -622,3 +622,34 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   测试重构与文档, 裁决回报后定稿——工作假设 COLUMN 命中, za-only 假设
   被实证推翻, 按裁决改 sm+za 双开。
 - **承接**:P3(sve512 家族×10)起另行计划。
+
+## 2026-10-25（PR #280 检视处置 R2：rebase 契约统一 + asm 加固 + FNV 重锚）
+
+- **rebase 到 main（#277 已并入）**:11 条当前 head 意见中 6 条
+  (pin 部署契约/空洞继承证明/prctl GET 虚假验证声明/同义反复断言/
+  死包含/CLAUDE.md 主机口径矛盾)的事实主体已在 main 经 #277 终轮
+  评审修复——本分支冻结的是其旧形态。rebase 承载统一(arm64_vl.h/
+  selftest.cpp/architecture.md/CLAUDE.md 与 main 逐字节一致, 0 diff);
+  f5b42fad/ebfda752/56e916fe 三提交内容被 main 吸收, 化空丢弃。
+  契约分裂(PR #279 移交项 26)随之统一: require 助手直返 EXIT_SKIP。
+- **asm 加固**(coderabbit early-clobber + merge-risk Z/P clobber +
+  local-claude 注释纠错):[a]/[b]/[n] "+r"→"+&r"(GCC 文档契约:
+  无 & 输出被假设输入消费完才写;防御性声明——in-out 入口值与
+  [o]/[s] 同时活跃, 本就无可别名);clobber 扩全 Z0-Z31/P0-P15/FFR
+  (SMSTART SM/SMSTOP SM 使整个 Z/P/FFR 文件 UNKNOWN, AAPCS-SME);
+  原注释"理论缺 early-clobber/为保字节同构延后"叙事有误(混淆编码
+  与分配), 重写为正确不变式。objdump 前后对照生成代码逐字节一致
+  (等价性变更实证);同源 kernel 同步加固。
+- **FNV 基数修正**(PR #279 移交项 28):gem5-fi kernel
+  sme_fmopa_za_dual.c 初值 1469598103934665603→14695981039346656037
+  (0xcbf29ce484222325 规范基;typo 源自计划模板)。通道 B 为纯复现
+  oracle, 比较性结论不受影响;16 checksum 重锚为新基值。
+- **四档 16 run 重锚**(gem5-fi feat/pr280-r2-dual @ 959a5fa7, 基
+  ebe08632):cols=4/8/16/32 逐档精确, axis=COLUMN ×16,
+  SDCSHIELD_FAILS=0 ×16, exit 0 ×16, 16 checksum 互异(新基值,
+  表见该仓 findings.md)——加固形态四档字节级复现原裁决。
+- **验证**:./scripts/build.sh 零警告;本机 SKIP 路径逐字不变
+  ('test compiled with lrcpc,sve,sve2,sme');selftest_arm64_vl_api
+  真实运行 pass;selftest_arm64_vl_require_sve 走 helper log_skip
+  原文 skip;zstd19 -t 2000 -n 1 回归 pass;x86-64 零触及
+  (全部变更位于 #elif __aarch64__/arm64 专属文件)。
