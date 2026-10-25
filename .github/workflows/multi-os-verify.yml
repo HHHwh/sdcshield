@@ -279,6 +279,21 @@ jobs:
             echo "::error::benchmark.tsv 全表 skip —— 二进制不可用或 --list-tests 失败(见上方 benchmark.log)"
             rc=1
           fi
+          # 部分退化告警(不红):单基准崩溃被 benchmark.sh 记为 skip(YAML 缺失,
+          # benchmark.sh 48-49 行 || true 吞掉现场),benchmark-to-json 随后静默
+          # 剔除该行 → 趋势数据点无声消失(2026-10-25 run 40177906937 的
+          # 24.03-LTS-SP2 memcpy_l2_cache_size 即此情形)。加 ::warning:: 把
+          # 零告警变为可观测;不收紧红阈值——缺席与崩溃在 TSV 层不可区分,
+          # 硬阈值会误伤合法缺席,BENCH_TESTS 声明为三系列交集故正常应为 0。
+          if [ "$rc" -eq 0 ]; then
+            skip_rows=$(awk -F'\t' 'NR>1 && $2 == "skip" {n++} END{print n+0}' \
+              benchmark/benchmark.tsv 2>/dev/null || echo 0)
+            if [ "$skip_rows" -gt 0 ]; then
+              names=$(awk -F'\t' 'NR>1 && $2 == "skip" {printf "%s ", $1}' \
+                benchmark/benchmark.tsv 2>/dev/null || true)
+              echo "::warning::benchmark 部分退化:${skip_rows} 行 skip(${names})—— 对应趋势数据点将缺失;若为单基准崩溃,现场已被 benchmark.sh 吞掉,需本地复跑定位"
+            fi
+          fi
           exit $rc
 
       # ---- 上传结果(成功与否都传,便于诊断) ----
