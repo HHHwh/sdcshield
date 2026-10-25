@@ -37,6 +37,20 @@ GHA 的 `ubuntu-24.04-arm` 是**共享 aarch64 云实例**（AWS Graviton 系）
 
 ## 输出
 
-`<outdir>/benchmark.tsv`：`test<TAB>wall_seconds<TAB>loop_count`。
+`<outdir>/benchmark.tsv`：`test<TAB>wall_seconds<TAB>loop_count`。`wall_seconds` 三态：
+
+| 值 | 含义 | 闸门（[`benchmark-gate.py`](benchmark-gate.py)，verify 与 benchmark-trend 共用） |
+|---|---|---|
+| 数值 | 数据行（目标测试 `result: pass` 且取到它自己的 `test-runtime`） | 进 JSON/趋势 |
+| `skip` | 缺席（`--list-tests` 无此测试）或运行时跳过（`result: skip`） | `::warning::` 点名，数据点缺失 |
+| `fail` | 在列但未产出可用数据（进程失败 / 测试 fail / 字段缺失） | verify 红 |
+
+失败现场留档：每测试 `stdout/stderr` 存 `<outdir>/<t>.log`、运行 YAML 存
+`<outdir>/<t>.yaml`（均随 artifact 上传），失败摘要（退出码 + 末尾 15 行）同时进
+`benchmark.log`。`--list-tests` 捕获失败会重试一次，连续失败中止采集（stderr 留档
+`list-tests.err`）——run 40177906937（2026-10-25）24.03-LTS-SP2 的
+`memcpy_l2_cache_size` 曾因该捕获一次性部分输出被误记「缺席」（同 job allquality
+全量扫描里该测试存在且 pass，此前两天同 OS 同测试均为正常数值），三态与留档即为此修。
+
 此基准 tsv 仍上传进 artifact，但不再进最终 report summary（最终 summary 由
 `report-summary.py` 生成「用例 × 版本」结果矩阵，见 `report-summary.py` 注释）。

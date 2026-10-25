@@ -301,7 +301,7 @@ jobs:
           path: |
             results/
             verify.log
-            benchmark/benchmark.tsv
+            benchmark/
             benchmark.log
             builddir/sdcshield-*.yaml
             builddir/sdcshield-*.log

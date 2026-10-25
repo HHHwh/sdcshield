@@ -2,8 +2,10 @@
 # benchmark-to-json.py — benchmark.tsv → github-action-benchmark custom JSON。
 #
 # 输入:benchmark.sh 产出的 benchmark.tsv(列:test\twall_seconds\tloop_count;
-#   不可跑的测试 wall_seconds 为 skip)。
-# 输出:[{"name": <test>, "value": <wall_seconds>, "unit": "s"}, ...](skip 行剔除)。
+#   无数据行的测试 wall_seconds 为 skip(缺席或运行时跳过)或 fail(在列但未
+#   产出可用数据))。
+# 输出:[{"name": <test>, "value": <wall_seconds>, "unit": "s"}, ...](skip/fail
+#   等一切非数值行剔除;闸门侧的状态判别见 benchmark-gate.py, 口径一致)。
 # 供 benchmark-action/github-action-benchmark 的 tool: custom 消费,趋势线只取
 # 固定基准 SP(24.03-LTS-SP3),跨 commit 可比。
 #
