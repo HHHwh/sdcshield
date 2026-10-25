@@ -1291,3 +1291,37 @@ def test_collect_marks_pending_skew_opinions_actionable(monkeypatch):
     md = pr_loop.render_collect(pr, "test/repo", 900)
     assert "处置与答复口径同常规意见" in md
     assert "当前 head(超容差待处置)" in md
+
+
+def test_status_overview_shows_pending_and_skew_warning(monkeypatch, capsys):
+    """意见 R2-#29: status 总览行意见数含 pending——pending-only PR 显示
+    「意见 0(+N 超带) [READY_TO_FIX]」而非自相矛盾的「意见 0 [READY_TO_FIX]」;
+    总览亦打印超带告警行(总览也是 status 出口,文档承诺各出口均提示)。"""
+    pr = _open_pr()
+    now = pr_loop.now_utc()
+    pr.bot_done = {b: now for b in pr_loop.BOT_ORDER}
+    pr.latest_signal = now - timedelta(seconds=1000)
+    pr.pending_skew_opinions = 2
+    pr.skew_suspects = [("review", now - timedelta(seconds=400), 400.0)]
+
+    monkeypatch.setattr(pr_loop, "resolve_slug", lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged",
+                        lambda path, list_key=None: [{"number": 9}])
+    monkeypatch.setattr(pr_loop, "fetch_pr", lambda slug, num: pr)
+
+    args = pr_loop.build_parser().parse_args(["status"])
+    assert pr_loop.cmd_status(args) == 0
+    out = capsys.readouterr().out
+    # 总览行: pending 计入提示 + 状态不再与意见数自相矛盾
+    assert "意见 0(+2 超带)  [READY_TO_FIX]" in out
+    # 总览出口的超带诊断告警行(与单 PR 详情/wait/collect 同提示)
+    assert "疑似时钟超带或同 SHA 回退" in out
+
+    # 回归对照: 无 pending/suspects 的 PR 总览行无后缀、无告警,READY_TO_MERGE
+    pr.pending_skew_opinions = 0
+    pr.skew_suspects.clear()
+    assert pr_loop.cmd_status(args) == 0
+    out2 = capsys.readouterr().out
+    assert "意见 0  [READY_TO_MERGE]" in out2
+    assert "超带)" not in out2
+    assert "疑似时钟超带" not in out2

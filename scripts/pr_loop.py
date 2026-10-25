@@ -1161,8 +1161,12 @@ def print_timeline(pr: PRData) -> None:
 
 def overview_line(pr: PRData, state: str) -> str:
     title = pr.title if len(pr.title) <= 40 else pr.title[:37] + "..."
+    # 检视意见 R2-#29: 总览行的意见数须含 pending 提示——否则 pending-only
+    # 的 PR 显示自相矛盾的「意见 0 [READY_TO_FIX]」,违背文档「status/wait/
+    # collect 各出口均提示」的承诺(总览也是 status 出口)。
+    pending = f"(+{pr.pending_skew_opinions} 超带)" if pr.pending_skew_opinions else ""
     return (f"#{pr.number:<4} {title}  head={pr.head_sha[:8]}  "
-            f"bots[{fmt_bots(pr)}]  意见 {pr.opinion_count}  [{state}]")
+            f"bots[{fmt_bots(pr)}]  意见 {pr.opinion_count}{pending}  [{state}]")
 
 
 def print_detail(pr: PRData, slug: str, quiet: int) -> None:
@@ -1230,6 +1234,11 @@ def cmd_status(args: argparse.Namespace) -> int:
             continue
         state = classify_state(pr, args.quiet, now_utc())
         print(overview_line(pr, state))
+        # 检视意见 R2-#29: 总览也是 status 出口——超带诊断告警与单 PR 详情
+        # (print_detail)/wait/collect 同样在此提示,勿让总览成为唯一静默出口。
+        warn = format_skew_warning(pr)
+        if warn:
+            print(f"     {warn}")
         details.append((pr, state))
     if failed:
         print(f"(注: {failed} 个 PR 数据不完整未计入总览——建议重跑 status 复查)")
