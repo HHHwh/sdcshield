@@ -24,6 +24,16 @@
  *     divisible by every runtime VL, so a full ptrue could over-read the
  *     final partial vector.
  *
+ * Review hardening (PR #283, F2 — mirrors the _arm variant's v2
+ * precedent): the gather_src fill is index-revealing v2 — sign |
+ * exponent [0.5,2) | 32-bit entropy in mantissa [51:20] | 20-bit
+ * element index tag (90000 < 2^20, so every element is distinct; the
+ * old seeds_f64[i % vl_d] fill had only vl_d distinct values and could
+ * not reveal a wrong-offset gather landing in the same residue class),
+ * and the run-side destination is zero-filled at the top of every round
+ * (the golden 1.5 + v*v is never zero, so a dropped scatter write
+ * cannot ride on the previous round's correct bytes).
+ *
  * All-VL 128..1024-bit via arm64_require_sve_vl (all-VL Phase 2 P3;
  * the pre-P3 512-bit single-value gate and its issue #182 caveat are
  * cleared by the four-tier dual-kernel evidence in gem5-fi
@@ -38,6 +48,7 @@
 #include <cinttypes>
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -51,6 +62,10 @@ static constexpr size_t SVD_COLS = 300;
 static constexpr size_t SVD_BLOCK_ROWS = 16;
 static constexpr size_t SVD_BLOCK_COLS = 16;
 
+// Index-revealing encoding v2 (review F2, _arm variant precedent): gn =
+// 90000 < 2^20, so the low 20 mantissa bits uniquely tag every element.
+static constexpr uint64_t IDX_TAG_MASK = 0xFFFFFULL;
+
 static inline uint64_t splitmix64(uint64_t x)
 {
     uint64_t z = (x + 0x9E3779B97F4A7C15ULL);
@@ -61,7 +76,6 @@ static inline uint64_t splitmix64(uint64_t x)
 
 struct SveGatherScatterSvdData {
     size_t vl_d;
-    std::vector<uint64_t> seeds_f64;
     std::vector<uint64_t> gather_src;
     std::vector<uint64_t> gather_idx;
     // Precomputed once in init; read-only in run (shared across threads).
@@ -129,21 +143,29 @@ static int sve512_gather_scatter_svd_init(struct test *test)
             return EXIT_FAILURE;
         }
 
-        /* randomization hardening H12': seeds from the framework RNG. */
-        data->seeds_f64.resize(data->vl_d);
-        for (size_t lane = 0; lane < data->vl_d; ++lane) {
-            data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (random64() & 0x000FFFFFFFFFFFFFULL);
-        }
-
         // SVD-scale gather/scatter workspace: 300x300 doubles = 720 KB.
         const size_t gn = SVD_ROWS * SVD_COLS;
         data->gather_src.resize(gn);
         data->gather_idx.resize(gn);
         data->scatter_golden.assign(gn, 0);
 
+        /* Index-revealing encoding v2 (review F2, the _arm variant's
+         * precedent): the low 20 mantissa bits (IDX_TAG_MASK) carry the
+         * element index, while sign, exponent and the upper mantissa
+         * carry per-run fresh entropy from the framework RNG (H12': -s
+         * reproducible). gn = 90000 < 2^20, so every element's tag is
+         * distinct — the pre-fix seeds_f64[i % vl_d] periodic fill (only
+         * vl_d distinct values) could not reveal a wrong-offset gather
+         * landing in the same residue class. The exponent stays in the
+         * [0.5, 2) band so the FMA transform v = 1.5 + v*v stays in
+         * [1.75, 5.5]: never zero (a dropped scatter write then shows
+         * up as the round's zero fill) and never overflow. */
         for (size_t i = 0; i < gn; ++i) {
-            data->gather_src[i] = data->seeds_f64[i % data->vl_d];
+            uint64_t sign = (random64() & 1ULL) << 63;
+            uint64_t exp = 0x3FEULL + (random64() & 1ULL);          // [0.5, 2)
+            uint64_t entropy = (random64() & 0xFFFFFFFFULL) << 20;  // mant [51:20]
+            data->gather_src[i] = sign | (exp << 52) | entropy |
+                                  (uint64_t)(i & IDX_TAG_MASK);
             data->gather_idx[i] = i;
         }
 
@@ -202,12 +224,15 @@ static int sve512_gather_scatter_svd_run(struct test *test, int cpu)
                         "init and run");
     }
 
-    // Per-CPU-thread local destination: the index table is a full
-    // permutation, so every element is overwritten each pass — no memset
-    // needed, and no cross-thread sharing.
+    // Per-CPU-thread local destination (no cross-thread sharing),
+    // zero-filled at the top of every round (review F2): the golden
+    // 1.5 + v*v is never zero, so a dropped scatter write leaves the
+    // round's zero fill behind instead of riding on the previous
+    // round's correct bytes.
     std::vector<uint64_t> dst(d->scatter_golden.size());
 
     do {
+        std::fill(dst.begin(), dst.end(), 0);
         bool all_passed = true;
         gather_scatter_hw(d, dst.data());
         for (size_t i = 0; i < dst.size(); ++i) {

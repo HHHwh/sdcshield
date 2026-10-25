@@ -54,6 +54,7 @@
 #include <cinttypes>
 #include <cstring>
 #include <cmath>
+#include <algorithm>  // std::fill: libc++ does not pull <algorithm> transitively (libstdc++ does)
 #include <memory>
 #include <vector>
 
@@ -272,8 +273,9 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
     const double* s_base = d->s_base;
     const svbool_t ptrue = svptrue_b64();
 
-    // Per-CPU-thread phase-B destination (full permutation overwrites
-    // every element each pass — no memset, no cross-thread sharing).
+    // Per-CPU-thread phase-B destination (no cross-thread sharing);
+    // zero-filled at the top of every sweep below (review F2) so a
+    // dropped scatter write cannot ride on the previous sweep's bytes.
     std::vector<uint64_t> dst(d->scatter_golden.size());
 
     // Pointer-table canary: sweep-0 images, byte-compared every sweep.
@@ -323,6 +325,12 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
         }
 
         /* ---- Phase B: SVD-format gather/scatter round trip ---- */
+        /* Zero the destination at the top of every sweep (review F2, the
+           gather_scatter_svd/_arm idiom): the golden fma(v,v,1.5) is never
+           zero, so a dropped or misdirected scatter write leaves the zero
+           fill behind and fails the phase-C compare instead of riding on
+           the previous sweep's correct bytes. */
+        std::fill(dst.begin(), dst.end(), 0);
         gather_scatter_hw(d, dst.data());
 
         /* ---- Phase C: byte-exact verification + pointer canary ---- */
