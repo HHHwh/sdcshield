@@ -258,6 +258,16 @@ jobs:
           bash scripts/gha/benchmark.sh "$(pwd)/builddir/sdcshield" "$(pwd)/benchmark" \
             > benchmark.log 2>&1 || rc=$?
           cat benchmark.log
+          # benchmark.sh 设计为采集非闸门(无 -e + 每条基准 || true): 进程级失败
+          # 只剩 usage/mkdir 类; 真实失败模式是二进制不可用 → LIST 空 → 全表
+          # skip 且 exit 0(静默退化), 空 JSON 会无声流入 gh-pages 基准趋势。
+          # 闸门: 一行非 skip 都没有 = 采集整体废掉, 必须红。
+          ok_rows=$(awk -F'\t' 'NR>1 && $2 != "skip" {n++} END{print n+0}' \
+            benchmark/benchmark.tsv 2>/dev/null || echo 0)
+          if [ "$rc" -eq 0 ] && [ "$ok_rows" -eq 0 ]; then
+            echo "::error::benchmark.tsv 全表 skip —— 二进制不可用或 --list-tests 失败(见上方 benchmark.log)"
+            rc=1
+          fi
           exit $rc
 
       # ---- 上传结果(成功与否都传,便于诊断) ----
