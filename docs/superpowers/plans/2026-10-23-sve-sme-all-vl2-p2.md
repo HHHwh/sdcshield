@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - 依赖排序：**测试分支 `feat/sme-fmopa-za-allvl` 从 `feat/arm64-vl-api`（PR #277，未合并）切出**（堆叠 PR）；若 #277 先合并，rebase 到 main（无冲突预期：两 PR 文件集不相交）。
-- 本机 0xd01 无 SVE/SME：测试只能验证构建零告警 + SKIP 路径；**全部功能结论以 gem5 四档真实 run 为准**（规则 2b）。gem5-fi 真实路径 `/home/sdc/wangxu/code-review/gem5-fi`。
+- 本机 0xd01 无 SVE/SME：测试只能验证构建零告警 + SKIP 路径；**全部功能结论以 gem5 四档真实 run 为准**（规则 2b）。gem5-fi 真实路径 `/home/sdc/wangxu/operator/gem5-fi`（二轮勘正:原写 code-review/ 系搬迁前旧路径,本机已不存在）。
 - 构建入口 `./scripts/build.sh`；回归 `./builddir/sdcshield -e zstd19 -t 2000 -n 1` → `exit: pass`；meson 改动须 `meson setup --reconfigure builddir`。
 - DCO：`git commit -s` 末行 `Signed-off-by: wangxu <wangxumarshall@qq.com>`，无 Co-Authored-By；永不提交 main；一单元一 patch。
 - x86-64 零改动；SME 测试全部在 `#if defined(__aarch64__)` 内。
@@ -53,7 +53,7 @@
 - [ ] **Step 1: gem5-fi 仓分支与身份**
 
 ```bash
-cd /home/sdc/wangxu/code-review/gem5-fi
+cd /home/sdc/wangxu/operator/gem5-fi
 git config user.name "wangxu" && git config user.email "wangxumarshall@qq.com"   # 若已配置则跳过
 git checkout -b feat/fmopa-za-dual    # 基于 main @ 9dbbbbba
 ```
@@ -105,7 +105,9 @@ static uint32_t xs32(void)
 }
 
 static unsigned g_fails = 0;
-static uint64_t fnv = 1469598103934665603ULL;
+static uint64_t fnv = 14695981039346656037ULL;  /* canonical FNV-1a 64 offset
+                                                   basis 0xcbf29ce484222325 —
+                                                   二轮勘正:原值掉尾位 7 */
 static void fnv_u32(uint32_t v)
 {
     fnv ^= v & 0xFF;         fnv *= 1099511628211ULL;
@@ -188,7 +190,9 @@ int main(int argc, char **argv)
         /* 注: 输出 %[a]/%[b]/%[n] 在输入 [s]/[o] 读尽前已写,GCC 语义上理论
            正确形为 "+&r";保持 "+r" 系与 ebe08632 已验证 kernel 及仓库惯例
            (sme_fmopa_stress_arm / za_tileview)逐字同源,统一硬化留待后续 PR
-           (三处 SME asm 一并改 "+&r" 并重跑 16-run)。 */
+           (四处 SME asm 一并改 "+&r" 并重跑 16-run:gem5-fi kernel ebe08632
+           + 本测试 + sme_fmopa_stress_arm + za_tileview——kernel 若不计入,
+           硬化落地即与测试静默失同步,见 Erratum 8)。 */
     }
 
     int row_ok = 1, col_ok = 1;
@@ -202,10 +206,14 @@ int main(int argc, char **argv)
         if (ob != cb) col_ok = 0;
     }
     if (row_ok && col_ok) {
-        /* row0 == col0 at this seed: patterns degenerated — rerun with a
-           different seed (the operator notes it); treat as failure here. */
-        fprintf(stderr, "row/col goldens identical — seed %u degenerate, "
-                        "rerun with another seed\n", seed);
+        /* row0 == col0: patterns degenerated — treat as failure here. Remedy
+           is mode-aware: only random mode consumes the seed; fixed mode
+           fills (si%7)+1/(si%5)+1 and is seed-independent, so "rerun with
+           another seed" is a no-op there (二轮勘正). */
+        fprintf(stderr, "row/col goldens identical (%s mode) — rerun in "
+                        "random mode with another seed; fixed mode is "
+                        "seed-independent, treat as test-data failure\n",
+                mode);
         return 1;
     }
     if (!row_ok && !col_ok) {
@@ -239,22 +247,27 @@ sme_fmopa_za_dual: sme_fmopa_za_dual.c
 - [ ] **Step 4: 四档 × {fixed, random×3} = 16 run**
 
 ```bash
-G5=/home/sdc/wangxu/code-review/gem5-fi/build/ARM/gem5.opt
+G5=/home/sdc/wangxu/operator/gem5-fi/build/ARM/gem5.opt
 overall=0
 for T in 1 2 4 8; do
   for ARGS in "fixed 1" "random 1" "random 2" "random 3"; do
+    LOG=/tmp/fza_sve${T}_$(echo $ARGS | tr ' ' '_').log
     timeout 600 $G5 configs/se/arm_chaos.py --cpu O3 \
       --cmd workloads/sdcshield/sme_fmopa_za_dual --sme_vl $T --sve_vl $T \
-      --workload_args "$ARGS" 2>&1 | tee /tmp/fza_sve${T}_$(echo $ARGS | tr ' ' '_').log \
+      --workload_args "$ARGS" 2>&1 | tee $LOG \
       | grep -E 'sme_fmopa_za_dual|SDCSHIELD_FAILS|checksum|mismatch'
     rc=${PIPESTATUS[0]}      # timeout/gem5 的真实退出码,不是 grep 的
-    echo "tier=$T args='$ARGS' exit=$rc"
+    grep -q '^SDCSHIELD_FAILS=0$' $LOG   # 程序化比对(二轮补):绿灯不再
+    fails_ok=$?                          # 悬置于 gem5 透传退出码的假设
+    grep -q 'axis=UNKNOWN' $LOG && fails_ok=1
+    echo "tier=$T args='$ARGS' exit=$rc fails_ok=$fails_ok"
     [ "$rc" -ne 0 ] && overall=1
+    [ "$fails_ok" -ne 0 ] && overall=1
   done
 done
 exit $overall
 ```
-Expected 逐档：`cols=4/8/16/32`（=128/256/512/1024-bit）；**axis= 四档一致**（记录 ROW 还是 COLUMN——这是 Task 2 golden 公式的依据）；全部 `SDCSHIELD_FAILS=0`；random 各 seed checksum 互异、fixed/random 可比即记录；**exit≠0 或 axis=UNKNOWN 的档位不得计入全绿、不得作为 Task 2 golden 依据**。若 gem5 在 smstart/fmopa 处崩溃（SIGILL 类）→ za-only 非法，改 `smstart sm`+`smstart za` / `smstop za`+`smstop sm`（stress 先例 :121-122/:150-151），重跑全部 16 run 并在 findings.md 记录裁决过程。若 axis 判别失败（两 golden 均不匹配）→ 看 mismatch dump，如实上报，不改数据迁就。
+Expected 逐档：`cols=4/8/16/32`（=128/256/512/1024-bit）；**axis= 四档一致**（记录 ROW 还是 COLUMN——这是 Task 2 golden 公式的依据）；全部 `SDCSHIELD_FAILS=0`（脚本已程序化比对 `^SDCSHIELD_FAILS=0$` 与 axis≠UNKNOWN——二轮补，原先 FAILS 只出现在展示 grep 里、从未被比对，绿灯悬置于"gem5.opt 把 SE 客户机退出码透传为宿主退出码"这一未验证假设上）；random 各 seed checksum 互异、fixed/random 可比即记录；**exit≠0、fails_ok≠0 或 axis=UNKNOWN 的档位不得计入全绿、不得作为 Task 2 golden 依据**。若 gem5 在 smstart/fmopa 处崩溃（SIGILL 类）→ za-only 非法，改 `smstart sm`+`smstart za` / `smstop za`+`smstop sm`（stress 先例 :121-122/:150-151），重跑全部 16 run 并在 findings.md 记录裁决过程。若 axis 判别失败（两 golden 均不匹配）→ 看 mismatch dump，如实上报，不改数据迁就。
 
 - [ ] **Step 5: findings.md + 提交推送**
 
@@ -266,7 +279,7 @@ findings.md 尾部：日期、16 run 表（tier/mode/cols/axis/checksum/FAILS/ex
 - Modify: `tests/cpu/arm64/sme_fmopa_za_arm.cpp`（全文重构 init/asm/golden/run/docblock）
 
 **Interfaces:**
-- Consumes: `arm64_require_sme_svl(struct test *, long min_bits, long max_bits) -> long`（>0 = SVL 字节；<0 = EXIT_SKIP(-255) 且已 log_skip——非裸 -1，见 arm64_vl.h 头注，直接 return；PR #277，`#include <device/cpu/arm64/arm64_vl.h>`）；Task 1 的 axis 裁决（**COLUMN**，ebe08632 四档实证）与 smstart 形态结论（**sm+za 双切强制**，za-only 首条 FMOPA 即陷阱）。
+- Consumes: `arm64_require_sme_svl(struct test *, long min_bits, long max_bits) -> long`（>0 = SVL 字节；<0 = 已 log_skip 的跳过——**具体负值随分支版本而异，勿做断言**：feat/arm64-vl-api @ d61cc09f 起返回 EXIT_SKIP(-255)（头注 "not a bare -1"），而本计划治理的堆叠分支 feat/sme-fmopa-za-allvl 切自 d61cc09f 之前、require 助手仍返回裸 -1 由调用方翻译（56e916fe 头注 "test_init translates it to EXIT_SKIP (-255)"）——同名头注两分支各说一词，详见 Erratum 4。**消费军规：一律 `svl < 0` 判定并 `return EXIT_SKIP`，禁止 `== -1`/`== EXIT_SKIP` 相等匹配**（任一形态下相等匹配都会漏判另一形态，漏判侧 `(size_t)负值/…` 巨量分配直接爆炸）；#280 rebase 到 #277 之后契约统一为 EXIT_SKIP(-255)；PR #277，`#include <device/cpu/arm64/arm64_vl.h>`）；Task 1 的 axis 裁决（**COLUMN**，ebe08632 四档实证）与 smstart 形态结论（**sm+za 双切强制**，za-only 首条 FMOPA 即陷阱）。
 - Produces: SME 侧全部达标（spec §6 P2 出口）。
 
 - [ ] **Step 1: 堆叠分支**
@@ -306,7 +319,9 @@ static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
         : [o] "r"(out_vec), [s] "r"(stride)
         : "z0", "z1", "z2", "p0", "w12", "memory", "cc");
     /* 注: 输出 %[a]/%[b]/%[n] 在输入 [s]/[o] 读尽前已写,理论正确形 "+&r";
-       保持 "+r" 与 ebe08632 已验证形态及仓库惯例逐字同源,统一硬化留待后续 PR。 */
+       保持 "+r" 与 ebe08632 已验证形态及仓库惯例逐字同源,统一硬化留待后续
+       PR——四处同步(gem5-fi kernel ebe08632 + 本测试 + sme_fmopa_stress_arm
+       + za_tileview),见 Erratum 8。 */
 }
 ```
 
@@ -338,8 +353,12 @@ static int sme_fmopa_za_arm_init(struct test *test)
 #else
     const long svl = arm64_require_sme_svl(test, 128, 1024);
     if (svl < 0)
-        return EXIT_SKIP;   /* helper returns EXIT_SKIP(-255), not a bare -1;
-                               log_skip already emitted (capability or range) */
+        return EXIT_SKIP;   /* negative = skip already log_skip'ed (capability
+                               or range). The concrete value is branch-version-
+                               dependent (EXIT_SKIP on feat/arm64-vl-api @
+                               d61cc09f+, bare -1 caller-translated on the
+                               stacked branch) — hence the < 0 test, never
+                               equality (see Erratum 4) */
 
     try {
         auto data = std::make_unique<SmeFmopaData>();
@@ -440,7 +459,7 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
 ```
 （比较改 memcmp 字节级整块比较 + 首失配定位日志——spec §8 军规口径。）
 
-**验证边界诚实声明（P2 评审裁决补记）**：本计划的验证架构存在结构性盲区——gem5 只执行 Task 1 kernel，测试粘合层（init 流尺寸/golden 组装/run 缓冲）在本机与 gem5 均零执行覆盖。缓解防线：① 测试 fixed 模式与 kernel 逐字节几何同构（操作数公式 `(si%7)+1/(si%5)+1`、`MOPA_STEPS=256`、golden 公式三者与 kernel 一致），16-run 证据经同构锚定直达测试 golden；② run 侧一步自检使真机首跑即校验 golden 组装；③ init 的 cols∈[4,32] 显式检查兜住单位漂移。此声明源自 PR #279 五 bot 检视（local-claude 意见），Self-Review 原文"范围检查 ✓"据实勘正为"bits 区间 + 派生 cols∈[4,32] 双重检查"。
+**验证边界诚实声明（P2 评审裁决补记；二轮再勘）**：本计划的验证架构存在结构性盲区——gem5 只执行 Task 1 kernel，测试粘合层（init 流尺寸/golden 组装/run 缓冲）在本机与 gem5 均零执行覆盖。缓解防线：① 测试 fixed 模式与 kernel 逐字节几何同构（操作数公式 `(si%7)+1/(si%5)+1`、`MOPA_STEPS=256`、golden 公式三者与 kernel 一致），16-run 证据经同构锚定直达测试 golden——**该同构由人工誊写维持、无机械比对步骤**（四处副本：gem5-fi kernel ebe08632 / 本测试 / sme_fmopa_stress_arm / za_tileview，跨仓无法 build-time 断言；Erratum 1 的 /32 事故正是发生在这条誊写缝上、由外部检视而非计划内检查捕获），后续 '+&r' 统一硬化 PR 须四处同步防锚点漂移；② run 侧一步自检使真机首跑即校验 golden 组装；③ init 的 cols∈[4,32] 显式检查**部分**兜住单位漂移——/32 类错误在 128/256/512-bit 档派生 cols=0/1/2 被拦，1024-bit 档 128/32=4 恰落区间内放行（该档 asm 按 ptrue 跑 32 lane、流按 cols=4 建模，前缀 memcmp 与一步自检双绿的同时 st1w 每轮向 16 字节缓冲写 128 字节、尾步 ld1w 同步越界读）；**全档兜底是 run 侧 `arm64_sme_svl_bytes()/4 != cols` fail-closed 断言**，防线排序以 run 侧为主、区间检查为辅。此声明源自 PR #279 五 bot 检视（local-claude 意见），Self-Review 原文"范围检查 ✓"据实勘正为"bits 区间 + 派生 cols∈[4,32] 双重检查"。
 
 头部 includes：`#ifdef __aarch64__` 块内 `<sys/auxv.h>/<asm/hwcap.h>` 换成 `#include <device/cpu/arm64/arm64_vl.h>`（getauxval 手探不再需要）；docblock 重写：三重缺陷修复记载、Task 1 轴向/SMSTART 裁决引用（gem5 run 命令形态 + 16 run 表）、"first functional form"诚实声明。
 
@@ -473,9 +492,13 @@ instead of assuming one tier:
 - **Probe via the framework layer**: `#include
   <device/cpu/arm64/arm64_vl.h>` and call
   `arm64_require_sve_vl(test, min_bits, max_bits)` /
-  `arm64_require_sme_svl(...)` from `test_init`; a negative return
-  (EXIT_SKIP, -255 — deliberately not a bare -1, see arm64_vl.h) means
-  the helper already logged the skip — `return EXIT_SKIP` immediately. Do
+  `arm64_require_sme_svl(...)` from `test_init`; a negative return means
+  the helper already logged the skip — test `< 0` and
+  `return EXIT_SKIP` immediately, NEVER match the exact value: the skip
+  value is EXIT_SKIP (-255) on current arm64_vl.h but a bare -1 on
+  branches cut before that contract fix, and an equality test
+  (`== -1` / `== EXIT_SKIP`) that misses the other form lets the
+  negative fall through as a bogus huge size. Do
   not hand-write getauxval probes: `device_has_feature()` is
   short-circuited by compile-time `__ARM_FEATURE_*` macros in +sve/+sme
   TUs (docs/architecture.md).
@@ -512,7 +535,7 @@ instead of assuming one tier:
 
 ---
 
-## Erratum（2026-10-24，PR #279 五 bot 检视闭环）
+## Erratum（一轮 2026-10-24 / 二轮 2026-10-25，PR #279 五 bot 检视闭环；二轮修订 1/3/4、新增 6-9）
 
 1. **`/32` 单位错误（Critical）**：原模板 init/run 两处 `svl / 32` 把
    arm64_require_sme_svl 返回的 **SVL 字节**当作位处理，差 8×——128-bit 档
@@ -521,6 +544,10 @@ instead of assuming one tier:
    `feat/sme-fmopa-za-allvl` 提交 38faa1b3 已在代码侧修复（`/32→/4` + 显式
    cols∈[4,32] 检查），本计划模板本节同步修正，并指出根因：**P2 计划模板
    自相矛盾**（Interfaces 说明写"字节"，代码块写 `/32`）。
+   **二轮再勘（防线③口径）**：cols∈[4,32] 检查对 /32 漂移仅 128/256/512 档
+   有效（cols=0/1/2），1024 档 cols=4 恰落区间放行（前缀一致假 PASS +
+   st1w 每轮溢出 112 字节）——修复主力是 `/4` 本身与 run 侧 fail-closed
+   断言，区间检查只是部分档位的辅助网，验证边界声明防线③已同步改写。
 2. **Task 1 两项裁决已落定**（原模板为未决占位）：**axis=COLUMN**
    （`za0v.s[w12,0]` 读列 0）；**sm+za 双切强制**（za-only 下首条 FMOPA 即
    陷阱，FMOPA 需 SVCR.SM=1）——证据 = gem5-fi `feat/fmopa-za-dual @
@@ -530,14 +557,56 @@ instead of assuming one tier:
    overall 汇总。kernel 输出补 `checksum=` 标签（原裸十六进制行被自家
    grep 过滤式排除）、axis 双失配时输出 UNKNOWN 而非武断 COLUMN、
    fnv/比对 memcpy 化（消严格别名 UB、字节级 per-lane）。
-4. **跳过返回值契约勘误**：Interfaces 与 Task 3 政策原文"-1 = 已
-   log_skip"系错误——实际契约是 EXIT_SKIP(-255)（arm64_vl.h 头注明确
-   "not a bare -1"）。两处已改，Task 3 文本将进入 writing_tests.md 持久
-   指南，此处勘误杠杆最高。
+   **二轮补充（FAILS 程序化比对）**：一轮修正后 SDCSHIELD_FAILS 仍只出现
+   在展示 grep 里、从未被程序化比对，绿灯悬置于"gem5.opt 把 SE 客户机
+   退出码透传为宿主退出码"这一未验证假设上——脚本再加 `grep -q
+   '^SDCSHIELD_FAILS=0$'` 与 axis≠UNKNOWN 两条程序化检查（fails_ok）。
+   既有 16-run 表（findings.md @ ebe08632）的 exit 列取自修前脚本（grep
+   退出码），该列仅"有匹配行"语义；权威逐 run 证据是 kernel 自身 stdout
+   的 FAILS/axis/checksum/cols 列，未来重跑以修正后脚本为准。
+4. **跳过返回值契约勘误（二轮再勘：契约随分支分裂，一轮断言只对了一半）**：
+   Interfaces 与 Task 3 政策原文"-1 = 已 log_skip"系错误；一轮勘误改写为
+   "实际契约是 EXIT_SKIP(-255)"——但该断言对**本计划治理的执行分支**不
+   成立：feat/arm64-vl-api @ d61cc09f（2026-10-23 18:35）起 require 助手
+   返回 EXIT_SKIP(-255)（头注 "not a bare -1"），而 feat/sme-fmopa-za-allvl
+   切自 d61cc09f 之前，其 arm64_vl.h 仍 `return -1` 由调用方翻译
+   （56e916fe 头注 "test_init translates it to EXIT_SKIP (-255)"）——
+   同名头注两分支各说一词。功能结论：`if (svl < 0) return EXIT_SKIP` 在
+   两种契约下均安全（本计划模板与 #280 实现均如此，framework 对 init 的
+   非 EXIT_SKIP 负返回仅追加 strerror 噪声不改变 Skipped 分类）；危险
+   形态仅是相等匹配（`== -1` 漏 EXIT_SKIP / `== EXIT_SKIP` 漏 -1，漏判侧
+   `(size_t)负值/…` 巨量分配）。Interfaces/init 模板注释/Task 3 政策
+   三处已改为值无关的 `< 0` 军规；#280 rebase 到 #277 后契约统一为
+   EXIT_SKIP(-255)，届时 writing_tests.md 落地文本即为终态契约。
 5. 评审出处：PR #279 五 bot 检视（coderabbit 6 条 / local-claude 6 条 /
    pr-agent、codex、greptile 限额类），处置明细见 PR 描述。自检失配
    "test bug, not SDC" 分类措辞中性化（自检走同一硬件路径，无独立 oracle
-   依据支撑分类断言）。
+   依据支撑分类断言）。二轮：local-claude 6 条（契约分裂/防线③1024 档/
+   FNV 基数/fixed 模式 seed 空操作/FAILS 程序化比对/四处同步清单）+
+   codex 配额类，全部采纳，处置见本节 1/3/4 修订与 6-9 新增。
+6. **FNV-1a 64 位 offset basis 掉尾笔误（二轮）**：kernel 模板与实际执行
+   kernel（gem5-fi ebe08632）的偏移基数均为 1469598103934665603——规范值
+   14695981039346656037（0xcbf29ce484222325）掉尾位 7；质数 1099511628211
+   正确。findings.md 的 16 个 checksum 即以 typo 基数计算：比较性结论
+   （16 值互异、档位一致、axis 全 COLUMN）不受影响，但与标准 FNV-1a 工具
+   互验必然对不上。模板本节已改规范值；kernel 侧修正 + 16-run 重跑属
+   gem5-fi 仓后续工作（重跑后 checksum 全变，须同步 findings.md 及
+   PR #280 的引用），不由本计划文档承载。
+7. **fixed 模式 degenerate 补救语空操作（二轮）**：kernel degenerate 分支
+   原消息 "rerun with another seed" 在 fixed 模式下是空操作——fixed 填充
+   `(si%7)+1/(si%5)+1` 与 seed 无关，16-run 协议含 "fixed 1" 四次。消息
+   已改模式感知（random 换 seed / fixed 视为测试数据失败）。16 run 中该
+   分支从未触发（四档 axis 均 COLUMN、非退化），无证据影响。
+8. **'+&r' 统一硬化范围勘误（二轮）**：原注 "三处 SME asm" 未把 gem5-fi
+   kernel 计入——四处副本：gem5-fi kernel（ebe08632）、本测试
+   fmopa_chain_asm、sme_fmopa_stress_arm、za_tileview；硬化 PR 若只改仓内
+   三处，kernel 即与测试静默失同步（同源锚点漂移）。两处 asm 注释与验证
+   边界声明防线①已同步改写，并如实记录：几何同构现由人工誊写维持、无
+   机械比对步骤（跨仓无法 build-time 断言），/32 事故正发生在这条誊写缝上。
+9. **gem5-fi 路径勘正（二轮，可复现性）**：本计划三处
+   `/home/sdc/wangxu/code-review/gem5-fi` 系搬迁前旧路径，本机已不存在；
+   实际路径 `/home/sdc/wangxu/operator/gem5-fi`（近期计划文档已统一），
+   三处已改。
 
 ## Self-Review 记录
 
