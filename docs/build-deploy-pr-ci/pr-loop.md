@@ -111,7 +111,10 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   `QUIET_WINDOW`（五 bot 完成但最新信号距今 < quiet）/ `READY_TO_FIX`（完成 + 过静默窗
   + 有待处置意见或数据不完整）/ `READY_TO_MERGE`（完成 + 过静默窗 + 零意见）。
   annotations 拉取失败时数据不完整，不给 `READY_TO_MERGE`（诚实性：无法确认「零意见」
-  时不提示合并），转 `READY_TO_FIX` 由人工复核。
+  时不提示合并），转 `READY_TO_FIX` 由人工复核；**超容差疑似误杀的可行动意见**
+  （`pending_skew_opinions`：严格锚定当前 head、却落在锚前 >容差 被时间锚排除的
+  可行动意见，判据与意见计数完全同口径、仅锚定分支不同）同理阻断 `READY_TO_MERGE`
+  ——不因超带静默丢意见后误判「零意见可合并」，status/wait/collect 各出口均提示。
 - **双锚定（防误判）**：review / 评论类信号须 `submitted_at`/`created_at` ≥ 当前 head
   的 **push 时间**（仓库 events 的 PushEvent `created_at`——本地 commit 与 push 之间
   存在窗口期，窗口内旧 head 的意见会被 committer date 锚误计入；events API 只保留
@@ -129,7 +132,11 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   commit 锚**严格匹配**（锚定字段存在且 `== head`，字段缺失不算）的条目在锚前
   300s 内仍计入。pr-agent 检视评论是 PR(issue)评论的唯一例外：回退锚容差窗口内仅
   `last_run.head_sha` 严格命中者计入；无 commit 绑定字段的其余 issue 评论不放宽
-  （放宽须以「可证属于当前 head」为前提）。check-run 信号须 `head_sha` 精确等于
+  （放宽须以「可证属于当前 head」为前提）。严格锚命中却落在锚前 **>容差** 的条目
+  （时钟超带或同 SHA 强推回退）只剩两种解释，均须人工甄别：记入 `skew_suspects`
+  诊断（status/wait/collect 告警行），其中**可行动意见**（判据与意见计数同口径）
+  另计入 `pending_skew_opinions` 阻断 `READY_TO_MERGE`；锚定推导（push 锚严格 / 回退
+  锚放宽 300s）由 `anchor_and_skew()` 单一真源提供。check-run 信号须 `head_sha` 精确等于
   PR head 且 `status == completed`。
 - **意见计数口径**：双锚定后的**待处置意见**数 = 有正文的 COMMENTED/CHANGES_REQUESTED
   review + 行级评论 + PR 评论 + check annotations。摘要/LGTM 类不计：APPROVED/
@@ -140,6 +147,10 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   全量含 notice 级）。annotations 拉取失败时如实提示「计数可能低估」，不假报。
 - **collect 全量导出**：意见明细不因「摘要/计数排除」而丢弃——摘要/报告类条目标注
   「未计入待处置意见数」，锚定不符的条目标注「非当前 head」，由 subagent 通读甄别。
+  「当前 head / 历史轮次」标注**直接复用计入判定的锚定结果**（`head_anchored` /
+  `issue_comment_anchored`，与意见计数同源）——容差窗口内被计数排除的条目（无严格锚 /
+  锚不命中 / pr-agent 显式错误 `last_run.head_sha`）标「历史轮次」，杜绝导出与计数
+  两口径分叉导致的重复处置。
   check-run 的 `output.summary`/`output.text` 一并导出（标注为不可信检视数据）。
 - **范围**：只处理同仓库分支的 PR；fork / draft 如实标注跳过。
 
