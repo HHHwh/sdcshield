@@ -26,7 +26,9 @@
  *                            the first FMOPA (gem5 SME model
  *                            smEnCheckCode; empirically settled at all
  *                            four tiers by the dual kernel, gem5-fi
- *                            feat/fmopa-za-dual @ ebe08632). Inside the
+ *                            feat/fmopa-za-dual @ ebe08632, re-anchored
+ *                            by the hardened-asm rerun feat/pr280-r2-dual
+ *                            @ 959a5fa7). Inside the
  *                            streaming window only the streaming-
  *                            compatible subset may run (the fa64=0
  *                            constraint on 0xd22) — the block contains
@@ -136,15 +138,25 @@ static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
                             size_t steps, float *out_vec, size_t cols)
 {
     const size_t stride = cols * sizeof(float);
-    /* Operand-constraint contract: [a]/[b]/[n] are written inside the loop
-       BEFORE [o]/[s] are consumed (st1w to [o] happens after the loop) —
-       in theory that makes them early clobbers, so the correct form is
-       "+&r" (the compiler must not assign [o]/[s] the same registers).
-       The current "+r" is the four-tier gem5-verified form, byte-identical
-       to the dual kernel at ebe08632; hardening to "+&r" (plus a four-tier
-       re-run to re-anchor the evidence) is deliberately deferred to a
-       follow-up commit — this batch documents the contract without
-       changing the encoding. */
+    /* Operand-constraint contract (review R2, hardened): [a]/[b]/[n] are
+       in-out ("+r") operands whose outputs are written inside the loop
+       BEFORE input [o] is consumed by the final st1w, so they carry the
+       early-clobber modifier ("+&r") per the GCC extended-asm contract
+       (outputs without '&' are assumed written only after all inputs are
+       consumed). Belt-and-braces rather than a bug fix: as in-out
+       operands their ENTRY values are simultaneously live with [o]/[s]
+       at the asm boundary, so the allocator cannot alias them with
+       distinct-valued inputs anyway — the classic early-clobber hazard
+       is write-only ("=r") outputs, which this asm does not have; the
+       '&' documents the write-before-read contract instead of relying on
+       allocator internals. Constraints never change the asm template
+       bytes, only register allocation. Re-anchored four-tier evidence:
+       gem5-fi feat/pr280-r2-dual @ 959a5fa7 (kernel synced in lockstep).
+       Clobber contract: SMSTART SM / SMSTOP SM transitions make the
+       ENTIRE Z0-Z31 / P0-P15 / FFR contents UNKNOWN (AAPCS-SME), not
+       just the registers this template names — the full file is
+       declared so the compiler never keeps live vector state across the
+       streaming window. GPRs are preserved by streaming mode. */
     __asm__ volatile(
         "smstart sm\n\t"
         "smstart za\n\t"
@@ -163,14 +175,21 @@ static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
         "st1w {z2.s}, p0, [%[o]]\n\t"
         "smstop za\n\t"
         "smstop sm\n\t"
-        : [a] "+r"(a_stream), [b] "+r"(b_stream), [n] "+r"(steps)
+        : [a] "+&r"(a_stream), [b] "+&r"(b_stream), [n] "+&r"(steps)
         : [o] "r"(out_vec), [s] "r"(stride)
-        : "z0", "z1", "z2", "p0", "w12", "memory", "cc");
+        : "z0", "z1", "z2", "z3", "z4", "z5", "z6", "z7",
+          "z8", "z9", "z10", "z11", "z12", "z13", "z14", "z15",
+          "z16", "z17", "z18", "z19", "z20", "z21", "z22", "z23",
+          "z24", "z25", "z26", "z27", "z28", "z29", "z30", "z31",
+          "p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7",
+          "p8", "p9", "p10", "p11", "p12", "p13", "p14", "p15",
+          "ffr", "w12", "memory", "cc");
 }
 
 // Scalar golden over the operand windows, exact integer accumulation.
-// Axis verdict (gem5-fi sme_fmopa_dual @ ebe08632, four tiers x
-// {fixed, random x3} = 16 runs, SDCSHIELD_FAILS=0): mova
+// Axis verdict (gem5-fi sme_fmopa_za_dual @ ebe08632, re-anchored by the
+// hardened-asm + FNV-corrected rerun feat/pr280-r2-dual @ 959a5fa7; four
+// tiers x {fixed, random x3} = 16 runs each, SDCSHIELD_FAILS=0): mova
 // za0v.s[w12,0] with w12=0 reads COLUMN 0 —
 //   readout[r] = ZA[r][0] = sum_s z0[r] * z1[0] = sum_s a[s*cols+r] * b[s*cols]
 static std::vector<float> fmopa_golden(const std::vector<float> &a_stream,
