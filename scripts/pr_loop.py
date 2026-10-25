@@ -1300,12 +1300,13 @@ def _collect_entries(pr: PRData) -> list:
     # (anchor, skew) 推导单一真源(与意见计数同口径,检视意见 8)。
     anchor, skew = anchor_and_skew(pr.push_time, pr.head_time)
 
-    def era_mark(ts: datetime) -> str:
-        # 阈值与意见计数同口径: 时间锚下界 = push_time(可得,严格)或 head_time
-        # (回退,放宽 CLOCK_SKEW_TOLERANCE)。否则回退锚容差窗口内(锚前 ≤300s)
-        # 被计入的条目会被标「历史轮次勿重复处置」——计入了却叫人勿处置,自相
-        # 矛盾(自检发现);push_time 锚下窗口为空,同样与计数一致。
-        if ts >= anchor - skew:
+    def era_mark(anchored: bool) -> str:
+        # 检视意见 7: 标注直接复用计入判定的锚定结果(head_anchored /
+        # issue_comment_anchored),不再按时间阈值另行推导——回退锚容差窗口内
+        # 「无严格锚/锚不命中」的条目计数侧不计入,时间阈值口径却标「当前
+        # head」,两口径分叉令旧 head 意见被当作当前 head 重复处置(实测
+        # 复现);push_time 锚下同理。era_mark 现与 opinion_count 完全同源。
+        if anchored:
             return "当前 head"
         return "历史轮次(GitHub 重锚定: 产生于当前 head 之前,仅供参考,勿重复处置)"
 
@@ -1319,12 +1320,14 @@ def _collect_entries(pr: PRData) -> list:
         ts = parse_ts(r.get("submitted_at"))
         if ts is None:
             continue
+        anchored = head_anchored(r, "submitted_at", anchor,
+                                 ("commit_id",), pr.head_sha, skew)
         extra = ""
         cid = r.get("commit_id")
         if cid and cid != pr.head_sha:
             extra = f" — review 锚定 head {cid[:8]}(非当前 head)"
         entries.append((ts,
-                        f"[{bot}] Review(state={r.get('state')}) — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
+                        f"[{bot}] Review(state={r.get('state')}) — {fmt_ts(ts)} — {era_mark(anchored)}{extra}",
                         (r.get("body") or "").strip() or "(无正文)"))
     for c in pr.review_comments:
         bot = bot_of(c)
@@ -1336,6 +1339,9 @@ def _collect_entries(pr: PRData) -> list:
         ts = parse_ts(c.get("created_at"))
         if ts is None:
             continue
+        anchored = head_anchored(c, "created_at", anchor,
+                                 ("original_commit_id", "commit_id"),
+                                 pr.head_sha, skew)
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
         cid = c.get("id")
         id_suffix = f" (id={cid})" if cid is not None else ""
@@ -1344,7 +1350,7 @@ def _collect_entries(pr: PRData) -> list:
         if oid and oid != pr.head_sha:
             extra = f" — 评论锚定 head {oid[:8]}(非当前 head)"
         entries.append((ts,
-                        f"[{bot}] 行级评论 {loc}{id_suffix} — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
+                        f"[{bot}] 行级评论 {loc}{id_suffix} — {fmt_ts(ts)} — {era_mark(anchored)}{extra}",
                         (c.get("body") or "").strip() or "(无正文)"))
     for c in pr.issue_comments:
         bot = bot_of(c)
@@ -1358,6 +1364,15 @@ def _collect_entries(pr: PRData) -> list:
         ts = parse_ts(c.get("created_at"))
         if ts is None:
             continue
+        anchored = issue_comment_anchored(c, anchor, pr.head_sha, skew)
+        # pr-agent 显式错误 last_run.head_sha: 计数侧 issue_comment_bot 不认
+        # (排除语义,pr_loop.py issue_comment_bot),导出标注同口径不标
+        # 「当前 head」(检视意见 7);head 缺失/解析失败保持 anchored 原值
+        # (回退时间锚定语义,与计数侧一致)。
+        if (pragent_comment(c)
+                and pragent_comment_head(c) is not None
+                and not pragent_strict_head(c, pr.head_sha)):
+            anchored = False
         extra = ""
         if bot == "pr-agent":
             head = pragent_comment_head(c)
@@ -1366,7 +1381,7 @@ def _collect_entries(pr: PRData) -> list:
         if is_summary_text(c.get("body") or ""):
             extra += " — 摘要/报告类(未计入待处置意见数)"
         entries.append((ts,
-                        f"[{bot}] PR 评论 — {fmt_ts(ts)} — {era_mark(ts)}{extra}",
+                        f"[{bot}] PR 评论 — {fmt_ts(ts)} — {era_mark(anchored)}{extra}",
                         (c.get("body") or "").strip() or "(无正文)"))
     entries.sort(key=lambda e: e[0])
     return entries
