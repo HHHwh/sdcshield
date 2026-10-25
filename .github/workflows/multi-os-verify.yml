@@ -277,31 +277,17 @@ jobs:
           bash scripts/gha/benchmark.sh "$(pwd)/builddir/sdcshield" "$(pwd)/benchmark" \
             > benchmark.log 2>&1 || rc=$?
           cat benchmark.log
-          # benchmark.sh 设计为采集非闸门(无 -e + 每条基准 || true): 进程级失败
-          # 只剩 usage/mkdir 类; 真实失败模式是二进制不可用 → LIST 空 → 全表
-          # skip 且 exit 0(静默退化), 空 JSON 会无声流入 gh-pages 基准趋势。
-          # 闸门: 一行非 skip 都没有 = 采集整体废掉, 必须红。
-          ok_rows=$(awk -F'\t' 'NR>1 && $2 != "skip" {n++} END{print n+0}' \
-            benchmark/benchmark.tsv 2>/dev/null || echo 0)
-          if [ "$rc" -eq 0 ] && [ "$ok_rows" -eq 0 ]; then
-            echo "::error::benchmark.tsv 全表 skip —— 二进制不可用或 --list-tests 失败(见上方 benchmark.log)"
-            rc=1
-          fi
-          # 部分退化告警(不红):单基准崩溃被 benchmark.sh 记为 skip(YAML 缺失,
-          # benchmark.sh 48-49 行 || true 吞掉现场),benchmark-to-json 随后静默
-          # 剔除该行 → 趋势数据点无声消失(2026-10-25 run 40177906937 的
-          # 24.03-LTS-SP2 memcpy_l2_cache_size 即此情形)。加 ::warning:: 把
-          # 零告警变为可观测;不收紧红阈值——缺席与崩溃在 TSV 层不可区分,
-          # 硬阈值会误伤合法缺席,BENCH_TESTS 声明为三系列交集故正常应为 0。
-          if [ "$rc" -eq 0 ]; then
-            skip_rows=$(awk -F'\t' 'NR>1 && $2 == "skip" {n++} END{print n+0}' \
-              benchmark/benchmark.tsv 2>/dev/null || echo 0)
-            if [ "$skip_rows" -gt 0 ]; then
-              names=$(awk -F'\t' 'NR>1 && $2 == "skip" {printf "%s ", $1}' \
-                benchmark/benchmark.tsv 2>/dev/null || true)
-              echo "::warning::benchmark 部分退化:${skip_rows} 行 skip(${names})—— 对应趋势数据点将缺失;若为单基准崩溃,现场已被 benchmark.sh 吞掉,需本地复跑定位"
-            fi
-          fi
+          # 闸门(scripts/gha/benchmark-gate.py——verify 与 benchmark-trend 共用
+          # 的同一分类权威, 取代原先 YAML 内联的三份 awk 拷贝):
+          #   ok   = wall_seconds 可按数值解析(与 benchmark-to-json.py 口径一致)
+          #   skip = 缺席或运行时跳过——良性缺数据点, ::warning:: 点名
+          #   fail = 在列但未产出可用数据(进程失败/测试 fail/格式漂移)——红
+          # ok=0(采集整体废掉)同样红。原「≥1 行非 skip 即绿」的全有全无阈值
+          # 废弃:缺席/失败已在采集侧(benchmark.sh)区分, 闸门不再需要妥协。
+          # 注:原注释把 run 40177906937 SP2 的 memcpy skip 行归因为「单基准
+          # 崩溃」有误——同 job allquality 全量扫描里该测试存在且 pass, 该行
+          # 实为 --list-tests 一次性部分输出被静默当缺席(已在 benchmark.sh 修)。
+          python3 scripts/gha/benchmark-gate.py verify benchmark/benchmark.tsv || rc=1
           exit $rc
 
       # ---- 上传结果(成功与否都传,便于诊断) ----
@@ -422,19 +408,17 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # 消费侧闸门:verify job 的 benchmark 步骤全表 skip 时本 job 仍以
-          # !cancelled() 运行,upload if: always() 的 all-skip TSV 会被转成
-          # 空 JSON([])交给 auto-push 的 benchmark-action——坏数据照常流入
-          # gh-pages,verify 侧闸门只报警不拦流。在此拦截:全 skip 不 push
-          # (verify 已红,本 job 定位是趋势更新非闸门,不重复报警)。
-          ok=$(awk -F'\t' 'NR>1 && $2 != "skip" {n++} END{print n+0}' "$tsv")
-          if [ "$ok" -eq 0 ]; then
-            echo "::warning::benchmark.tsv 全表 skip(verify 闸门已红)— 不更新 gh-pages 趋势"
+          # 消费侧闸门(benchmark-gate.py trend——与 verify 同一分类权威, 取代
+          # 原内联 awk): 无数据行(全 skip/fail 或 TSV 不可读)不产 JSON、不
+          # push, 报警归 verify 侧不重复。原内联 awk 无兜底, TSV 不可读时
+          # ok 为空串, [ "$ok" -eq 0 ] 报 integer expression → -e 直接红,
+          # 违背「趋势更新非闸门」定位;gate 非零走 else, step 保持绿。
+          if python3 scripts/gha/benchmark-gate.py trend "$tsv"; then
+            python3 scripts/gha/benchmark-to-json.py "$tsv" bench/benchmark.json
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
-          python3 scripts/gha/benchmark-to-json.py "$tsv" bench/benchmark.json
-          echo "publish=true" >> "$GITHUB_OUTPUT"
       # publish 门控:Convert 在无 TSV / 全 skip 路径 exit 0 且不产
       # bench/benchmark.json, 无条件运行的 benchmark-action 会因读取缺失的
       # output-file-path 失败, 把本「非闸门」job 染红成下游症状(run 39577407937
