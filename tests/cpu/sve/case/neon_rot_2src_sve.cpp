@@ -21,6 +21,12 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
+
+#ifndef SVE_MAX_VECTOR_BYTES
+/* GCC 12 的 arm_sve.h 不提供该 ACLE 宏 (neon_rot_store_only 同款自定义):
+ * SVE 架构最大 VL 2048bit = 256 字节 */
+#define SVE_MAX_VECTOR_BYTES 256
+#endif
 #include <device/cpu/arm64/arm64_vl.h>
 #endif
 
@@ -142,7 +148,7 @@ static int neon_rot_2src_sve_run(struct test *test, int cpu) {
                 svuint64_t r_eor = sveor_u64_x(pg, a, b);
                 svuint64_t r_and = svand_u64_x(pg, a, b);
                 svuint64_t r_orr = svorr_u64_x(pg, a, b);
-                uint64_t phase[8];
+                uint64_t phase[SVE_MAX_VECTOR_BYTES / 8];   /* all-VL: n <= svcntd() <= 16 */
                 int n = (data->count - base < (size_t)lanes) ? (int)(data->count - base) : lanes;
                 for (int k = 0; k < n; ++k) phase[k] = (base + k) % 4;
                 svbool_t pgn = svwhilelt_b64((uint64_t)0, (uint64_t)n);
