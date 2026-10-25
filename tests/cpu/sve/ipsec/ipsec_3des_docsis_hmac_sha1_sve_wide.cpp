@@ -7,7 +7,11 @@
  * @parblock
  * SVE port of ipsec_3des_docsis_hmac_sha1_avx512: AES/3DES encryption stays on OpenSSL EVP while
  * the HMAC-SHA1-96 MAC runs on the multi-stream SVE HMAC implementation
- * (verified bit-for-bit against OpenSSL; see scripts/sve-sha-verify).
+ * (HMAC construction validated same-source in gem5-fi across 128..1024-bit against an
+ * independent scalar oracle and RFC 2202/4231 vectors; the underlying SHA
+ * kernels were verified bit-for-bit against OpenSSL in the original
+ * fixed-stream form — see scripts/sve-sha-verify and
+ * docs/research/progress-log.md).
  * N = svcntw() (32-bit family) independent HMAC lanes run in parallel on
  * SVE vector lanes (all-VL 128..1024-bit, one message per 32-bit lane): lane 0
  * carries the original ciphertext message (MAC semantics identical to the

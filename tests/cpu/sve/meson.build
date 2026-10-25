@@ -298,8 +298,14 @@ if host_machine.cpu_family() == 'aarch64'
     # IPSec domain (24 ports). Two tiers:
     # - HMAC/SHA family (17): encryption stays on OpenSSL EVP, the MAC runs
     #   on the multi-stream SVE HMAC layer (tests/cpu/sve/ipsec/sve_hmac.h
-    #   over sve_sha_kernels.h — both verified bit-for-bit against OpenSSL,
-    #   5200+1360 vectors, see scripts/sve-sha-verify). N = svcntw()/svcntd()
+    #   over sve_sha_kernels.h). The SHA kernels were verified bit-for-bit
+    #   against OpenSSL in the original fixed 8/4-stream form (5200+1360
+    #   vectors, scripts/sve-sha-verify, VL=256 host); the all-VL
+    #   parameterized form is validated same-source in gem5-fi at
+    #   128..1024-bit (independent scalar oracle + RFC 2202/4231 vectors,
+    #   gem5-fi workloads/sdcshield/sve_hmac_dual — verification boundary in
+    #   docs/research/progress-log.md; an OpenSSL re-run needs an SVE host).
+    #   N = svcntw()/svcntd()
     #   lanes (all-VL 128..1024-bit, one message per lane; stream count is
     #   the runtime lane count): lane 0 carries the original ciphertext
     #   message (MAC semantics identical to the avx-named original), lanes
