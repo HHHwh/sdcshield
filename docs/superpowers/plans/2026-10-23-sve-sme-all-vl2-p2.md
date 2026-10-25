@@ -249,6 +249,7 @@ sme_fmopa_za_dual: sme_fmopa_za_dual.c
 ```bash
 G5=/home/sdc/wangxu/operator/gem5-fi/build/ARM/gem5.opt
 overall=0
+axis_ref=
 for T in 1 2 4 8; do
   for ARGS in "fixed 1" "random 1" "random 2" "random 3"; do
     LOG=/tmp/fza_sve${T}_$(echo $ARGS | tr ' ' '_').log
@@ -259,15 +260,29 @@ for T in 1 2 4 8; do
     rc=${PIPESTATUS[0]}      # timeout/gem5 的真实退出码,不是 grep 的
     grep -q '^SDCSHIELD_FAILS=0$' $LOG   # 程序化比对(二轮补):绿灯不再
     fails_ok=$?                          # 悬置于 gem5 透传退出码的假设
-    grep -q 'axis=UNKNOWN' $LOG && fails_ok=1
-    echo "tier=$T args='$ARGS' exit=$rc fails_ok=$fails_ok"
+    grep -Eq 'axis=(UNKNOWN|NEITHER)' $LOG && fails_ok=1
+    # 上一行(三轮补):双失配标签双态兼容——本模板印 UNKNOWN(一轮修正),
+    # 实际 kernel(ebe08632 及 #280 的 959a5fa7)印 NEITHER,只拦一个会漏另一个
+    cols=$(sed -n 's/^sme_fmopa_za_dual:.*cols=\([0-9][0-9]*\).*/\1/p' $LOG)
+    [ "$cols" = "$((4 * T))" ] || fails_ok=1
+    # 上一行(三轮补):cols==4*T 即 4/8/16/32——若 gem5 忽略/裁剪 --sme_vl,
+    # kernel 按真实 SVL 自洽生成 golden 仍 FAILS=0,唯有档位断言能拦错误几何
+    axis=$(sed -n 's/^sme_fmopa_za_dual:.*axis=\(ROW\|COLUMN\).*/\1/p' $LOG)
+    if [ -z "$axis" ]; then
+      fails_ok=1               # 轴向行缺失或未决(UNKNOWN/NEITHER)——无效证据
+    elif [ -z "$axis_ref" ]; then
+      axis_ref=$axis           # 三轮补:首个有效轴向为跨 run 一致性基准
+    elif [ "$axis" != "$axis_ref" ]; then
+      fails_ok=1               # 三轮补:跨档轴向分歧——Task 2 golden 公式不能混用
+    fi
+    echo "tier=$T args='$ARGS' exit=$rc fails_ok=$fails_ok cols=${cols:-none} axis=${axis:-none} ref=${axis_ref:-none}"
     [ "$rc" -ne 0 ] && overall=1
     [ "$fails_ok" -ne 0 ] && overall=1
   done
 done
 exit $overall
 ```
-Expected 逐档：`cols=4/8/16/32`（=128/256/512/1024-bit）；**axis= 四档一致**（记录 ROW 还是 COLUMN——这是 Task 2 golden 公式的依据）；全部 `SDCSHIELD_FAILS=0`（脚本已程序化比对 `^SDCSHIELD_FAILS=0$` 与 axis≠UNKNOWN——二轮补，原先 FAILS 只出现在展示 grep 里、从未被比对，绿灯悬置于"gem5.opt 把 SE 客户机退出码透传为宿主退出码"这一未验证假设上）；random 各 seed checksum 互异、fixed/random 可比即记录；**exit≠0、fails_ok≠0 或 axis=UNKNOWN 的档位不得计入全绿、不得作为 Task 2 golden 依据**。若 gem5 在 smstart/fmopa 处崩溃（SIGILL 类）→ za-only 非法，改 `smstart sm`+`smstart za` / `smstop za`+`smstop sm`（stress 先例 :121-122/:150-151），重跑全部 16 run 并在 findings.md 记录裁决过程。若 axis 判别失败（两 golden 均不匹配）→ 看 mismatch dump，如实上报，不改数据迁就。
+Expected 逐档：`cols=4/8/16/32`（=128/256/512/1024-bit，脚本已断言 `cols==4*T`——三轮补）；**axis= 四档一致**（记录 ROW 还是 COLUMN——这是 Task 2 golden 公式的依据；脚本已断言跨 run 一致、首个有效轴向为基准——三轮补）；全部 `SDCSHIELD_FAILS=0`（脚本已程序化比对 `^SDCSHIELD_FAILS=0$` 与 axis 未决双态 UNKNOWN/NEITHER——二/三轮补，原先 FAILS 只出现在展示 grep 里、从未被比对，绿灯悬置于"gem5.opt 把 SE 客户机退出码透传为宿主退出码"这一未验证假设上）；random 各 seed checksum 互异、fixed/random 可比即记录；**exit≠0、fails_ok≠0（含 cols≠4*T 或跨 run 轴向分歧）或 axis 未决的档位不得计入全绿、不得作为 Task 2 golden 依据**。若 gem5 在 smstart/fmopa 处崩溃（SIGILL 类）→ za-only 非法，改 `smstart sm`+`smstart za` / `smstop za`+`smstop sm`（stress 先例 :121-122/:150-151），重跑全部 16 run 并在 findings.md 记录裁决过程。若 axis 判别失败（两 golden 均不匹配）→ 看 mismatch dump，如实上报，不改数据迁就。
 
 - [ ] **Step 5: findings.md + 提交推送**
 
@@ -535,7 +550,7 @@ instead of assuming one tier:
 
 ---
 
-## Erratum（一轮 2026-10-24 / 二轮 2026-10-25，PR #279 五 bot 检视闭环；二轮修订 1/3/4、新增 6-9）
+## Erratum（一轮 2026-10-24 / 二轮 / 三轮 2026-10-25，PR #279 五 bot 检视闭环；二轮修订 1/3/4、新增 6-9；三轮修订 3/5）
 
 1. **`/32` 单位错误（Critical）**：原模板 init/run 两处 `svl / 32` 把
    arm64_require_sme_svl 返回的 **SVL 字节**当作位处理，差 8×——128-bit 档
@@ -564,6 +579,24 @@ instead of assuming one tier:
    既有 16-run 表（findings.md @ ebe08632）的 exit 列取自修前脚本（grep
    退出码），该列仅"有匹配行"语义；权威逐 run 证据是 kernel 自身 stdout
    的 FAILS/axis/checksum/cols 列，未来重跑以修正后脚本为准。
+   **三轮补充（cols 档位断言 + 跨 run 轴向一致）**：二轮程序化检查只拦
+   FAILS≠0 与 axis 未决，仍有两条假绿通道——(a) gem5 忽略/裁剪
+   `--sme_vl $T` 时 kernel 按真实 SVL 自洽生成 golden，FAILS=0 照常通过，
+   错误几何流入 Task 2；(b) 各档轴向分歧（一档 ROW 一档 COLUMN）时
+   fails_ok 仍全 0，单一 golden 公式对部分 VL 必错。脚本再加两条断言：
+   解析 `^sme_fmopa_za_dual:` 行的 cols= 并要求 `cols==4*T`（4/8/16/32
+   对应 T=1/2/4/8）；解析 axis= 并以首个有效 ROW/COLUMN 为基准做跨 run
+   一致性比对，分歧即 fails_ok=1。**回溯核验**：既有 16-run 表
+   （findings.md @ ebe08632）cols 逐档 4/8/16/32、axis=COLUMN ×16，两
+   断言全过，既有证据无需重跑。**模板/实际 kernel 标签分歧（本轮核验
+   中发现）**：双失配时本模板印 UNKNOWN（一轮修正），实际 kernel
+   （ebe08632 与 #280 的 959a5fa7）印 NEITHER；实际 kernel 的 checksum
+   行仍是裸十六进制（无 `checksum=` 标签，展示 grep 的 checksum 分支只
+   匹配模板输出）。脚本的 axis 拒绝已双态兼容 `axis=(UNKNOWN|NEITHER)`，
+   cols/axis 解析锚定行首 `^sme_fmopa_za_dual:`（gem5 日志的
+   `command line:`/`Returning '…'` 行含 workload 名但均不在行首，实测
+   p283v 日志核验），不受标签分歧影响；kernel 侧标签统一属 gem5-fi 仓
+   后续（与第 6 条 FNV 基数修正同批），不由本计划文档承载。
 4. **跳过返回值契约勘误（二轮再勘：契约随分支分裂，一轮断言只对了一半）**：
    Interfaces 与 Task 3 政策原文"-1 = 已 log_skip"系错误；一轮勘误改写为
    "实际契约是 EXIT_SKIP(-255)"——但该断言对**本计划治理的执行分支**不
@@ -583,7 +616,11 @@ instead of assuming one tier:
    "test bug, not SDC" 分类措辞中性化（自检走同一硬件路径，无独立 oracle
    依据支撑分类断言）。二轮：local-claude 6 条（契约分裂/防线③1024 档/
    FNV 基数/fixed 模式 seed 空操作/FAILS 程序化比对/四处同步清单）+
-   codex 配额类，全部采纳，处置见本节 1/3/4 修订与 6-9 新增。
+   codex 配额类，全部采纳，处置见本节 1/3/4 修订与 6-9 新增。三轮：
+   coderabbit 2 条（cols 档位断言 / 跨 run 轴向一致，均 Major——walkthrough
+   Merge Risk 段同义复述）+ review 头（Actionable=2 计数，无独立发现），
+   两条采纳，脚本 fail-closed 加固与标签分歧记录见本节 3 三轮补充；
+   codex/greptile 配额类、local-claude 对该 head 未发信号。
 6. **FNV-1a 64 位 offset basis 掉尾笔误（二轮）**：kernel 模板与实际执行
    kernel（gem5-fi ebe08632）的偏移基数均为 1469598103934665603——规范值
    14695981039346656037（0xcbf29ce484222325）掉尾位 7；质数 1099511628211
