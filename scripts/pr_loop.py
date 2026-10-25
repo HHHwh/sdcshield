@@ -352,6 +352,22 @@ def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
 CLOCK_SKEW_TOLERANCE = timedelta(seconds=300)
 
 
+def anchor_and_skew(push_time: Optional[datetime],
+                    head_time: datetime) -> tuple:
+    """(anchor, skew) 推导的单一真源(检视意见 8,防复制漂移):
+    - push_time 可得 → (push_time, timedelta(0)): PushEvent created_at 与
+      条目时间同属 GitHub 服务器钟,无本机偏差可言,时间锚严格不放宽
+      (防同 SHA 强推回退,意见#22 先例);
+    - push_time 缺失 → (head_time, CLOCK_SKEW_TOLERANCE): 回退 committer
+      date(本机钟盖戳,可快/慢于服务器),commit 严格锚条目放宽 300s。
+    fetch_pr / _real_opinion_inventory / _collect_entries /
+    format_skew_warning 四处共用——规则演进只改这一处,杜绝再犯 797d10ef
+    式的复制漂移(era_mark 阈值与计数口径分叉 bug 即该复制模式所致)。"""
+    if push_time:
+        return push_time, timedelta(0)
+    return head_time, CLOCK_SKEW_TOLERANCE
+
+
 def commit_strict_match(item: dict, sha_keys: tuple, head_sha: str) -> bool:
     """commit 锚严格匹配: 锚定字段存在且 == 当前 head(区别于 commit_anchored
     的「字段缺失回退 True」——那只是兜底,不能作为放宽时间锚的依据)。"""
@@ -601,11 +617,9 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # committer date 锚误计入(意见#22)。PushEvent 是唯一可得的精确 push 边界;
     # 不可得时回退 committer date(行为不劣于修复前)。
     push_time = fetch_push_time(slug, head.get("ref") or "", head_sha)
-    anchor = push_time or head_time
-    # 时钟偏差容差仅限回退锚(意见 1): push_time 与条目时间同属 GitHub 服务器
-    # 钟,无本机偏差可言,锚定保持严格(防同 SHA 强推回退,意见#22 先例);仅
-    # 回退 committer date(本机钟盖戳,可快/慢于服务器)时放宽 300s。
-    skew = timedelta(0) if push_time else CLOCK_SKEW_TOLERANCE
+    # 时钟偏差容差仅限回退锚(意见 1): (anchor, skew) 推导的单一真源见
+    # anchor_and_skew——push_time 锚严格,仅回退 committer date 时放宽 300s。
+    anchor, skew = anchor_and_skew(push_time, head_time)
 
     reviews = gh_api_paged(f"repos/{slug}/pulls/{number}/reviews")
     review_comments = gh_api_paged(f"repos/{slug}/pulls/{number}/comments")
@@ -866,10 +880,8 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
                    issue 评论 + check annotations 的 failure/warning 级)。
     供 verify_reply_completeness 做双向集合差——真实数据,不是自产数组。
     """
-    anchor = pr.push_time or pr.head_time
-    # 容差推导与 fetch_pr 同口径(意见 1): push_time 锚严格(timedelta(0)),
-    # 仅回退 committer date 锚放宽 CLOCK_SKEW_TOLERANCE。
-    skew = timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE
+    # (anchor, skew) 推导单一真源(与 fetch_pr 同口径,检视意见 8)。
+    anchor, skew = anchor_and_skew(pr.push_time, pr.head_time)
     inline = set()
     for c in pr.review_comments:
         bot = bot_of(c)
@@ -1022,8 +1034,8 @@ def format_skew_warning(pr: PRData) -> Optional[str]:
     if not pr.skew_suspects:
         return None
     worst = max(delta for _, _, delta in pr.skew_suspects)
-    tol = int((timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE)
-              .total_seconds())
+    # (anchor, skew) 推导单一真源(检视意见 8)
+    tol = int(anchor_and_skew(pr.push_time, pr.head_time)[1].total_seconds())
     return (f"⚠ 疑似时钟超带或同 SHA 回退: {len(pr.skew_suspects)} 条严格锚定"
             f"条目落在锚前 >{tol}s(最远 {int(worst)}s)——请人工甄别,勿静默丢弃")
 
@@ -1221,14 +1233,14 @@ def _collect_entries(pr: PRData) -> list:
     收录一切 bot 数据供 subagent 批判性处置(含摘要类,标注后由人工甄别);
     「当前 head / 历史轮次」与锚定不符处另加括注。"""
     entries = []
+    # (anchor, skew) 推导单一真源(与意见计数同口径,检视意见 8)。
+    anchor, skew = anchor_and_skew(pr.push_time, pr.head_time)
 
     def era_mark(ts: datetime) -> str:
         # 阈值与意见计数同口径: 时间锚下界 = push_time(可得,严格)或 head_time
         # (回退,放宽 CLOCK_SKEW_TOLERANCE)。否则回退锚容差窗口内(锚前 ≤300s)
         # 被计入的条目会被标「历史轮次勿重复处置」——计入了却叫人勿处置,自相
         # 矛盾(自检发现);push_time 锚下窗口为空,同样与计数一致。
-        anchor = pr.push_time or pr.head_time
-        skew = timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE
         if ts >= anchor - skew:
             return "当前 head"
         return "历史轮次(GitHub 重锚定: 产生于当前 head 之前,仅供参考,勿重复处置)"
