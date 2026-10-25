@@ -124,7 +124,14 @@ sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断�
 
 预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（440）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
 
-> **旧二进制判读警示**：2026-09-12 预构建二进制是 `eigen_svd_double`/`eigen_sparse` 满核假阳修复（2026-10-24，feat/eigen-svd-multithread）**之前**的构建——其上这两个用例的满核 FAIL 仍按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；下节"满核挂 = SDC 嫌疑"的判读规则仅适用于含 2026-10-24 修复的构建。
+> **旧二进制判读警示**：2026-09-12 预构建二进制是 `eigen_svd_double`/`eigen_sparse` 满核假阳修复（2026-10-24，feat/eigen-svd-multithread）**之前**的构建——其上这两个用例的满核 FAIL 仍按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；下节"满核挂 = SDC 嫌疑"的判读规则仅适用于含 2026-10-24 修复的构建。**若用旧二进制跑 24h 战役脚本**（`scripts/run/run_sdc_campaign.sh`），须显式恢复旧白名单，否则这两个用例的满核假阳会被按新口径分类为 `full_core_only` 而非 `known_benign_ulp`（在仓库根目录）：
+>
+> ```bash
+> SDC=third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built/run-sdcshield.sh \
+> KNOWN_FLAKY="eigen_svd_double eigen_sparse" bash scripts/run/run_sdc_campaign.sh
+> ```
+>
+> （`SDC`/`KNOWN_FLAKY` 两个环境变量仅用于旧二进制；含修复的源码构建不需要、也不应设置。）
 
 ```bash
 git clone --recurse-submodules <repo-url>   # 含子模块
