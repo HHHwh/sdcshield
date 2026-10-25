@@ -156,25 +156,27 @@ static int sve_fpcr_cartesian_arm_run(struct test *test, int cpu)
             wr_fpcr(fpcr);
 
             // tie liveness on the SVE datapath: fma(1,1,2^-24) is a real
-            // single-rounding tie — 1.0 + 2^-24 rounds per mode.
+            // single-rounding tie — 1.0 + 2^-24 rounds per mode. Operands
+            // and result live in the vl_w-sized a/b/c/hw vectors (lane 0 =
+            // tie operands, lanes 1+ whatever the previous hot iteration
+            // left — never compared): the pre-all-VL form used 2-element
+            // stack arrays against a full-width svld1/svst1, an OOB
+            // read/write at every VL >= 128-bit (svcntw() >= 4 lanes).
             {
-                float ta[2] = { 1.0f, 0.0f };
-                float tb[2] = { 1.0f, 0.0f };
-                float tc[2] = { 0x1p-24f, 0.0f };
-                svfloat32_t va = svld1_f32(all, ta);
-                svfloat32_t vb = svld1_f32(all, tb);
-                svfloat32_t vc = svld1_f32(all, tc);
+                a[0] = 1.0f; b[0] = 1.0f; c[0] = 0x1p-24f;
+                svfloat32_t va = svld1_f32(all, a.data());
+                svfloat32_t vb = svld1_f32(all, b.data());
+                svfloat32_t vc = svld1_f32(all, c.data());
                 svfloat32_t vd = svmla_f32_x(all, vc, va, vb);
-                float res[2] = { 0.0f, 0.0f };
-                svst1_f32(all, res, vd);
+                svst1_f32(all, hw.data(), vd);
                 // 1+2^-24 is an exact tie between 1.0 and 1.000002:
                 // RNE->1.0, RP->1.000002 (toward +inf), RM->1.0, RZ->1.0.
                 float expect2 = (r == 1) ? 0x1.000002p+0f : 0x1p+0f;
-                if (res[0] != expect2) {
+                if (hw[0] != expect2) {
                     log_warning("sve_fpcr_cartesian: mode %s fz=%d "
                                 "liveness FAILED: fma(1,1,2^-24)=%a "
                                 "(want %a)", ROUND_NAME[r], fz,
-                                (double)res[0], (double)expect2);
+                                (double)hw[0], (double)expect2);
                     wr_fpcr(orig_fpcr);
                     report_fail_msg("sve_fpcr_cartesian_arm: SVE "
                                     "rounding mode did not take effect");
