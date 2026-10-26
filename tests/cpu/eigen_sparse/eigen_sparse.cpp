@@ -35,12 +35,23 @@
  *
  * Detection-channel disclosure: the same-source repeat detects
  * NON-deterministic defects — transient/intermittent/marginal errors
- * where the same computation yields different bits on the same input.
+ * where the same computation yields different bits on the same input
+ * (this includes errors that hit the GOLDEN computation itself: the
+ * next same-source re-run mismatches the corrupted golden and FAILs).
  * It is structurally blind to deterministic core defects (a
  * permanently wrong instruction/data path computes the golden and
- * the re-run identically wrong, so the memcmp matches); those are
- * covered by the independent golden-value test family (fixed golden
- * data, byte-compared).
+ * the re-run identically wrong, so the memcmp matches). Accuracy
+ * note (检视 #52): the fixed-golden test family covers deterministic
+ * defects on its OWN instruction paths (FMA/SIMD/crypto/compression
+ * golden data) — no test in the suite exercises any Eigen
+ * factorization path against fixed golden data (the whole Eigen
+ * family gemm/sparse/svd is same-source repeat), so deterministic
+ * defects on the sparse-Cholesky path are a disclosed coverage gap.
+ * The old shared-golden structure did provide a probabilistic
+ * channel for them (a deterministically wrong worker core mismatched
+ * the init golden), at the cost of the full-core false-positive
+ * channel that dominated operations; this design trades the former
+ * away to eliminate the latter — a deliberate, disclosed choice.
  * @endparblock
  */
 
@@ -244,13 +255,19 @@ static int eigen_sparse_run(struct test *test, int cpu) {
         }
     }
 
-    /* 异常分类契约(检视 #39, 两轮意见方向相反故显式固定): 各路径
+    /* 异常分类契约(检视 #39/#49, 两轮意见方向相反故显式固定): 各路径
      * 逐字保留 main 基线的分类——run 期求解异常自 OpenDCDiag 原始
      * 代码起就是 report_fail(异常即异常, 宁可误报), 构造/golden
      * 异常自 init 时代起就是资源 SKIP(golden 无法建立 = 该线程无
      * 基准可言)。本 PR 把 golden 搬进 run 后不引入任何分类语义变化。
      * 内存水位: 每线程峰值在 reroll 档(新旧两个 LDLT 因子短暂并存),
-     * 恰在 SKIP 防护内; x 路径仅持单因子, 水位低于 reroll 档。 */
+     * 恰在 SKIP 防护内; x 路径仅持单因子, 水位低于 reroll 档。
+     * 检出无损论证(检视 #49): ① NDEBUG 生产构建下 Eigen 断言关闭,
+     * compute/solve 实际可抛的异常只有 bad_alloc(资源性, SKIP 语义
+     * 正确); ② SDC 打坏 golden 的"值"不丢检——下一轮同源重算
+     * memcmp 立即 mismatch FAIL; ③ A 结构的持久损坏以 16:1 暴露比
+     * 先打在 x 路径(每 reroll 周期 16 次 x 求解 vs 1 次 golden);
+     * ④ SKIP 亦有痕(log_skip 落日志), 仅不进战役 fail 分类。 */
     int since_reroll = 0;
     do {
         Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> solver;
