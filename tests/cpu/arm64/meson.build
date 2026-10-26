@@ -278,6 +278,7 @@ if host_machine.cpu_family() == 'aarch64'
             march_generic_flags,
             '-march=armv8.2-a+sve',
             sve_sanitize_exempt,
+            sve_bitpattern_exempt,
         ],
     )
 
@@ -323,6 +324,7 @@ if host_machine.cpu_family() == 'aarch64'
                 march_generic_flags,
                 sve2_march,
                 sve_sanitize_exempt,
+                sve_bitpattern_exempt,
             ],
         )
 
@@ -381,6 +383,7 @@ if host_machine.cpu_family() == 'aarch64'
                 march_generic_flags,
                 sme_args,
                 sve_sanitize_exempt,
+                sve_bitpattern_exempt,
             ],
         )
 
