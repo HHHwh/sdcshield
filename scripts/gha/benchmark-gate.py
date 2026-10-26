@@ -27,8 +27,10 @@
 #               ok>0 → exit 0(fail/skip 行不进 JSON, 数据点缺失由 verify 报;
 #               行完备性报警同样归 verify——缺行只意味着当日无新数据点,
 #               已发布的历史点不受影响, trend 不越位)
-# TSV 缺失/不可读: 两角色都按「无数据」处理(verify 红 / trend 不发布), 打
-# ::warning:: 说明原因, 不抛异常不红趋势 job(趋势更新非闸门)。
+# TSV 缺失/不可读/非 UTF-8: 两角色都按「无数据」处理(verify 红 / trend 不
+# 发布), 打 ::warning:: 说明具体原因, 不抛异常不红趋势 job(趋势更新非闸门);
+# verify 的 ::error:: 走专属归因(采集在写表前中止/文件损坏), 不落入「表头
+# 漂移/行截断」——那是对不存在文件的失真归因。
 # 表头契约:首行必须是 test\twall_seconds\tloop_count(与 benchmark.sh 写入方
 # 和 benchmark-to-json.py 一致)。盲跳首行的旧写法在格式演进(加列/改列序/丢
 # 表头)时会把首行真实数据静默吃掉——数据点无声丢失;表头不符按格式漂移处理
@@ -66,10 +68,15 @@ def expected_tests():
 
 
 def classify(path):
-    """→ (ok, skips, fails, header_ok)。header_ok=False 表示表头不符契约
-    (含空文件/丢表头/格式演进), 由调用方按角色决定红/不发布。"""
+    """→ (ok, skips, fails, header_ok, readable)。header_ok=False 表示表头
+    不符契约(含空文件/丢表头/格式演进);readable=False 表示文件缺失/不可读/
+    非 UTF-8(已打 ::warning:: 给出具体原因), 两者都由调用方按角色决定
+    红/不发布——但 readable=False 走专属归因文案, 不落入「表头漂移/行
+    截断」:那是给「文件在但内容坏」的归因, 文件压根不存在时是失真归因
+    (典型根因:benchmark.sh --list-tests 双败 ABORT 在写 TSV 之前退出)。"""
     ok, skips, fails = [], [], []
     header_ok = False
+    readable = True
     try:
         with open(path, encoding="utf-8") as f:
             first = f.readline().rstrip("\n")
@@ -110,48 +117,61 @@ def classify(path):
         # 字节的 TSV(传输损坏/磁盘错)若不显式接住会裸 traceback, verify 丢
         # 失全部分类诊断(只剩堆栈), 违背本脚本「不抛异常」的书面契约
         print(f"::warning::benchmark-gate: cannot read/decode {path} ({err})")
-    return ok, skips, fails, header_ok
+        readable = False
+    return ok, skips, fails, header_ok, readable
 
 
 def main():
     if len(sys.argv) != 3 or sys.argv[1] not in ("verify", "trend"):
         sys.exit(f"usage: {sys.argv[0]} {{verify|trend}} <benchmark.tsv>")
     role, path = sys.argv[1], sys.argv[2]
-    ok, skips, fails, header_ok = classify(path)
+    ok, skips, fails, header_ok, readable = classify(path)
     print(f"benchmark-gate[{role}]: ok={len(ok)} skip={len(skips)} "
           f"fail={len(fails)} header={'ok' if header_ok else 'BAD'}")
     if role == "verify":
         rc = 0
-        if not header_ok:
-            print("::error::benchmark.tsv 表头不符契约(预期 'test\\twall_seconds\\t"
-                  "loop_count')——格式漂移/丢表头会吃掉首行数据, 须同步 benchmark.sh/"
-                  "benchmark-gate.py/benchmark-to-json.py 三处")
+        if not readable:
+            # 文件缺失/不可读/非 UTF-8:专属归因(具体原因见 classify 打的
+            # ::warning::)。不走下方「文件在但内容坏」的表头/缺行文案——对
+            # 不存在的文件那是失真归因;典型根因是 benchmark.sh --list-tests
+            # 双败 ABORT(在写 TSV 之前 exit 1, 真因现场在上方 benchmark.log
+            # 的 ABORT 行与 artifact 的 list-tests.err)。
+            print("::error::benchmark.tsv 缺失/不可读/非 UTF-8(原因见上 ::warning::)"
+                  "——采集在写表前中止(benchmark.sh ABORT)或文件损坏/未产出")
             rc = 1
-        if not ok:
-            print(f"::error::benchmark.tsv 无数据行(ok=0, skip={len(skips)}, "
-                  f"fail={len(fails)})——采集整体废掉或基准全部失败(见上方 benchmark.log)")
-            rc = 1
-        if fails:
-            print(f"::error::benchmark 基准失败 {len(fails)} 行: {' '.join(fails)}"
-                  "——在列但未产出可用数据, 现场见 benchmark.log 与 artifact 的 "
-                  "benchmark/<test>.yaml|.log")
-            rc = 1
-        expected = expected_tests()
-        if expected is None:
-            print("::warning::benchmark-gate: cannot parse BENCH_TESTS from benchmark.sh"
-                  " — TSV 行完备性校验跳过(状态分类判定不受影响)")
         else:
-            present = set(ok) | set(skips) | set(fails)
-            missing = [t for t in expected if t not in present]
-            if missing:
-                print(f"::error::benchmark.tsv 缺 {len(missing)} 行(预期在列但无记录): "
-                      f"{' '.join(missing)}——producer 写入失败/截断, 数据点无声丢失")
+            if not header_ok:
+                print("::error::benchmark.tsv 表头不符契约(预期 'test\\twall_seconds\\t"
+                      "loop_count')——格式漂移/丢表头会吃掉首行数据, 须同步 benchmark.sh/"
+                      "benchmark-gate.py/benchmark-to-json.py 三处")
                 rc = 1
-        if skips:
-            print(f"::warning::benchmark 无数据点 {len(skips)} 行(运行时跳过): "
-                  f"{' '.join(skips)}——对应趋势数据点将缺失")
+            if not ok:
+                print(f"::error::benchmark.tsv 无数据行(ok=0, skip={len(skips)}, "
+                      f"fail={len(fails)})——采集整体废掉或基准全部失败(见上方 benchmark.log)")
+                rc = 1
+            if fails:
+                print(f"::error::benchmark 基准失败 {len(fails)} 行: {' '.join(fails)}"
+                      "——在列但未产出可用数据, 现场见 benchmark.log 与 artifact 的 "
+                      "benchmark/<test>.yaml|.log")
+                rc = 1
+            expected = expected_tests()
+            if expected is None:
+                print("::warning::benchmark-gate: cannot parse BENCH_TESTS from benchmark.sh"
+                      " — TSV 行完备性校验跳过(状态分类判定不受影响)")
+            else:
+                present = set(ok) | set(skips) | set(fails)
+                missing = [t for t in expected if t not in present]
+                if missing:
+                    print(f"::error::benchmark.tsv 缺 {len(missing)} 行(预期在列但无记录): "
+                          f"{' '.join(missing)}——producer 写入失败/截断, 数据点无声丢失")
+                    rc = 1
+            if skips:
+                print(f"::warning::benchmark 无数据点 {len(skips)} 行(运行时跳过): "
+                      f"{' '.join(skips)}——对应趋势数据点将缺失")
         sys.exit(rc)
     # trend 角色:消费侧拦截, 不产 JSON 不 push;报警归 verify 侧, 不重复红
+    if not readable:
+        sys.exit(1)  # 已打 ::warning::(原因);不产 JSON 不 push
     if not header_ok:
         print("::warning::benchmark.tsv 表头不符契约——不更新 gh-pages 趋势")
         sys.exit(1)
