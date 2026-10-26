@@ -25,7 +25,10 @@
 #    gitleaks 8.24.3 已无净收益为正的更窄表达:targetRules(按规则限定)
 #    8.25.0 才引入;regexTarget line/match 受 RE2 无 lookaround 限制;
 #    path×value AND 违反第 2 条且把未来新文件里的合法向量变成误报
-#    (实测)。接受依据:被豁免值 NIST 公开、零保密性,恰等于它的
+#    (实测)。版本锚定:CI 已显式 pin workflow env GITLEAKS_VERSION=8.24.3
+#    (此前随 gitleaks-action@v3 浮动 tag 的内部缺省漂移,PR #292 三轮
+#    检视实证);升级 gitleaks 版本须连同本组不变式重验 + 探针重跑。
+#    接受依据:被豁免值 NIST 公开、零保密性,恰等于它的
 #    「凭据」本身已无秘密可言;真实凭据处置仍走 rotate 原则(见第 2 条
 #    所引文档)。
 

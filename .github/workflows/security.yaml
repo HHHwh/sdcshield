@@ -41,6 +41,14 @@ jobs:
     name: gitleaks (credential leaks)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # PR #292 三轮意见实证:8.24.3 只是 gitleaks-action@v3 浮动 tag 的内部
+      # 硬编码缺省(dist/index.js 'GITLEAKS_VERSION || "8.24.3"'),本仓并未
+      # 固定——上游 action 更新即静默换 gitleaks 版本,而 .gitleaks.toml 的
+      # 版本特定论断(regexTarget 缺省=secret、无 targetRules 更窄表达)全部
+      # 锚定 8.24.3;漂移最先暴露处是最长延迟 7 天的周一 schedule cron 红。
+      # 显式 pin;升级时必须连同 .gitleaks.toml 不变式重验 + 探针重跑。
+      GITLEAKS_VERSION: "8.24.3"
     permissions:
       # gitleaks-action 在每个 pull_request 事件都先 GET /pulls/N/commits
       # 枚举扫描范围(x-accepted-github-permissions: pull_requests=read),

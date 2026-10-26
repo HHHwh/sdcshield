@@ -58,3 +58,9 @@ nightly 跑完后 `benchmark-trend` job 自动维护 gh-pages 分支;
   各形)的真实凭据同样会被放行——该值全球公开、零保密性,不构成增量
   泄露(PR #292 二轮检视实证,有意接受,gitleaks 8.24.3 无更窄表达);
   真实凭据——包括恰为公开向量值者——仍走上一条 rotate 原则。
+- gitleaks 二进制版本已由 `security.yaml` gitleaks job 的
+  `GITLEAKS_VERSION: "8.24.3"` 显式 pin(此前 8.24.3 只是
+  gitleaks-action@v3 浮动 tag 的内部缺省,上游更新会静默换版本,
+  PR #292 三轮检视实证);`.gitleaks.toml` 的版本特定论断
+  (regexTarget 缺省=secret、无 targetRules)均锚定 8.24.3。升级版本:
+  同步改 env + 重验 `.gitleaks.toml` 不变式 + 重跑豁免探针。
