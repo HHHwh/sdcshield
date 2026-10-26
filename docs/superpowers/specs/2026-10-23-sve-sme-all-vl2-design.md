@@ -164,10 +164,13 @@ long arm64_require_sme_svl(struct test *t, long min_bits, long max_bits);
 - **运行矩阵**：受影响档位 128/256/512/1024 × {fixed, random×3} = 每 kernel 16 run；
   全绿 = 全部 `SDCSHIELD_FAILS=0`（判据主体为逐元素字节级 golden 比对，§8 不变式）；
   random 各 seed checksum 互异**仅约束值依赖 seed 的模式**（chain/stencil 族——防
-  seed 未接线的健全性检查），**结果与 seed 无关的模式**（gather 类：randomize 仅
-  Fisher-Yates 洗牌 perm，src 与 dst 地址序终态均与 seed 无关）预期**同档一致**，
-  checksum 仅记录、不作判据（PR #281 检视 R3 口径同步——P3 as-built 实证：gather
-  每档 fixed/random×3 四 run checksum 相同，统一互异判据对其实为假失败）。
+  seed 未接线的健全性检查），**结果与 seed 无关的模式**（gather 类 dual kernel，
+  判据绑定构造前提而非模式类名：src 固定与 seed 无关、randomize 仅 Fisher-Yates
+  洗牌双射 perm，dst 地址序终态与 seed 无关；不满足前提的形态不得套用——如测试
+  `sve512_gather_scatter_arm.cpp` 以 random64() 随机化 gather_src（src/dst 随 seed
+  变化，属值依赖模式））预期**同档一致**，checksum 仅记录、不作判据（PR #281 检视
+  R3 口径同步、R4 适用范围限定——P3 as-built 实证：gather 每档 fixed/random×3
+  四 run checksum 相同，统一互异判据对其实为假失败）。
 - **回归锚**：重构前在原设计档跑旧 kernel 记录 checksum；重构后同档逐位一致
   （先例：`e9e2be2a` @ svl=4）。
 - **记录落盘三处**：测试源码 docblock 简表（命令形态 + 档位 + checksum）+ gem5-fi
