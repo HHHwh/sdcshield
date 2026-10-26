@@ -45,6 +45,17 @@ sve_sanitize_exempt = []
 if get_option('b_sanitize') != 'none'
     sve_sanitize_exempt = ['-fno-sanitize=all']
 endif
+
+# SVE/SME 测试以「FP 指令算、整数缓冲按位比」为方法学:svst1_f32/f64 的结果
+# 直接写进 uint32_t/uint64_t 缓冲,随后按位读回与标量 golden 比较——这是刻意
+# 的类型双关。GCC/Clang 的 TBAA(严格别名)会据此判定该 double/float 写不与
+# 整数读别名,把整个 SVE 计算连同 store 当死代码删除,缓冲区保持零值,每条
+# lane 都报出 actual=0x0 的**假 SDC**。2026-10-26 实证:CI(GCC 16.2.0)上
+# sve512_*_svd 三例失败,反汇编其二进制可见 sve512_f64_chain_svd_run 内 SVE
+# 指令数为 0(同 TU 的 _arm 孪生为 6);同构最小复现在本机 GCC 12.3.1 与
+# Clang 17.0.6 上均可重现并被本开关修好。与 CPU 运行时 VL 无关。故对这些
+# SVE/SME 目标关闭严格别名(仅影响这两个目标,非 SVE 代码不受影响)。
+sve_bitpattern_exempt = ['-fno-strict-aliasing']
 if target_machine.system() == 'windows' and get_option('buildtype') == 'debug'
     # Force a little bit of optimization, otherwise we get:
     # Fatal error: tests/libtests_base.a.p/eigen_svd_svd_cdouble_noavx512.cpp.obj: file too big
