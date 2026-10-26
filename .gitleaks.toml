@@ -1,0 +1,49 @@
+# gitleaks 配置:扩展默认规则集 + 逐值豁免「已公开标准测试向量」误报。
+#
+# 背景:本仓是 crypto SDC 检测器,测试以 NIST/FIPS 公开发布的标准向量做
+# golden 基准,注释/代码里必然出现 `key = <hex>` 形态,generic-api-key
+# 规则会把它们当凭据误报(实测:FIPS-197 Appendix C.1 的 AES-128 向量
+# key,entropy 3.88 越过 3.5 阈值,run 38240202283 因它红)。该值由
+# NIST 在标准附录中公开发布,是全世界 AES 实现通用的测试数据,不构成
+# 任何凭据。
+#
+# 边界(安全不变式,不得破坏):
+# 1. 必须保留 [extend] useDefault = true —— 缺了它,本文件会整体替换
+#    默认规则集,等于静默关闭全部泄漏检测(安全倒退)。
+# 2. 豁免仅限逐值列出的公开向量;禁止按路径/文件名/目录豁免——那会让
+#    真实凭据泄漏漏检。真实泄漏的处理原则(rotate 凭据优先)见
+#    docs/build-deploy-pr-ci/ci-web-operations.md「已知事项」。
+# 3. 新增豁免值必须给出公开出处(FIPS/NIST 文档号 + 附录/章节)。
+# 4. 每条豁免正则必须整值锚定 `(?i)^…$`(allowlist 的 regexTarget 缺省
+#    作用于提取出的 secret 本身,不锚定则「包含该片段的更长真实凭据」
+#    也会被静默豁免——PR #292 检视实证:AWS/GitHub-PAT 形态密钥前拼/内嵌
+#    公开向量即可逃逸全部规则)。(?i) 覆盖同一向量的十六进制大小写等价
+#    写法,堵住大写形态再误红的复燃路径;两者均不放宽到子串。
+#    机械强制:scripts/gitleaks_allowlist_probe.py(形态+行为双层断言,
+#    CI Security/gitleaks job 每次运行;PR 口径扫描扫不到历史误报与
+#    逃逸形态,本不变式曾可全绿违反,PR #292 三轮检视实证)。
+# 5. 整值豁免的固有残留边界(有意接受,PR #292 二轮检视实证):值匹配
+#    无法区分 golden 基准与「恰好等于该公开值的真实凭据」——实测
+#    `root_password = <向量整值>` 在默认规则下检出、本配置下被放行。
+#    gitleaks 8.24.3 已无净收益为正的更窄表达:targetRules(按规则限定)
+#    8.25.0 才引入;regexTarget line/match 受 RE2 无 lookaround 限制;
+#    path×value AND 违反第 2 条且把未来新文件里的合法向量变成误报
+#    (实测)。版本锚定:CI 已显式 pin workflow env GITLEAKS_VERSION=8.24.3
+#    (此前随 gitleaks-action@v3 浮动 tag 的内部缺省漂移,PR #292 三轮
+#    检视实证);升级 gitleaks 版本须连同本组不变式重验 + 探针重跑。
+#    接受依据:被豁免值 NIST 公开、零保密性,恰等于它的
+#    「凭据」本身已无秘密可言;真实凭据处置仍走 rotate 原则(见第 2 条
+#    所引文档)。
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Published NIST/FIPS crypto test vectors used as golden baselines (not credentials)"
+regexes = [
+    # FIPS-197 Appendix C.1 AES-128 vector key — 亦为 NIST SP 800-38A 全模式
+    # (ECB/CBC/CFB/OFB/CTR) 测试向量的共用 key,NIST 公开发布。整值锚定
+    # + (?i):只豁免与该公开值完全等价的 secret(含 hex 大小写各形),
+    # 内嵌该片段的更长真实凭据仍被检出。
+    '''(?i)^2b7e151628aed2a6abf7158809cf4f3c$''',
+]

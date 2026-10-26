@@ -41,6 +41,14 @@ jobs:
     name: gitleaks (credential leaks)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # PR #292 三轮意见实证:8.24.3 只是 gitleaks-action@v3 浮动 tag 的内部
+      # 硬编码缺省(dist/index.js 'GITLEAKS_VERSION || "8.24.3"'),本仓并未
+      # 固定——上游 action 更新即静默换 gitleaks 版本,而 .gitleaks.toml 的
+      # 版本特定论断(regexTarget 缺省=secret、无 targetRules 更窄表达)全部
+      # 锚定 8.24.3;漂移最先暴露处是最长延迟 7 天的周一 schedule cron 红。
+      # 显式 pin;升级时必须连同 .gitleaks.toml 不变式重验 + 探针重跑。
+      GITLEAKS_VERSION: "8.24.3"
     permissions:
       # gitleaks-action 在每个 pull_request 事件都先 GET /pulls/N/commits
       # 枚举扫描范围(x-accepted-github-permissions: pull_requests=read),
@@ -57,6 +65,34 @@ jobs:
         with:
           fetch-depth: 0          # 全历史:本仓 fork 自 OpenDCDiag,历史长
           persist-credentials: false
+      - name: gitleaks allowlist invariants probe
+        # PR #292 三轮意见 #17/#18 实证:锚定不变式与豁免有效性此前仅有
+        # 注释约束——未锚定的 d1f0be94 曾全绿通过本 PR 门禁(run 40101478911
+        # success,与修复后不可区分);且 PR 口径扫描(--first-parent
+        # <base>..<head>)只扫 PR 自身 commits,历史误报与逃逸形态不在扫描
+        # 集,写错的豁免会绿着合并、最迟 7 天后 schedule cron 才红。本探针
+        # 以固定样本集 + 同 pin 版本二进制做形态/行为双层断言,把该不变式
+        # 变为每次运行可证伪;判别实证(未锚定/笔误/删 useDefault/去 (?i)
+        # /分支形态/主观豁免逃逸值,六类注入全部探针红)见脚本头注。
+        run: |
+          set -eu
+          case "$(uname -m)" in
+            x86_64)  arch=x64 ;;
+            aarch64) arch=arm64 ;;
+            *) echo "unsupported runner arch: $(uname -m)"; exit 1 ;;
+          esac
+          dir="/tmp/gitleaks-probe-bin"
+          tgz="gitleaks_${GITLEAKS_VERSION}_linux_${arch}.tar.gz"
+          mkdir -p "${dir}"
+          curl -fsSL -o "${dir}/${tgz}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tgz}"
+          curl -fsSL -o "${dir}/checksums.txt" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          # 供应链完整性:只校验本次下载资产行;grep 无命中即 fail closed
+          grep -F "${tgz}" "${dir}/checksums.txt" > "${dir}/checksums.expect"
+          (cd "${dir}" && sha256sum -c checksums.expect)
+          tar -xzf "${dir}/${tgz}" -C "${dir}"
+          python3 scripts/gitleaks_allowlist_probe.py --gitleaks "${dir}/gitleaks"
       - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

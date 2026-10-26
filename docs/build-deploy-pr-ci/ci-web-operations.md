@@ -49,3 +49,26 @@ nightly 跑完后 `benchmark-trend` job 自动维护 gh-pages 分支;
   例外允许 x86 runner 仅做分析注入(产物不发布)——勿静默改回。
 - gitleaks 若报 fork 历史(OpenDCDiag)遗留泄漏:立即处理泄漏本身
   (rotate 凭据),非仅修 workflow。
+- gitleaks 对「已公开的 NIST/FIPS 标准测试向量」误报已按值豁免
+  (`.gitleaks.toml`:`[extend] useDefault = true` 保留默认规则 + 整值
+  锚定(`(?i)^…$`)的逐值 allowlist,先例 FIPS-197 C.1 AES-128 key,run
+  38240202283)。豁免仅限有公开出处、整值匹配的向量值——未锚定正则会
+  连「内嵌该片段的更长真实凭据」一并豁免(PR #292 检视实证),禁止按
+  路径豁免。整值豁免的固有边界:恰好等于已豁免公开值(含 hex 大小写
+  各形)的真实凭据同样会被放行——该值全球公开、零保密性,不构成增量
+  泄露(PR #292 二轮检视实证,有意接受,gitleaks 8.24.3 无更窄表达);
+  真实凭据——包括恰为公开向量值者——仍走上一条 rotate 原则。
+- gitleaks 二进制版本已由 `security.yaml` gitleaks job 的
+  `GITLEAKS_VERSION: "8.24.3"` 显式 pin(此前 8.24.3 只是
+  gitleaks-action@v3 浮动 tag 的内部缺省,上游更新会静默换版本,
+  PR #292 三轮检视实证);`.gitleaks.toml` 的版本特定论断
+  (regexTarget 缺省=secret、无 targetRules)均锚定 8.24.3。升级版本:
+  同步改 env + 重验 `.gitleaks.toml` 不变式 + 重跑豁免探针。
+- gitleaks 豁免安全不变式由 `scripts/gitleaks_allowlist_probe.py`
+  在 CI(gitleaks job,先于 gitleaks-action)每次运行机械强制:形态层
+  (useDefault 保留、豁免正则整值锚定无分支)+ 行为层(固定样本集双态:
+  公开向量整值含大小写两形必须豁免,前拼/内嵌向量片段的逃逸凭据与无关
+  对照必须仍检出)。改动 `.gitleaks.toml` 后本地自验:
+  `python3 scripts/gitleaks_allowlist_probe.py --gitleaks <8.24.3 二进制>`。
+  背景:PR 口径扫描只扫 PR 自身 commits,历史误报与逃逸形态不在扫描集,
+  不变式曾可全绿违反(PR #292 三轮检视实证),探针把其变为可证伪。
