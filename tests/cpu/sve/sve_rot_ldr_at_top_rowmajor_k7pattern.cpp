@@ -34,15 +34,29 @@
  *   - hiham >> rand -> transition density matters (physical coupling).
  *
  * SVE/Tag note: each z-register slot holds vl_bytes/8 64b words; the
- * GPS tag byte_off counts bytes from the start of the buffer, so at
- * 256b VL the maximum byte_off is 1023*32+24 = 32760 < 65535 — the
- * 16b byte_off field still fits for any VL up to 512b inclusive.
+ * GPS tag byte_off counts bytes from the start of the buffer. The
+ * NEON tag's single 16b byte_off field only covered up to 512b VL at
+ * the default 1024 slots (max byte_off 65528 < 65535); the all-VL
+ * 128..1024-bit gate — and any tier once the slots knob pushes
+ * slots*vl_bytes past 64 KiB — overflowed it, so positions exactly
+ * 64 KiB apart received IDENTICAL tags: the misread was undetectable
+ * there and the dump classifier decoded aliased offsets (review
+ * round 1, PR #286). The tag therefore splits byte_off across 32
+ * bits: low 16b in the classic field (complement check unchanged),
+ * high 16b in the field the NEON tag reserved for a generation
+ * counter (always 0 here). That covers the whole knob domain
+ * (1M slots x 128B = 128 MiB < 4 GiB) with zero aliasing at every
+ * tier. No k7p dump predates this layout (the test had never run on
+ * SVE hardware before the all-VL migration), so no forensic archive
+ * is invalidated; the field-substitution classifier must decode k7p
+ * tags as byte_off = (bits[15:0] << 16) | bits[47:32].
  *
- * Build note: registered in tests_set_sve and compiled with
- * -msve-vector-bits=128 (fixed 128-bit SVE semantics, correct only at
- * runtime VL == 128, docs/architecture.md size-specific rule); the
- * true-VLA migration is scheduled for all-VL Phase 2 P5
- * (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
+ * Build note: all-VL Phase 2 P5 migration DONE — compiled in the
+ * true-VLA tests_sve_vla library (-march=armv8.2-a+sve, no
+ * -msve-vector-bits), so the vl_bytes/8-lane words-per-slot and the
+ * GPS-tag fill follow the runtime VL (spike evidence: three-state
+ * compile probe 128/256/no-flag, zero warnings; see
+ * docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
  * @endparblock
  */
 
@@ -55,6 +69,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 /* 每缓冲 VL 槽数(原 1024, 缓冲 = 槽数 × VL 字节) — 统一优先级链:
@@ -117,11 +132,16 @@ static inline svuint64_t rot_alu(int i, svuint64_t a, svuint64_t b) {
 
 #endif
 
-static inline uint64_t sve_gps_tag(uint64_t magic, uint64_t byte_off, uint64_t gen) {
-    return (magic                      << 48)
-         | ((byte_off        & 0xFFFFULL) << 32)
-         | ((~byte_off       & 0xFFFFULL) << 16)
-         |  (gen             & 0xFFFFULL);
+/* 32-bit byte_off split across the tag (see header SVE/Tag note):
+ * bits[47:32] = byte_off low 16b (classic field, complement check in
+ * bits[63:48] magic / [31:16] unchanged), bits[15:0] = byte_off high
+ * 16b (formerly the always-0 generation counter). Zero aliasing over
+ * the whole slots knob domain at every VL tier. */
+static inline uint64_t sve_gps_tag(uint64_t magic, uint64_t byte_off) {
+    return (magic                       << 48)
+         | ((byte_off         & 0xFFFFULL) << 32)
+         | ((~byte_off        & 0xFFFFULL) << 16)
+         |  ((byte_off >> 16) & 0xFFFFULL);
 }
 
 /* pattern fill: P_RAND_GPS keeps the GPS tag structure (classifier
@@ -132,7 +152,7 @@ static uint64_t sve_pattern_word(enum SveK7Pattern p, int which, uint64_t byte_o
         case P_ONE:      return 0xFFFFFFFFFFFFFFFFULL;
         case P_RAND_GPS: {
             const uint64_t magic = (which == 0) ? 0xA5A5ULL : ((which == 1) ? 0x5A5AULL : 0x0F0FULL);
-            return sve_gps_tag(magic, byte_off, 0);
+            return sve_gps_tag(magic, byte_off);
         }
         case P_HIHAM: {
             /* high-Hamming with position info: alternate 0x55/0xAA per
@@ -150,8 +170,19 @@ static uint64_t sve_pattern_word(enum SveK7Pattern p, int which, uint64_t byte_o
 }
 
 static int sve_k7p_init_common(struct test *test, enum SveK7Pattern p) {
+    /* All-VL Phase 2 P5: framework-layer capability + 128..1024-bit range
+     * gate in one call (framework/device/cpu/arm64/arm64_vl.h) — the
+     * HWCAP/rdvl probe executes no SVE instruction, so it runs before the
+     * words-per-slot pattern fill below. Shared by all four battery
+     * cells. The framework's compiler_minimum_device gate already
+     * catches non-SVE hosts; this keeps a test-specific skip reason even
+     * if that ordering ever changes. */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
+        return EXIT_SKIP;
+
     auto *data = static_cast<SveK7PData *>(malloc(sizeof(SveK7PData)));
-    data->vl_bytes = svcntb();
+    data->vl_bytes = (size_t)svl;
     data->vl_slots = (int)sve_k7p_slots(test, data->vl_bytes);
 
     const size_t buf = (size_t)data->vl_slots * data->vl_bytes;
@@ -190,6 +221,18 @@ static int sve_k7p_init_common(struct test *test, enum SveK7Pattern p) {
 
 static int sve_k7p_run_common(struct test *test, int cpu, const char *name) {
     auto *data = static_cast<SveK7PData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift — load-bearing:
+     * the pattern fill is word-addressed by init's vl_bytes/8
+     * words-per-slot; a different VL here would make the full-vector asm
+     * ldr/str walk wrong strides. Shared by all four battery cells. */
+    if (svcntb() != data->vl_bytes) {
+        log_error("sve_rot_ldr_at_top_rowmajor_%s: SVE VL drifted between "
+                  "init (%zu bytes) and run (%u bytes)", name,
+                  data->vl_bytes, (unsigned)svcntb());
+        report_fail_msg("sve_rot_ldr_at_top_rowmajor_%s: SVE VL drifted "
+                        "between init and run", name);
+    }
 
     const size_t buf = (size_t)data->vl_slots * data->vl_bytes;
     uint8_t *temp = static_cast<uint8_t *>(aligned_alloc_safe(64, buf));

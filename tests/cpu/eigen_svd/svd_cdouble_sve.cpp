@@ -23,11 +23,27 @@
  * budget, and floored at 300. An explicit override is available via
  * `-O eigen_svd_cdouble_sve.mdim=N` (300..6000).
  *
- * Because SVE instructions are baked into the object, the test probes for
- * SVE availability at init time using plain C (no SVE instructions) and
- * reports a clean CpuNotSupported skip when the running CPU has no SVE
- * (e.g. Kunpeng 920). On SVE-capable hardware (e.g. Kunpeng 930) the test
- * runs and stresses the SVE FMA/vector units for SDC detection.
+ * Because SVE instructions are baked into the object, the test gates at
+ * init time via the framework-layer arm64_require_sve_vl helper (the
+ * HWCAP/rdvl probe executes no SVE instructions — all-VL Phase 2 P5)
+ * and reports a clean CpuNotSupported skip when the running CPU has no
+ * SVE (e.g. Kunpeng 920). On SVE-capable hardware (e.g. Kunpeng 930)
+ * the test runs and stresses the SVE FMA/vector units for SDC detection.
+ *
+ * All-VL Phase 2 P5 (spike verdict): Eigen's SVE packet backend is
+ * compile-time fixed-width (arm_sve_vector_bits(EIGEN_ARM64_SVE_VL));
+ * VLA is un-compilable at the C++ language level (sizeless struct
+ * members / NumTraits sizeof — twice-confirmed spike), so this TU stays
+ * at the 128-bit lock and pins ITSELF instead: the test_run wrapper
+ * pins each worker thread to the compile-time VL via arm64_sve_pin_vl(16)
+ * before any packet code runs (then delegates to the shared EigenSVDTest
+ * template run), replacing the external VL-pinning launcher (prctl
+ * PR_SVE_SET_VL before exec, the scripts/eigen-sve-double/ precedent;
+ * the /tmp/vlrun tool no longer exists). The pin lives in test_run,
+ * NOT test_init: init runs on a throwaway aux thread whose prctl does
+ * not reach the per-CPU workers (they inherit the control thread's VL
+ * — the hard boundary documented in
+ * framework/device/cpu/arm64/arm64_vl.h).
  *
  * @note This test requires at least 2 threads to run.
  * @endparblock
@@ -38,8 +54,8 @@
 
 #if defined(__aarch64__)
 
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
+#include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #include <unistd.h>
 #include <cmath>
 
@@ -159,20 +175,20 @@ static int size_matrix_preinit(struct test *test)
 }
 
 /*
- * Probe SVE availability using only the vDSO / getauxval, which executes no
- * SVE instructions itself. We must not let any SVE-instrumented Eigen code
- * run on a CPU without SVE (it would SIGILL), so this is done before
- * delegating to the Eigen-backed init.
+ * Gate SVE availability via the framework layer (all-VL Phase 2 P5):
+ * arm64_require_sve_vl probes HWCAP_SVE and reads rdvl — no SVE
+ * instructions execute on the no-SVE path. We must not let any
+ * SVE-instrumented Eigen code run on a CPU without SVE (it would
+ * SIGILL), so this stays before the Eigen-backed init's allocations;
+ * the framework's compiler_minimum_device gate already skips non-SVE
+ * hosts before init — this keeps a test-specific reason if that
+ * ordering ever changes.
  */
 static int sve_probe_and_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; "
-                 "eigen_svd_cdouble_sve requires SVE (e.g. Kunpeng 930)");
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
     log_info("M_DIM %d (sized in preinit from memory; expected iteration "
              "%.1f s, desired_duration %d ms; override with -O "
              "eigen_svd_cdouble_sve.mdim=N)",
@@ -192,11 +208,44 @@ static int sve_probe_and_init(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend, dimension sized from available memory); counterpart of eigen_svd_cdouble")
+/*
+ * All-VL Phase 2 P5 (spike verdict) run wrapper: pin THIS worker thread
+ * to the compile-time 128-bit VL before any Eigen packet code runs, then
+ * delegate to the shared EigenSVDTest template run — replacing the lost
+ * external VL-pinning launcher. In test_run, not test_init: init runs on
+ * a throwaway aux thread whose prctl never reaches the per-CPU workers
+ * (arm64_vl.h hard boundary — the kernel only propagates a pin to
+ * threads the pinning thread itself creates). The drift guard uses
+ * arm64_sve_vl_bytes() (.inst-encoded rdvl), NOT svcntb(): under
+ * -msve-vector-bits=128 GCC constant-folds svcntb() to 16, which would
+ * silently compile the guard away, while the raw rdvl reads the actual
+ * per-thread runtime VL (same evidence as gemm_double_max_arm).
+ */
+static int eigen_svd_cdouble_sve_run(struct test *test, int cpu)
+{
+    const long pinned = arm64_sve_pin_vl(16);
+    if (pinned != 16) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: cannot pin the thread to the compile-time 128-bit "
+                 "VL (prctl returned %ld; kernel restriction?) — Eigen "
+                 "size-specific packets are undefined at other VLs",
+                 test->id, pinned);
+        return EXIT_SKIP;
+    }
+    if (arm64_sve_vl_bytes() != 16) {
+        log_error("%s: SVE VL is %ld bytes after pinning (expected 16)",
+                  test->id, arm64_sve_vl_bytes());
+        report_fail_msg("%s: SVE VL drift after pin — Eigen packets are "
+                        "compiled for 128-bit", test->id);
+    }
+    return eigen_svd_cdouble_sve_test::run(test, cpu);
+}
+
+DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend self-pinned to the compile-time 128-bit VL, dimension sized from available memory); counterpart of eigen_svd_cdouble")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_preinit = size_matrix_preinit,
   .test_init = sve_probe_and_init,
-  .test_run = eigen_svd_cdouble_sve_test::run,
+  .test_run = eigen_svd_cdouble_sve_run,
   .test_cleanup = eigen_svd_cdouble_sve_test::cleanup,
   .minimum_cpu = 0,
   /* desired_duration is written by test_preinit (parent, before the

@@ -22,22 +22,33 @@
  * re-compared instead of staying only the finiteness canary. Every SVE
  * loop steps
  * by svcntd()/svcntw() with svwhilelt tail truncation, which makes the
- * loop indices and tails exact at the compiled-for VL=128 (and keeps a
- * larger runtime VL from walking past nelems — defensive only). This is
- * NOT a correctness promise for arbitrary vector lengths: the TU is
- * compiled with a fixed 128-bit VL and the toolchain generates code for
- * that VL only (ACLE ties the supported runtime VL to the intersection
- * of source and object-file support), so behavior at a runtime VL above
- * 128 is undefined/unsupported. u10 and u35 are
+ * loop indices and tails exact at EVERY runtime vector length — the TU
+ * is true VLA (all-VL Phase 2 P5: compiled in the dedicated tests_sve_vla
+ * library with -march=armv8.2-a+sve and NO -msve-vector-bits, so the
+ * sizeless svfloat64_t/svfloat32_t types adopt the CPU's runtime VL; the
+ * pre-P5 128-bit lock and its ACLE intersection caveat are retired).
+ * Spike evidence: three-state compile probe (128 / 256 / no flag) with
+ * zero warnings, and the vendored SLEEF 3.9.0 static library is pure VLA
+ * machine code (disassembly: cntd/cntp/rdvl, no ptrue_pat fixed-width
+ * patterns); the historical "VL=256 compile regression" is most
+ * plausibly experiment contamination (the whole-library flag flip
+ * recompiled Eigen's fixed-width TUs, whose heap corruption got
+ * attributed to sleef). Cross-tier byte-identity of the per-lane-pure
+ * kernels is judged by the gem5-fi sleef_vla_dual 16-run matrix: four
+ * tiers x {fixed, random x3} all green (SDCSHIELD_FAILS=0, per-input-set
+ * checksums bit-identical across tiers), fidelity closed by
+ * vector==scalar 0-ulp calibration plus a real-hardware scalar anchor
+ * (gem5-fi feat/sleef-vla-dual @ 6d740525). u10 and u35
+ * are
  * SLEEF's two INDEPENDENT implementations of the same mathematics
  * (different coefficients, different FMA-chain schedules), so the
  * second tier is a free second-phase sample of the same silicon for
  * the same math. Covers the newest-instruction-generation risk area
  * (PinDrop Obs12: instructions fail most in their first arch gen) —
  * SVE is the newest-generation vector datapath on ARM64. Compiled in
- * the dedicated tests_sve static library (-march=armv8.2-a+sve
- * -msve-vector-bits=128) so the SVE instructions never leak into the
- * NEON baseline build.
+ * the dedicated tests_sve_vla true-VLA static library
+ * (-march=armv8.2-a+sve, no -msve-vector-bits) so the SVE instructions
+ * never leak into the NEON baseline build.
  *
  * The per-family element count is runtime-configurable through the
  * unified stress-config chain: "-O sleef_sve.nelems=N" or a config-file
@@ -51,9 +62,12 @@
  * byte-identical inputs/goldens).
  *
  * Runtime gate: silicon without SVE (e.g. Kunpeng 920) skips cleanly
- * (CpuNotSupported / EXIT_SKIP). Real execution requires SVE hardware
- * (Kunpeng 930 / Neoverse) — documented limitation of this development
- * host; on SVE silicon the test runs the full payload.
+ * (CpuNotSupported / EXIT_SKIP) via the framework-layer
+ * arm64_require_sve_vl helper (HWCAP_SVE capability + 128..1024-bit
+ * range check in one call, all-VL Phase 2 P5). Real execution requires
+ * SVE hardware (Kunpeng 930 / Neoverse) — documented limitation of this
+ * development host; on SVE silicon the test runs the full payload at
+ * the hardware's own vector length.
  * @endparblock
  */
 
@@ -63,8 +77,7 @@
 #include <sleef.h>
 
 #include <arm_sve.h>
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -73,16 +86,14 @@
  * and buffer size in this TU derives from it. Every SVE loop steps by
  * svcntd()/svcntw() and builds its load/store predicate with
  * svwhilelt_b64/b32(i, nelems) inside the loop, so the loop indices and
- * tails are exact at the compiled-for VL=128 and a longer runtime VL
- * can never walk the tail past nelems (defensive; a shorter one only
- * shortens the vectors). That is the full extent of the claim: the TU
- * is compiled for the fixed 128-bit VL (-msve-vector-bits=128, matching
- * the tests_sve build block), and the toolchain generates code for that
- * VL only, so a runtime VL above 128 is undefined/unsupported — this
- * comment is not a correctness promise for arbitrary vector lengths.
- * On the compiled-for VL, svcntd()==2, svcntw()==4 and every full
- * iteration's svwhilelt is all-true, so the generality costs nothing. */
-#define ELEMS_MIN 128        /* multiple of 4 — keeps every predicate fully active at VL=128 (double tier steps 2 lanes, float tier 4) */
+ * tails are exact at EVERY runtime vector length (all-VL Phase 2 P5:
+ * this TU compiles in the true-VLA tests_sve_vla library with no
+ * -msve-vector-bits; a longer VL just takes longer vectors per
+ * iteration, a shorter one takes more of them — same bytes either way,
+ * the kernels are per-lane pure). Spike evidence: three-state compile
+ * probe (128/256/no flag) zero warnings; the vendored SLEEF library is
+ * pure VLA machine code (disassembly: cntd/cntp/rdvl, no ptrue_pat). */
+#define ELEMS_MIN 128        /* multiple of 4 — an efficiency nicety at the 128-bit tier (f32 tier steps 4 lanes), NOT a correctness requirement: svwhilelt tails keep any count exact at every VL */
 #define ELEMS_MAX (64 << 20) /* per-family element ceiling of the nelems knob */
 
 namespace {
@@ -94,6 +105,12 @@ struct sleef_test_data {
      * test->data, so the value is resolved once in init, never per
      * thread */
     int nelems;
+    /* init-time SVE VL in bytes (the arm64_require_sve_vl return) — the
+     * run-side drift-guard anchor (all-VL policy #3). The per-lane-pure
+     * kernels make the goldens VL-independent, so this is a fail-closed
+     * environment invariant, not geometry. Only test->data (init's
+     * shared copy) ever reads it. */
+    size_t vl_bytes;
     /* per-domain inputs; the run loop keeps its OWN per-thread re-rolled
      * copy (B2-006) — the shared arrays are filled and golden-checked
      * once in init as the finiteness canary, then replayed once per
@@ -121,9 +138,10 @@ struct sleef_test_data {
  *      double 8B/元素 × 20 个线性缓冲/线程计, 占物理内存 60%,
  *      clamp [128, 64M]。线性缓冲用 sdc_auto_linear_count (误用方阵版
  *      会把压力欠缩放 sqrt(n) 倍)。
- * 任何显式值必须是 4 的倍数 (VL=128 svptrue 全活跃谓词按 4 元素步进,
- * 见上), 非 4 倍数 log_warning 并向下对齐; 自适应值静默对齐 (其下限
- * 128 本身是 4 的倍数, 对齐不会跌破)。 */
+ * 任何显式值必须是 4 的倍数 (尾谓词安全表述: svwhilelt 使任意计数在
+ * 所有档位精确, 4 倍数只是让 128-bit 档的 f32 阶 (每步 4 lane) 无尾——
+ * 效率修饰而非正确性要求, 见上), 非 4 倍数 log_warning 并向下对齐;
+ * 自适应值静默对齐 (其下限 128 本身是 4 的倍数, 对齐不会跌破)。 */
 static size_t sleef_sve_nelems(struct test *test)
 {
     int64_t v = sdc_knob_int_clamped(test, "nelems", 0, ELEMS_MIN, ELEMS_MAX);
@@ -132,7 +150,8 @@ static size_t sleef_sve_nelems(struct test *test)
     if (v > 0) {
         if (v % 4 != 0) {
             log_warning("sleef_sve: nelems=%ld is not a multiple of 4 "
-                        "(fixed VL=128 svptrue full-predicate stride) — "
+                        "(alignment nicety; svwhilelt tails keep any "
+                        "count exact at every VL) — "
                         "rounding down to %ld",
                         (long)v, (long)(v - v % 4));
             v -= v % 4;
@@ -256,8 +275,7 @@ static void sleef_fill_inputs(struct sleef_test_data *p)
  * kernels the run loop verifies against — the shared-helper structure is
  * what keeps the byte-exact comparison valid across rerolls. Steps by
  * svcntd()/svcntw() with svwhilelt tail-truncated predicates, exact at
- * the compiled-for VL=128 and tail-safe at larger VLs (see the nelems
- * comment above for the fixed-VL caveat). */
+ * every runtime VL (see the nelems comment above). */
 static void sleef_compute_goldens(struct sleef_test_data *p)
 {
     for (int i = 0; i < p->nelems; i += svcntd()) {
@@ -290,26 +308,27 @@ static void sleef_compute_goldens(struct sleef_test_data *p)
 
 static int sleef_sve_init(struct test *test)
 {
-    /* Runtime gate. NOTE: device_has_feature(cpu_feature_sve) is useless
-     * here — it is defined as (device_compiler_features & f) || (device_features
-     * & f) and this TU is compiled with +sve, so the compiler half would make
-     * it always-true on any CPU. Probe HWCAP_SVE directly via getauxval,
-     * exactly like eigen_svd_cdouble_sve: the vDSO call executes no SVE
-     * instructions, so it is safe to run before any SVE code path. The
-     * framework-level compiler_minimum_device gate (the "test compiled with
-     * sve" skip) already catches non-SVE hosts before init; this explicit
-     * probe keeps a sleef_sve-specific skip reason even if that framework
-     * gate ordering ever changes. */
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; "
-                 "sleef_sve requires SVE (e.g. Kunpeng 930)");
+    /* All-VL Phase 2 P5: framework-layer capability + 128..1024-bit range
+     * gate in one call (framework/device/cpu/arm64/arm64_vl.h), replacing
+     * the getauxval hand-probe. NOTE: device_has_feature(cpu_feature_sve)
+     * is useless here — it is defined as (device_compiler_features & f) ||
+     * (device_features & f) and this TU is compiled with +sve, so the
+     * compiler half would make it always-true on any CPU;
+     * arm64_require_sve_vl probes HWCAP_SVE directly and reads rdvl — no
+     * SVE instruction executes on the no-SVE path, so it is safe before
+     * any SVE code. The framework-level compiler_minimum_device gate (the
+     * "test compiled with sve" skip) already catches non-SVE hosts before
+     * init; this explicit gate keeps a sleef_sve-specific skip reason even
+     * if that framework gate ordering ever changes. Any tier in range is
+     * in-domain: the TU and the vendored SLEEF library are both pure VLA
+     * (spike evidence in the file header). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     auto d = new(sleef_test_data);
     test->data = d;
+    d->vl_bytes = (size_t)svl;   /* run-side drift-guard anchor */
     d->nelems = (int)sleef_sve_nelems(test);
     d->xd_trig = (double *)malloc(d->nelems * sizeof(double));
     d->xd_exp  = (double *)malloc(d->nelems * sizeof(double));
@@ -387,6 +406,17 @@ static int sleef_sve_init(struct test *test)
 static int sleef_sve_run(struct test *test, int cpu)
 {
     auto d = CAST(test->data);       /* read-only, for the frozen replay round */
+
+    /* All-VL policy #3: fail closed on init/run VL drift. The kernels are
+     * per-lane pure so the goldens are VL-independent, but a VL change on
+     * this thread between init and run would be an environment anomaly
+     * worth failing loudly on. */
+    if (svcntb() != d->vl_bytes) {
+        log_error("sleef_sve: SVE VL drifted between init (%zu bytes) and "
+                  "run (%u bytes)", d->vl_bytes, (unsigned)svcntb());
+        report_fail_msg("sleef_sve: SVE VL drifted between init and run");
+    }
+
     constexpr int kRerollEvery = 16;
     int since_reroll = kRerollEvery; /* force the first-iteration fill */
     long iter = 0;
@@ -472,8 +502,8 @@ static int sleef_sve_run(struct test *test, int cpu)
          * (re-rolled or the frozen-replay snapshot) through the same SVE
          * kernels and lands in the thread-private scratch; the loops
          * step by svcntd()/svcntw() with svwhilelt predicates (see the
-         * nelems comment), so the tail never walks past d->nelems even
-         * at a longer runtime VL (fixed-VL caveat there) */
+         * nelems comment), so the tail never walks past d->nelems at
+         * any runtime VL */
         for (int i = 0; i < d->nelems; i += svcntd()) {
             const svbool_t pg = svwhilelt_b64((uint64_t)i, (uint64_t)d->nelems);
             svfloat64_t x = svld1_f64(pg, &src->xd_trig[i]);
@@ -575,7 +605,7 @@ static int sleef_sve_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(sleef_sve, "SLEEF vectorized transcendentals (SVE polynomial FMA chains, sin/cos/exp/log double+float + u35 tier (exp2) double)")
+DECLARE_TEST(sleef_sve, "SLEEF vectorized transcendentals (SVE polynomial FMA chains, all-VL 128..1024-bit via arm64_require_sve_vl, sin/cos/exp/log double+float + u35 tier (exp2) double)")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_init = sleef_sve_init,
   .test_run = sleef_sve_run,

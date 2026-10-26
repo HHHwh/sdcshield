@@ -307,15 +307,33 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
         /* Phase A verification: per-lane byte-exact compare against the
            init-frozen golden (the values are exact 1/8-grid quantities,
            so != and memcmp agree; memcmp keeps the byte-exact golden
-           discipline of phases B/C). */
-        for (size_t jj = 0; jj < bt; ++jj) {
-            if (memcmp(&result[jj], &d->axis_expected[jj], sizeof(double))
-                    != 0) {
-                log_warning("sve512_xlswave_ctx: axis lane %2zu "
-                            "result=%.1f expected=%.1f",
-                            jj, result[jj], d->axis_expected[jj]);
+           discipline of phases B/C). The golden is FROZEN in init, not
+           recomputed here from s_base: a per-round recompute reads the
+           same source the hardware just consumed, so at-rest s_base
+           corruption reconciles both sides and stays invisible (PR #283
+           review finding A; same idiom as sve512_gather_scatter_svd/_arm).
+           Forensics follow the Phase B discipline — scan ALL lanes and
+           dump 64-bit bit patterns, since the 1/8 grid means %.1f cannot
+           show low-mantissa flips (PR #286 review round 1). */
+        {
+            size_t bad_lanes = 0;
+            for (size_t jj = 0; jj < bt; ++jj) {
+                if (memcmp(&result[jj], &d->axis_expected[jj],
+                           sizeof(double)) != 0) {
+                    uint64_t g, a;
+                    memcpy(&g, &d->axis_expected[jj], 8);
+                    memcpy(&a, &result[jj], 8);
+                    log_warning("sve512_xlswave_ctx: axis lane %2zu/%zu "
+                                "golden=0x%016" PRIx64 " actual=0x%016"
+                                PRIx64 " xor=0x%016" PRIx64, jj, bt, g, a,
+                                g ^ a);
+                    ++bad_lanes;
+                }
+            }
+            if (bad_lanes > 0) {
                 report_fail_msg("sve512_xlswave_ctx_arm: phase A "
-                                "(stencil axis) SDC detected");
+                                "(stencil axis) SDC detected on %zu/%zu "
+                                "lanes", bad_lanes, bt);
                 return EXIT_FAILURE;
             }
         }

@@ -42,11 +42,12 @@
  * prefix (never collides with NEON dumps). GPS tags otherwise
  * unchanged.
  *
- * Build note: registered in tests_set_sve and compiled with
- * -msve-vector-bits=128 (fixed 128-bit SVE semantics, correct only at
- * runtime VL == 128, docs/architecture.md size-specific rule); the
- * true-VLA migration is scheduled for all-VL Phase 2 P5
- * (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
+ * Build note: all-VL Phase 2 P5 migration DONE — compiled in the
+ * true-VLA tests_sve_vla library (-march=armv8.2-a+sve, no
+ * -msve-vector-bits), so the 4096-VL-slot footprint scales with the
+ * runtime VL exactly as the residency design above describes (spike
+ * evidence: three-state compile probe 128/256/no-flag, zero warnings;
+ * see docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
  * @endparblock
  */
 
@@ -59,6 +60,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 /* 每缓冲 VL 槽数(原 4096, 4x footprint; 缓冲 = 槽数 × VL 字节) — 统一优先级链:
@@ -125,8 +127,19 @@ static inline uint64_t sve_k3res_gps_tag(uint64_t magic, uint64_t byte_off, uint
 }
 
 static int sve_k3res_init(struct test *test) {
+    /* All-VL Phase 2 P5: framework-layer capability + 128..1024-bit range
+     * gate in one call (framework/device/cpu/arm64/arm64_vl.h) — the
+     * HWCAP/rdvl probe executes no SVE instruction, so it runs before the
+     * intra-slot GPS-tag fill below. The framework's
+     * compiler_minimum_device gate already catches non-SVE hosts; this
+     * keeps a test-specific skip reason even if that ordering ever
+     * changes. */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
+        return EXIT_SKIP;
+
     auto *data = static_cast<SveK3ResData *>(malloc(sizeof(SveK3ResData)));
-    data->vl_bytes = svcntb();
+    data->vl_bytes = (size_t)svl;
     data->vl_slots = (int)sve_k3res_slots(test, data->vl_bytes);
 
     const size_t buf = (size_t)data->vl_slots * data->vl_bytes;
@@ -164,6 +177,18 @@ static int sve_k3res_init(struct test *test) {
 
 static int sve_k3res_run(struct test *test, int cpu) {
     auto *data = static_cast<SveK3ResData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift — load-bearing:
+     * the 4096-VL-slot footprint and the intra-slot-tagged golden are
+     * sized at init's VL; a different VL here would make the full-vector
+     * asm ldr/str walk wrong strides. */
+    if (svcntb() != data->vl_bytes) {
+        log_error("sve_rot_ldr_at_top_rowmajor_k3res: SVE VL drifted "
+                  "between init (%zu bytes) and run (%u bytes)",
+                  data->vl_bytes, (unsigned)svcntb());
+        report_fail_msg("sve_rot_ldr_at_top_rowmajor_k3res: SVE VL "
+                        "drifted between init and run");
+    }
 
     const size_t buf = (size_t)data->vl_slots * data->vl_bytes;
     uint8_t *temp = static_cast<uint8_t *>(aligned_alloc_safe(64, buf));

@@ -136,11 +136,12 @@ END_DECLARE_TEST
   pinnable VL and no SVE2/SME, some expose the full SVE2 set + SME/SME2 at a
   wider VL. Verification path follows rule 2: tiers the host supports are
   verified natively here; tiers it lacks go to gem5-fi
-  (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). `tests_sve`
-  compiles at fixed 128-bit, so on SVE hosts with VL≠128 the eigen SVD test
-  needs a VL-pinning launcher (`scripts/eigen-sve-double/` precedent; the
-  external `/tmp/vlrun` tool no longer exists); `sleef_sve` stays at 128 by
-  design.
+  (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). All-VL Phase 2 P5:
+  `tests_sve` (eigen×2 only) still compiles at fixed 128-bit — those tests
+  self-pin each worker thread to the compile-time VL inside `test_run`
+  (`arm64_sve_pin_vl(16)`, no external launcher; a failed pin skips honestly).
+  `sleef_sve` + sve_rot×5 migrated to the true-VLA `tests_sve_vla` library
+  (no `-msve-vector-bits`, all-VL 128..1024-bit).
 - **SME caveat**: "HWCAP2_SME=0 / `SMSTART` raises SIGILL" only proves SME is
   *not enabled by this kernel* — with `CONFIG_ARM64_SME=n` (check
   `/boot/config-$(uname -r)`; the SME sysctl
