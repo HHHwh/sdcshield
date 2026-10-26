@@ -377,6 +377,119 @@ grep -n "sve_vl\|sme_vl" CLAUDE.md docs/architecture.md
 
 ---
 
+### Task 6（追加·用户 2026-10-26 批准扩展范围）: 7 处活文档的"本机"断言去时态化
+
+**背景**：Task 5 终检发现同一句断言散布 23 个文档。其中 16 个是**日期化快照**（记录当时那台机器，不改）；7 个是**活文档**（无日期，会被当现行事实读），逐处加"当次/按机探测"限定。**不删除任何原有结论**，只消除"本机"的当下时态。
+
+**Files:**
+- Modify: `docs/research/adding-tests.md:156`
+- Modify: `docs/research/progress-log.md`（头部追加 2026-10-26 条目 + 561 行加"当时"）
+- Modify: `docs/SDC_STRESS_CONFIG_CN.md:302-304`
+- Modify: `docs/paper/SDC_RESEARCH_for_FI.md:313`
+- Modify: `docs/paper/ref-paper-experiment-note/C-sve-sme.md:141`
+- Modify: `docs/paper/ref-paper-experiment-note/ENHANCEMENT_PROPOSAL.md:80,222`
+- Modify: `docs/paper/ref-paper-experiment-note/experiments/SYNTHESIS.md:158`
+
+**Interfaces:** Consumes Task 1 的规则 2 编号与 Task 2 的"按机探测"措辞；Produces 无。
+
+- [ ] **Step 1: adding-tests.md**
+
+`且 init 里必须 arm64_require_sve_vl()，负返回值即 EXIT_SKIP（本机 0xd01 无 SVE）` →
+`且 init 里必须 arm64_require_sve_vl()，负返回值即 EXIT_SKIP（本机是否有 SVE 须现场探测，见 CLAUDE.md 第 2 条——不要照抄任何写死的 part 号）`
+
+- [ ] **Step 2: SDC_STRESS_CONFIG_CN.md**
+
+```
+- **SVE 用例**：本机无 SVE（Kunpeng 920），全部 SVE 用例运行时
+  log_skip 优雅跳过（编译全通过）；SVE 硅片上的自适应行为由模型
+  单元公式保证（sysconf 物理内存/在线 CPU 与 arch 无关）。
+```
+→
+```
+- **SVE 用例**：本机是否有 SVE **须现场探测**（CLAUDE.md 第 2 条）。曾记录的那台
+  无 SVE 开发机上，全部 SVE 用例运行时 log_skip 优雅跳过（编译全通过）；在
+  **有** SVE 的板子上这些用例会真跑，压测数据必须取真实 run 而非 skip。
+  SVE 硅片上的自适应行为由模型单元公式保证（sysconf 物理内存/在线 CPU 与
+  arch 无关）。
+```
+
+- [ ] **Step 3: SDC_RESEARCH_for_FI.md**
+
+`新套件补 SVE2 族——本机无 SVE，实际只补 fma byte-exact 化与 power_virus 类）` →
+`新套件补 SVE2 族——撰写时所用开发机无 SVE（SVE 能力须现场探测，见 CLAUDE.md 第 2 条），故实际只补 fma byte-exact 化与 power_virus 类）`
+
+- [ ] **Step 4: C-sve-sme.md 表格行**
+
+`| **Kunpeng 920(本机,0xd01)** |` → `| **Kunpeng 920(当次实测机,0xd01)** |`
+
+- [ ] **Step 5: ENHANCEMENT_PROPOSAL.md 两处**
+
+- `本机(Kunpeng 920 无 SVE)验证到编译 + SVE 代码生成 + 干净 skip;真实验证在 cn23154。` →
+  `当次开发机(Kunpeng 920,part 0xd01)无 SVE,故只能验证到编译 + SVE 代码生成 + 干净 skip;真实验证在 cn23154。**这是按机结论,不是按仓结论**:换机须按 CLAUDE.md 第 2 条现场探测。`
+- `- 本机(Kunpeng 920)无 SVE/SVE2/SME:§3 全部新测试本机只能验证到编译 + SVE 代码生成(反汇编)+ 干净 skip;真实激发效果只能在 cn23154 验证。这与 sve512 家族的既有验证口径一致。` →
+  `- 当次开发机(Kunpeng 920,part 0xd01)无 SVE/SVE2/SME:§3 全部新测试在那台机上只能验证到编译 + SVE 代码生成(反汇编)+ 干净 skip;真实激发效果只能在 cn23154 验证。这与 sve512 家族的既有验证口径一致。**注意:本仓已有 SVE 能力各异的板子(如 SVE-256 且无 SVE2/SME 的一档),换机请按 CLAUDE.md 第 2 条探测,勿沿用本条旧设定。**`
+
+- [ ] **Step 6: SYNTHESIS.md**
+
+`- 本机(Kunpeng 920)无 SVE:SVE/SVE2 族只能验证到编译+代码生成+干净 skip,真实激发在 cn23154——论文实验配置表须如实分列两机角色;` →
+`- 当次开发机(Kunpeng 920,part 0xd01)无 SVE:SVE/SVE2 族在那台机上只能验证到编译+代码生成+干净 skip,真实激发在 cn23154——论文实验配置表须如实分列两机角色(换机请按 CLAUDE.md 第 2 条探测,勿沿用"本机无 SVE"旧设定);`
+
+- [ ] **Step 7: progress-log.md**
+
+(a) 561 行 `- **本机(0xd01 无 SVE)**:` → `- **当时本机(0xd01 无 SVE)**:`
+(b) 在首个 `---` 之后、`## 2026-09-19（会话 3…` 之前插入：
+
+```markdown
+## 2026-10-26（会话：主机向量能力「先探测、不假设」规则化）
+
+### 结论（实证）
+- 本机（当前工作机）MIDR `0x480fd020` = HiSilicon impl `0x48` / part **`0xd02`** / rev 0：
+  **有 SVE**，默认 **VL=256-bit**（`prctl(PR_SVE_GET_VL)`=32B，`rdvl #1`=32B 真执行），
+  可 pin 到 128-bit（`SET_VL 16B→回读16B`）；**无 SVE2**（HWCAP2_SVE2=0；`smulh z.b`/
+  `sqrshl p/m`/`bdep`/`bext` 实测 SIGILL）；**有** SVE 矩阵扩展（`smmla/ummla/bfdot/
+  bfmmla/fmmla(z.s)/fmmla(z.d)` 实测可执行）。
+- **SME 软件不可见**：HWCAP2_SME=0、`SMSTART`/`mrs smidr_el1` SIGILL、内核
+  `CONFIG_ARM64_SME` 未设置（`/proc/sys/abi/` 无 `sme_default_vector_length`）。
+  诚实边界：这只证明"内核未启用"，不是硬件判决——`ID_AA64PFR1_EL1` 读得 `0x20`
+  （SME 字段=0b0000，本世代核疑为 RES0）。
+- 原生 SVE 功能测试可跑：`-e sve_rot_ldr_at_top -t 2000 -n 1` 与 `-e sleef_sve` 均 `exit: pass`。
+
+### 落盘改动（`docs/host-vector-probe-rule` 分支）
+- CLAUDE.md 规则 2 → "Probe the host before assuming anything"（支持的档位本机原生验证、
+  不支持的才 gem5-fi）；平台怪癖节改 `probe per host`，新增 SME caveat。
+- docs/architecture.md 同步；两份 2026-10-23 快照加更正注记；7 处活文档"本机无 SVE"去时态化。
+
+### 下一步
+- 未做：16 份日期化快照按原样保留（历史记录）；是否开 PR 由人决定。
+```
+
+- [ ] **Step 8: 验证**
+
+```bash
+cd /home/sdc/wangxu/sdcshield
+# 活文档中"本机…无 SVE"型当下时态断言应清零（paper 的"当次开发机"不匹配）
+grep -rn "本机.*无 SVE\|本机(Kunpeng\|本机（Kunpeng\|本机,0xd01" docs/research/adding-tests.md docs/SDC_STRESS_CONFIG_CN.md docs/paper/ docs/research/progress-log.md | grep -v "当时本机\|当次开发机\|当次实测机"
+```
+期望：**无输出**（退出码 1）。
+```bash
+grep -c "2026-10-26" docs/research/progress-log.md    # 期望 ≥1
+grep -n "CLAUDE.md 第 2 条" docs/research/adding-tests.md docs/SDC_STRESS_CONFIG_CN.md  # 期望各 ≥1
+```
+
+- [ ] **Step 9: Commit（3 个提交，按单元切分）**
+
+```bash
+git add docs/research/adding-tests.md docs/research/progress-log.md
+git commit -s -m "docs(research): 活文档『本机无 SVE』去时态化 + 2026-10-26 探测结论落盘"
+git add docs/SDC_STRESS_CONFIG_CN.md docs/paper/SDC_RESEARCH_for_FI.md
+git commit -s -m "docs(stress-config,paper): SVE 用例可用性改为按机探测，删除写死机器身份"
+git add docs/paper/ref-paper-experiment-note/
+git commit -s -m "docs(paper-notes): 实验笔记的『本机』改为『当次开发机』并指向探测规则"
+git push
+```
+
+---
+
 ## Self-Review
 
 **1. Spec coverage**（对照用户两条要求）：
