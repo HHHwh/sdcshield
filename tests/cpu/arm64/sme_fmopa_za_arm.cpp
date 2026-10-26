@@ -20,36 +20,87 @@
  * Implementation: pure inline asm. GCC 12.3's <arm_sme.h> is an empty
  * shell (0 intrinsics — probed), so the whole SMSTART..SMSTOP sequence
  * is one asm volatile block with all operands staged through memory:
- *   smstart za            — enter streaming mode, ZA accessible
+ *   smstart sm + smstart za — enter streaming mode AND enable ZA. The
+ *                            double-switch is mandatory: FMOPA requires
+ *                            SVCR.SM=1, and a za-only window traps on
+ *                            the first FMOPA (gem5 SME model
+ *                            smEnCheckCode; empirically settled at all
+ *                            four tiers by the dual kernel, gem5-fi
+ *                            feat/fmopa-za-dual @ ebe08632, re-anchored
+ *                            by the hardened-asm rerun feat/pr280-r2-dual
+ *                            @ 959a5fa7). Inside the
+ *                            streaming window only the streaming-
+ *                            compatible subset may run (the fa64=0
+ *                            constraint on 0xd22) — the block contains
+ *                            nothing but SVE loads, FMOPA, MOVA, stores
+ *                            and the mode switches.
  *   ptrue p0.s
  *   zero {za}             — deterministic tile start state
- *   N x [ ld1w z0/z1 <- mem;  fmopa za0.s, p0/m, p0/m, z0.s, z1.s ]
- *   mova z2.s, p0/m, za0v.s[w12, 0]   — extract tile row slice 0
+ *   N x [ ld1w z0/z1 <- mem;  a/b += stride;  fmopa za0.s, p0/m, p0/m ]
+ *   mova z2.s, p0/m, za0v.s[w12, 0]   — extract a ZA vector slice
  *   st1w z2.s -> memory
- *   smstop za             — leave streaming mode (ZA inaccessible after)
+ *   smstop za + smstop sm — leave both (ZA inaccessible, streaming off)
  * w12 is zeroed (slice selector 0); z0/z1/z2/p0/w12 are clobbers.
  *
- * The fa64=0 constraint on 0xd22 (SMFR0) means only the streaming-
- * compatible subset may execute inside SMSTART..SMSTOP — the asm block
- * contains nothing but SVE loads, FMOPA, MOVA, stores and the mode
- * switches, so it is valid under that constraint.
+ * All-VL Phase 2 P2 rework (campaign log: docs/research/progress-log.md,
+ * "2026-10-23 (all-VL Phase 2 P2)" entry; the P2 spec itself,
+ * docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md, reached main
+ * via PR #271 and is not carried by this branch): the pre-P2 form had
+ * never executed on any hardware and carried four independent defects
+ * (1-4 below); the first P2 cut added a fifth (5), caught by adversarial
+ * review — five fixes total in this PR:
+ *   1. `rdsvl %0, 0` (imm 0) always returned 0 -> tile_cols 0 -> empty
+ *      golden and a heap overflow on real SME hardware (RDSVL multiplies
+ *      SVL_bytes by the immediate);
+ *   2. the asm advanced the operand pointers by #16 BYTES while the
+ *      golden indexed 16 FLOATS per step — inconsistent at every SVL;
+ *   3. the golden modelled ZA row 0 while `mova ..., za0v.s[w12, 0]`
+ *      reads the COLUMN view (the za_tileview probe, gem5-verified at
+ *      four tiers in PR #242, established za0v = column/transpose);
+ *   4. `smstart za` alone cannot execute FMOPA (SVCR.SM=1 required) —
+ *      the sm+za double-switch is mandatory (four-tier gem5 verdict,
+ *      dual kernel ebe08632);
+ *   5. the first P2 cut divided the helper's SVL-in-BYTES return by 32
+ *      (bits) — an 8x unit error replaying defect 1's geometry at 128-bit
+ *      and overruns at larger tiers; caught by adversarial review
+ *      (Critical-1), fixed as /4 plus a release-effective cols in [4,32]
+ *      check (assert is compiled out under NDEBUG).
+ * The rework: SVL via the framework layer (`arm64_require_sme_svl`,
+ * 128..1024-bit range check — the helper returns the SVL in BYTES),
+ * per-step operand WINDOWS of cols = SVL_bits/32 = SVL_bytes/4 f32
+ * lanes, the window stride registerized (cols * sizeof(float) as an
+ * asm operand — element size stays fixed), and the golden follows the
+ * gem5-verified axis verdict below. This is the test's FIRST FUNCTIONAL
+ * FORM; there is no regression anchor (the pre-P2 form produced no
+ * valid output anywhere).
  *
  * Golden: FMOPA za0.S with full predicates computes
  *   ZA[r][c] += Zn[r] * Zm[c]   (outer product, single rounding)
- * Deterministic operand streams (a[i] in {1.0, 2.0}, b[j] in {1.0, 3.0}
- * patterns) make every accumulate exact, so the golden is a plain scalar
- * double loop with zero rounding ambiguity. The tile row slice 0 of za0
- * holds row 0: ZA[0][c] for c in [0, SVL/32).
+ * Operands are exact small integers in window layout [s*cols + i]
+ * (a: (i%7)+1, b: (i%5)+1 over the absolute index), so every product
+ * and accumulate is exactly representable — zero rounding ambiguity,
+ * and gem5's fplib double-rounding (F4) coincides with hardware.
+ * The readout vector golden_readout[r] follows the axis verdict of the
+ * same-source dual kernel (gem5-fi workloads/sdcshield/
+ * sme_fmopa_dual.c, four tiers x {fixed, random x3}):
+ *   COLUMN: mova za0v.s[w12,0] w12=0 reads column 0 —
+ *           readout[r] = sum_s a[s*cols+r] * b[s*cols]
  *
  * A one-step self-check runs before the chain (golden-vs-hardware on a
- * single FMOPA — a golden bug reports as a test bug, never as SDC).
+ * single FMOPA — no independent oracle: the check rides the same
+ * FMOPA/ZA datapath as the main chain, so a self-check mismatch could be
+ * a test-model bug or real SDC and must be investigated, not presumed).
+ * test_run re-checks the SVL against the value recorded at init and
+ * fails closed on drift (never continues with stale geometry).
  *
- * test_init probes getauxval(AT_HWCAP2) & HWCAP2_SME and returns a clean
- * EXIT_SKIP when absent (this Kunpeng 920 and cn23154's 5.10 kernel both
- * skip). If a kernel ever exposes the bit without truly enabling SME,
- * the SMSTART traps (SIGILL) — the fork-isolated child crashes and the
- * framework reports it; that outcome is itself diagnostic (documented
- * expectation, settled definitively by the selftest_sme_sigill_probe).
+ * test_init gates via arm64_require_sme_svl() (framework arm64_vl.h
+ * layer: HWCAP2_SME capability + 128..1024-bit SVL range, honest
+ * runtime probing immune to the device_has_feature compile-time
+ * short-circuit). If a kernel ever exposes the bit without truly
+ * enabling SME, the SMSTART traps (SIGILL) — the fork-isolated child
+ * crashes and the framework reports it; that outcome is itself
+ * diagnostic (documented expectation, settled definitively by the
+ * selftest_sme_sigill_probe).
  * Requires the tests_arm64_sme library (-march=armv9-a+sme).
  * @endparblock
  */
@@ -58,21 +109,21 @@
 #include <cstdint>
 #include <cinttypes>
 #include <cstring>
-#include <cmath>
 #include <memory>
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
-// FMOPA accumulation steps per iteration.
+// FMOPA accumulation steps per iteration (SVL-independent).
 static constexpr size_t MOPA_STEPS = 256;
 
 struct SmeFmopaData {
     size_t tile_cols;               // SVL/32 f32 columns per tile row
-    std::vector<float> golden_row0; // expected ZA row 0 after the chain
+    std::vector<float> a_stream;    // operand windows, [s*cols + i]
+    std::vector<float> b_stream;
+    std::vector<float> golden_readout; // expected mova readout after chain
 };
 
 #ifdef __aarch64__
@@ -80,11 +131,34 @@ struct SmeFmopaData {
 // ---------------------------------------------------------------------------
 // One FMOPA accumulation round (N steps) with operands staged in memory.
 // All SVE state is local to the asm block; results leave via memory.
+// The window stride (cols * sizeof(float)) is a REGISTER operand — the
+// PR #242 invariant: geometry scales with SVL, element size stays fixed.
 // ---------------------------------------------------------------------------
 static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
-                            size_t steps, float *out_row0, size_t out_cols)
+                            size_t steps, float *out_vec, size_t cols)
 {
+    const size_t stride = cols * sizeof(float);
+    /* Operand-constraint contract (review R2, hardened): [a]/[b]/[n] are
+       in-out ("+r") operands whose outputs are written inside the loop
+       BEFORE input [o] is consumed by the final st1w, so they carry the
+       early-clobber modifier ("+&r") per the GCC extended-asm contract
+       (outputs without '&' are assumed written only after all inputs are
+       consumed). Belt-and-braces rather than a bug fix: as in-out
+       operands their ENTRY values are simultaneously live with [o]/[s]
+       at the asm boundary, so the allocator cannot alias them with
+       distinct-valued inputs anyway — the classic early-clobber hazard
+       is write-only ("=r") outputs, which this asm does not have; the
+       '&' documents the write-before-read contract instead of relying on
+       allocator internals. Constraints never change the asm template
+       bytes, only register allocation. Re-anchored four-tier evidence:
+       gem5-fi feat/pr280-r2-dual @ 959a5fa7 (kernel synced in lockstep).
+       Clobber contract: SMSTART SM / SMSTOP SM transitions make the
+       ENTIRE Z0-Z31 / P0-P15 / FFR contents UNKNOWN (AAPCS-SME), not
+       just the registers this template names — the full file is
+       declared so the compiler never keeps live vector state across the
+       streaming window. GPRs are preserved by streaming mode. */
     __asm__ volatile(
+        "smstart sm\n\t"
         "smstart za\n\t"
         "ptrue p0.s\n\t"
         "zero {za}\n\t"
@@ -92,37 +166,56 @@ static void fmopa_chain_asm(const float *a_stream, const float *b_stream,
         "1:\n\t"
         "ld1w {z0.s}, p0/z, [%[a]]\n\t"
         "ld1w {z1.s}, p0/z, [%[b]]\n\t"
-        "add %[a], %[a], #16\n\t"
-        "add %[b], %[b], #16\n\t"
+        "add %[a], %[a], %[s]\n\t"
+        "add %[b], %[b], %[s]\n\t"
         "fmopa za0.s, p0/m, p0/m, z0.s, z1.s\n\t"
         "subs %[n], %[n], #1\n\t"
         "b.ne 1b\n\t"
         "mova z2.s, p0/m, za0v.s[w12, 0]\n\t"
         "st1w {z2.s}, p0, [%[o]]\n\t"
         "smstop za\n\t"
-        : [a] "+r"(a_stream), [b] "+r"(b_stream), [n] "+r"(steps)
-        : [o] "r"(out_row0)
-        : "z0", "z1", "z2", "p0", "w12", "memory", "cc");
-    (void)out_cols;
+        "smstop sm\n\t"
+        : [a] "+&r"(a_stream), [b] "+&r"(b_stream), [n] "+&r"(steps)
+        : [o] "r"(out_vec), [s] "r"(stride)
+        : "z0", "z1", "z2", "z3", "z4", "z5", "z6", "z7",
+          "z8", "z9", "z10", "z11", "z12", "z13", "z14", "z15",
+          "z16", "z17", "z18", "z19", "z20", "z21", "z22", "z23",
+          "z24", "z25", "z26", "z27", "z28", "z29", "z30", "z31",
+          "p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7",
+          "p8", "p9", "p10", "p11", "p12", "p13", "p14", "p15",
+          "ffr", "w12", "memory", "cc");
 }
 
-// Scalar golden: ZA[r][c] += a[r] * b[c] over the stream, exact values.
-// Operands are exact small integers so every accumulate is exact.
+// Scalar golden over the operand windows, exact integer accumulation.
+// Axis verdict (gem5-fi sme_fmopa_za_dual @ ebe08632, re-anchored by the
+// hardened-asm + FNV-corrected rerun feat/pr280-r2-dual @ 959a5fa7; four
+// tiers x {fixed, random x3} = 16 runs each, SDCSHIELD_FAILS=0): mova
+// za0v.s[w12,0] with w12=0 reads COLUMN 0 —
+//   readout[r] = ZA[r][0] = sum_s z0[r] * z1[0] = sum_s a[s*cols+r] * b[s*cols]
 static std::vector<float> fmopa_golden(const std::vector<float> &a_stream,
                                        const std::vector<float> &b_stream,
                                        size_t steps, size_t cols)
 {
-    // za0 row 0 accumulates a_stream[0] * b_stream[j] per step (the
-    // row index comes from the A vector's lane: with full ptrue, lane
-    // r of z0 multiplies into tile row r; row 0 <- z0 lane 0).
-    std::vector<double> acc(cols, 0.0);
-    for (size_t s = 0; s < steps; ++s)
-        for (size_t c = 0; c < cols; ++c)
-            acc[c] += (double)a_stream[s] * (double)b_stream[s * 16 + c];
-    std::vector<float> out(cols);
-    for (size_t c = 0; c < cols; ++c)
-        out[c] = (float)acc[c];   // exact: small integers
+    std::vector<float> out(cols, 0.0f);
+    for (size_t s = 0; s < steps; ++s) {
+        const size_t s0 = s * cols;
+        for (size_t r = 0; r < cols; ++r)
+            out[r] += a_stream[s0 + r] * b_stream[s0];  /* exact integers */
+    }
     return out;
+}
+
+// Exact-integer operand windows, [s*cols + i] over the absolute index.
+static void fill_operand_windows(std::vector<float> &a_stream,
+                                 std::vector<float> &b_stream, size_t steps,
+                                 size_t cols)
+{
+    a_stream.resize(steps * cols);
+    b_stream.resize(steps * cols);
+    for (size_t si = 0; si < a_stream.size(); ++si) {
+        a_stream[si] = (float)((si % 7) + 1);
+        b_stream[si] = (float)((si % 5) + 1);
+    }
 }
 
 static int sme_fmopa_za_arm_init(struct test *test)
@@ -131,38 +224,38 @@ static int sme_fmopa_za_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap2 = getauxval(AT_HWCAP2);
-    if ((hwcap2 & HWCAP2_SME) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SME not exposed by this kernel (HWCAP2_SME unset; needs "
-                 "kernel >= 5.19 and hardware SME — e.g. HiSilicon 0xd22 "
-                 "has the hardware but its 5.10 kernel does not enable it). "
-                 "Run selftest_sme_sigill_probe to settle kernel support "
-                 "in one run.");
+    /* Framework layer: HWCAP2_SME capability + 128..1024-bit SVL range
+       check in one call; on skip the helper itself log_skip'ed the
+       reason and returned EXIT_SKIP (-255) — the unified require
+       contract (arm64_vl.h via PR #277/main; never a bare -1, which the
+       framework's init handling would decorate with a misleading
+       strerror). The `< 0` check below is the value-agnostic consumption
+       rule (compare < 0, never == -1 / == EXIT_SKIP), so this caller is
+       safe under either contract formulation. The return value is the
+       SVL in BYTES; cols = SVL_bits/32 = svl_bytes/4
+       (f32 lanes per tile row) — the exact mapping the dual kernel uses
+       (sme_fmopa_za_dual.c: cols = svl_bytes/4). The explicit range
+       check below catches any unit drift on the first SME host to run
+       this, release builds included (assert() is compiled out under
+       NDEBUG; adversarial review Critical-1: the pre-fix form divided
+       bytes by 32 — an 8x error no local run could expose). */
+    const long svl = arm64_require_sme_svl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<SmeFmopaData>();
-        // Tile row width: SVL bits / 32 per .s row. Read via inline asm
-        // rdsvl (safe only under streaming mode? No — RDSVL reads the
-        // current vector length; use __ARM_FEATURE_SME's __arm_get_current_vg
-        // is clang-only; read SVCR-free via 'rdsvl' which works outside
-        // streaming for the SM vector length on SME hardware).
-        long svl;
-        __asm__ volatile("rdsvl %0, 0" : "=r"(svl));
-        data->tile_cols = (size_t)svl / 32;
-
-        // Deterministic exact operand streams.
-        std::vector<float> a_stream(MOPA_STEPS);
-        std::vector<float> b_stream(MOPA_STEPS * 16);
-        for (size_t s = 0; s < MOPA_STEPS; ++s) {
-            a_stream[s] = (s & 1) ? 1.0f : 2.0f;
-            for (size_t j = 0; j < 16; ++j)
-                b_stream[s * 16 + j] = (j & 1) ? 1.0f : 3.0f;
+        data->tile_cols = (size_t)svl / 4;
+        if (data->tile_cols < 4 || data->tile_cols > 32) {
+            log_error("sme_fmopa_za_arm: cols %zu outside [4,32] — unit "
+                      "drift (svl %ld bytes)", data->tile_cols, svl);
+            return EXIT_FAILURE;
         }
-        data->golden_row0 = fmopa_golden(a_stream, b_stream, MOPA_STEPS,
-                                          data->tile_cols);
+
+        fill_operand_windows(data->a_stream, data->b_stream, MOPA_STEPS,
+                             data->tile_cols);
+        data->golden_readout = fmopa_golden(data->a_stream, data->b_stream,
+                                            MOPA_STEPS, data->tile_cols);
         test->data = data.release();
         return EXIT_SUCCESS;
     } catch (const std::exception &e) {
@@ -186,46 +279,53 @@ static int sme_fmopa_za_arm_run(struct test *test, int cpu)
     auto *d = static_cast<SmeFmopaData *>(test->data);
     const size_t cols = d->tile_cols;
 
-    // Operand streams (recreated identically to init).
-    std::vector<float> a_stream(MOPA_STEPS);
-    std::vector<float> b_stream(MOPA_STEPS * 16);
-    for (size_t s = 0; s < MOPA_STEPS; ++s) {
-        a_stream[s] = (s & 1) ? 1.0f : 2.0f;
-        for (size_t j = 0; j < 16; ++j)
-            b_stream[s * 16 + j] = (j & 1) ? 1.0f : 3.0f;
+    /* Fail-closed: never continue with stale geometry if the SVL drifted
+       between init and run (PR #242 review invariant). arm64_sme_svl_bytes
+       returns BYTES — same /4 mapping as init. */
+    if ((size_t)arm64_sme_svl_bytes() / 4 != cols) {
+        log_error("sme_fmopa_za_arm: SVL drifted between init (%zu cols) "
+                  "and run (%ld cols)", cols, arm64_sme_svl_bytes() / 4);
+        report_fail_msg("sme_fmopa_za_arm: SVL drifted between init and run");
     }
 
-    // One-step self-check (golden vs hardware on a single FMOPA).
+    /* One-step self-check (golden-vs-hardware on a single FMOPA — no
+       independent oracle, same FMOPA/ZA datapath: a mismatch could be a
+       test-model bug or real SDC, investigate before concluding). */
     {
-        std::vector<float> one_a(1, 2.0f);
-        std::vector<float> one_b(16);
-        for (size_t j = 0; j < 16; ++j)
+        std::vector<float> one_a(cols, 2.0f), one_b(cols);
+        for (size_t j = 0; j < cols; ++j)
             one_b[j] = (j & 1) ? 1.0f : 3.0f;
         std::vector<float> expect = fmopa_golden(one_a, one_b, 1, cols);
         std::vector<float> got(cols, -1.0f);
         fmopa_chain_asm(one_a.data(), one_b.data(), 1, got.data(), cols);
         if (memcmp(expect.data(), got.data(), cols * sizeof(float)) != 0) {
-            report_fail_msg("sme_fmopa_za_arm: golden tile-mapping "
-                            "self-check failed — test bug, not SDC");
-            return EXIT_FAILURE;
+            report_fail_msg("sme_fmopa_za_arm: tile-mapping self-check "
+                            "mismatch — no independent oracle (same "
+                            "FMOPA/ZA datapath): test-model bug or real "
+                            "SDC, investigate");
         }
     }
 
     do {
-        std::vector<float> row0(cols, -1.0f);
-        fmopa_chain_asm(a_stream.data(), b_stream.data(), MOPA_STEPS,
-                        row0.data(), cols);
-        for (size_t c = 0; c < cols; ++c) {
-            if (row0[c] != d->golden_row0[c]) {
-                uint32_t g, a;
-                memcpy(&g, &d->golden_row0[c], 4);
-                memcpy(&a, &row0[c], 4);
-                log_warning("sme_fmopa_za: col %zu golden=0x%08" PRIx32
-                            " actual=0x%08" PRIx32, c, g, a);
-                report_fail_msg("sme_fmopa_za_arm: SME FMOPA/ZA outer-"
-                                "product SDC detected");
-                return EXIT_FAILURE;
-            }
+        std::vector<float> out(cols, -1.0f);
+        fmopa_chain_asm(d->a_stream.data(), d->b_stream.data(), MOPA_STEPS,
+                        out.data(), cols);
+        /* Byte-exact per-lane comparison (spec §8 invariant: no cross-lane
+           aggregation); log the first mismatch for diagnosis. */
+        if (memcmp(out.data(), d->golden_readout.data(),
+                   cols * sizeof(float)) != 0) {
+            for (size_t c = 0; c < cols; ++c)
+                if (out[c] != d->golden_readout[c]) {
+                    uint32_t g, a;
+                    memcpy(&g, &d->golden_readout[c], 4);
+                    memcpy(&a, &out[c], 4);
+                    log_warning("sme_fmopa_za: lane %zu golden=0x%08" PRIx32
+                                " actual=0x%08" PRIx32, c, g, a);
+                    break;
+                }
+            report_fail_msg("sme_fmopa_za_arm: SME FMOPA/ZA outer-"
+                            "product SDC detected");
+            return EXIT_FAILURE;
         }
     } while (test_time_condition(test));
 
@@ -249,10 +349,11 @@ DECLARE_TEST(sme_fmopa_za_arm,
              "SME FMOPA/ZA outer-product chain SDC stress: 256-step "
              "fmopa za0.s accumulation into the ZA tile via a single "
              "SMSTART..SMSTOP inline-asm block (operands staged through "
-             "memory — GCC's arm_sme.h is an empty shell), row-slice "
-             "extraction via mova, byte-exact vs an exact-integer scalar "
-             "golden with a one-step tile-mapping self-check; clean-skip "
-             "on kernels without HWCAP2_SME")
+             "memory — GCC's arm_sme.h is an empty shell), ZA readout "
+             "via mova, byte-exact vs an exact-integer scalar golden "
+             "with a one-step tile-mapping self-check; all-VL "
+             "(128..1024-bit via arm64_require_sme_svl); clean-skip on "
+             "kernels without HWCAP2_SME")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sme_fmopa_za_arm_init,
     .test_run = sme_fmopa_za_arm_run,
