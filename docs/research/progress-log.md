@@ -655,6 +655,38 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   被实证推翻, 按裁决改 sm+za 双开。
 - **承接**:P3(sve512 家族×10)起另行计划。
 
+## 2026-10-24（all-VL Phase 2 P3：sve512 家族×10 全 VL 化——issue #182 疑点清除）
+## 2026-10-24（all-VL Phase 2 P3：sve512 家族×10 全 VL 化——issue #182 在 3 个代表性 kernel 上未复现）
+
+- **探索结论**:8/10 文件几何早已 svcnt 动态(512-ism 全为文案), 真重构仅
+  xlswave(Phase A 硬 512 双向量几何: B_TILE=16/n+8/result+8 越界/闭式 golden
+  绑定 512 对齐)与 libomp(micro[8] 栈缓冲 1024-bit 档溢出)。
+- **gem5 四档实证**(feat/sve512-dual @ ea86b681, 3 kernel × 4 档 × {fixed,
+  random×3} = 48 run 全绿): sve512_chain_dual 四模式(f64 链/块 slab 寻址/
+  f32 链/特殊值类别比对)lanes 逐档 2/4/8/16 与 4/8/16/32; sve512_gather_dual
+  两模式(1d_tag 索引标签断言/2d_block whilelt 尾)gn=128..1024;
+  stencil_axis_dual(bt=4..32, 7bed7f0e 全 VL 版+memcpy 告警修复)。**issue
+  #182 在 3 个代表性 kernel(chain/gather/stencil)上未复现**: 128-bit 档
+  全部模式字节级全绿——历史 GH runner VL=128 golden 失配在 gem5-fi O3
+  全 VL 语义下不复现;非全家族逐文件运行验证, 且本机无 SVE、真实 SVE
+  主机验证未覆盖(结论口径收窄, PR #283 评审)。chain 16 checksum 互异;
+  gather 同档 fixed/random checksum 相同系设计属性(FNV 按地址序, dst 内容
+  与排列无关, 源码核实)。
+- **重构**(feat/sve512-allvl, 11 commit): 范本 f64_chain_arm(a08302c0)+
+  xlswave bt 参数化(235a9c47, 闭式→stencil_axis 式标量 golden, result
+  [kTileMax]+result+lanes 修越界)+批量代理 8 文件(隔离 worktree, 五段式:
+  require(128,1024)/lanes=svl÷8|÷4+NDEBUG-proof 范围检查/漂移 fail-closed/
+  文案)+meson 注释同步(a7a8c941, 含 ~360MB/~2.7GiB 先存错误值修正)。libomp
+  micro[8]→[16] 实义容量修复。
+- **验证模式**: 48 run 与 8 文件批改均由隔离 subagent 执行(用户指令);
+  主 agent 并行完成范本/xlswave/P4 计划。每文件构建 TU 零告警+skip 干净
+  (框架编译特性门)+zstd19 pass。
+- **诚实边界**: 本机无 SVE, 各档功能行为以 kernel 家族级四档证据为锚
+  (同 kernel 形态=同验证目标的聚类 scoping, spec §6 "≈5-6 kernel"落实为
+  3 个); splitmix64 死代码系 H12' 先存遗留; f64_special_svd 缺
+  fracture_loop_count 一致性问题记账未动。
+- **承接**:P4(ipsec HMAC×17)计划已就绪(docs/superpowers/plans/
+  2026-10-24-sve-sme-all-vl2-p4.md)。
 ## 2026-10-25（PR #280 检视处置 R2：rebase 契约统一 + asm 加固 + FNV 重锚）
 
 - **rebase 到 main（#277 已并入）**:11 条当前 head 意见中 6 条

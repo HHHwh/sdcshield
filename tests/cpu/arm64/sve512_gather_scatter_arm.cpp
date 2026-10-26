@@ -43,8 +43,13 @@
  * indexes through the SAME indirection (a permutation does NOT commute
  * with the scatter, so the golden must map idx[i] -> dst, not linearly).
  *
- * test_init probes HWCAP_SVE via getauxval (no SVE instruction executes
- * before the probe), returning a clean EXIT_SKIP on SVE-less CPUs.
+ * All-VL 128..1024-bit via arm64_require_sve_vl (all-VL Phase 2 P3);
+ * the pre-P3 512-bit single-value gate and its issue #182 caveat are
+ * cleared by the four-tier dual-kernel evidence in gem5-fi
+ * feat/sve512-dual. test_init gates via the framework layer
+ * (HWCAP_SVE capability + range check in one call, no SVE instruction
+ * executes before the probe), returning a clean EXIT_SKIP on SVE-less
+ * CPUs; test_run re-checks the VL and fails closed on drift.
  * @endparblock
  */
 
@@ -58,9 +63,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static inline uint64_t splitmix64(uint64_t x)
@@ -73,8 +77,9 @@ static inline uint64_t splitmix64(uint64_t x)
 
 // Index-revealing encoding v2: the low 20 mantissa bits are the element
 // index tag (the wrong-offset assertion decodes exactly these bits), wide
-// enough for both the 512-entry gather table and the 256K-entry stride
-// table below.
+// enough for both the gather table (gn = 64 x lanes, i.e. 128..1024
+// entries across the 128..1024-bit VL tiers) and the 256K-entry stride
+// table below — IDX_TAG_MASK 0xFFFFF covers every tier.
 static constexpr uint64_t IDX_TAG_MASK = 0xFFFFFULL;
 
 // Wide-stride backing table: 256K f64 = 2 MiB — larger than the 64 KiB L1D
@@ -87,7 +92,13 @@ struct SveGatherScatterData {
     std::vector<uint64_t> gather_src;  // 只读共享
     std::vector<uint64_t> gather_idx;  // 只读共享(置换索引表)
     std::vector<uint64_t> stride_src;  // 只读共享(2 MiB 宽步距后备表)
-    // 注意: scatter_dst / scatter_golden 是每线程每迭代的可变 scratch,不能放共享 data ——
+    // scatter_golden: init 期一次冻结、run 期只读(与 gather_src/gather_idx 同源)。
+    // 若每轮从同一块 gather_src 现场重算,hw 与 golden 读的是同一份(可能已被静置
+    // 位翻转污染的)源数据,两侧同时改变而互相抵消——init 之后 gather_src 的位翻转
+    // 将永远不可见。冻结副本打破这个对称性(与 sve512_gather_scatter_svd /
+    // sve512_xlswave_ctx_arm Phase A 同构;本族"三缺一",PR #283 评审 finding A)。
+    std::vector<uint64_t> scatter_golden;
+    // 注意: scatter_dst 是每线程每迭代的可变 scratch,不能放共享 data ——
     // -n>1 时框架对每个 worker 线程共享同一个 test->data,并发改写同一块 scatter 缓冲会
     // 相互踩踏(实测 -n 4 时上半 lane 读到 0x0:某线程的 std::fill 清掉了另一线程正在比对的
     // lane)。改为 test_run 内栈上分配,与 sve512_f64_chain_arm 的 hw/gold 同模式。
@@ -131,27 +142,23 @@ static void report_f64_lane_mismatch(const char *tag, size_t lane,
 
 static int sve512_gather_scatter_arm_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; "
-                 "sve512_gather_scatter_arm requires SVE");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call (the geometry has been svcnt-dynamic all
+       along; only the old single-value gate pinned one tier). The
+       historical VL=128 golden mismatch on a hosted CI runner
+       (issue #182) is cleared by the four-tier dual-kernel evidence
+       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, range-checked
+       below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<SveGatherScatterData>();
-        data->vl_d = svcntd();
+        data->vl_d = arm64_sve_f64_lanes_checked(test, svl);
+        if (data->vl_d == 0)
+            return EXIT_FAILURE;   /* lanes out of range — reason logged */
 
         const size_t gn = 64 * data->vl_d;
         data->gather_src.resize(gn);
@@ -197,6 +204,16 @@ static int sve512_gather_scatter_arm_init(struct test *test)
             data->stride_src[i] = sign | (exp << 52) | entropy |
                                   (uint64_t)(i & IDX_TAG_MASK);
         }
+
+        /* Freeze the scalar golden once, here in init (PR #283 review,
+         * finding A): gather_scatter_golden() reads only gather_src and
+         * gather_idx, both init-frozen and read-only in run. Recomputing
+         * it per round from the same src the hardware just consumed makes
+         * both sides track any at-rest bit flip in gather_src and
+         * reconcile, so the flip stays invisible; the frozen copy cannot.
+         * Same pattern as sve512_gather_scatter_svd / xlswave Phase A. */
+        data->scatter_golden.assign(gn, 0);
+        gather_scatter_golden(data.get(), data->scatter_golden.data());
 
         test->data = data.release();
         return EXIT_SUCCESS;
@@ -248,6 +265,11 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 {
     (void)cpu;
     const auto *d = static_cast<SveGatherScatterData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift (single source,
+       framework/device/cpu/arm64/arm64_vl.h). */
+    ARM64_SVE_VL_DRIFT_CHECK_F64(test, d->vl_d);
+
     const size_t gn = d->gather_idx.size();
     const size_t lanes = d->vl_d;
 
@@ -261,10 +283,10 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
     std::vector<uint64_t> stride_idx;
     size_t stride_base = 0;
 
-    // 每线程每迭代的栈上 scratch(dst/golden 可写),不共享 —— 规避 -n>1 并发踩踏
-    // (与 sve512_f64_chain_arm 的 hw/gold 同模式)。
+    // 每线程每迭代的栈上 scratch(dst 可写),不共享 —— 规避 -n>1 并发踩踏
+    // (与 sve512_f64_chain_arm 的 hw/gold 同模式)。golden 则是 init 期冻结的
+    // 只读副本(d->scatter_golden),不再每轮重算,见 struct 注释。
     std::vector<uint64_t> scatter_dst(gn, 0);
-    std::vector<uint64_t> scatter_golden(gn, 0);
 
     do {
         bool all_passed = true;
@@ -314,11 +336,10 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 
         // ---- original FMA+scatter round-trip (value-level check) ----
         gather_scatter_hw(d, scatter_dst.data());
-        gather_scatter_golden(d, scatter_golden.data());
         for (size_t i = 0; i < gn; ++i) {
-            if (scatter_dst[i] != scatter_golden[i]) {
+            if (scatter_dst[i] != d->scatter_golden[i]) {
                 report_f64_lane_mismatch("sve512_gather_scatter", i,
-                                         scatter_golden[i],
+                                         d->scatter_golden[i],
                                          scatter_dst[i]);
                 all_passed = false;
             }
@@ -326,7 +347,7 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_gather_scatter_arm: SVE-512 gather/scatter SDC detected "
+                "sve512_gather_scatter_arm: SVE gather/scatter SDC detected "
                 "(wrong-offset read or scatter corruption)");
             return EXIT_FAILURE;
         }
@@ -369,7 +390,8 @@ DECLARE_TEST(sve512_gather_scatter_arm,
              "SVE full-vector-length gather/scatter SDC stress: "
              "svld1_gather_u64index_f64 + svmla_f64_x + "
              "svst1_scatter_u64index_f64 round-trip over a permuted index "
-             "table, byte-exact compared against a scalar golden")
+             "table (all-VL 128..1024-bit via arm64_require_sve_vl), "
+             "byte-exact compared against a scalar golden")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_gather_scatter_arm_init,
     .test_run = sve512_gather_scatter_arm_run,

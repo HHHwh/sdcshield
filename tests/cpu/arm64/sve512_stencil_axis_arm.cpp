@@ -37,7 +37,7 @@
  *     greptile 4254737399; PR #237 review, coderabbit).
  *   - Shape B (fully randomized): per-thread grid and coefficients
  *     re-rolled from the framework RNG every round, run through the
- *     very same axis_generic_16x2 hot path, then compared against an
+ *     very same axis_generic_dual hot path, then compared against an
  *     INDEPENDENT scalar std::fma chain that mirrors the kernel's
  *     r=1..6 up-then-down order. Shape A varies only the grid per
  *     fragment; shape B re-rolls both the grid and the coefficients
@@ -152,7 +152,10 @@ static inline uint64_t bits_of(double d)
     return u;
 }
 
-inline void axis_generic_16x2(
+/* (was axis_generic_16x2 — named for the retired 512-bit B_TILE=16 ×
+ * 2-vector geometry; renamed for the bt-parameterized all-VL kernel.
+ * The gem5-fi dual-kernel counterpart is stencil_axis_dual.) */
+inline void axis_generic_dual(
     const double* s_base, const size_t coord,
     const size_t extent, const size_t stride,
     const svbool_t ptrue, const double* coeff, const size_t bt,
@@ -317,7 +320,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                 log_warning("sve512_stencil_axis: iteration=%zu, &res0=%p",
                             j, static_cast<void *>(&res0));
             }
-            axis_generic_16x2(
+            axis_generic_dual(
                 s_base, coord, extent, stride, ptrue, coeff, bt, res0, res1);
         }
 
@@ -348,7 +351,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
         }
 
         /* ---- 形态 B: 全随机第二形态 (B6 / R2b 冻结盲区) ----
-         * 同一热路径 (axis_generic_16x2 原样), 输入换成框架 RNG 每轮重掷
+         * 同一热路径 (axis_generic_dual 原样), 输入换成框架 RNG 每轮重掷
          * 的随机格点/系数 (per-thread); 期望由独立标量 std::fma 链式参考
          * 按内核顺序 (r=1..6, 每半径先上后下) 计算 —— 形态 A 仅按
          * fragment 变化格点, 形态 B 每轮连系数一起重掷。 */
@@ -408,7 +411,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                                 "iteration=%zu, &b_res0=%p",
                                 j, static_cast<void *>(&b_res0));
                 }
-                axis_generic_16x2(
+                axis_generic_dual(
                     r_base, coord, extent, stride, ptrue, r_coeff,
                     bt, b_res0, b_res1);
             }

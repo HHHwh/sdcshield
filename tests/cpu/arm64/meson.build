@@ -140,10 +140,13 @@ if host_machine.cpu_family() == 'aarch64'
     # +sve target, while the tests_arm64 baseline stays armv8.1-a+crc+crypto:
     # enabling +sve for the whole library could let GCC auto-vectorize the
     # NEON tests into SVE instructions, which would SIGILL on SVE-less CPUs
-    # such as this Kunpeng 920. Every test probes HWCAP_SVE first thing in
-    # test_init and returns a clean EXIT_SKIP on SVE-less CPUs, so their SVE
+    # such as this Kunpeng 920. Every test self-gates in test_init and
+    # returns a clean EXIT_SKIP on SVE-less CPUs, so their SVE
     # codegen only ever executes on SVE-capable hardware. Built only on
-    # aarch64.
+    # aarch64. (Gate split as of all-VL Phase 2: the P3 files gate via
+    # the framework layer — arm64_require_sve_vl: HWCAP_SVE capability +
+    # 128..1024-bit range in one call; the remaining legacy files still
+    # probe HWCAP_SVE by hand and migrate in P6.)
     #
     # NOTE: sve512_fma_arm.cpp is committed (ea879f68) but deliberately NOT
     # wired into any sources list yet — wiring + all-VL validation is
@@ -168,30 +171,32 @@ if host_machine.cpu_family() == 'aarch64'
             # does not require deterministic NaN payload propagation.
             'sve512_f64_special_arm.cpp',
             # workload 3: the same serial FMLA chain structure at f32 width
-            # (svmla_f32_x), exercising the 16-lane f32 FMA/predicate
-            # datapath at full 512-bit width, byte-exact vs a scalar
-            # fmaf() golden recomputed with the identical operation order.
+            # (svmla_f32_x), exercising the svcntw() f32 FMA/predicate
+            # lanes at the runtime VL (all-VL Phase 2, 128..1024-bit),
+            # byte-exact vs a scalar fmaf() golden recomputed with the
+            # identical operation order.
             'sve512_f32_chain_arm.cpp',
             # SVD-format variant of workload 1: same serial svmla_f64_x
             # chain, but the operand streams are walked through a 16x16
             # nested block traversal (BDCSVD-style block-of-matrix access)
-            # over an SVD-scale allocation (300*300*512*VL elements per
-            # stream, ~2.7 GiB each at a 512-bit VL). The per-iteration
-            # touched set (~24 MB, 5.76 MB step stride) overflows L2 and
-            # pressures L3/TLB — the first of eigen_svd_cdouble_sve's
-            # SVD-only trigger paths (working set beyond L2).
+            # over an SVD-scale allocation whose size is proportional to
+            # the runtime lane count (m+a streams total ~5.9..47.3 MB
+            # across 128..1024-bit, i.e. ~2.95..23.7 MB per stream;
+            # all-VL Phase 2). The per-iteration touched
+            # set overflows L2 and pressures L3/TLB at every tier — the
+            # first of eigen_svd_cdouble_sve's SVD-only trigger paths
+            # (working set beyond L2).
             'sve512_f64_chain_svd.cpp',
             # SVD-format variant of workload 2: the same SVD-scale block
             # traversal over the IEEE-754 special-value table (64-step
             # chain), compared per lane by category (fsu_byteexact_arm
-            # precedent). Allocation: 300*300*64*VL per stream (~360 MB
-            # each at a 512-bit VL).
+            # precedent). Allocation ∝ lanes (~1.5 MB per stream at
+            # 512-bit, all-VL Phase 2).
             'sve512_f64_special_svd.cpp',
             # SVD-format variant of workload 3: the same SVD-scale block
-            # traversal at f32 width (svmla_f32_x, 16-lane f32 datapath),
-            # byte-exact vs a scalar fmaf() golden. Allocation:
-            # 300*300*512*VL f32 elements per stream (~2.7 GiB each at a
-            # 512-bit VL).
+            # traversal at f32 width (svmla_f32_x, svcntw() lanes),
+            # byte-exact vs a scalar fmaf() golden. Allocation ∝ lanes
+            # (~11.8 MB per stream at 512-bit, all-VL Phase 2).
             'sve512_f32_chain_svd.cpp',
             # SVD-format variant of workload 4: gather/FMA/scatter
             # round-trip over a 2-D 16x16 block-permuted index table

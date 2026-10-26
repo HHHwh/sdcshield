@@ -23,6 +23,23 @@
  *   - the hot loop uses an svwhilelt predicate: 90000 is not guaranteed
  *     divisible by every runtime VL, so a full ptrue could over-read the
  *     final partial vector.
+ *
+ * Review hardening (PR #283, F2 — mirrors the _arm variant's v2
+ * precedent): the gather_src fill is index-revealing v2 — sign |
+ * exponent [0.5,2) | 32-bit entropy in mantissa [51:20] | 20-bit
+ * element index tag (90000 < 2^20, so every element is distinct; the
+ * old seeds_f64[i % vl_d] fill had only vl_d distinct values and could
+ * not reveal a wrong-offset gather landing in the same residue class),
+ * and the run-side destination is zero-filled at the top of every round
+ * (the golden 1.5 + v*v is never zero, so a dropped scatter write
+ * cannot ride on the previous round's correct bytes).
+ *
+ * All-VL 128..1024-bit via arm64_require_sve_vl (all-VL Phase 2 P3;
+ * the pre-P3 512-bit single-value gate and its issue #182 caveat are
+ * cleared by the four-tier dual-kernel evidence in gem5-fi
+ * feat/sve512-dual); test_run re-checks the VL and fails closed on
+ * drift. The 90000-element workspace itself is VL-independent — the
+ * svwhilelt tail predicate above already handles every runtime VL.
  * @endparblock
  */
 
@@ -31,19 +48,23 @@
 #include <cinttypes>
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 #include <memory>
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static constexpr size_t SVD_ROWS = 300;
 static constexpr size_t SVD_COLS = 300;
 static constexpr size_t SVD_BLOCK_ROWS = 16;
 static constexpr size_t SVD_BLOCK_COLS = 16;
+
+// Index-revealing encoding v2 (review F2, _arm variant precedent): gn =
+// 90000 < 2^20, so the low 20 mantissa bits uniquely tag every element.
+static constexpr uint64_t IDX_TAG_MASK = 0xFFFFFULL;
 
 static inline uint64_t splitmix64(uint64_t x)
 {
@@ -55,7 +76,6 @@ static inline uint64_t splitmix64(uint64_t x)
 
 struct SveGatherScatterSvdData {
     size_t vl_d;
-    std::vector<uint64_t> seeds_f64;
     std::vector<uint64_t> gather_src;
     std::vector<uint64_t> gather_idx;
     // Precomputed once in init; read-only in run (shared across threads).
@@ -100,32 +120,24 @@ static void report_f64_lane_mismatch(const char *tag, size_t lane,
 
 static int sve512_gather_scatter_svd_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve512_gather_scatter_svd requires SVE");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call (the geometry has been svcnt-dynamic all
+       along — the svwhilelt tail predicate was designed for arbitrary
+       runtime VLs from day one; only the old single-value gate pinned
+       one tier). The historical VL=128 golden mismatch on a hosted CI
+       runner (issue #182) is cleared by the four-tier dual-kernel
+       evidence (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, range-checked
+       below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
     try {
         auto data = std::make_unique<SveGatherScatterSvdData>();
-        data->vl_d = svcntd();
-
-        /* randomization hardening H12': seeds from the framework RNG. */
-        data->seeds_f64.resize(data->vl_d);
-        for (size_t lane = 0; lane < data->vl_d; ++lane) {
-            data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (random64() & 0x000FFFFFFFFFFFFFULL);
-        }
+        data->vl_d = arm64_sve_f64_lanes_checked(test, svl);
+        if (data->vl_d == 0)
+            return EXIT_FAILURE;   /* lanes out of range — reason logged */
 
         // SVD-scale gather/scatter workspace: 300x300 doubles = 720 KB.
         const size_t gn = SVD_ROWS * SVD_COLS;
@@ -133,8 +145,23 @@ static int sve512_gather_scatter_svd_init(struct test *test)
         data->gather_idx.resize(gn);
         data->scatter_golden.assign(gn, 0);
 
+        /* Index-revealing encoding v2 (review F2, the _arm variant's
+         * precedent): the low 20 mantissa bits (IDX_TAG_MASK) carry the
+         * element index, while sign, exponent and the upper mantissa
+         * carry per-run fresh entropy from the framework RNG (H12': -s
+         * reproducible). gn = 90000 < 2^20, so every element's tag is
+         * distinct — the pre-fix seeds_f64[i % vl_d] periodic fill (only
+         * vl_d distinct values) could not reveal a wrong-offset gather
+         * landing in the same residue class. The exponent stays in the
+         * [0.5, 2) band so the FMA transform v = 1.5 + v*v stays in
+         * [1.75, 5.5]: never zero (a dropped scatter write then shows
+         * up as the round's zero fill) and never overflow. */
         for (size_t i = 0; i < gn; ++i) {
-            data->gather_src[i] = data->seeds_f64[i % data->vl_d];
+            uint64_t sign = (random64() & 1ULL) << 63;
+            uint64_t exp = 0x3FEULL + (random64() & 1ULL);          // [0.5, 2)
+            uint64_t entropy = (random64() & 0xFFFFFFFFULL) << 20;  // mant [51:20]
+            data->gather_src[i] = sign | (exp << 52) | entropy |
+                                  (uint64_t)(i & IDX_TAG_MASK);
             data->gather_idx[i] = i;
         }
 
@@ -185,12 +212,19 @@ static int sve512_gather_scatter_svd_run(struct test *test, int cpu)
     (void)cpu;
     auto *d = static_cast<SveGatherScatterSvdData *>(test->data);
 
-    // Per-CPU-thread local destination: the index table is a full
-    // permutation, so every element is overwritten each pass — no memset
-    // needed, and no cross-thread sharing.
+    /* All-VL policy #3: fail closed on init/run VL drift (single source,
+       framework/device/cpu/arm64/arm64_vl.h). */
+    ARM64_SVE_VL_DRIFT_CHECK_F64(test, d->vl_d);
+
+    // Per-CPU-thread local destination (no cross-thread sharing),
+    // zero-filled at the top of every round (review F2): the golden
+    // 1.5 + v*v is never zero, so a dropped scatter write leaves the
+    // round's zero fill behind instead of riding on the previous
+    // round's correct bytes.
     std::vector<uint64_t> dst(d->scatter_golden.size());
 
     do {
+        std::fill(dst.begin(), dst.end(), 0);
         bool all_passed = true;
         gather_scatter_hw(d, dst.data());
         for (size_t i = 0; i < dst.size(); ++i) {
@@ -217,8 +251,10 @@ static int sve512_gather_scatter_svd_cleanup(struct test *test)
 #endif // __aarch64__
 
 DECLARE_TEST(sve512_gather_scatter_svd,
-             "SVD-format SVE-512 gather/scatter round-trip: 1.44 MB working "
-             "set + 2-D block index permutation, byte-exact vs scalar golden")
+             "SVD-format SVE gather/scatter round-trip: 90000-element "
+             "VL-independent working set + 2-D block index permutation "
+             "(all-VL 128..1024-bit via arm64_require_sve_vl), byte-exact "
+             "vs scalar golden")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_gather_scatter_svd_init,
     .test_run = sve512_gather_scatter_svd_run,
