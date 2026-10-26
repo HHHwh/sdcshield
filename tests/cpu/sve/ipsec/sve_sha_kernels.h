@@ -46,6 +46,13 @@
 #define SVE_SHA_STREAMS_MAX_32 32   /* svcntw() at VL=1024-bit */
 #define SVE_SHA_STREAMS_MAX_64 16   /* svcntd() at VL=1024-bit */
 
+/* CONTRACT (PR #294 review round 2): the kernels below svst1 full-width
+   (svptrue) into [..][SVE_SHA_STREAMS_MAX_*] arrays — callers MUST gate
+   the runtime VL to <= 1024-bit (svcntw() <= 32 / svcntd() <= 16). The
+   HMAC layer (sve_hmac.h) enforces this with a return -1 stream-count
+   capacity guard alongside its key_len/padded guards; direct kernel
+   reusers must apply the equivalent gate (see the standalone verifier). */
+
 /* ================= SHA-256 family (SHA-224/SHA-256), 8×32-bit lanes ================= */
 
 static const uint32_t sha256_k[64] = {
@@ -70,7 +77,7 @@ static const uint32_t sha224_iv[8] = {
  * 指针(各 nblocks*64B, 已含 padding 与长度); out: out[w][s] 写第 s 条消息的
  * 8 个状态字(小端 uint32)。streams = svcntw() at the caller's runtime VL
  * (all-VL Phase 2: 调用方 128..1024-bit 门控, 此处 n∈[4,32] 由 VL 决定)。 */
-static inline void sha256_compress_x8(uint32_t out[8][SVE_SHA_STREAMS_MAX_32],   /* [word][stream] */
+static inline void sha256_compress_xn(uint32_t out[8][SVE_SHA_STREAMS_MAX_32],   /* [word][stream] */
                                       const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32],
                                       uint32_t nblocks,
                                       const uint32_t iv[8])
@@ -193,7 +200,7 @@ static const uint64_t sha384_iv[8] = {
  * nblocks*128B); out[word][stream]: 8 个字 × N 条流。streams = svcntd() at
  * the caller's runtime VL (all-VL Phase 2: 调用方 128..1024-bit 门控, 此处
  * n∈[2,16] 由 VL 决定)。 */
-static inline void sha512_compress_x4(uint64_t out[8][SVE_SHA_STREAMS_MAX_64],   /* [word][stream] */
+static inline void sha512_compress_xn(uint64_t out[8][SVE_SHA_STREAMS_MAX_64],   /* [word][stream] */
                                       const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_64],
                                       uint32_t nblocks,
                                       const uint64_t iv[8])
@@ -283,7 +290,7 @@ static inline void sha512_compress_x4(uint64_t out[8][SVE_SHA_STREAMS_MAX_64],  
  * n∈[4,32] 由 VL 决定)。(旧注释 "4 条 64-bit lane" 系 sha512 段复制残留,
  * 实况一直是 32-bit lane。) */
 
-static inline void sha1_compress_x8(uint32_t out[5][SVE_SHA_STREAMS_MAX_32],   /* [word][stream] */
+static inline void sha1_compress_xn(uint32_t out[5][SVE_SHA_STREAMS_MAX_32],   /* [word][stream] */
                                     const uint8_t *const msgs[SVE_SHA_STREAMS_MAX_32],
                                     uint32_t nblocks)
 {

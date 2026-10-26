@@ -107,7 +107,7 @@ static int gmp_bigadd_sve_run(struct test *test, int cpu)
             svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)n);
             svuint64_t va = svld1_u64(pg, d->a.data() + base);
             svuint64_t vb = svld1_u64(pg, d->b.data() + base);
-            uint64_t vsum[8];
+            uint64_t vsum[16];   /* 1024-bit gate: svcntd() <= 16 */
             svst1_u64(pg, vsum, svadd_u64_x(pg, va, vb));
             for (int i = 0; i < n; ++i) {
                 unsigned __int128 s = (unsigned __int128)vsum[i] + carry;

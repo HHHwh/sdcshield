@@ -82,7 +82,7 @@ static int sdc_sve_detect(const void *data, size_t len,
         int n = (len - base < (size_t)lanes) ? (int)(len - base) : lanes;
         svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)n);
         svuint8_t v = svld1_u8(pg, p + base);
-        uint8_t chunk[64];
+        uint8_t chunk[128];   /* 1024-bit gate: svcntb() <= 128 */
         svst1_u8(pg, chunk, v);
         for (int i = 0; i < n; ++i) {
             crc32 = crc32_for_byte[(crc32 ^ chunk[i]) & 0xFFu] ^ (crc32 >> 8);

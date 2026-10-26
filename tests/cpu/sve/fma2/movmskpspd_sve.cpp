@@ -117,10 +117,14 @@ static int movmskpspd_sve_init(struct test *test)
  */
 static inline uint32_t do_movmskps_sve(const float *p)
 {
-    const int lanes = svcntw();
-    float vals[32];
-    uint32_t out[32];
-    svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)(lanes < 32 ? lanes : 32));
+    /* out 容量 = 钳制后的行宽 FPS_LANES: svst1 只写 pg 激活的
+     * (≤4) 个 lane, 容量与写入范围一致 (32-lane 全宽时代的
+     * vals[32]/out[32] 残留已随谓词钳制清除)。 */
+    uint32_t out[FPS_LANES];
+    /* Clamp to the x86 MOVMSKPS row width (FPS_LANES=4): the source
+     * row holds 4 floats — a full-width load would read past the LAST
+     * row into the heap at any VL > 128 (all-VL hardening). */
+    svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)FPS_LANES);
     svfloat32_t v = svld1_f32(pg, p);
     /* 谓词 = 符号位置位 lane。注意不能用浮点比较 svcmplt_f32(v, 0):
      * -0.0 < +0.0 为 false 会漏检负零; 按原版语义用符号位(整数比较)。 */
@@ -128,24 +132,25 @@ static inline uint32_t do_movmskps_sve(const float *p)
     /* 展开谓词到 0/1 lane 值并读回 */
     svuint32_t bits = svsel_u32(neg, svdup_u32(1u), svdup_u32(0u));
     svst1_u32(pg, out, bits);
-    (void)vals;
     uint32_t mask = 0;
-    for (int i = 0; i < 4; ++i) mask |= (out[i] & 1u) << i;
+    for (int i = 0; i < FPS_LANES; ++i) mask |= (out[i] & 1u) << i;
     return mask;
 }
 
 static inline uint32_t do_movmskpd_sve(const double *p)
 {
-    const int lanes = svcntd();
-    uint64_t out[16];
-    svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)(lanes < 16 ? lanes : 16));
+    /* out 容量 = 钳制后的行宽 FPD_LANES (与 f32 形态同款对齐)。 */
+    uint64_t out[FPD_LANES];
+    /* Clamp to the x86 MOVMSKPD row width (FPD_LANES=2) — same
+     * last-row OOB hazard as the f32 form above. */
+    svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)FPD_LANES);
     svfloat64_t v = svld1_f64(pg, p);
     svbool_t neg = svcmpge_n_u64(pg, svreinterpret_u64_f64(v), 0x8000000000000000ull);
     svuint64_t bits = svsel_u64(neg, svdup_u64(1ull), svdup_u64(0));
     svst1_u64(pg, out, bits);
     uint32_t mask = 0;
     /* double: 64-bit lane 的 1 已在低位 */
-    for (int i = 0; i < 2; ++i) mask |= (out[i] & 1u) << i;
+    for (int i = 0; i < FPD_LANES; ++i) mask |= (out[i] & 1u) << i;
     return mask;
 }
 

@@ -107,7 +107,7 @@ static int aes256_cbc_sha2_224_sve_compute_golden(struct test *test, struct aes2
             d->variant_msg[s-1][i] = d->golden_ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
         msgs[s] = d->variant_msg[s-1];
     }
-    if (hmac_sha224_x8(d->golden_mac, keys, 28, msgs, d->data_size) != 0) {
+    if (hmac_sha224_xn(d->golden_mac, keys, 28, msgs, d->data_size) != 0) {
         log_error("%s: HMAC capacity overflow (data_size too large)", test->id);
         return -1;
     }
@@ -276,7 +276,7 @@ static int aes256_cbc_sha2_224_sve_run(struct test *test, int cpu) {
                         variant_msg[(s-1)*d->data_size + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
                     msgs[s] = variant_msg + (s-1)*d->data_size;
                 }
-                if (hmac_sha224_x8(mac, keys, 28, msgs, d->data_size) != 0) {
+                if (hmac_sha224_xn(mac, keys, 28, msgs, d->data_size) != 0) {
                     log_error("%s: HMAC capacity overflow (data_size too large)", test->id);
                     report_fail_msg("%s: hmac assembly over capacity", test->id);
                 }
@@ -310,7 +310,7 @@ static int aes256_cbc_sha2_224_sve_run(struct test *test, int cpu) {
                         variant_msg[(s-1)*d->data_size + i] = ciphertext[i] ^ (uint8_t)(s * 0x5A + (i & 0x0F));
                     msgs[s] = variant_msg + (s-1)*d->data_size;
                 }
-                if (hmac_sha224_x8(mac, keys, 28, msgs, d->data_size) != 0) {
+                if (hmac_sha224_xn(mac, keys, 28, msgs, d->data_size) != 0) {
                     log_error("%s: HMAC capacity overflow (data_size too large)", test->id);
                     report_fail_msg("%s: hmac assembly over capacity", test->id);
                 }

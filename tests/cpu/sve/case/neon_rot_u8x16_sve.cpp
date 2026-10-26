@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <numeric>
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
@@ -85,10 +86,15 @@ static int neon_rot_u8x16_sve_init(struct test *test)
         return EXIT_SKIP;
     buffer_bytes = neon_rot_u8x16_sve_buffer_bytes(test);
     /* 全 VL ldr/str 访问 + aligned_alloc(64,·) 尺寸约束 (原 16/64 对齐保留):
-     * 向下取整到 svcntb() 与 64 的公倍数 (均为 2 的幂, 取大者即公倍数) */
-    size_t align = (size_t)svl;   /* VL 字节 = SVL bytes (svcntb 同值) */
-    if (align < 64)
-        align = 64;
+     * 向下取整到 svcntb() 与 64 的最小公倍数。SVE 架构只保证 VL 为
+     * 16 字节的倍数 (128..2048-bit 内任意档位), 非 2 幂 VL 合法
+     * (48B/96B — 同文件 NEON_ROT_U8X16_SVE_LDR_SLACK 注释同此假设),
+     * 取大者不等于公倍数: max(96,64)=96 而 lcm(96,64)=192, 96 的奇数
+     * 倍不是 64 的倍数, aligned_alloc(64, 非 64 倍数尺寸) 违反
+     * C11 7.22.3.1 (size 须为 alignment 的整数倍, C23 起才放宽)。
+     * 2 幂 VL 下 lcm 与原 max() 取值一致, 行为仅在原实现 UB 的
+     * 非 2 幂档位改变 (PR #294 检视 round 2)。 */
+    const size_t align = std::lcm((size_t)svl, (size_t)64); /* svl = SVL bytes (svcntb 同值) */
     if (buffer_bytes % align != 0) {
         const size_t rounded = buffer_bytes - buffer_bytes % align;
         log_warning("neon_rot_u8x16_sve: buffer_bytes=%zu 不是 svcntb()=%d 与 64 的公倍数, "
@@ -142,6 +148,20 @@ static int neon_rot_u8x16_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *data = static_cast<NeonRotU8x16SveData *>(test->data);
+
+    /* All-VL policy #3 (hardening): init rounds buffer_bytes down to a
+     * multiple of lcm(svcntb(), 64) — a VL drift here would misalign the
+     * full-vector ldr z walks against the sized buffers. Same lcm basis
+     * as init (max() ≠ common multiple at non-power-of-2 VL, see there). */
+    {
+        const size_t align = std::lcm((size_t)svcntb(), (size_t)64);
+        if (data->buffer_bytes % align != 0) {
+            log_error("neon_rot_u8x16_sve: buffer_bytes %zu no longer a "
+                      "multiple of lcm(svcntb(),64)=%zu — VL drifted since "
+                      "init", data->buffer_bytes, align);
+            report_fail_msg("neon_rot_u8x16_sve: SVE VL drifted between init and run");
+        }
+    }
 
     uint8_t *temp = static_cast<uint8_t *>(aligned_alloc(64, data->buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK));
     uint8_t *dst  = static_cast<uint8_t *>(aligned_alloc(64, data->buffer_bytes));

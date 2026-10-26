@@ -153,12 +153,9 @@ if host_machine.cpu_family() == 'aarch64'
     # probed by design, while their pure-SVE gate goes through the
     # require helper.)
     #
-    # NOTE: sve512_fma_arm.cpp is committed (ea879f68) but deliberately NOT
-    # wired into any sources list yet — its source side was migrated to
-    # the all-VL form in P6 batch C (require + lanes + drift guard, commit
-    # d8e6f625), so wiring it in only needs the meson entry plus the
-    # all-VL validation run; the original wiring plan (P3) lapsed unclaimed
-    # (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
+    # NOTE: sve512_fma_arm.cpp (orphan since ea879f68) was wired into the
+    # sources list by the all-VL hardening unit — see the comment at its
+    # entry below.
     arm64_sve_lib = static_library(
         'tests_arm64_sve',
         files(
@@ -224,6 +221,14 @@ if host_machine.cpu_family() == 'aarch64'
             # 1.5*iterations*(j+1); its stale RADIUS=4 formula
             # iterations*(j+1) was a software false positive.)
             'sve512_stencil_axis_arm.cpp',
+            # Orphan since ea879f68, wired by the all-VL hardening unit:
+            # P6 batch C migrated its gate to arm64_require_sve_vl (d8e6f625)
+            # and an independent compile probe verified it clean; its four
+            # workloads (f64/f32 FMLA chains, special-value chain,
+            # gather/scatter round-trip) are the kernel shapes already
+            # four-tier-validated by the sve512_chain_dual and
+            # sve512_gather_dual gem5 kernels (family-level scoping).
+            'sve512_fma_arm.cpp',
             # XLSDFT composite-context SDC stress (escalation T1):
             # interleaves the stencil axis kernel (phase A), the SVD-format
             # gather/scatter over an L2-overflow working set (phase B) and

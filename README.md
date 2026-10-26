@@ -48,7 +48,7 @@ bash scripts/run/sdc_detect.sh
 
 | 旗标 | 作用 |
 |---|---|
-| `--quality=0` | 跑 PROD+BETA 全部 446 用例（源码构建口径；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
+| `--quality=0` | 跑 PROD+BETA 全部 484 用例（源码构建口径；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
 | `--test-list-file` | 优先序测试列表：由脚本从当前二进制动态生成（顺序即执行序，对新用例自适应） |
 | `-T forever` | 整套用例无限轮转。SDC 故障窗口极稀疏（CPU179 实测占空比 ~0.06%），长驻留是检出关键；一轮 ≈ 7 小时 |
 | `-t 60s` | 每用例 60 秒。SEVI 实测 >80% 的首错在 10 秒内出现，60s 有 6 倍余量 |
@@ -154,7 +154,7 @@ sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzs
 ./third-party/acl/build.sh               # → install/lib/libarm_compute-core.a（acl_gemm NEGEMM + fisttp_arm；NEON runtime core 目标，v23.02）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ./scripts/build.sh
-./builddir/sdcshield --list-tests        # 应列出 440 个 PROD 用例（gcc + 全部 vendored 依赖，实测于 2026-10-12）
+./builddir/sdcshield --list-tests        # 应列出 478 个 PROD 用例（gcc + 全部 vendored 依赖，实测于 2026-10-26）
 ```
 
 > 构建统一走 `./scripts/build.sh`：默认 `-j` = `nproc`/2（共享服务器保护；ninja 上游默认是核数+2）。显式 `-j` 或 `SDC_BUILD_JOBS` 可覆盖，详见 `scripts/build.sh` 头注释。
@@ -355,7 +355,7 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 
 ## 测试用例与检测能力
 
-当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）默认 quality 下共 **440 个用例**（gcc + 全部 vendored 依赖齐备时，`--list-tests` 实测 2026-10-12；`--quality=0` 446、`--quality=-1` 451），含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建默认 quality 下共 **478 个用例**（gcc + 全部 vendored 依赖齐备时，`--list-tests` 实测 2026-10-26 于 Kunpeng 920 / openEuler 22.03 LTS 本机；`--quality=0` 484、`--quality=-1` 489），含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
@@ -387,10 +387,10 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 6 |
-| 2 | PROD（默认）| `quality >= 2` | 440（gcc + 全部 vendored 依赖，实测 2026-10-12） |
-| | **合计** | | **451** |
+| 2 | PROD（默认）| `quality >= 2` | 478（gcc + 全部 vendored 依赖，实测 2026-10-26） |
+| | **合计** | | **489** |
 
-> 上表为 gcc 参考平台（2026-10-12 实测）口径。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
+> 上表为 gcc 参考平台（2026-10-26 实测）口径。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`

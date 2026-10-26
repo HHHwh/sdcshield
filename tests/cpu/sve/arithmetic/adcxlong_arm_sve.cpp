@@ -73,7 +73,7 @@ static void carry_chain_sve(const uint64_t *lhs, const uint64_t *rhs,
         svuint64_t va = svld1_u64(pgn, lhs + base);
         svuint64_t vb = svld1_u64(pgn, rhs + base);
         /* 向量无进位和 (SVE 硬件加法) */
-        uint64_t vsum[8];
+        uint64_t vsum[16];   /* 1024-bit gate: svcntd() <= 16 */
         svst1_u64(pgn, vsum, svadd_u64_x(pgn, va, vb));
         /* 进位折叠: 总溢出 = (a+b 的进位: vsum < lhs) + (vsum+c 的进位: s>>64)。
          * 生成器第一版只算了后者丢了前者 —— word[2] 差 1 的根源。 */

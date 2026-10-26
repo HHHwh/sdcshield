@@ -14,9 +14,9 @@
  * maps to svnot (a real SVE1 instruction); pg4 sub-block predicates
  * preserve the 4-lane NEON semantics (arm0102_kreg_mask_sve
  * discipline); svcntw() elements (runtime VL) of buffer slack cover the
- * asm full-VL ldr z at the final sub-block (documented deviation from
- * the mask_sve template). Back-to-back str z -> ldr z -> str z
- * amplifier.
+ * asm full-VL ldr z at the final sub-block (kreg-family slack pattern;
+ * the mask cell adopted it in PR #294 review round 5, completing the
+ * family). Back-to-back str z -> ldr z -> str z amplifier.
  * The element count (originally ARM0102_KREG_NOT_SVE_COUNT=1024) is
  * runtime configurable via -O arm0102_kreg_not_sve.count=N /
  * SDC_ARM0102_KREG_NOT_SVE_COUNT, with a memory-adaptive default
@@ -45,6 +45,7 @@ struct Arm0102KregNotSveData {
     uint32_t *srcB;
     uint32_t *expected;
     int count;                /* 运行时元素数 (≤64M, int 足够) */
+    int lanes;               /* init 期 f32 lanes (svl/4) — run 侧漂移守卫基准 */
 };
 
 #if defined(__aarch64__)
@@ -110,6 +111,7 @@ static int arm0102_kreg_not_sve_init(struct test *test) {
     const size_t total = (size_t)(count + slack) * sizeof(uint32_t);
     auto *data = static_cast<Arm0102KregNotSveData *>(malloc(sizeof(Arm0102KregNotSveData)));
     data->count = count;
+    data->lanes = lanes;   /* run 侧以 svcntw() 复读核对 (漂移守卫, round 3 #49 同款) */
     data->srcA = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->srcB = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->expected = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
@@ -154,6 +156,17 @@ static int arm0102_kreg_not_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<Arm0102KregNotSveData *>(test->data);
     const int count = data->count;
+
+    /* All-VL policy #3 (PR #294 检视 round 4, 发现 #49 传播): fail closed on
+     * init/run VL drift — golden 的旋转相位按 init lanes 步进预计算
+     * ((base+sub)/KNOT_SVE_SUBLANES), 而下面的批循环步进用运行时
+     * svcntw(); 漂移即相位错位报假 SDC, 且全宽 ldr z 尾批越过按 init
+     * lanes 定容的 srcA/srcB slack。以复读比对把漂移本身报出来。 */
+    if ((int)svcntw() != data->lanes) {
+        log_error("%s: SVE VL drifted between init (lanes=%d) and run (svcntw()=%d)",
+                  test->id, data->lanes, (int)svcntw());
+        report_fail_msg("%s: SVE VL drifted between init and run", test->id);
+    }
 
     uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
     uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));

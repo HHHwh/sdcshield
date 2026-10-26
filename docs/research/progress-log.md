@@ -786,46 +786,12 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   report_fail_msg 会表现为 Skipped("Unexpected OS error")而非干净
   Failed——knob 钳制后不可达, 纯纵深防御, 记账。
 - **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
-<<<<<<< HEAD
-- **承接**:P5(SLEEF/Eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
-  语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
-  遗留手探文件)待做。
-<<<<<<< HEAD
-=======
-  语言级不可编译); P6 存量迁移(含本阶段 6 个遗留手探文件)待做。
-
-<<<<<<< HEAD
 ## 2026-10-24 · P5 sleef 半侧实证收口(PR #286 检视闭环)
 =======
 ## 2026-10-24（all-VL Phase 2 P5：SLEEF/Eigen×8 按 spike 证据分流——真 VLA 迁移 + 自 pin 回退）
->>>>>>> 51679200 (docs(all-vl2): 检视精度两处——vl_bytes 来源注释 + progress-log 库名大小写)
-
-- **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
-  gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
-  (128/256/512/1024-bit)×{fixed,random×3},全部 SDCSHIELD_FAILS=0;
-  同一输入集 checksum 四档逐位一致(跨档字节同一性成立,per-lane 纯度
-  +尾精确的设计预期);三重保真闭环——gem5 向量 vs 标量 worst 0.00 ulp
-  + 真硬件标量锚(宿主用同一 libsleef.a 逐位一致),阴性对照(金标准/
-  输入 1-ulp 毒化)确认检测链非空转。内核直链 vendored libsleef.a
-  (与 tests_sve_vla 同一机器码),12 函数矩阵镜像 sleef_sve.cpp。
-- **sve_rot×5 家族归并裁定**(诚实边界):与 sleef_sve 同批迁入真 VLA
-  库、迁移机制同构(同库同 flag),但**风险面不同构**——sleef 拉入整库
-  VLA 机器码(深),sve_rot 是自写浅内核(裸 z-ldr/str + 整数 _x 算子,
-  无 whilelt 尾无库代码);本矩阵可背书"库迁移模式"半边,**不能**当作
-  sve_rot 指令面验证。sve_rot 维持 compile-probe-only,若需收口应补
-  小型 sve_rot_vla_dual(z-ldr/str + 整数算子 × 四档)——登记为后续
-  可选工作项,不阻塞本 PR。
-- **gem5 SE 边界新实证**:guest 退出码不传播(exit(7)→gem5 退 0),
-  "真实退出码"记 gem5 进程码;F3(SVE2_MOVI 读回 DEVIATION)根因 open
-  (上下文相关 O3 现象,孤立复现失败),SLEEF 不受影响由价值级证据独立
-  证明——均入档 gem5-fi findings.md。
-- **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
-  现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
-  (git-sanity)+ 本实证收口。
-<<<<<<< HEAD
->>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
-=======
-
+- **承接**:P5(SLEEF/Eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
+  语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
+  遗留手探文件)待做。
 ## 2026-10-25 · PR #286 检视 round 1 处置(head 11cdd2c5,当前 head 5 条意见)
 
 - **意见清单与裁定**:当前 head 待处置 5 条——k7pattern GPS tag 16-bit
@@ -856,8 +822,7 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **验证**:build.sh 零新警告;本机四 k7p cell + xlswave SKIP 路径不变
   (CpuNotSupported, 'test compiled with sve');zstd19 -t 2000 -n 1 pass;
   x86-64 非回归(纯 aarch64 段内改动)。
->>>>>>> 679c4610 (docs(progress): PR #286 检视 round 1 处置记录——k7pattern tag 32 位拆分 + sve_rot_vla_dual 16-run 实证)
-=======
+  语言级不可编译); P6 存量迁移(含本阶段 6 个遗留手探文件)待做。
 
 ## 2026-10-24（all-VL Phase 2 P6：存量迁移收官——142 文件框架层化 + 分支拓扑修复）
 
@@ -884,4 +849,319 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   终态 477 测试构建零告警+zstd19 pass; 全仓审计如上。
 - **战役状态**: P0-P6 全部落地; PR 编队 #277→#283→#284→#286→#288
   (+计划文档 #279/#281/#282/#285/#287)等人工 merge 门。
->>>>>>> a9c1f08c (docs(progress): all-VL Phase 2 P6 收官条目 + 战役状态总览)
+## 2026-10-25（all-VL Phase 2 收尾硬化单元——终审递延清单清零）
+
+- **六类先存越界修复**(f7716fcf, 20 文件): vsum[8]→[16]×10(adcx/adox
+  家族+gmp_bigadd+operand_space——svst1 写 svcntd() 个 double, VL>512
+  溢出)/ai[8]/lo_vec[8]→[16](bigint_mulx/gmp_bignum)/phase[8]→[16]
+  (agu_stress_2src)/chunk[64]→[128](arm64_sdc, svcntb 字节)/fsu
+  cross-line vbuf+128B 余量(56+128=184>旧 128B)/movmskpspd 谓词钳制
+  到行宽 4/2(消除 VL>128 即触发的末行堆越界读, 与 x86 MOVMSKS/PD
+  原语义逐位一致)。全部为 1024-bit 门内闭包扩容或行为收缩, 零压力
+  语义变化。
+- **守卫与 assert**: neon_rot 2src/store_only 补 count%svcntd 守卫,
+  u8x16 补 buffer_bytes%max(svcntb,64) 守卫(init 取整不变式);
+  sme_fmopa_stress run 侧 assert→release 生效显式检查(NDEBUG 蒸发,
+  P2 实证同类)。
+- **x8/x4 改名**(2ea9069c, 20 文件): 3 内核+5 hmac 包装 → _xn 后缀,
+  与 P4 的 N=svcntw()/svcntd() 运行时语义一致; x86 零触碰(x86_64 文件
+  命中系前缀子串已核非调用方)。
+- **孤儿接线**(3b293d9b): sve512_fma_arm 自 ea879f68(2026-10-11)首次
+  进入构建——P6 批 C 已迁门控(d8e6f625)+终审独立编译探针零告警;
+  四工作负载 kernel 形态已由 chain_dual/gather_dual 四档实证覆盖
+  (家族级 scoping)。--list-tests 477→478。
+  〔勘误 2026-10-26 round 3: "家族级 scoping" 已被 round 1 检视 #31
+  (claude Important, 引 PR #242 同源实证先例) 推翻——chain_dual/
+  gather_dual 是独立源文件, 不构成该文件自身 init/golden/比较逻辑的
+  执行证据; round 1 处置已建同源 kernel sve512_fma_dual 四档实证闭合
+  (见下方 round 1 补档条目), 证据简表并已落该文件 docblock。〕
+- **验证**: 全量构建零告警; 9+3+1 受影响测试全部干净 skip; verify.cpp
+  独立编译零告警; zstd19 → exit: pass。
+- **战役终态**: P0-P6 + 收尾硬化全部落地; 12 个 PR(#272-#288 + 硬化
+  PR)等人工 merge 门; 累计 gem5 四档实证 ~200 run 全绿。
+## 2026-10-26（PR #294 检视 round 2 处置——六发现逐条裁决 + 验证边界入档）
+
+- **裁决总览**: #36/#39 采纳合一 commit（per-lane 比对, 79542f9d）、
+  #40 变通（无代码改动——钳制本身修复真越界读不可回退, 处置=如实
+  声明边界, 见下）、#41 采纳（计数同步, CLAUDE.md/README）、#42 采纳
+  （流数守卫, a9a4fdd8）、#43 采纳（lcm, dc2dc471）。#1-#35 为历史
+  轮次（旧 head）未重复处置。
+- **乘法器盲区消除**(79542f9d, #36 coderabbit Major + #39 claude
+  Important): NUM_WORDS=8 时 i+j>=NUM_WORDS 的 28/64 词对, SVE 低半积
+  lo_row[j] 只进高位结果字 acc[8..14]（进位只前进不回传）, out_lo 仅
+  memcpy acc[0..7]——运行 memcmp 观察不到这些乘法的错误。修复:
+  标量 j 循环累加前逐项比对 lo_row[j] != (uint64_t)prod 即置位,
+  sve_bigint_mul512 改返回 bool; run 侧 per-lane 通道先行
+  report_fail（log_data 四组诊断）, init 并入首跑 self-check;
+  gmp_bignum_sve.cpp 双胞胎同款。健康硬件恒等, 累加结果逐位不变。
+- **流数守卫对称封口**(a9a4fdd8, #42): sve_hmac.h 五个 hmac_*_xn 入口
+  补 svcntw()/svcntd() > SVE_SHA_STREAMS_MAX_32/64 → return -1, 与
+  key_len/padded 守卫同款同位; sve_sha_kernels.h 定义处补 kernel
+  前置条件契约注释。18 个消费 TU 均先经 arm64_require_sve_vl(128,1024)
+  门控（守卫为防御性）; verify.cpp 自带同款门控（52-57 行）; 7 个无
+  VL 门控的 ipsec TU（cmac/xcbc/gcm 族）不含 sve_hmac.h。
+- **非 2 幂 VL 对齐修复**(dc2dc471, #43): neon_rot_u8x16_sve init/run
+  的 align 由 max(svcntb,64) 改 std::lcm(svcntb,64)。SVE 架构只保证
+  VL 为 16B 倍数, 96B（768-bit）合法过门: max(96,64)=96≠lcm=192,
+  96 的奇数倍非 64 倍数, aligned_alloc(64,·) 违反 C11 7.22.3.1。
+  2 幂 VL 档 lcm≡max 行为不变。条文核实边界: 本机网络策略阻断
+  open-std.org 抓取, N1570 引文以检视意见为准; 算术本地可证
+  （96×171=16416 非 64 倍数）, 同文件 LDR_SLACK 注释本已承认非 2 幂
+  VL 合法, 与旧注释『均为 2 的幂』自相矛盾。
+- **验证边界声明（CLAUDE.md 规则 2 兜底条款, 诚实入档）**: 下列路径
+  在本机 0xd01（无 SVE/SME）零执行; gem5-fi 本机不可用（无 gem5
+  源码/二进制, 2026-10-23 全盘搜索 + 2026-10-26 复核; CLAUDE.md 所写
+  /home/sdc/wangxu/code-review/gem5-fi 路径不存在）。本机验证仅覆盖
+  编译 + SKIP 路径（skip-reason 'test compiled with sve'）+ zstd19
+  回归, **首次真实执行将在目标硅片**:
+  1. bigint_mulx/gmp_bignum 的 per-lane 比对与 bool 返回语义（含
+     round-1 引入的低半积参与累加 + svwhilelt 分块循环）（#39）;
+  2. movmskpspd_sve 谓词钳制路径（svwhilelt_b32/b64(0, FPS_LANES/
+     FPD_LANES)）——旧版 svwhilelt(0, lanes<32?lanes:32) 在 VL=256
+     激活 8 lane 越 4-float 行读堆（f7716fcf diff 实证）, 钳制后仅
+     4/2 lane; 4-bit 掩码结果数学等价为纯分析论证, 无运行证据（#40）;
+  3. neon_rot_u8x16_sve lcm 取整路径（非 2 幂档本机无硬件）（#43）。
+- **计数同步**(#41): worktree 全保真构建（openssl/openblas/sleef/
+  isa-l/acl 五 install 符号链接齐备）实测 --list-tests = 478（PROD）/
+  484（--quality=0）/ 489（--quality=-1）, 2026-10-26; CLAUDE.md 477
+  →478, README 440→478（446→484/451→489）。D-tests.md 的 279 系历史
+  实验时点记录（自述 vendored 缺失降级构建）, 保留不改。
+- **git-sanity failure 诊断（只诊断不改历史）**: check runs 里
+  git-sanity 红 = 分支含 6 个 merge commit（ec65712b..7fe83a97:
+  20a79b88/c5bc95b3/9a72140a/680307c4/a1ce89b7/b82ff2bf）触发
+  .github/scripts/check-git-history.sh 的 no-merges 检查
+  （pr.yaml:59 传 github.base_ref + GITHUB_SHA）; Signed-off-by 检查
+  全绿（95/95 非合并提交）。修复需 rebase 改写历史, 本轮约束不做,
+  留人工 merge 门裁决。
+- **验证**: 每 commit ./scripts/build.sh 零新警告（基线仅
+  stacksize.cpp _XOPEN_SOURCE redefined 一条宿主配方既有警告）;
+  受影响测试 --quality=-1 -t 2000 -n 1 全部干净 skip + exit: pass;
+  zstd19 → exit: pass（每 commit 一轮）。
+<<<<<<< HEAD
+
+- **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
+  gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
+  (128/256/512/1024-bit)×{fixed,random×3},全部 SDCSHIELD_FAILS=0;
+  同一输入集 checksum 四档逐位一致(跨档字节同一性成立,per-lane 纯度
+  +尾精确的设计预期);三重保真闭环——gem5 向量 vs 标量 worst 0.00 ulp
+  + 真硬件标量锚(宿主用同一 libsleef.a 逐位一致),阴性对照(金标准/
+  输入 1-ulp 毒化)确认检测链非空转。内核直链 vendored libsleef.a
+  (与 tests_sve_vla 同一机器码),12 函数矩阵镜像 sleef_sve.cpp。
+- **sve_rot×5 家族归并裁定**(诚实边界):与 sleef_sve 同批迁入真 VLA
+  库、迁移机制同构(同库同 flag),但**风险面不同构**——sleef 拉入整库
+  VLA 机器码(深),sve_rot 是自写浅内核(裸 z-ldr/str + 整数 _x 算子,
+  无 whilelt 尾无库代码);本矩阵可背书"库迁移模式"半边,**不能**当作
+  sve_rot 指令面验证。sve_rot 维持 compile-probe-only,若需收口应补
+  小型 sve_rot_vla_dual(z-ldr/str + 整数算子 × 四档)——登记为后续
+  可选工作项,不阻塞本 PR。
+- **gem5 SE 边界新实证**:guest 退出码不传播(exit(7)→gem5 退 0),
+  "真实退出码"记 gem5 进程码;F3(SVE2_MOVI 读回 DEVIATION)根因 open
+  (上下文相关 O3 现象,孤立复现失败),SLEEF 不受影响由价值级证据独立
+  证明——均入档 gem5-fi findings.md。
+- **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
+  现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
+  (git-sanity)+ 本实证收口。
+<<<<<<< HEAD
+>>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
+=======
+- **勘误（round 3, 2026-10-26）**: 上方"验证边界声明"中"gem5-fi 本机
+  不可用（无 gem5 源码/二进制）"**失实**——真实 checkout 在
+  /home/sdc/wangxu/operator/gem5-fi（build/ARM/gem5.opt 在位,
+  workloads/sdcshield/ 双内核齐备, round 1 的 16-run 即在其上完成）;
+  round 2 处置会话仅按 CLAUDE.md 所写失效路径（code-review/gem5-fi,
+  该行已另行勘误）搜索即下结论。三条零执行声明的实际状态:
+  ① mul512 per-lane/bool 返回语义——round 3 已以 A 节同步 kernel
+  （gem5-fi feat/pr294-r3-dual）四档补验: 12 格 checksum 与 round 1
+  表逐字一致（回归锚）+ per-lane 阴性对照 FAILS=9; 其中"round-1 引入
+  的低半积参与累加 + svwhilelt 分块循环"在 round 1 的 A 节本已四档
+  实跑, 当时零执行的只是 round 2 新增的 per-lane 比对。
+  ② movmskpspd 钳制路径——"无运行证据"不实: round 1 的
+  sve_arith_bounds_dual D 节即为其首次四档真实执行（round 1 处置
+  报告 #33 已记录, 79542f9d 提交正文遗漏引用）。
+  ③ neon_rot_u8x16 lcm 取整——区分性案例（非 2 幂 VL, 如 768-bit）
+  在 gem5 --sve_vl {1,2,4,8} 下不可表达, 四档运行只能确认 2 幂档
+  lcm≡max 恒等（等价论证即覆盖 gem5 可表达域）, 真非 2 幂档首验在
+  目标硅片——此条边界维持, 但理由是 harness 表达力而非 gem5 不可用。
+  另: a9a4fdd8 的 hmac 流数守卫为门内不可达的防御性守卫（全部消费 TU
+  经 128..1024-bit 门 ⇒ svcntw()≤32=SVE_SHA_STREAMS_MAX_32、
+  svcntd()≤16=SVE_SHA_STREAMS_MAX_64, 守卫条件恒假）, 健康路径零
+  行为变化, 等价论证成立, 无需 gem5。
+
+## 2026-10-25（PR #294 检视 round 1 处置——25 条意见, 5 修复 + 2 同源 gem5 kernel）（round 3 补档）
+
+〔本条目由 round 3 补档（spec "记录落盘三处"之第 3 处, PR #293 移交项
+③②）; 事实以处置时点为准, 处置起点 head 6c4dc121、终点 7fe83a97。〕
+
+- **裁决总览**: 27 项可处置发现（25 条意见, coderabbit 行级含 3 条
+  outside-diff 子意见）——采纳 6 / 变通 12 / 驳回 2 / 无需处置 9;
+  堆叠归属 triage 是主轴（movbe×14、kreg_mask、fpcr tie 块、40 文件
+  注释块等变通移交 #288 链或独立单元, 详见 /tmp/pr294-resolution.md）。
+- **五个修复 commit**:
+  - d609b4fc sve512_fma_arm scatter 缓冲 worker 私有化（#10, -n>1
+    共享 test->data 竞争假 SDC; hw/golden 输出指针形态对齐
+    gather_scatter 家族）;
+  - 7685cb73 mul512 分块谓词化（svcntd() 分块 + svwhilelt_b64 限
+    NUM_WORDS, 消 1024-bit 越界读 64B）+ SVE 低半积参与累加（消
+    (void)lo 乘法器盲区）（#12/#13, bigint_mulx + gmp_bignum 双胞胎）;
+  - 45459bfa operand_space sve_mul_words 谓词钳制 4-lane 行宽（消
+    VL>256 对 ai/bi/out[4] 栈数组越界读写）（#14）;
+  - 74c618d7 neon_rot_2src phase[SVE_MAX_VECTOR_BYTES/8]（消 1024-bit
+    栈越界 64B）（#29b）;
+  - 7fe83a97 movmskpspd 钳制残留清理（死变量 vals[32] 删除, out 容量
+    对齐行宽 4/2）（#33）。
+- **同源 gem5 kernel ×2**（gem5-fi feat/pr294-hardening-dual,
+  136c8b95 + 90c25429）:
+  - sve512_fma_dual: 孤儿 sve512_fma_arm 自身 init/golden/四负载/
+    比较逻辑的首证（#31 推翻"家族级 scoping"）; 四档
+    SDCSHIELD_FAILS=0（128-bit a21f58a169e67cd5 / 256-bit
+    5d99e539781bfd32 / 512-bit 7053636920f1b997 / 1024-bit
+    153eb39bbb6c0d30）+ poison FAILS=4。
+  - sve_arith_bounds_dual: A=mul512/B=sve_mul_words/C=phase 派发/
+    D=movmsk 四节, 16-run（4 档 × 3 输入集）全绿 + poison FAILS=5
+    （A/B/C/D 全检出, D 两形态）; D 节为 movmskpspd 钳制形态的首次
+    四档真实执行。工具性发现: clang -O2 会消隐内联后的确定性 hw 链
+    （零 fmla、四档 FAILS=192 全零假象）, hw/golden 双 noinline 为
+    硬纪律。
+- **验证**: 每 commit 构建零新警告 + 受影响测试干净 skip + zstd19
+  exit: pass; x86-64 零触碰（全部改动在 aarch64 门控内）。
+
+## 2026-10-26（PR #294 检视 round 3 处置——head 028cf3af 八条意见 + 三移交项 + round 2 补验）
+
+- **裁决总览**: 当前 head 待处置 8 条——采纳 5（#45/#46/#48a/#48b/
+  #49）/ 变通 1（#50）/ 无需处置 2（#44 greptile 配额提示、#47
+  coderabbit review 容器, 其 2 条 actionable 即 #45/#46）; 另 #51 采纳
+  （审计面修正, 本条目内承载）。三移交项（PR #293）: ①agu 尾批 slack
+  采纳（与 #49 合一 commit）、②sve512_fma_arm docblock gem5 简表采纳、
+  ③progress-log 双勘误采纳（家族级 scoping 勘误 + round 1 补档, 本
+  文件内）。PR 描述同步补越界修复全量清单（见下）。
+- **修复 commit ×3**:
+  - 4ebf2199 mul512 per-lane 冷路径诊断（Mul512LaneDiag: 首个失配
+    (i,j)/actual/expected/xor + lane 直方图 j%svcntd() + 总数）+ init
+    self-check 失败化（EXIT_SKIP→EXIT_FAILURE, 持续乘法器错误记为
+    检出而非跳过）（#45/#46, 双胞胎两文件）;
+  - 975ce16d stencil_axis run 侧 assert→release 生效检查 + init/run
+    VL 漂移 fail-closed（#48a, fmopa 先例; 纯守卫等价论证）;
+  - ee6a4a7d agu_stress_2src 尾批 count+lanes slack（kreg 家族修法,
+    移交①）+ phase[SVE_MAX_VECTOR_BYTES/8] + 漂移 fail-closed;
+    arm0102_fma_f32_sve 漂移守卫（#49; 文件属 #288 链, 发现于本 head,
+    同批落地防再递延, fma_f32 守卫为纯守卫等价论证）。
+- **文档 commit ×3**: aab5fb8d CLAUDE.md gem5-fi 路径勘误（code-review/
+  → operator/, #48b）; 615288c2 sve512_fma_arm docblock 补 gem5 证据
+  简表（移交②, spec 落盘三处之第 1 处）+ stencil host 声明勘误
+  （"this host VL=256"属 cortex x3b, 6b9dedf0 引入且已在 main）;
+  本条目（移交③+#51+round 2 勘误）。
+- **gem5-fi 四档实证**（feat/pr294-r3-dual, O3, 2026-10-26）:
+  - sve_arith_bounds_dual A 节同步 head 形态（round 2 per-lane + round 3
+    诊断）: 12 格全绿且 checksum 与 round 1 表逐字一致（回归锚）;
+    per-lane 阴性对照 FAILS=9（i=7/j=7 词对 i+j=14≥8, out_lo memcmp
+    通道不可见——盲区消除直接证明; 直方图 vl=8 报 lane 7、vl=1 报
+    lane 1, j%svcntd() 跨档验证）。
+  - agu_2src_dual 新 kernel（镜像修复后形态, count=4*lanes+(lanes+1)/2
+    非 lanes 整倍数, 每档过尾批全宽 ldr z/str z）: 12 格全绿
+    SDCSHIELD_FAILS=0（128-bit count=9 674bdb139b9ddea1…至 1024-bit
+    count=72 5581e8640365cf45, 详表 gem5-fi findings.md）+ poison
+    FAILS=3; objdump 实证 22 z-load/store + 19 z-ALU 计算链在位。
+- **越界修复全量审计（#51, 修正"六类"口径）**: 本 PR diff 内堆叠可见
+  的越界/UB 修复实为 9 处, 按归属分层——
+  本 PR 自有 8 处: f7716fcf 六类（vsum×10 / ai+lo_vec / phase(agu) /
+  chunk / fsu vbuf / movmskpspd 谓词钳制）+ 45459bfa operand_space
+  sve_mul_words 谓词钳制（round 1, 未入六类清单——#51 所指第八处之
+  一）+ ee6a4a7d agu 尾批 slack（round 3）; 另 7685cb73（mul512 分块
+  谓词化）与 74c618d7（neon_rot_2src phase）为六类中 ai/lo_vec 与
+  phase 类的漏网收口, 不另计类。
+  堆叠链（#288）1 处: libomp micro[8]→[16]（3a3cda7b P3 全 VL 化,
+  #51 所指另一处——堆叠 diff 可见但非本 PR commit, 归属注明防再
+  混淆）; neon_rot_u8x16 lcm（dc2dc471, round 2）系对齐 UB 修复
+  （C11 aligned_alloc 尺寸整除）非越界类, 单列。
+- **验证**: 每 commit ./scripts/build.sh 零新警告; 受影响测试
+  （bigint_mulx/gmp_bignum/agu_stress_2src/arm0102_fma_f32_sve/
+  sve512_stencil_axis_arm/sve512_fma_arm）--quality=-1 -t 2000 -n 1
+  全部 result: skip + skip-reason 'test compiled with sve' + exit:
+  pass（SKIP 路径逐字不变）; zstd19/mce_check → exit: pass; x86-64
+  零触碰（全部改动在 aarch64 门控目录/条件编译内）。
+<<<<<<< HEAD
+>>>>>>> ee42739d (docs(progress): PR #294 round 3 处置入档——8 意见裁决 + 3 移交项 + round 1 补档 + 三处勘误 + 越界修复全量审计)
+=======
+
+## 2026-10-26（PR #294 检视 round 4 处置——head ee42739d 两条 findings, robot5 指定检视）
+
+- **触发**: 用户指令"robot5 检视 pr294"——`scripts/pr_local_review.py 294`
+  对 round-3 处置后 head ee42739d 的定向检视（非 pr-loop 全 bot 轮）。
+  local-claude 发布 marker-only review + 2 条 body findings（挂不上
+  diff 行）: #49 传播（kreg 四兄弟漏漂移守卫, 重要）+ #50（k7p GPS
+  tag 16-bit byte_off 模 65536 别名, 次要）。
+- **裁决**: 2 条全采纳, 修复 commit ×2:
+  - d1d709c0 kreg 四兄弟（logic/not/select/mask）补 init/run VL 漂移
+    fail-closed 守卫——round 3 的 ee6a4a7d 只给 arm0102_fma_f32_sve
+    落了 #49 守卫, 同批四个 kreg 兄弟同构结构全漏（修复传播不完整）;
+    Data struct 增 lanes 字段 + init 保存 + run 入口复读比对（mask
+    因 data->count 赋值先于 lanes 定义, 保存锚点取 lanes 定义行）。
+  - dac72d0e k7p GPS tag byte_off 从绝对偏移改槽内偏移编码
+    （k3res 纪律同款）——1024 slots × 128B（1024-bit 档）绝对偏移
+    最大 ≈131064 > 65535, 相差 64 KiB 的两偏移产出逐字节相同 payload,
+    错偏移读不可判别; 槽内偏移值域 0..vl_bytes-8 恒安全, 槽号离线可
+    恢复（dump 携带完整缓冲区）; P_HIHAM 奇偶语义不受影响（vl_bytes
+    恒偶）; docblock '512b inclusive 够用' 过时声明同步更新。
+- **验证**: 每 commit ./scripts/build.sh 零新警告; 受影响测试
+  （arm0102_kreg_{logic,not,select,mask}_sve ×4 +
+  sve_rot_ldr_at_top_rowmajor_k7p_{zero,rand} ×2）-t 2000 -n 1 -v
+  全部 result: skip + CpuNotSupported + 框架 exit: pass（SKIP 路径
+  逐字不变）; zstd19 → exit: pass; x86-64 零触碰。边界如实声明:
+  守卫 SVE 触发路径与 k7p 填充路径本机不可达（无 SVE）且 kreg/k7p
+  族无 gem5 探针载体——守卫为纯防御代码（正常路径不变由 SKIP 输出
+  背书）; k7p 仅 tag 编码内容变化, 比较两侧同源（expected 由同一
+  填充链派生）, 与 round 3 同款守卫的验证口径一致。
+- **过程事故（诚实记录）**: 批量正则首版把 mask 的 data->lanes 保存
+  插到 lanes 定义之前（编译失败 'lanes was not declared'）, 四文件
+  回滚后按文件结构差异分锚点重做——盲目 count=1 正则对同构文件群的
+  结构差异（字段定义序不同）不安全, 已以逐文件锚点修正。
+<<<<<<< HEAD
+>>>>>>> c62861e8 (docs(progress): PR #294 检视 round 4 处置入档——robot5 定向检视两 findings 全采纳)
+=======
+
+## 2026-10-26（PR #294 检视 round 5 处置——head c62861e8 两条 coderabbit findings）
+
+- **触发**: pr_loop collect 轮换（head c62861e8, 待处置 3 条: greptile
+  配额提示 ×1 + coderabbit 行级 ×2）。greptile 50-credit 配额——无需
+  处置; 两条 coderabbit Major 均采纳。
+- **裁决与修复（commit ×2 + 本入档）**:
+  - e3a05d1d arm0102_kreg_mask_sve 尾批全宽 ldr z 越界读补 slack
+    （coderabbit @ :161）: load_vec_sve 是 asm 全宽 ldr z, 最末 pg4
+    子块自 count-4 起读 svcntw() 元素, count=1024 默认几何在 1024-bit
+    档越界读 28 元素/112B（256-bit 档亦越 4 元素）; kreg 四兄弟中
+    logic/not/select 早有 slack=lanes, mask 是唯一漏网（round 3 agu
+    家族修法未传播完整）。修复: 家族同款 lanes 门控 [4,32] +
+    (count+slack) 定容 + aligned_alloc_safe（issue #252）+ memset_random
+    覆盖 total + run 侧 temp/dst (count+svcntw()); 四兄弟+fma_f32 文件
+    头 'deviation from the mask_sve template' 措辞勘误（家族已统一）。
+  - b3749e7e k7p GPS tag 32 位拆分恢复槽身份（coderabbit @ :200）:
+    round 4 的 dac72d0e 槽内偏移消了 64KiB 别名但使所有槽 payload
+    相同——rot_alu 相位 i%4 每四槽重复, 槽 i+4-for-i 误读 memcmp 不可
+    检出, 盲区比待修别名更大。修复 = 移植 PR #286 已验证形态
+    （099945ff, 不在本链）: 绝对偏移低 16 位经典字段 + 高 16 位占恒 0
+    generation 字段, slots 全域（1M×128B < 4GiB）零混叠且任意
+    (slot,lane) payload 唯一。k3res 槽内偏移不动（非本轮意见对象）。
+- **验证**: 每 commit ./scripts/build.sh 零新警告（touch 重编受影响
+  文件, warning 计数 0）; 受影响测试（arm0102_kreg_mask_sve +
+  k7p_{zero,one,rand,hiham} ×5）--quality=-1 -t 2000 -n 1 全部
+  result: skip + CpuNotSupported + 'test compiled with sve' + exit:
+  pass（stash 往返对照, SKIP 逐字不变）; zstd19 → exit: pass;
+  x86-64 零触碰（aarch64 门控目录/条件编译内）。
+- **gem5-fi 四档实证（round 4 'kreg/k7p 族无探针载体' 口径本轮补齐;
+  gem5-fi feat/pr294-r5-dual @ 8e4041a0, O2, arm_chaos.py SE,
+  2026-10-26, 21-run）**:
+  - 新 kernel kreg_mask_dual（镜像修复后 mask, count 非 lanes 整倍数
+    每档过尾批全宽 ldr z）: 健康路径 4 档 SDCSHIELD_FAILS=0（vl1
+    c731957ab6657fbb / vl2 0509655bf1098ab3 / vl4 8db5a7ab724e74e3 /
+    vl8 3b83ee4d02793243）; poison 负对照 vl2 FAILS=3。
+  - sve_rot_vla_dual 增量 intra/swap 模式: rand fixed noswap 4 档
+    FAILS=0 + TAG_DUPS fixed=0; rand fixed swap（槽 4→0 误读模拟）
+    4 档 FAILS=2（修复后误读可检出）; rand intra swap（round-4 形态
+    + 同一误读）4 档 FAILS=0（盲区实证, 意见主张逐档兑现）; legacy
+    16-bit 负对照 vl8 dups=8192 与 PR #286 faae123f 记录逐字一致。
+- **移交观察（不处置, 依据）**: mask 的旋转相位 (base+sub)%4 恒为 0
+  （base 是 svcntw() 倍数、sub 是 4 的倍数）→ kreg_expand_rotating
+  实际恒走 case 0（eq）, "rotating" 语义退化; logic 兄弟已改
+  (base+sub)/4, mask 未跟。golden/run 同源自洽, 无 SDC 检出损失,
+  非本轮意见范围; 修复需独立单元 + 独立 gem5 验证, 留待后续轮次。
+>>>>>>> 97cd08a1 (docs(progress): PR #294 检视 round 5 处置入档——两 coderabbit findings 全采纳 + 21-run gem5 实证 + 移交观察)

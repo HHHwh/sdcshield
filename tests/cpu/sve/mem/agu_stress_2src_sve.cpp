@@ -22,6 +22,10 @@
 #if defined(__aarch64__)
 #include <arm_sve.h>
 #include <device/cpu/arm64/arm64_vl.h>
+
+#ifndef SVE_MAX_VECTOR_BYTES
+#define SVE_MAX_VECTOR_BYTES 256
+#endif
 #endif
 
 /* 每缓冲 u64 元素数(原 1024) — 统一优先级链:
@@ -43,6 +47,7 @@ static size_t agu_2src_sve_count(struct test *test)
 
 struct AguStress2srcSveData {
     size_t    count;      /* 每缓冲 u64 元素数(init 定容, 线程共享) */
+    int       lanes;      /* init 期 svcntd() — run 侧漂移守卫基准 (u64 lanes = SVL bytes / 8) */
     uint64_t *srcA;
     uint64_t *srcB;
     uint64_t *expected;
@@ -72,12 +77,25 @@ static int agu_stress_2src_sve_init(struct test *test) {
     const long svl = arm64_require_sve_vl(test, 128, 1024);
     if (svl < 0)
         return EXIT_SKIP;
+    const int init_lanes = (int)(svl / 8);   /* u64 lanes — run 侧漂移守卫基准 */
 #endif
     auto *data = static_cast<AguStress2srcSveData *>(malloc(sizeof(AguStress2srcSveData)));
     data->count = agu_2src_sve_count(test);
-    data->srcA = static_cast<uint64_t *>(aligned_alloc_safe(64, data->count * sizeof(uint64_t)));
-    data->srcB = static_cast<uint64_t *>(aligned_alloc_safe(64, data->count * sizeof(uint64_t)));
-    data->expected = static_cast<uint64_t *>(aligned_alloc_safe(64, data->count * sizeof(uint64_t)));
+#if defined(__aarch64__)
+    data->lanes = init_lanes;
+    /* 尾批松弛 (kreg 家族修法, PR #293 移交 + PR #294 检视 round 3):
+     * run 的 load_vec_sve 是 asm 全宽 ldr z (svcntb() 字节)、store_vec_sve
+     * 是 svwhilelt(0, svcntd()) 全宽写 —— count 非 lanes 整倍数时尾批
+     * 读写最多越过 count 端 (lanes-1) 个元素 (默认 count=600 在 1024-bit
+     * 档越 8 元素 64B, aligned_alloc_safe 仅补齐 64B 对齐不足掩蔽)。
+     * slack=lanes 使全宽尾批严格落界; 松弛区不进 golden/memcmp。 */
+    const size_t total = (data->count + (size_t)data->lanes) * sizeof(uint64_t);
+#else
+    const size_t total = data->count * sizeof(uint64_t);
+#endif
+    data->srcA = static_cast<uint64_t *>(aligned_alloc_safe(64, total));
+    data->srcB = static_cast<uint64_t *>(aligned_alloc_safe(64, total));
+    data->expected = static_cast<uint64_t *>(aligned_alloc_safe(64, total));
 
     memset_random(data->srcA, data->count * sizeof(uint64_t));
     memset_random(data->srcB, data->count * sizeof(uint64_t));
@@ -101,10 +119,23 @@ static int agu_stress_2src_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<AguStress2srcSveData *>(test->data);
     const size_t count = data->count;
-
-    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc_safe(64, count * sizeof(uint64_t)));
-    uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc_safe(64, count * sizeof(uint64_t)));
     const int lanes = svcntd();
+
+    /* All-VL policy #3 (PR #294 检视 round 3, 发现 #49): fail closed on
+     * init/run VL drift — phase 几何与 init 尾批 slack 均按 init 期
+     * svcntd() 定容, 漂移时 phase[] 写穿 + 全宽尾批越过 init slack,
+     * 表现为 UB/假 SDC 而非可诊断失败; 以复读比对把漂移本身报出来。 */
+    if (lanes != data->lanes) {
+        log_error("agu_stress_2src_sve: SVE VL drifted between init "
+                  "(lanes=%d) and run (svcntd()=%d)", data->lanes, lanes);
+        report_fail_msg("agu_stress_2src_sve: SVE VL drifted between "
+                        "init and run");
+    }
+
+    /* 尾批松弛同 init: 全宽 str z/ldr z/str z 放大链在尾批写读
+     * (count, count+lanes) 区间, 与 src 同尺寸 slack 落界。 */
+    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc_safe(64, (count + (size_t)lanes) * sizeof(uint64_t)));
+    uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc_safe(64, (count + (size_t)lanes) * sizeof(uint64_t)));
     svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)lanes);
 
     TEST_LOOP(test, 1 << 13) {
@@ -120,7 +151,7 @@ static int agu_stress_2src_sve_run(struct test *test, int cpu) {
                 svuint64_t r_eor = sveor_u64_x(pg, a, b);
                 svuint64_t r_and = svand_u64_x(pg, a, b);
                 svuint64_t r_orr = svorr_u64_x(pg, a, b);
-                uint64_t phase[8];
+                uint64_t phase[SVE_MAX_VECTOR_BYTES / 8];   /* n <= lanes, 家族范式 (store_only/74c618d7); 门控+漂移守卫双保险 */
                 int n = (count - base < (size_t)lanes) ? (int)(count - base) : lanes;
                 for (int k = 0; k < n; ++k) phase[k] = (base + k) % 4;
                 svbool_t pgn = svwhilelt_b64((uint64_t)0, (uint64_t)n);

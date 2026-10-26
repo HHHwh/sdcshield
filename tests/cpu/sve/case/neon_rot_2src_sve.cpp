@@ -21,6 +21,12 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
+
+#ifndef SVE_MAX_VECTOR_BYTES
+/* GCC 12 的 arm_sve.h 不提供该 ACLE 宏 (neon_rot_store_only 同款自定义):
+ * SVE 架构最大 VL 2048bit = 256 字节 */
+#define SVE_MAX_VECTOR_BYTES 256
+#endif
 #include <device/cpu/arm64/arm64_vl.h>
 #endif
 
@@ -114,6 +120,16 @@ static int neon_rot_2src_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<NeonRot2srcSveData *>(test->data);
 
+    /* All-VL policy #3 (hardening): init rounds count down to a multiple
+     * of init-time svcntd() — a VL drift here would make the loop below
+     * walk different strides than the buffers/golden were sized for. */
+    if (data->count % (size_t)svcntd() != 0) {
+        log_error("neon_rot_2src_sve: count %zu no longer a multiple of "
+                  "svcntd()=%zu — VL drifted since init", data->count,
+                  (size_t)svcntd());
+        report_fail_msg("neon_rot_2src_sve: SVE VL drifted between init and run");
+    }
+
     uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
     uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
     const int lanes = svcntd();
@@ -132,7 +148,7 @@ static int neon_rot_2src_sve_run(struct test *test, int cpu) {
                 svuint64_t r_eor = sveor_u64_x(pg, a, b);
                 svuint64_t r_and = svand_u64_x(pg, a, b);
                 svuint64_t r_orr = svorr_u64_x(pg, a, b);
-                uint64_t phase[8];
+                uint64_t phase[SVE_MAX_VECTOR_BYTES / 8];   /* all-VL: n <= svcntd() <= 16 */
                 int n = (data->count - base < (size_t)lanes) ? (int)(data->count - base) : lanes;
                 for (int k = 0; k < n; ++k) phase[k] = (base + k) % 4;
                 svbool_t pgn = svwhilelt_b64((uint64_t)0, (uint64_t)n);
