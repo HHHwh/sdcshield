@@ -55,6 +55,22 @@
  * references, with per-lane golden/actual/XOR logging on mismatch.
  * report_fail_msg on any mismatch. ARM64-native; non-SVE CPUs return a
  * clean EXIT_SKIP from init. Built only on aarch64.
+ *
+ * gem5-fi same-source dual-kernel evidence (spec "记录落盘三处" #1;
+ * kernel workloads/sdcshield/sve512_fma_dual, gem5-fi branch
+ * feat/pr294-hardening-dual, 2026-10-25; command form: `gem5.opt
+ * configs/se/arm_chaos.py --cmd workloads/sdcshield/sve512_fma_dual
+ * --cpu O3 --sve_vl N --workload_args "random 1"`):
+ *   vl=1 (128-bit)  SDCSHIELD_FAILS=0  checksum a21f58a169e67cd5
+ *   vl=2 (256-bit)  SDCSHIELD_FAILS=0  checksum 5d99e539781bfd32
+ *   vl=4 (512-bit)  SDCSHIELD_FAILS=0  checksum 7053636920f1b997
+ *   vl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 153eb39bbb6c0d30
+ * Poison negative control: one golden word poisoned per workload ->
+ * SDCSHIELD_FAILS=4 (all four comparisons live). Checksums differ per
+ * tier by design (lane count scales with VL; the test is deterministic).
+ * Honest boundary: this build host (Kunpeng 920 0xd01) has no SVE — the
+ * C++ test skips here, so all four tiers are gem5-backed and real-SVE
+ * runs remain future hardware validation.
  * @endparblock
  */
 

@@ -228,9 +228,13 @@ static int sve512_stencil_axis_arm_init(struct test *test)
      *                   512-bit kernel — regression anchor)
      *   vl=8 (1024-bit) SDCSHIELD_FAILS=0  checksum 8ea5a0fb4dfb840c
      * Honest boundary: gem5 validates the same-source dual kernel per
-     * tier; this host (Kunpeng 920, VL=256) can run the C++ test at its
-     * native VL only — the 512/1024-bit tiers are gem5-backed, real-SVE
-     * runs at those VLs remain future hardware validation. */
+     * tier; this build host (Kunpeng 920 0xd01) has no SVE at all — the
+     * C++ test skips here, so all four tiers are gem5-backed and real-SVE
+     * runs remain future hardware validation. (Erratum, PR #294 review
+     * round 3: an earlier note claimed "this host (Kunpeng 920, VL=256)
+     * can run the C++ test at its native VL" — that record belongs to a
+     * different machine, the cortex x3b; see CLAUDE.md's SVE runtime-VL
+     * rule.) */
     const size_t bt = 2 * svcntd();
     if (bt < 4 || bt > kTileMax) {
         log_skip(CpuNotSupportedSkipCategory,
