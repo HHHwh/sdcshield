@@ -71,7 +71,11 @@
  * RUNTIME-UNVERIFIABLE (SVE): developed on a host without SVE
  * (HWCAP_SVE clear); compile-verified and the skip path executed for
  * real, but the SVE datapath itself has not run on hardware
- * (cf. 8502e491 / 73ebbd3f for the precedent). The PR #244-review
+ * (cf. 8502e491 / 73ebbd3f for the precedent). test_init gates via
+ * the framework layer (arm64_require_sve_vl: HWCAP_SVE capability +
+ * 128..1024-bit range in one call, all-VL Phase 2 P6; the TU is true
+ * VLA — svwhilelt-stepped loops in svcntd()/svcntw() batches — so
+ * every tier in range is in-domain). The PR #244-review
  * gather/scatter left-update IS verified on gem5 SVE SE emulation
  * (O3, VL=128/256/512, n=64/68/128): the pre-fix contiguous-load
  * version diverges at ~1.7 vs the scalar reference (the review's bug
@@ -90,11 +94,7 @@
 
 #ifdef __aarch64__
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 /* 维度 n 运行时可配置, 统一优先级链:
@@ -361,12 +361,17 @@ static void bidiag_compare_or_fail(const double *got, const double *golden,
 
 static int eigen_svd_bidiag_sve_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for eigen_svd_bidiag_sve");
+    /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
+     * framework-layer call, replacing the getauxval hand-probe (and its
+     * misleading "placeholder" skip wording — absence of SVE is a
+     * capability fact, not an unimplemented feature). Gate only: the
+     * golden is an n×n scalar reference and the run side sizes its
+     * per-thread scratch from a fresh svcntd() read, so no init/run VL
+     * state exists to drift. */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
+    (void)svl;
 
     auto *d = new bidiag_data;
     if (!d)

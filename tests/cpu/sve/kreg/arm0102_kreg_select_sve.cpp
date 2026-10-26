@@ -39,11 +39,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define ARM0102_KREG_SELECT_SVE_COUNT 1024        /* u32 elements */
@@ -113,14 +109,19 @@ static inline svuint32_t select_rotating_sve(svbool_t pg, svuint32_t a, svuint32
 
 static int arm0102_kreg_select_sve_init(struct test *test) {
 #if defined(__aarch64__)
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for arm0102_kreg_select_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
-    const int slack = svcntw();   /* asm ldr z 尾批松弛, 见文件头注释 */
+    const int lanes = (int)(svl / 4);   /* f32 lanes = SVL bytes / 4 */
+    if (lanes < 4 || lanes > 32) {
+        log_error("%s: f32 lanes %d outside [4,32] — unit drift (svl %ld bytes)",
+                  test->id, lanes, svl);
+        return EXIT_FAILURE;
+    }
+    const int slack = lanes;   /* asm ldr z 尾批松弛, 见文件头注释 */
     const int count = (int)arm0102_kreg_select_sve_count(test);
     const size_t total = (size_t)(count + slack) * sizeof(uint32_t);
     auto *data = static_cast<Arm0102KregSelectSveData *>(malloc(sizeof(Arm0102KregSelectSveData)));
@@ -138,7 +139,7 @@ static int arm0102_kreg_select_sve_init(struct test *test) {
     /* golden: 与 run 完全相同的 4 元素子块结构 + 相位 = 子块序号
      * (base+sub)/KSEL_SVE_SUBLANES, 按子块旋转 op; 原式 (base+sub)%4
      * 恒为 0 (base 是 svcntw() 倍数、sub 是 4 的倍数), 旋转失效 */
-    const int lanes = svcntw();
+    /* lanes 已由上方门控 svl 换算 (f32 lanes = SVL bytes / 4) */
     svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)KSEL_SVE_SUBLANES);
     for (int base = 0; base < count; base += lanes) {
         const int n = (count - base < lanes)

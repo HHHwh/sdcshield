@@ -65,9 +65,11 @@
  *     dropped (the framework times tests itself).
  *
  * Full-VL support: bt = 2*svcntd() f64 lanes (128..1024-bit SVE), all
- * layout offsets scale at runtime; out-of-range VLs return a clean
- * EXIT_SKIP, non-SVE CPUs are skipped by the framework's
- * compiler-feature gate. Built only on aarch64.
+ * layout offsets scale at runtime; test_init gates the SVE capability
+ * and the 128..1024-bit range via the framework layer
+ * (arm64_require_sve_vl, all-VL Phase 2 P6) and out-of-range tile
+ * widths return a clean EXIT_SKIP, non-SVE CPUs are skipped by the
+ * framework's compiler-feature gate. Built only on aarch64.
  *
  * RUNTIME-UNVERIFIABLE (512-bit SVE): developed on a host without SVE
  * (HWCAP_SVE clear); compile-verified and the skip path executed for
@@ -87,9 +89,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 using std::size_t;
@@ -199,12 +200,19 @@ static double stencil_random_pm_one()
 
 static int sve512_stencil_axis_arm_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve512_stencil_axis_arm requires SVE");
+    /* All-VL Phase 2 P6: probe-only swap — the SVE capability gate moves
+     * to the framework layer (arm64_require_sve_vl: HWCAP_SVE + the
+     * 128..1024-bit range in one call), replacing the getauxval
+     * hand-probe. The bt = 2*svcntd() geometry below and its [4,
+     * kTileMax] stack-buffer guard are the P1-242-verified parameterized
+     * geometry and stay untouched; the run side re-checks 2*svcntd()
+     * against init's bt (release-effective drift guard, all-VL policy
+     * #3), and the run-side assert() additionally pins the kTileMax
+     * buffer bound. */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
+    (void)svl;   /* gate only: bt is read via svcntd() as before */
 
     /* Full-VL support: bt = 2*svcntd() scales every layout offset below.
      * The 512-bit geometry was characterized on HiSilicon 0xd22; the
@@ -266,6 +274,19 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *d = static_cast<SveStencilAxisData *>(test->data);
+
+    /* All-VL policy #3 (fail-closed): re-check the geometry fresh. The
+     * assert() further down only pins the stored invariant and is
+     * NDEBUG-sensitive (writing_tests.md: re-check the VL in test_run and
+     * report_fail on drift — never continue with stale geometry; the
+     * xlswave/gather_scatter siblings use the same release-effective
+     * form). */
+    if (2 * svcntd() != d->bt) {
+        log_error("sve512_stencil_axis_arm: VL drifted between init (bt=%zu) "
+                  "and run (bt=%zu)", d->bt, (size_t)(2 * svcntd()));
+        report_fail_msg("sve512_stencil_axis_arm: SVE VL drifted between "
+                        "init and run");
+    }
 
     // Stack-local coefficient table (the svdup_f64 / ld1rd source), as in
     // the original main(). 0.125 is exactly representable.

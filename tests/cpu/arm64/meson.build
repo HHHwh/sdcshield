@@ -143,14 +143,21 @@ if host_machine.cpu_family() == 'aarch64'
     # such as this Kunpeng 920. Every test self-gates in test_init and
     # returns a clean EXIT_SKIP on SVE-less CPUs, so their SVE
     # codegen only ever executes on SVE-capable hardware. Built only on
-    # aarch64. (Gate split as of all-VL Phase 2: the P3 files gate via
-    # the framework layer — arm64_require_sve_vl: HWCAP_SVE capability +
-    # 128..1024-bit range in one call; the remaining legacy files still
-    # probe HWCAP_SVE by hand and migrate in P6.)
+    # aarch64. (Gate split as of all-VL Phase 2 P6: every SVE1 test in
+    # this library gates via the framework layer — arm64_require_sve_vl:
+    # HWCAP_SVE capability + 128..1024-bit range in one call. The only
+    # getauxval hand-probes left under tests/cpu/arm64/ are the SVE2
+    # composite-gate files sve512_fmmla_arm/sve2_cross_precision_arm
+    # (tests_arm64_sve2 below): their SVE2|F32MM|F64MM / SVE2|SVEBF16
+    # HWCAP2 conjunctions are the tests' own semantics and stay hand-
+    # probed by design, while their pure-SVE gate goes through the
+    # require helper.)
     #
     # NOTE: sve512_fma_arm.cpp is committed (ea879f68) but deliberately NOT
-    # wired into any sources list yet — wiring + all-VL validation is
-    # scheduled for all-VL Phase 2 P3
+    # wired into any sources list yet — its source side was migrated to
+    # the all-VL form in P6 batch C (require + lanes + drift guard, commit
+    # d8e6f625), so wiring it in only needs the meson entry plus the
+    # all-VL validation run; the original wiring plan (P3) lapsed unclaimed
     # (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
     arm64_sve_lib = static_library(
         'tests_arm64_sve',

@@ -6,12 +6,8 @@
 #include <atomic>
 #ifdef __aarch64__
 #include <arm_sve.h>
-#include <sys/auxv.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #include <unistd.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
 
 #define VECTOR_SIZE 4                  // 原负载：每次存储 4 个 int32（SVE 谓词分批）
 // 每线程元素数在 run 中按目标内存动态计算(见 mesh_target_bytes)。
@@ -48,12 +44,13 @@ static size_t mesh_target_bytes(struct test *test)
 }
 
 static int mesh_upi_sve_write_only_int_init(struct test *test) {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for mesh_upi_sve_write_only_int");
+    /* All-VL Phase 2 P6: per-test auxv hand-probe -> framework
+     * layer: arm64_require_sve_vl does the SVE capability check
+     * + 128..1024-bit range gate in one call (skip reason
+     * framework-issued). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     auto *td = new TestData;
     if (!td) return EXIT_FAILURE;

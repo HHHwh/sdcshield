@@ -28,12 +28,14 @@
  *  - all-core concurrency: 608 threads each in their own streaming
  *    window (per-thread ZA, no sharing).
  *
- * Gates: HWCAP2 SME bit, then a runtime rdsvl check bounding SVL to the
- * supported 128..1024-bit range (n = SVL/4 f32 lanes per slice; the
- * geometry was characterized at 512-bit on cn23154 and the parameterized
- * asm verified at all four SVLs in gem5). Non-aarch64 hosts, non-clang
- * compilers, and out-of-range SVLs skip with an honest reason. x86-64
- * untouched.
+ * Gates: the framework layer's arm64_require_sme_svl (HWCAP2_SME
+ * capability + 128..1024-bit SVL range in one call, all-VL Phase 2
+ * P6), then the characterized-geometry guard (n = SVL/4 f32 lanes per
+ * slice within [4, kTileNMax]; the geometry was characterized at
+ * 512-bit on cn23154 and the parameterized asm verified at all four
+ * SVLs in gem5). Non-aarch64 hosts, non-clang compilers, and
+ * out-of-range SVLs skip with an honest reason; test_run re-checks the
+ * SVL and fails closed on drift. x86-64 untouched.
  * @endparblock
  */
 
@@ -56,12 +58,7 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
-#endif
-/* Kernel headers of the SME era define this; older ones (5.10) do not. */
-#ifndef HWCAP2_SME
-#define HWCAP2_SME (1UL << 23)
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 /* Full-SVL support (128..1024-bit): n = SVL/4 f32 lanes per slice is
@@ -163,18 +160,16 @@ static int sme_fmopa_stress_arm_init(struct test *test)
              "built with clang on aarch64 (armv9-a+sve+sme+sme-f64f64)");
     return EXIT_SKIP;
 #else
-    unsigned long hwcap2 = getauxval(AT_HWCAP2);
-    if ((hwcap2 & HWCAP2_SME) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SME not available; sme_fmopa_stress_arm exercises "
-                 "the FMOPA matrix-accumulate datapath");
+    /* All-VL Phase 2 P6: HWCAP2_SME capability + 128..1024-bit SVL range
+     * in one framework-layer call, replacing the getauxval hand-probe and
+     * the inline rdsvl (the helper reads rdsvl #1 internally — SME
+     * implies SVE, so it cannot SIGILL here). Returns the SVL in BYTES;
+     * the n = SVL/4 geometry and the [4, kTileNMax] stack-buffer guard
+     * below are the gem5-verified parameterized geometry and stay
+     * untouched. */
+    const long svl_bytes = arm64_require_sme_svl(test, 128, 1024);
+    if (svl_bytes < 0)
         return EXIT_SKIP;
-    }
-
-    /* RDVL Xd, #imm = VL_bytes * imm; #1 reads the streaming vector
-     * length in bytes. SME implies SVE, so rdsvl cannot SIGILL here. */
-    long svl_bytes;
-    asm volatile("rdsvl %0, #1" : "=r"(svl_bytes));
     const long n = svl_bytes / 4;
     if (n < 4 || n > kTileNMax) {
         log_skip(CpuNotSupportedSkipCategory,
@@ -246,6 +241,16 @@ static int sme_fmopa_stress_arm_run(struct test *test, int cpu)
      * pin init's invariant (n within [4, kTileNMax]) before any buffer
      * math (PR #242 review, coderabbit). */
     assert(n >= 4 && n <= kTileNMax);
+    /* All-VL policy #3: fail closed on init/run SVL drift — the shared
+     * golden is sized at init's n, and the assert above only pins the
+     * stored invariant (NDEBUG-sensitive); this check is
+     * release-effective and compares a fresh rdsvl read. */
+    if (arm64_sme_svl_bytes() / 4 != n) {
+        log_error("sme_fmopa_stress_arm: SVL drifted between init (n=%ld) "
+                  "and run (n=%ld)", n, arm64_sme_svl_bytes() / 4);
+        report_fail_msg("sme_fmopa_stress_arm: SME SVL drifted between "
+                        "init and run");
+    }
     const size_t count = static_cast<size_t>(n) * n;
     const size_t bytes = count * sizeof(float);
 

@@ -17,9 +17,11 @@
  * This test is compiled WITHOUT -msve-vector-bits so the GCC sizeless
  * svfloat64_t / svfloat32_t types adopt the CPU runtime vector length —
  * the full 512-bit datapath on 0xd22 (and a proportional width on any
- * other SVE CPU). test_init probes HWCAP_SVE via getauxval (no SVE
- * instruction executes before the probe), returning a clean EXIT_SKIP on
- * SVE-less CPUs (e.g. the Kunpeng 920 login node).
+ * other SVE CPU). test_init gates via the framework layer
+ * (arm64_require_sve_vl: HWCAP_SVE capability + 128..1024-bit range in
+ * one call, no SVE instruction executes before the gate, all-VL Phase 2
+ * P6), returning a clean EXIT_SKIP on SVE-less CPUs (e.g. the Kunpeng
+ * 920 login node); test_run re-checks the VL and fails closed on drift.
  *
  * Four byte-exact-checked workloads run in every iteration:
  *
@@ -60,9 +62,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 // Serial FMA chain length per iteration.
@@ -339,19 +340,29 @@ static int sve512_fma_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    // Probe SVE availability BEFORE executing any SVE instruction.
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available on this CPU; sve512_fma_arm "
-                 "requires SVE (e.g. HiSilicon 0xd22, 512-bit VL)");
+    /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
+       framework-layer call, replacing the getauxval hand-probe (no SVE
+       instruction executes before the gate). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, f32 lanes = svl/4,
+       both range-checked below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<SveFmaData>();
-        data->vl_d = svcntd();
-        data->vl_w = svcntw();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        data->vl_w = (size_t)svl / 4;   /* f32 lanes = SVL bytes / 4 */
+        if (data->vl_d < 2 || data->vl_d > 16) {
+            log_error("sve512_fma_arm: f64 lanes %zu outside [2,16] "
+                      "— unit drift (svl %ld bytes)", data->vl_d, svl);
+            return EXIT_FAILURE;
+        }
+        if (data->vl_w < 4 || data->vl_w > 32) {
+            log_error("sve512_fma_arm: f32 lanes %zu outside [4,32] "
+                      "— unit drift (svl %ld bytes)", data->vl_w, svl);
+            return EXIT_FAILURE;
+        }
 
         // Per-lane seed accumulators: finite in [1.0, 2.0).
         data->seeds_f64.resize(data->vl_d);
@@ -443,6 +454,17 @@ static int sve512_fma_arm_run(struct test *test, int cpu)
     return EXIT_SKIP;
 #else
     auto *d = static_cast<SveFmaData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift (the operand
+       streams and goldens are sized in init at its lanes). */
+    if (svcntd() != d->vl_d || svcntw() != d->vl_w) {
+        log_error("sve512_fma_arm: VL drifted between init (f64 %zu, "
+                  "f32 %zu lanes) and run (f64 %u, f32 %u lanes)",
+                  d->vl_d, d->vl_w, (unsigned)svcntd(),
+                  (unsigned)svcntw());
+        report_fail_msg("sve512_fma_arm: SVE VL drifted between init "
+                        "and run");
+    }
 
     // Goldens, recomputed each iteration (deterministic, same op order).
     std::vector<uint64_t> gold64(d->vl_d);
@@ -539,9 +561,9 @@ static int sve512_fma_arm_cleanup(struct test *test)
 DECLARE_TEST(sve512_fma_arm,
              "SVE full-vector-length FMA SDC stress: f64/f32 FMLA dependency "
              "chains + special-value category chain + gather/scatter "
-             "round-trip at the CPU's runtime SVE vector length (512-bit on "
-             "HiSilicon 0xd22), byte-exact compared against deterministic "
-             "software references")
+             "round-trip at the CPU's runtime SVE vector length (all-VL "
+             "128..1024-bit via arm64_require_sve_vl), byte-exact compared "
+             "against deterministic software references")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_fma_arm_init,
     .test_run = sve512_fma_arm_run,

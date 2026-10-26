@@ -29,11 +29,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define ARM0102_KREG_MASK_SVE_COUNT 1024   /* elements per buffer (uint32) */
@@ -107,32 +103,49 @@ static inline svuint32_t kreg_expand_rotating(svbool_t pg, svuint32_t a, svuint3
 }
 
 static int arm0102_kreg_mask_sve_init(struct test *test) {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for arm0102_kreg_mask_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     auto *data = static_cast<Arm0102KregMaskSveData *>(malloc(sizeof(Arm0102KregMaskSveData)));
     const int count = (int)arm0102_kreg_mask_sve_count(test);
     data->count = count;
-    data->srcA = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
-    data->srcB = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
-    data->expected = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
-
-    memset_random(data->srcA, (size_t)count * sizeof(uint32_t));
-    memset_random(data->srcB, (size_t)count * sizeof(uint32_t));
 
     /* golden: 同一旋转组合, 在相同 SVE 单元上预计算 */
     [[maybe_unused]] svbool_t pg = svptrue_b32();
-    const int lanes = svcntw();
+    const int lanes = (int)(svl / 4);   /* f32 lanes = SVL bytes / 4 */
+    /* arm64_vl.h unit convention: release-effective range check catches
+     * a wrong-divisor drift (e.g. svl/8 here would compile silently). */
+    if (lanes < 4 || lanes > 32) {
+        log_error("%s: f32 lanes %d outside [4,32] — unit drift (svl %ld bytes)",
+                  test->id, lanes, svl);
+        return EXIT_FAILURE;
+    }
+    /* 尾批 asm 全宽读松弛 = lanes (kreg_logic 同款, a6f753ce): run 侧
+     * ldr z 按 svcntb() 全宽载, 最末子块最多读到 (count-1)+svcntw()
+     * 个元素, slack=lanes 严格充分 (任意 VL)。aligned_alloc_safe 为
+     * 795e0d55 家族契约修法 (total 未必是 64 的倍数)。 */
+    const int slack = lanes;
+    const size_t total = (size_t)(count + slack) * sizeof(uint32_t);
+    data->srcA = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
+    data->srcB = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
+    data->expected = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
+
+    memset_random(data->srcA, total);
+    memset_random(data->srcB, total);
+
     for (int base = 0; base < count; base += lanes) {
         int n = (count - base < lanes) ? (count - base) : lanes;
         [[maybe_unused]] svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
-        /* 与 run 完全相同的 4 元素子块结构 + 相位 (base+sub)%4 */
+        /* 与 run 完全相同的 4 元素子块结构 + 相位按子块旋转 */
         for (int sub = 0; sub < n; sub += 4) {
-            int phase = (base + sub) % 4;
+            /* 相位 = 子块序号 (base+sub)/KREG_SVE_SUBLANES, 按子块旋转;
+             * 原式 (base+sub)%4 恒为 0 (base 是 svcntw() 倍数、sub 是 4
+             * 的倍数) —— 4 谓词路径只覆盖 eq, gt/eq-u/tst 全部死代码
+             * (426dc5c6 家族同款修法, kreg_logic/not/select/fma 均已改)。 */
+            const int phase = (base + sub) / KREG_SVE_SUBLANES;
             /* 单 lane 组: 用标量嵌入向量 */
             uint32_t av[8], bv[8], ov[8];
             for (int k = 0; k < 4 && sub + k < n; ++k) {
@@ -156,12 +169,14 @@ static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
     auto *data = static_cast<Arm0102KregMaskSveData *>(test->data);
     const int count = data->count;
 
-    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
-    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc(64, (size_t)count * sizeof(uint32_t)));
+    /* run 侧 temp/dst 同享尾批松弛: load_vec_sve 的 asm ldr z 全宽读
+     * 最末子块, (count + svcntw()) 与 init 的 total 同界 (kreg_logic 同款)。 */
+    uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
+    uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
 
     TEST_LOOP(test, 1 << 13) {
         /* 与 golden 完全相同的 4 元素子块结构: 每 SVE 向量批内按 4 元素子块,
-         * 相位 = (base+sub) % 4 (与 init 的 golden 循环逐字一致) */
+         * 相位 = 子块序号 (base+sub)/KREG_SVE_SUBLANES (与 init 一致) */
         for (int base = 0; base < count; base += svcntw()) {
             int n = (count - base < svcntw()) ? (count - base) : svcntw();
             for (int sub = 0; sub < n; sub += 4) {
@@ -171,7 +186,8 @@ static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
                 svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)4);
 
                 /* 载荷: 谓词比较掩码扩展 + svsel (相位与 golden 一致) */
-                svuint32_t res = kreg_expand_rotating(pg4, a, b, base + sub);
+                svuint32_t res = kreg_expand_rotating(pg4, a, b,
+                                                      (base + sub) / KREG_SVE_SUBLANES);
 
                 /* 放大器: str z -> ldr z -> str z */
                 store_vec_sve(temp + base + sub, res);

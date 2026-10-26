@@ -19,11 +19,13 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
 
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
+#ifndef SVE_MAX_VECTOR_BYTES
+/* GCC 12 的 arm_sve.h 不提供该 ACLE 宏 (movbe_slf_sweep 同款自定义):
+ * SVE 架构最大 VL 2048bit = 256 字节 */
+#define SVE_MAX_VECTOR_BYTES 256
 #endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define MRN_RELOADED_SVE_COUNT 256
@@ -69,12 +71,11 @@ struct MrnReloadedSveData {
 static int mrn_reloaded_sve_init(struct test *test)
 {
 #if defined(__aarch64__)
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for mrn_reloaded_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 #endif
     auto *data = static_cast<MrnReloadedSveData *>(malloc(sizeof(MrnReloadedSveData)));
     data->count = mrn_reloaded_sve_count(test);
@@ -104,7 +105,10 @@ static int mrn_reloaded_sve_run(struct test *test, int cpu)
             int n = (data->count - base < (size_t)svcntb()) ? (int)(data->count - base) : svcntb();
             svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)n);
             svst1_u8(pg, temp8 + base, svld1_u8(pg, data->src8 + base));
-            uint8_t got[64];
+            /* spill 缓冲按架构最大 VL 定容: svcntb() 最多 256 lane,
+             * 原 got[64] 在 VL>512-bit 时被 svst1 全宽越界写 (movbe 家族
+             * SVE_MAX_VECTOR_BYTES 范式, all-VL Phase 2 P6 收口)。 */
+            uint8_t got[SVE_MAX_VECTOR_BYTES];
             svst1_u8(pg, got, svld1_u8(pg, temp8 + base));
             for (int i = 0; i < n; ++i)
                 if (got[i] != data->src8[base + i])
@@ -118,7 +122,7 @@ static int mrn_reloaded_sve_run(struct test *test, int cpu)
             int n = (data->count - base < (size_t)svcntw()) ? (int)(data->count - base) : svcntw();
             svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)n);
             svst1_u32(pg, temp32 + base, svld1_u32(pg, data->src32 + base));
-            uint32_t got[16];
+            uint32_t got[SVE_MAX_VECTOR_BYTES / 4];
             svst1_u32(pg, got, svld1_u32(pg, temp32 + base));
             for (int i = 0; i < n; ++i)
                 if (got[i] != data->src32[base + i])
@@ -132,7 +136,7 @@ static int mrn_reloaded_sve_run(struct test *test, int cpu)
             int n = (data->count - base < (size_t)svcntd()) ? (int)(data->count - base) : svcntd();
             svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)n);
             svst1_u64(pg, temp64 + base, svld1_u64(pg, data->src64 + base));
-            uint64_t got[8];
+            uint64_t got[SVE_MAX_VECTOR_BYTES / 8];
             svst1_u64(pg, got, svld1_u64(pg, temp64 + base));
             for (int i = 0; i < n; ++i)
                 if (got[i] != data->src64[base + i])

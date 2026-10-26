@@ -9,11 +9,7 @@
 
 #ifdef __aarch64__
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define KREG6_ELEMENTS 16   /* 原负载: 16 位掩码 → 16 个 32 位展开 */
@@ -21,12 +17,11 @@
 static int kreg6_sve_init(struct test *test) {
     (void)test;
 #ifdef __aarch64__
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for kreg6_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 #endif
     return EXIT_SUCCESS;
 }

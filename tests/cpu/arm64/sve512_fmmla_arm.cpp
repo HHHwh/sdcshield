@@ -43,11 +43,17 @@
  * with a clear message (golden-lane-mapping bug guard, so the test never
  * reports a false SDC on a healthy CPU).
  *
- * test_init probes HWCAP_SVE + HWCAP2 (SVE2, F32MM, F64MM) via getauxval
- * before any SVE instruction, returning a clean EXIT_SKIP when absent
- * (e.g. this Kunpeng 920 dev host). Requires the tests_arm64_sve2 library
- * (-march=armv9-a+sve2+f32mm+f64mm). Any runtime vector length is
- * accepted (full 512-bit on 0xd22).
+ * test_init gates in two layers (all-VL Phase 2 P6 split): the pure SVE
+ * capability + 128..1024-bit range check goes through the framework
+ * layer (arm64_require_sve_vl, one call, no SVE instruction executes
+ * before the gate), while the composite SVE2|F32MM|F64MM HWCAP2 bits
+ * stay a getauxval hand-probe — that conjunction is this test's own
+ * semantics (FEAT_F32MM + FEAT_F64MM), not something the generic
+ * require helper covers. Either layer returns a clean EXIT_SKIP when
+ * absent (e.g. this Kunpeng 920 dev host). test_run re-checks the VL
+ * and fails closed on drift. Requires the tests_arm64_sve2 library
+ * (-march=armv9-a+sve2+f32mm+f64mm). Any runtime vector length in the
+ * supported range is accepted (full 512-bit on 0xd22).
  * @endparblock
  */
 
@@ -63,6 +69,7 @@
 #include <sys/auxv.h>
 #include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 // Dependent FMMLA chain length per iteration.
@@ -146,13 +153,16 @@ static int sve512_fmmla_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    unsigned long hwcap2 = getauxval(AT_HWCAP2);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve512_fmmla_arm requires SVE");
+    /* All-VL Phase 2 P6 split gate: the pure SVE capability + 128..1024-bit
+       range check moves to the framework layer (arm64_require_sve_vl —
+       returns the VL in BYTES), while the composite SVE2|F32MM|F64MM
+       HWCAP2 conjunction stays a getauxval hand-probe: it is this test's
+       own semantic gate (FEAT_F32MM + FEAT_F64MM matrix-multiply
+       instructions), which the generic require helper does not cover. */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
+    unsigned long hwcap2 = getauxval(AT_HWCAP2);
     if ((hwcap2 & (HWCAP2_SVE2 | HWCAP2_SVEF32MM | HWCAP2_SVEF64MM))
             != (HWCAP2_SVE2 | HWCAP2_SVEF32MM | HWCAP2_SVEF64MM)) {
         log_skip(CpuNotSupportedSkipCategory,
@@ -167,8 +177,13 @@ static int sve512_fmmla_arm_init(struct test *test)
 
     try {
         auto data = std::make_unique<FmmlaData>();
-        const size_t vl_w = svcntw();            // f32 lanes
-        const size_t vl_d = svcntd();            // f64 lanes
+        const size_t vl_w = (size_t)svl / 4;     /* f32 lanes = SVL bytes / 4 */
+        const size_t vl_d = (size_t)svl / 8;     /* f64 lanes = SVL bytes / 8 */
+        if (vl_d < 2 || vl_d > 16 || vl_w < 4 || vl_w > 32) {
+            log_error("sve512_fmmla_arm: lanes outside [2,16]/[4,32] "
+                      "— unit drift (svl %ld bytes)", svl);
+            return EXIT_FAILURE;
+        }
         data->vl_f32_rows = vl_w / 2;            // f32 tile side
         data->vl_f64_rows = vl_d / 2;            // f64 tile side
 
@@ -223,6 +238,19 @@ static int sve512_fmmla_arm_run(struct test *test, int cpu)
     auto *d = static_cast<FmmlaData *>(test->data);
     const size_t vl_d = svcntd();
     const size_t vl_w = svcntw();
+
+    /* All-VL policy #3: fail closed on init/run VL drift (the goldens
+       are sized at init's lanes; a wider run-side VL would read past
+       them in the compare loops below). */
+    if (vl_d != d->vl_f64_rows * 2 || vl_w != d->vl_f32_rows * 2) {
+        log_error("sve512_fmmla_arm: VL drifted between init (f64 tile "
+                  "side %zu, f32 tile side %zu) and run (svcntd %u, "
+                  "svcntw %u)", d->vl_f64_rows, d->vl_f32_rows,
+                  (unsigned)vl_d, (unsigned)vl_w);
+        report_fail_msg("sve512_fmmla_arm: SVE VL drifted between init "
+                        "and run");
+    }
+
     bool all_passed = true;
 
     // ---------- f64 tile ----------

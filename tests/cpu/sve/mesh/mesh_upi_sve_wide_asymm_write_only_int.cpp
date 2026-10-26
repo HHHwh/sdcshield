@@ -6,11 +6,7 @@
 #include <atomic>
 #ifdef __aarch64__
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #include <unistd.h>
 #include <cstdlib>
 #include <sys/sysinfo.h>
@@ -56,12 +52,13 @@ static size_t mesh_target_bytes(struct test *test)
 }
 
 static int mesh_upi_sve_wide_asymm_write_only_int_init(struct test *test) {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for mesh_upi_sve_wide_asymm_write_only_int");
+    /* All-VL Phase 2 P6: per-test auxv hand-probe -> framework
+     * layer: arm64_require_sve_vl does the SVE capability check
+     * + 128..1024-bit range gate in one call (skip reason
+     * framework-issued). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 
     if (sysconf(_SC_NPROCESSORS_ONLN) < 2) {
         return -255;   // 需要至少 2 个线程
@@ -284,13 +281,6 @@ static int mesh_upi_sve_wide_asymm_write_only_int_finish(struct test *test) {
 
 #else
 static int mesh_upi_sve_wide_asymm_write_only_int_init(struct test *test) {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for mesh_upi_sve_wide_asymm_write_only_int");
-        return EXIT_SKIP;
-    }
-
     (void)test;
     log_skip(CpuNotSupportedSkipCategory,
              "to be implemented (placeholder): ARM NEON required for mesh_upi_sve_wide_asymm_write_only_int");

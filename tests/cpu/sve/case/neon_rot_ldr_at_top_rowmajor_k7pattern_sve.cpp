@@ -46,11 +46,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 #define NEON_ROT_LDR_AT_TOP_ROWMAJOR_K7P_SVE_SLOTS 1024
@@ -130,9 +126,14 @@ static size_t k7p_sve_slots(struct test *test)
     return v > 0 ? (size_t)v : (size_t)dflt;
 }
 
-static int k7p_sve_init_common(struct test *test, K7pSvePattern pattern)
+static int k7p_sve_init_common(struct test *test, K7pSvePattern pattern, long svl)
 {
-    const int lanes = (int)svcntd();
+    const int lanes = (int)(svl / 8);   /* f64 lanes = SVL bytes / 8 */
+    if (lanes < 2 || lanes > 16) {
+        log_error("%s: f64 lanes %d outside [2,16] — unit drift (svl %ld bytes)",
+                  test->id, lanes, svl);
+        return EXIT_FAILURE;
+    }
     const size_t slots = k7p_sve_slots(test);
     const size_t elems = slots * (size_t)lanes;
 
@@ -175,12 +176,12 @@ static int k7p_sve_init_common(struct test *test, K7pSvePattern pattern)
 static int k7p_zero_sve_init(struct test *test)
 {
 #if defined(__aarch64__)
-    if ((getauxval(AT_HWCAP) & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for k7p_zero_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-    return k7p_sve_init_common(test, K7P_SVE_ZERO);
+    return k7p_sve_init_common(test, K7P_SVE_ZERO, svl);
 #else
     (void)test;
     log_skip(CpuNotSupportedSkipCategory,
@@ -192,12 +193,12 @@ static int k7p_zero_sve_init(struct test *test)
 static int k7p_one_sve_init(struct test *test)
 {
 #if defined(__aarch64__)
-    if ((getauxval(AT_HWCAP) & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for k7p_one_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-    return k7p_sve_init_common(test, K7P_SVE_ONE);
+    return k7p_sve_init_common(test, K7P_SVE_ONE, svl);
 #else
     (void)test;
     log_skip(CpuNotSupportedSkipCategory,
@@ -209,12 +210,12 @@ static int k7p_one_sve_init(struct test *test)
 static int k7p_rand_sve_init(struct test *test)
 {
 #if defined(__aarch64__)
-    if ((getauxval(AT_HWCAP) & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for k7p_rand_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-    return k7p_sve_init_common(test, K7P_SVE_RAND);
+    return k7p_sve_init_common(test, K7P_SVE_RAND, svl);
 #else
     (void)test;
     log_skip(CpuNotSupportedSkipCategory,
@@ -226,12 +227,12 @@ static int k7p_rand_sve_init(struct test *test)
 static int k7p_hiham_sve_init(struct test *test)
 {
 #if defined(__aarch64__)
-    if ((getauxval(AT_HWCAP) & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for k7p_hiham_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-    return k7p_sve_init_common(test, K7P_SVE_HIHAM);
+    return k7p_sve_init_common(test, K7P_SVE_HIHAM, svl);
 #else
     (void)test;
     log_skip(CpuNotSupportedSkipCategory,

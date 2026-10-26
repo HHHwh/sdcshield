@@ -42,11 +42,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 /* 每线程消歧地址跨度(原 4096 字节) — 统一优先级链:
@@ -78,16 +74,28 @@ struct MemDisambigAluSveData {
 static int mem_disambig_alu_sve_init(struct test *test)
 {
 #if defined(__aarch64__)
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for mem_disambig_alu_sve");
+    /* All-VL Phase 2 P6: per-test auxv hand-probe -> framework
+     * layer: arm64_require_sve_vl does the SVE capability check
+     * + 128..1024-bit range gate in one call (skip reason
+     * framework-issued). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
+    const int lanes = (int)(svl / 8);   /* f64 lanes = SVL bytes / 8 */
+    if (lanes < 2 || lanes > 16) {   /* [2,16] vs 128..1024-bit, NDEBUG-proof */
+        log_error("mem_disambig_alu_sve: f64 lanes %d outside [2,16]"
+                  " -- unit drift (svl %ld bytes)", lanes, svl);
+        return EXIT_FAILURE;
     }
+#else
+    /* TU is aarch64-only in meson (tests/cpu/sve guard); keep the
+     * translation unit self-contained for single-TU compiles (the
+     * arm64_vl.h include above is conditionally compiled). */
+    const int lanes = 0;
 #endif
     auto *data = static_cast<MemDisambigAluSveData *>(malloc(sizeof(MemDisambigAluSveData)));
     data->buffer_bytes = disambig_alu_sve_buffer_bytes(test);
-    data->lanes = (int)svcntd();
+    data->lanes = lanes;
     data->offsets = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));
     data->values = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));
     data->expected = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));

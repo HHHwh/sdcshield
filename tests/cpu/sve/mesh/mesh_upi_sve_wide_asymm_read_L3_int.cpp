@@ -6,11 +6,7 @@
 #include <atomic>
 #ifdef __aarch64__
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #include <unistd.h>
 
 #define NEON_VECTOR_SIZE 4              // NEON 一次处理 4 个 int32

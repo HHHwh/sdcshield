@@ -15,8 +15,13 @@
  * golden with FZ flush mirrored in software. mrs/msr only between
  * configurations. FPCR saved/restored/verified.
  *
- * test_init probes HWCAP_SVE and returns a clean EXIT_SKIP on SVE-less
- * CPUs (e.g. this Kunpeng 920 dev host). Any runtime vector length.
+ * test_init gates via the framework layer (arm64_require_sve_vl:
+ * HWCAP_SVE capability + 128..1024-bit range in one call, all-VL
+ * Phase 2 P6) and returns a clean EXIT_SKIP on SVE-less CPUs (e.g.
+ * this Kunpeng 920 dev host). The run side reads the VL fresh (svcntw)
+ * and sizes its operand buffers from the same lanes, and re-checks it
+ * against the init-time value recorded in test->data — a drifted VL
+ * fails closed instead of running ungated geometry (all-VL policy #3).
  * Built in tests_arm64_sve.
  * @endparblock
  */
@@ -30,9 +35,8 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 static const uint32_t SPECIAL_F32[] = {
@@ -82,6 +86,12 @@ static const int ROUND_FE[4] = { FE_TONEAREST, FE_UPWARD,
                                  FE_DOWNWARD, FE_TOWARDZERO };
 static const char *ROUND_NAME[4] = { "RNE", "RP", "RM", "RZ" };
 
+/* init 期记录的 VL (f32 lanes): run 侧漂移比对用 (all-VL policy #3,
+ * stencil_axis/xlswave sibling 同款 fail-closed 形态)。 */
+struct SveFpcrCartesianData {
+    size_t vl_w;
+};
+
 static uint32_t golden_fma_f32(uint32_t ua, uint32_t ub, uint32_t uc,
                                int r, int fz)
 {
@@ -111,13 +121,18 @@ static int sve_fpcr_cartesian_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve_fpcr_cartesian_arm "
-                 "requires SVE (SVE-side rounding network)");
+    /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
+       framework-layer call, replacing the getauxval hand-probe. The
+       init-time VL (f32 lanes) is recorded in test->data; the run side
+       re-reads svcntw(), sizes its buffers from the same lanes, and
+       fails closed on drift from the recorded value (all-VL policy #3). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
+    auto *fpcr_data = static_cast<SveFpcrCartesianData *>(
+        malloc(sizeof(SveFpcrCartesianData)));
+    fpcr_data->vl_w = (size_t)svl / sizeof(float);
+    test->data = fpcr_data;
     return EXIT_SUCCESS;
 #endif
 }
@@ -132,7 +147,17 @@ static int sve_fpcr_cartesian_arm_run(struct test *test, int cpu)
              "sve_fpcr_cartesian_arm");
     return EXIT_SKIP;
 #else
+    auto *data = static_cast<SveFpcrCartesianData *>(test->data);
     const size_t vl_w = svcntw();
+    /* All-VL policy #3 (fail-closed): a VL that drifted between init
+     * and run was never range-gated — refuse to run it on stale
+     * geometry (stencil_axis/xlswave sibling form). */
+    if (vl_w != data->vl_w) {
+        log_error("sve_fpcr_cartesian_arm: VL drifted between init "
+                  "(%zu lanes) and run (%zu lanes)", data->vl_w, vl_w);
+        report_fail_msg("sve_fpcr_cartesian_arm: SVE VL drifted "
+                        "between init and run");
+    }
     const uint64_t orig_fpcr = rd_fpcr();
     const svbool_t all = svptrue_b32();
     bool all_passed = true;
@@ -153,25 +178,27 @@ static int sve_fpcr_cartesian_arm_run(struct test *test, int cpu)
             wr_fpcr(fpcr);
 
             // tie liveness on the SVE datapath: fma(1,1,2^-24) is a real
-            // single-rounding tie — 1.0 + 2^-24 rounds per mode.
+            // single-rounding tie — 1.0 + 2^-24 rounds per mode. Operands
+            // and result live in the vl_w-sized a/b/c/hw vectors (lane 0 =
+            // tie operands, lanes 1+ whatever the previous hot iteration
+            // left — never compared): the pre-all-VL form used 2-element
+            // stack arrays against a full-width svld1/svst1, an OOB
+            // read/write at every VL >= 128-bit (svcntw() >= 4 lanes).
             {
-                float ta[2] = { 1.0f, 0.0f };
-                float tb[2] = { 1.0f, 0.0f };
-                float tc[2] = { 0x1p-24f, 0.0f };
-                svfloat32_t va = svld1_f32(all, ta);
-                svfloat32_t vb = svld1_f32(all, tb);
-                svfloat32_t vc = svld1_f32(all, tc);
+                a[0] = 1.0f; b[0] = 1.0f; c[0] = 0x1p-24f;
+                svfloat32_t va = svld1_f32(all, a.data());
+                svfloat32_t vb = svld1_f32(all, b.data());
+                svfloat32_t vc = svld1_f32(all, c.data());
                 svfloat32_t vd = svmla_f32_x(all, vc, va, vb);
-                float res[2] = { 0.0f, 0.0f };
-                svst1_f32(all, res, vd);
+                svst1_f32(all, hw.data(), vd);
                 // 1+2^-24 is an exact tie between 1.0 and 1.000002:
                 // RNE->1.0, RP->1.000002 (toward +inf), RM->1.0, RZ->1.0.
                 float expect2 = (r == 1) ? 0x1.000002p+0f : 0x1p+0f;
-                if (res[0] != expect2) {
+                if (hw[0] != expect2) {
                     log_warning("sve_fpcr_cartesian: mode %s fz=%d "
                                 "liveness FAILED: fma(1,1,2^-24)=%a "
                                 "(want %a)", ROUND_NAME[r], fz,
-                                (double)res[0], (double)expect2);
+                                (double)hw[0], (double)expect2);
                     wr_fpcr(orig_fpcr);
                     report_fail_msg("sve_fpcr_cartesian_arm: SVE "
                                     "rounding mode did not take effect");
@@ -265,7 +292,8 @@ static int sve_fpcr_cartesian_arm_run(struct test *test, int cpu)
 
 static int sve_fpcr_cartesian_arm_cleanup(struct test *test)
 {
-    (void)test;
+    free(static_cast<SveFpcrCartesianData *>(test->data));
+    test->data = nullptr;
     return EXIT_SUCCESS;
 }
 

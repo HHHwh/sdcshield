@@ -27,6 +27,16 @@
  * kernel's clone-inheritance rule (new threads inherit the creator's VL)
  * still holds — the framework's thread structure is simply not "test_init
  * creates the workers".
+ *
+ * UNIT CONVENTION (P6 audit, 2026-10-24 — 298 call sites counted: ~200
+ * pure gates, 97 lane conversions, all pin sites in bytes): the require
+ * helpers take the RANGE in BITS (matching how the spec and skip messages
+ * speak: "128..1024-bit") but RETURN BYTES (what buffers and lanes need);
+ * the pin helpers take and return BYTES. Lane conversions are therefore
+ * divisions: f64 lanes = svl/8, f32 lanes = svl/4 (the P2 Critical-1
+ * lesson — dividing bytes by the wrong power of two compiles silently;
+ * every conversion site carries a unit comment plus a release-effective
+ * range check that catches drift).
  */
 
 #include <stdbool.h>

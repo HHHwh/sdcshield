@@ -39,11 +39,7 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
-#include <sys/auxv.h>
-
-#ifndef HWCAP_SVE
-#define HWCAP_SVE (1 << 22)
-#endif
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 /* 64KB 扫描缓冲 (16384 u32, 按 u32 填充; 运行时按字节扫描 — 与元素宽度解耦)。
@@ -203,12 +199,11 @@ static void slf_sweep_selfcheck(int width)
 static int movbe_slf_sweep_sve_init(struct test *test)
 {
 #if defined(__aarch64__)
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "to be implemented (placeholder): ARM SVE required for movbe_slf_sweep_sve");
+    /* All-VL Phase 2 P6: SVE capability + 128..1024-bit VL range
+     * gate in one framework-layer call (device/cpu/arm64/arm64_vl.h). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
 #endif
     auto *data = (movbe_slf_sweep_sve_data *)malloc(sizeof(movbe_slf_sweep_sve_data));
     data->buffer_bytes = movbe_slf_sweep_sve_buffer_bytes(test);
