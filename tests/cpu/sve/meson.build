@@ -11,7 +11,8 @@
 # Naming rule (user decision 2026-09-19): _avx/_avx2 -> _sve, _avx512 ->
 # _sve_wide. The _wide suffix reflects the wider-vector variant of the pair
 # (original avx2=256-bit vs avx512=512-bit), NOT the SVE2 instruction set —
-# no SVE2 instructions are used (target silicon has SVE1 only, VL=256).
+# no SVE2 instructions are used (target silicon Kunpeng 920: SVE1, VL=256;
+# the tests themselves are all-VL 128..1024-bit since all-VL Phase 2).
 #
 # Build discipline mirrors tests/cpu/arm64/meson.build: the whole subdir is
 # entered only under the aarch64 guard (x86-64 untouched), and the SVE object
@@ -297,12 +298,19 @@ if host_machine.cpu_family() == 'aarch64'
     # IPSec domain (24 ports). Two tiers:
     # - HMAC/SHA family (17): encryption stays on OpenSSL EVP, the MAC runs
     #   on the multi-stream SVE HMAC layer (tests/cpu/sve/ipsec/sve_hmac.h
-    #   over sve_sha_kernels.h — both verified bit-for-bit against OpenSSL,
-    #   5200+1360 vectors, see scripts/sve-sha-verify). NSTREAM lanes: lane 0
-    #   carries the original ciphertext message (MAC semantics identical to
-    #   the avx-named original), lanes 1..N-1 carry deterministic key-stream
-    #   variant messages that fill the remaining SVE lanes; goldens for all
-    #   lanes precomputed in init.
+    #   over sve_sha_kernels.h). The SHA kernels were verified bit-for-bit
+    #   against OpenSSL in the original fixed 8/4-stream form (5200+1360
+    #   vectors, scripts/sve-sha-verify, VL=256 host); the all-VL
+    #   parameterized form is validated same-source in gem5-fi at
+    #   128..1024-bit (independent scalar oracle + RFC 2202/4231 vectors,
+    #   gem5-fi workloads/sdcshield/sve_hmac_dual — verification boundary in
+    #   docs/research/progress-log.md; an OpenSSL re-run needs an SVE host).
+    #   N = svcntw()/svcntd()
+    #   lanes (all-VL 128..1024-bit, one message per lane; stream count is
+    #   the runtime lane count): lane 0 carries the original ciphertext
+    #   message (MAC semantics identical to the avx-named original), lanes
+    #   1..N-1 carry deterministic key-stream variant messages that fill the
+    #   remaining SVE lanes; goldens for all lanes precomputed in init.
     # - EVP-only family (7: GCM x2, CMAC/XCBC x5): the workload has no SHA
     #   component to move to SVE (CMAC/XCBC are AES-CBC-MAC chains inside
     #   OpenSSL; upstream has no SVE AES path), so these are faithful

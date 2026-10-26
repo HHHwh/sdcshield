@@ -406,7 +406,7 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 
 > `mce_check` 是真实 EDAC 后端测试（统计 `/proc/interrupts` 的 EDAC `ce/ue_count`），实测 `exit: pass`，非 placeholder。
 
-**能力门控的诚实跳过**（skip 不是只有"未实现"一种）：17 个多流 HMAC 的 ipsec SVE 用例（`*_hmac_sha*` / `*_sha2_*`）每条 HMAC 流占一个 SVE lane（sha1/224/256 8×32-bit 需 `svcntw()>=8`，384/512 4×64-bit 需 `svcntd()>=4`，均为 VL≥256 bit），在 `test_init` 探测 `HWCAP_SVE` 后实测 `svcnt*`：短 VL 硬件（如 Neoverse N2，VL=128）返回 `CpuNotSupported` 跳过并在 skip-reason 报告实际 VL，绝不进入对未写入 lane 的比较（lane 超出 VL 的输出永不写入，比较只会读到未初始化内存——那不是检测而是噪声）；无 SVE 的硬件在框架级 `test compiled with sve` 守卫处跳过。目标硅片（鲲鹏 930，VL=256）正常执行，内核经独立标量参考实现 + gem5 VL=256 仿真双重位级验证。
+**能力门控的诚实跳过**（skip 不是只有"未实现"一种）：17 个多流 HMAC 的 ipsec SVE 用例（`*_hmac_sha*` / `*_sha2_*`）每条 HMAC 流占一个 SVE lane，**流数 = 运行时 lane 数（all-VL Phase 2 P4：sha1/224/256 为 `svcntw()` 4..32 流、384/512 为 `svcntd()` 2..16 流，128..1024-bit 全档自适应）**，经框架层 `arm64_require_sve_vl` 门控（HWCAP_SVE 能力 + 范围检查一行）；W 调度表按 1024-bit 上限定维（修掉了旧固定 8/4 维度在 VL≥512 硬件上的行越界隐患），`data_size` knob 上限钳制到 HMAC 组装缓冲容量。无 SVE 的硬件在框架级 `test compiled with sve` 守卫处跳过。内核流数参数化形态经 gem5-fi `sve_sha_dual` 四档 16-run 实证（128-bit 档 4/2 流全绿即"短 VL 可跑"的命题实证；K/IV 常量表同源复制，FIPS 标量参考逐流字节级比对）。
 
 ### `memcpy_rewr`：MPSC memcpy 一致性压测（使用选项与推荐参数）
 
