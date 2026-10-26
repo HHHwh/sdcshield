@@ -138,7 +138,7 @@ SME(Armv9.2-A 引入)在 SVE 之上增加**矩阵引擎**,核心组件与各自�
 
 | 硅片 | 核/微架构 | SVE | SVE2 | SME/SME2 | 实现向量长度 | HWCAP 暴露要求 |
 |---|---|---|---|---|---|---|
-| **Kunpeng 920(本机,0xd01)** | TaiShan v110(ARMv8.2) | ✗(NEON only) | ✗ | ✗ | 128b NEON | —(实测 /proc/cpuinfo 无 sve) |
+| **Kunpeng 920(当次实测机,0xd01)** | TaiShan v110(ARMv8.2) | ✗(NEON only) | ✗ | ✗ | 128b NEON | —(实测 /proc/cpuinfo 无 sve) |
 | **cn23154 目标机(HiSilicon 0xd22)** | 未公开 TaiShan 核,ARMv9 | ✓ | ✓ 全集(sveaes/sha3/sm4) | **硬件有 SME+SME2**(SMFR0 实测 f64f64/b16f32/f32f32/i8i32=1, fa64=0;f16f32 未见) | **SVE 512-bit(VL=64B)** | SVE2 位 5.10 内核已暴露;**SME 位需 ≥5.19 内核——5.10 不暴露(关键,见 §5)** |
 | AWS Graviton3 | Neoverse V1 | ✓ | ✗(SVE1) | ✗ | 256-bit | 内核 ≥5.10 |
 | AWS Graviton4 | Neoverse V2 | ✓ | ✓ | ✗(公开资料无 SME) | 256-bit | 同上 |
@@ -211,7 +211,7 @@ SME(Armv9.2-A 引入)在 SVE 之上增加**矩阵引擎**,核心组件与各自�
 
 ## 来源
 
-**本仓实测(命令/文件)**:`framework/device/cpu/simd-arm.conf` 全文;`framework/device/cpu/scripts/armsimd_generate.pl`(140-220 行);`builddir/framework/device/cpu/cpu_features.h`(grep);`tests/cpu/arm64/meson.build` 全文;`tests/cpu/meson.build`(380-530/880-930 行);`tests/cpu/arm64/sve512_f64_chain_arm.cpp` 全文;`sve512_gather_scatter_arm.cpp`、`sve512_stencil_axis_arm.cpp`、`tests/cpu/sleef/sleef_sve.cpp`(grep/节选);`framework/sandstone.cpp:450-480`、`sandstone.h:163`、`selftest.cpp:2748-2770`、`cpuid_internal.h:269-284`;`docs/cpu/cn23154.md` 全文;memory cn23154-numa3-va-path-fault。主机 GCC 12.3.1 / clang 17.0.6 / glibc 2.38 / 内核 6.6;`asm/hwcap.h` SME 位;arm_sme.h 两编译器对比编译实验(§5.1);/proc/cpuinfo(本机 0xd01 无 sve)。
+**本仓实测(命令/文件)**:`framework/device/cpu/simd-arm.conf` 全文;`framework/device/cpu/scripts/armsimd_generate.pl`(140-220 行);`builddir/framework/device/cpu/cpu_features.h`(grep);`tests/cpu/arm64/meson.build` 全文;`tests/cpu/meson.build`(380-530/880-930 行);`tests/cpu/arm64/sve512_f64_chain_arm.cpp` 全文;`sve512_gather_scatter_arm.cpp`、`sve512_stencil_axis_arm.cpp`、`tests/cpu/sleef/sleef_sve.cpp`(grep/节选);`framework/sandstone.cpp:450-480`、`sandstone.h:163`、`selftest.cpp:2748-2770`、`cpuid_internal.h:269-284`;`docs/cpu/cn23154.md` 全文;memory cn23154-numa3-va-path-fault。主机 GCC 12.3.1 / clang 17.0.6 / glibc 2.38 / 内核 6.6;`asm/hwcap.h` SME 位;arm_sme.h 两编译器对比编译实验(§5.1);/proc/cpuinfo(当次实测机 0xd01 无 sve;换机须现场探测,见 CLAUDE.md 第 2 条)。
 
 **联网查证**:
 - AWS Graviton4/Graviton3 SVE 能力:AWS HPC blog「An overview of the AWS Graviton4 processor」、Red Hat Graviton4 tuning、AWS Graviton GitHub wiki(经 WebSearch 摘要)

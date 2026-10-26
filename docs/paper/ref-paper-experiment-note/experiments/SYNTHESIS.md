@@ -155,7 +155,7 @@ SDCShield 新实验(结构化长链激发 + 字节精确 golden + 簇锚定 camp
 
 - 19 任务/20 commits 已实施完成(feat/sdc-excitation-enhancement-20260917,PROD 279→291)——对照组 C 的 SDCShield 侧弹药已在手;
 - cn23154 复验入口:`--selftests -e selftest_sme_sigill_probe` → 单核 `sve512_nt_reload_arm` → 满簇 `run_cluster_anchored.sh`(对照组 B 的执行序);
-- 本机(Kunpeng 920)无 SVE:SVE/SVE2 族只能验证到编译+代码生成+干净 skip,真实激发在 cn23154——论文实验配置表须如实分列两机角色;
+- 当次开发机(Kunpeng 920,part 0xd01)无 SVE:SVE/SVE2 族在那台机上只能验证到编译+代码生成+干净 skip,真实激发在 cn23154——论文实验配置表须如实分列两机角色(换机请按 CLAUDE.md 第 2 条探测,勿沿用"本机无 SVE"旧设定);
 - OpenDCDiag 上游基线数字可直接引用并同源对比:Harpocrates 实测其 L1D>80%、SSE FP 加法器 98.5%、**SSE FP 乘法器仅 58.2%**——SDCShield 的纯乘法密度微内核档(P0-2 修复后的 fma 家族 + fmmla 外积)正是补这个 58.2% 缺口的直接论据。
 
 ## 6. 档案索引

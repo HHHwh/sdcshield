@@ -77,7 +77,7 @@ SME 结论先行:cn23154 **硬件确有 SME+SME2**(SMFR0 实测),但 5.10 内核
 
 ## 3. 第一层:cn23154 当下可跑的新激发测试(纯 SVE/SVE2)
 
-> 通用工程纪律(全部沿用 sve512 家族已验证干净的模式,C§1.3):ACLE intrinsics;init 首行 `getauxval` 手写探测(+sve 编译的 TU 内不能用 device_has_feature)→ 干净 `EXIT_SKIP`;标量同序 golden + 字节级 memcmp;特殊值按类别比较。本机(Kunpeng 920 无 SVE)验证到编译 + SVE 代码生成 + 干净 skip;真实验证在 cn23154。
+> 通用工程纪律(全部沿用 sve512 家族已验证干净的模式,C§1.3):ACLE intrinsics;init 首行 `getauxval` 手写探测(+sve 编译的 TU 内不能用 device_has_feature)→ 干净 `EXIT_SKIP`;标量同序 golden + 字节级 memcmp;特殊值按类别比较。当次开发机(Kunpeng 920,part 0xd01)无 SVE,故只能验证到编译 + SVE 代码生成 + 干净 skip;真实验证在 cn23154。**这是按机结论,不是按仓结论**:换机须按 CLAUDE.md 第 2 条现场探测。
 
 ### P0-1: non-temporal 访存 + 栈重装载窗口家族 `sve512_nt_reload_arm`(最高价值)
 
@@ -219,7 +219,7 @@ SME 结论先行:cn23154 **硬件确有 SME+SME2**(SMFR0 实测),但 5.10 内核
 
 ## 8. 诚实边界
 
-- 本机(Kunpeng 920)无 SVE/SVE2/SME:§3 全部新测试本机只能验证到编译 + SVE 代码生成(反汇编)+ 干净 skip;真实激发效果只能在 cn23154 验证。这与 sve512 家族的既有验证口径一致。
+- 当次开发机(Kunpeng 920,part 0xd01)无 SVE/SVE2/SME:§3 全部新测试在那台机上只能验证到编译 + SVE 代码生成(反汇编)+ 干净 skip;真实激发效果只能在 cn23154 验证。这与 sve512 家族的既有验证口径一致。**注意:本仓已有 SVE 能力各异的板子(如 SVE-256 且无 SVE2/SME 的一档),换机请按 CLAUDE.md 第 2 条探测,勿沿用本条旧设定。**
 - SEVI 的"宽向量低频窗口"是从 AVX2 256-bit 外推到 SVE 512-bit(推断,论文未测 SVE);FMMLA/BF16/FCMLA 的具体 SDC 易损性无直接论文数据,依据是"独立数据通路 + 新代际"两条间接原则。
 - cn23154 核内 OoO 参数(ROB/PRF/端口)未公开(B 附录),涉及参数的测试设计(如 reload→use 距离档位)以扫描代替精确值。
 - SME 在 cn23154 的用户态可达性未定(内核 5.10);硅片支持矩阵部分来自 WebSearch 摘要(可信度降级,C§来源声明)。

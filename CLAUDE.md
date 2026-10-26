@@ -4,9 +4,10 @@ Guidance for Claude Code in this repository. SDCShield detects **silent data
 corruption (SDC)** — computations that don't crash but produce wrong bits — by
 stressing compute units (FMA, SIMD, compression, SVD, crypto) and
 byte-comparing against golden values. Forked from Intel's OpenDCDiag; ported
-to ARM64 (Kunpeng 920 / ARMv8.1+); x86-64 is the untouched reference
-architecture. Deep-dives live under `docs/` — the Documentation map below
-routes you; consult it before guessing.
+to ARM64 (ARMv8.1+; lab hosts differ in part number, core count and vector
+capability — probe each machine, see rule 2); x86-64 is the untouched
+reference architecture. Deep-dives live under `docs/` — the Documentation map
+below routes you; consult it before guessing.
 
 ## Non-negotiable rules
 
@@ -17,18 +18,31 @@ routes you; consult it before guessing.
    (c) regression: `-e zstd19 -t 2000 -n 1` → `exit: pass`; (d) x86
    non-regression by inspection. No "should work" — fix and re-verify, never
    commit.
-   **gem5-fi rule when the host chip cannot run it**: if the affected
-   behavior is unrunnable on this machine because the chip lacks the
-   capability (missing HWCAP/HWCAP2 bit such as SME, an unsupported VL/SVL
-   tier, a newer ISA generation), then verifying only the SKIP path is NOT
-   sufficient — the change MUST be validated in gem5-fi
-   (`/home/sdc/wangxu/code-review/gem5-fi`, CHAOS/SE, same-source dual kernel under
-   `workloads/sdcshield/`) at the affected VL/SVL tiers, quoting real run
-   output (tier, checksum, `SDCSHIELD_FAILS=0`); if gem5 validation is
-   genuinely impossible, state that verification boundary honestly instead.
-   Never pass off "SKIP reason unchanged" as the verification of a
-   functional change (PR #242 precedent: input-formula fix verified by
-   `sme_za_tileview_dual.c` at SVL 128/256/512/1024-bit).
+   **Probe the host before assuming anything** — the lab runs several ARM64
+   hosts that differ in part number, core count and vector capability
+   (SVE/SVE2/SME, VL/SVL tiers). Never quote a part number, a core count or
+   "this machine has/hasn't X" from memory or from another host; measure
+   THIS machine first (MIDR = implementer/part/rev, HWCAP-derived features
+   incl. `sve`/`sve2`/`sme`, online CPUs, and the *real* per-thread vector
+   length — HWCAP presence is not proof an instruction executes, so probe
+   the instruction itself where it matters; an unsupported one raises
+   SIGILL):
+   `cat /sys/devices/system/cpu/cpu0/regs/identification/midr_el1`,
+   `grep -m1 Features /proc/cpuinfo`, `nproc` + `lscpu | grep On-line`,
+   `prctl(PR_SVE_GET_VL)` / `rdvl` for VL, `mrs smidr_el1` / `SMSTART` for
+   SME, and `./builddir/sdcshield --dump-cpu-info` (CPU + feature dump; a
+   current build also prints the SVE vector length).
+   - **Capability present on this host → verify natively here** with a real
+     run and real output. SKIP-only is never acceptable evidence for a
+     functional change.
+   - **Capability absent on this host → gem5-fi** (`/home/sdc/wangxu/code-review/gem5-fi`,
+     CHAOS/SE, same-source dual kernel under `workloads/sdcshield/`) at the
+     affected VL/SVL tiers, quoting real run output (tier, checksum,
+     `SDCSHIELD_FAILS=0`); if gem5 validation is genuinely impossible, state
+     that verification boundary honestly instead.
+   - Never pass off "SKIP reason unchanged" as the verification of a
+     functional change (PR #242 precedent: input-formula fix verified by
+     `sme_za_tileview_dual.c` at SVL 128/256/512/1024-bit).
 3. **DCO + auto-push** — `git commit -s` (last line `Signed-off-by: wangxu
    <wangxumarshall@qq.com>`, nothing after, no Co-Authored-By). Push each
    verified commit to the feature branch, never `main`; run
@@ -100,25 +114,39 @@ END_DECLARE_TEST
   (the framework quiets SNaN uniformly in `sandstone_data.cpp` so FP16/BF16
   NaN bit patterns match cross-arch).
 
-## Known platform quirks (Kunpeng 920, openEuler 24.03 SP3)
+## Known platform quirks (probe per host — this section binds no machine)
+
+这些条目来自**多台**开发机的实测记录，单条可能只对其中一部分机器成立。
+换机先按 rule 2 探测；与本机实测冲突时以本机实测为准，并顺手更新本节。
 
 - `sysfs cluster_id` increases monotonically (138→654→1170…) and
-  `physical_package_id` is large — firmware/ACPI-PPTT artifact, read as-is.
-- No `cpufreq` → `--vary-frequency`/`--vary-uncore-frequency` skip gracefully;
-  no CPU `thermal_zone*` zones → thermal throttle is a no-op here.
+  `physical_package_id` is large — firmware/ACPI-PPTT artifact (observed on a
+  Kunpeng-family board); read as-is.
+- cpufreq/thermal **因机而异**：有的板有 `cppc_cpufreq`（每核独立 policy，
+  实测范围见 `cpuinfo_min_freq`/`cpuinfo_max_freq`），有的完全没有。先看
+  `ls /sys/devices/system/cpu/cpu0/cpufreq` 与 `ls /sys/class/thermal/`：
+  缺 `cpufreq` 时 `--vary-frequency`/`--vary-uncore-frequency` 优雅 SKIP；
+  缺 CPU `thermal_zone*` 时 thermal throttle 是 no-op。都不是缺陷。
 - `eigen_svd_double`/`eigen_sparse` fail sporadically under full-system
-  multithreading (ULP-level diffs vs strict memcmp; the original "192 CPUs"
-  records are from the cortex x3b machine — see the SVE rule below, this host
-  is the 96-CPU 0xd01) — `-n 1` always
-  passes. Eigen/large-core-count limitation, not a port defect.
-- SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 96 CPUs) has NO
-  SVE/SME — all SVE/SME functional verification is gem5-fi only
-  (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). Earlier "host is
-  VL=256" records refer to a different machine (cortex x3b,
-  docs/architecture.md:130). `tests_sve` still compiles at fixed 128-bit; on
-  SVE hosts with VL≠128 the eigen SVD test needs a VL-pinning launcher
-  (`scripts/eigen-sve-double/` precedent; the external `/tmp/vlrun` tool no
-  longer exists); `sleef_sve` stays at 128 by design.
+  multithreading (ULP-level diffs vs strict memcmp; the larger the core
+  count the more likely — machine-independent) — `-n 1` always passes.
+  Eigen/large-core-count limitation, not a port defect.
+- **Vector capability (SVE/SVE2/SME, VL/SVL tiers) is per-host — probe it,
+  never assume it.** Measured lab hosts differ widely: some expose SVE with a
+  pinnable VL and no SVE2/SME, some expose the full SVE2 set + SME/SME2 at a
+  wider VL. Verification path follows rule 2: tiers the host supports are
+  verified natively here; tiers it lacks go to gem5-fi
+  (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). `tests_sve`
+  compiles at fixed 128-bit, so on SVE hosts with VL≠128 the eigen SVD test
+  needs a VL-pinning launcher (`scripts/eigen-sve-double/` precedent; the
+  external `/tmp/vlrun` tool no longer exists); `sleef_sve` stays at 128 by
+  design.
+- **SME caveat**: "HWCAP2_SME=0 / `SMSTART` raises SIGILL" only proves SME is
+  *not enabled by this kernel* — with `CONFIG_ARM64_SME=n` (check
+  `/boot/config-$(uname -r)`; the SME sysctl
+  `/proc/sys/abi/sme_default_vector_length` will also be absent) EL0 `SMSTART`
+  traps regardless of silicon. A kernel-level "absent" is not a hardware
+  verdict; say "software-invisible" and state the boundary.
 
 ## Documentation map — consult before guessing
 

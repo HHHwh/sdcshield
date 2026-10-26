@@ -299,9 +299,11 @@ static int mytest_dim(struct test *test)
   数据见 5.1b。
 - **自适应**：openblas_dgemm 未配置时自适应 mdim（85% 内存 rss6.0
   模型，本机封顶 8192）通过；sleef_neon 自适应（60%÷线程）通过。
-- **SVE 用例**：本机无 SVE（Kunpeng 920），全部 SVE 用例运行时
-  log_skip 优雅跳过（编译全通过）；SVE 硅片上的自适应行为由模型
-  单元公式保证（sysconf 物理内存/在线 CPU 与 arch 无关）。
+- **SVE 用例**：本机是否有 SVE **须现场探测**（CLAUDE.md 第 2 条）。曾记录的那台
+  无 SVE 开发机上，全部 SVE 用例运行时 log_skip 优雅跳过（编译全通过）；在
+  **有** SVE 的板子上这些用例会真跑，压测数据必须取真实 run 而非 skip。
+  SVE 硅片上的自适应行为由模型单元公式保证（sysconf 物理内存/在线 CPU 与
+  arch 无关）。
 - **模型级多规格验证**（直接调用 sdc_stress_config.h 自适应函数，
   1~192 线程扫描，376GB 主机）：
   - 线性类（sleef 语义，600‰）：总预算恒定 225.8GiB（=物理内存

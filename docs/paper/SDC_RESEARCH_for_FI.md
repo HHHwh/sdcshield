@@ -310,7 +310,7 @@ gem5-fi 仓（`/home/sdc/wangxu/gem5-fi-fuzz`）已具备：19+ CHAOS 注入器�
 
 ### 5.1 本机 CORE179（docs/cases/CORE179_SDC_REPORT_CN.md：36 样本/562 bit，core 179 锚定从不漂移，ttf 0.27–250s，movbe/GEMM 路径，每次 fail 10–39 bit，float 尾数 85%/double 93%）
 
-- 套件对 179 定点长跑（--cpuset 179）vs 健康核对照——增强套件对已知缺陷的自然检出复验（既有 movbe_dump 探针族已做过，新套件补 SVE2 族——本机无 SVE，实际只补 fma byte-exact 化与 power_virus 类）；
+- 套件对 179 定点长跑（--cpuset 179）vs 健康核对照——增强套件对已知缺陷的自然检出复验（既有 movbe_dump 探针族已做过，新套件补 SVE2 族——撰写时所用开发机无 SVE（SVE 能力须现场探测，见 CLAUDE.md 第 2 条），故实际只补 fma byte-exact 化与 power_virus 类）；
 - 与 L1-F7②（CORE179 形态回放注入）闭环：注入形态来自 179 实测位谱。
 
 ### 5.2 cn23154 NUMA3（memory 档案：cpus 114–151，VA[55:48]，~19min 节律，ld1rd/stnt1d 栈重装载窗口，≥36 线程簇饱和，HPL 70h/eigen 68.65h 零复现）
