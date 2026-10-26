@@ -5,10 +5,12 @@
 #   bash benchmark.sh <bin> <outdir>
 #     <bin>    容器内 sdcshield 绝对路径(如 /__w/.../builddir/sdcshield)
 #     <outdir> 输出目录(挂载回 host)
-# 产出:<outdir>/benchmark.tsv,列: test<TAB>wall_seconds<TAB>loop_count
+# 产出:<outdir>/benchmark.tsv,首行表头 test<TAB>wall_seconds<TAB>loop_count 是
+#   三方契约(benchmark.sh 写 / benchmark-gate.py 与 benchmark-to-json.py 校验),
+#   格式演进(加列/改列序)必须三处同步。
 #   wall_seconds 三态(消费方闸门见 benchmark-gate.py):
 #     数值   数据行(目标测试 result: pass 且取到它自己的 test-runtime)
-#     skip   缺席(--list-tests 无此测试)或运行时跳过(result: skip)——良性无数据点
+#     skip   运行时跳过(result: skip)——良性无数据点
 #     fail   在列但未产出可用数据(进程失败/测试 fail/字段缺失)——交闸门红
 #   失败现场:每测试输出留档 <outdir>/<t>.log、YAML 留档 <outdir>/<t>.yaml
 #   (随 artifact 上传), 摘要(退出码+末尾输出)同时打进本脚本 stdout
@@ -38,20 +40,34 @@ DEFAULT_LOOP=2   # 其余 2 次(openblas 单 loop ~54s → 2 loop ~2min)
 # 2>/dev/null 吞掉、部分输出被当真——run 40177906937 的 24.03-LTS-SP2 上一次
 # 瞬态失败使 11 个基准中恰 1 个(memcpy_l2_cache_size)没匹配上、被记成「缺席
 # skip」(同 job 更早的 allquality 全量扫描里该测试存在且 pass;10-23/10-24 同
-# OS 同测试均为正常数值——既非崩溃也非缺席)。故:stderr 落档、退出码非零或
-# 列表为空即重试一次,连续失败中止采集(退出码交 verify 闸门红,现场在
-# list-tests.err)。
+# OS 同测试均为正常数值——既非崩溃也非缺席;该次 rc 已不可考,rc=0 的部分输出
+# 变体无法被「rc≠0 或空表」拦截)。BENCH_TESTS 声明为跨三系列交集,正常应全部
+# 在列(3 run × 15 OS = 495 行实证:唯一一次缺席就是上述事故)——故捕获有效性
+# = rc=0 且非空且交集完整;任一不满足即重试一次,连续失败中止采集(退出码交
+# verify 闸门红,现场在 list-tests.err)。
 LIST_ERR="$OUTDIR/list-tests.err"
-lrc=0
-LIST="$("$BIN" --list-tests 2>"$LIST_ERR")" || lrc=$?
-if [ "$lrc" -ne 0 ] || [ -z "$LIST" ]; then
-  echo "benchmark: --list-tests failed (rc=$lrc); stderr attempt#1:" >&2
-  cat "$LIST_ERR" >&2
-  echo "benchmark: retrying --list-tests once ..." >&2
+capture_list() {
   lrc=0
   LIST="$("$BIN" --list-tests 2>"$LIST_ERR")" || lrc=$?
-  if [ "$lrc" -ne 0 ] || [ -z "$LIST" ]; then
-    echo "benchmark: ABORT — --list-tests failed twice (rc=$lrc); stderr attempt#2:" >&2
+}
+list_valid() {
+  # grep -qxF:字面整行匹配。-x 不等于字面匹配,grep -qx 'a.c' 会误命中 'abc'
+  # (BRE 元字符);测试名当前全是 C 标识符,但名单演进后元字符名会造成
+  # 缺席/在场判定静默出错,-F 关闭模式解释。
+  [ "$lrc" -eq 0 ] && [ -n "$LIST" ] || return 1
+  local t
+  for t in "${BENCH_TESTS[@]}"; do
+    printf '%s\n' "$LIST" | grep -qxF -- "$t" || return 1
+  done
+}
+capture_list
+if ! list_valid; then
+  echo "benchmark: --list-tests invalid (rc=$lrc; empty or BENCH_TESTS not all listed); stderr attempt#1:" >&2
+  cat "$LIST_ERR" >&2
+  echo "benchmark: retrying --list-tests once ..." >&2
+  capture_list
+  if ! list_valid; then
+    echo "benchmark: ABORT — --list-tests failed/incomplete twice (rc=$lrc); stderr attempt#2:" >&2
     cat "$LIST_ERR" >&2
     exit 1
   fi
@@ -62,9 +78,11 @@ OUT="$OUTDIR/benchmark.tsv"
 printf 'test\twall_seconds\tloop_count\n' >> "$OUT"
 
 for t in "${BENCH_TESTS[@]}"; do
-  if ! printf '%s\n' "$LIST" | grep -qx "$t"; then
-    printf '%s\tskip\t0\n' "$t" >> "$OUT"
-    echo "benchmark: $t: absent from --list-tests (skip)"
+  if ! printf '%s\n' "$LIST" | grep -qxF -- "$t"; then
+    # 不可达防御:list_valid 已保证 BENCH_TESTS 全部在列。若真到这(校验逻辑
+    # 被改坏),按 fail 落表交闸门红——绝不静默降级 skip(缺席=异常,见上)。
+    printf '%s\tfail\t0\n' "$t" >> "$OUT"
+    echo "benchmark: $t: absent from --list-tests despite validated capture (logic error)" >&2
     continue
   fi
   LOOP=$DEFAULT_LOOP

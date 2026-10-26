@@ -8,7 +8,7 @@
 | 文件 | 作用 |
 |---|---|
 | `verify-params.py` | 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），末行 `RESULT: PASS|FAIL` |
-| `benchmark.sh` | 固定 `--max-test-loop-count` 采集跨 OS 基准 → `benchmark.tsv`（`wall_seconds` 三态：数值/`skip`(缺席或运行时跳过)/`fail`(在列未出数据)，失败现场按测试留档 `.yaml`/`.log`） |
+| `benchmark.sh` | 固定 `--max-test-loop-count` 采集跨 OS 基准 → `benchmark.tsv`（`wall_seconds` 三态：数值/`skip`(运行时跳过)/`fail`(在列未出数据)；`--list-tests` 捕获须 BENCH_TESTS 交集完整否则重试/中止；失败现场按测试留档 `.yaml`/`.log`） |
 | `benchmark-gate.py` | benchmark.tsv 状态分类单一权威（verify/trend 共用）：ok=可 float 解析、skip=缺席或运行时跳过、fail=在列但未出数据 |
 | `benchmark.md` | 基准口径说明（为何固定 loop 数、诚实边界） |
 | `report-summary.py` | `report` job 汇总 15 份 `allquality.yaml` 成「用例 × 版本」结果矩阵（有基线时每格附耗时 Δ） |
@@ -68,7 +68,8 @@ python3 scripts/gha/verify-params.py --bin ... --out ... --smoke
 ```bash
 bash scripts/gha/benchmark.sh "$(pwd)/builddir/sdcshield" "$(pwd)/benchmark"
 # → benchmark/benchmark.tsv: test<TAB>wall_seconds<TAB>loop_count
-#   wall_seconds ∈ { 数值, skip(缺席或运行时跳过), fail(在列未出数据) }
+#   wall_seconds ∈ { 数值, skip(运行时跳过), fail(在列未出数据) }
+#   (--list-tests 捕获无效/交集不完整 → 重试一次,连续失败中止)
 # → 每测试 benchmark/<t>.yaml|<t>.log 留档;闸门判定用 benchmark-gate.py
 ```
 
