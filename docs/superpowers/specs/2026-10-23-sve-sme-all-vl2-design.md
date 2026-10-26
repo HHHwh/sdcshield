@@ -169,7 +169,21 @@ long arm64_require_sme_svl(struct test *t, long min_bits, long max_bits);
   clang `-static -O2 -march=armv9-a+sve+sme`（FMOPA 类强制 `-ffp-contract=off` 对齐
   gem5 fplib 双舍入）。
 - **运行矩阵**：受影响档位 128/256/512/1024 × {fixed, random×3} = 每 kernel 16 run；
-  全绿 = 全部 `SDCSHIELD_FAILS=0` 且 random 各 seed checksum 互异。
+  全绿 = 全部 `SDCSHIELD_FAILS=0`（判据主体为逐元素字节级 golden 比对，§8 不变式）；
+  random 各 seed checksum 互异**仅约束值依赖 seed 的模式**（chain/stencil 族——防
+  seed 未接线的健全性检查），**结果与 seed 无关的模式**（gather 类 dual kernel，
+  判据绑定构造前提而非模式类名：src 固定与 seed 无关、randomize 仅 Fisher-Yates
+  洗牌双射 perm，dst 地址序终态与 seed 无关；不满足前提的形态不得套用——如测试
+  `sve512_gather_scatter_arm.cpp` 以 random64() 随机化 gather_src（src/dst 随 seed
+  变化，属值依赖模式））预期**同档一致**，checksum 仅记录、不作判据（PR #281 检视
+  R3 口径同步、R4 适用范围限定——P3 as-built 实证：gather 每档 fixed/random×3
+  四 run checksum 相同，统一互异判据对其实为假失败）。gather 类的 **seed 接线**
+  另由 **perm 指纹独立校验**承担（检视 R5 补判据）：完整 perm 的范围（[0,n)）与
+  双射性检查 + perm_fingerprint 记录（FNV-1a 逐轮折叠），同档 {fixed, random×3}
+  指纹**两两互异**（防 seed 未接入置换生成——golden 与 hw 共用同一 perm、dst 终态
+  与置换无关，二者均证不了 seed 接线；非双射可由 golden 检出、seed 未接线不可
+  检出，激发覆盖将静默下降），同 seed 重放指纹须一致（证可重放）；该校验独立于
+  golden 与 checksum。
 - **回归锚**：重构前在原设计档跑旧 kernel 记录 checksum；重构后同档逐位一致
   （先例：`e9e2be2a` @ svl=4）。
 - **记录落盘三处**：测试源码 docblock 简表（命令形态 + 档位 + checksum）+ gem5-fi
@@ -226,8 +240,8 @@ long arm64_require_sme_svl(struct test *t, long min_bits, long max_bits);
 
 ## 12. 验收标准
 
-1. 受影响的 SVE/SME 用例在 gem5 四档 × 16 run 全绿（`SDCSHIELD_FAILS=0`，random checksum
-   互异）。
+1. 受影响的 SVE/SME 用例在 gem5 四档 × 16 run 全绿（`SDCSHIELD_FAILS=0`；random checksum
+   互异仅限值依赖 seed 的模式——gather 类结果与 seed 无关、预期同档一致仅记录，§7 口径）。
 2. 回归锚全部逐位一致（几何重构零语义漂移）。
 3. 本机（无 SVE）：构建零警告 + 全部 SVE/SME 用例干净 SKIP + selftest VL 探针通过。
 4. 手写探测样板清零：`tests/` 下不再有 SVE/SME 的 getauxval 手探 init 样板（探测统一走
