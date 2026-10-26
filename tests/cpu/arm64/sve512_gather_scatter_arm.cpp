@@ -92,7 +92,13 @@ struct SveGatherScatterData {
     std::vector<uint64_t> gather_src;  // 只读共享
     std::vector<uint64_t> gather_idx;  // 只读共享(置换索引表)
     std::vector<uint64_t> stride_src;  // 只读共享(2 MiB 宽步距后备表)
-    // 注意: scatter_dst / scatter_golden 是每线程每迭代的可变 scratch,不能放共享 data ——
+    // scatter_golden: init 期一次冻结、run 期只读(与 gather_src/gather_idx 同源)。
+    // 若每轮从同一块 gather_src 现场重算,hw 与 golden 读的是同一份(可能已被静置
+    // 位翻转污染的)源数据,两侧同时改变而互相抵消——init 之后 gather_src 的位翻转
+    // 将永远不可见。冻结副本打破这个对称性(与 sve512_gather_scatter_svd /
+    // sve512_xlswave_ctx_arm Phase A 同构;本族"三缺一",PR #283 评审 finding A)。
+    std::vector<uint64_t> scatter_golden;
+    // 注意: scatter_dst 是每线程每迭代的可变 scratch,不能放共享 data ——
     // -n>1 时框架对每个 worker 线程共享同一个 test->data,并发改写同一块 scatter 缓冲会
     // 相互踩踏(实测 -n 4 时上半 lane 读到 0x0:某线程的 std::fill 清掉了另一线程正在比对的
     // lane)。改为 test_run 内栈上分配,与 sve512_f64_chain_arm 的 hw/gold 同模式。
@@ -199,6 +205,16 @@ static int sve512_gather_scatter_arm_init(struct test *test)
                                   (uint64_t)(i & IDX_TAG_MASK);
         }
 
+        /* Freeze the scalar golden once, here in init (PR #283 review,
+         * finding A): gather_scatter_golden() reads only gather_src and
+         * gather_idx, both init-frozen and read-only in run. Recomputing
+         * it per round from the same src the hardware just consumed makes
+         * both sides track any at-rest bit flip in gather_src and
+         * reconcile, so the flip stays invisible; the frozen copy cannot.
+         * Same pattern as sve512_gather_scatter_svd / xlswave Phase A. */
+        data->scatter_golden.assign(gn, 0);
+        gather_scatter_golden(data.get(), data->scatter_golden.data());
+
         test->data = data.release();
         return EXIT_SUCCESS;
     } catch (const std::exception &e) {
@@ -267,10 +283,10 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
     std::vector<uint64_t> stride_idx;
     size_t stride_base = 0;
 
-    // 每线程每迭代的栈上 scratch(dst/golden 可写),不共享 —— 规避 -n>1 并发踩踏
-    // (与 sve512_f64_chain_arm 的 hw/gold 同模式)。
+    // 每线程每迭代的栈上 scratch(dst 可写),不共享 —— 规避 -n>1 并发踩踏
+    // (与 sve512_f64_chain_arm 的 hw/gold 同模式)。golden 则是 init 期冻结的
+    // 只读副本(d->scatter_golden),不再每轮重算,见 struct 注释。
     std::vector<uint64_t> scatter_dst(gn, 0);
-    std::vector<uint64_t> scatter_golden(gn, 0);
 
     do {
         bool all_passed = true;
@@ -320,11 +336,10 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 
         // ---- original FMA+scatter round-trip (value-level check) ----
         gather_scatter_hw(d, scatter_dst.data());
-        gather_scatter_golden(d, scatter_golden.data());
         for (size_t i = 0; i < gn; ++i) {
-            if (scatter_dst[i] != scatter_golden[i]) {
+            if (scatter_dst[i] != d->scatter_golden[i]) {
                 report_f64_lane_mismatch("sve512_gather_scatter", i,
-                                         scatter_golden[i],
+                                         d->scatter_golden[i],
                                          scatter_dst[i]);
                 all_passed = false;
             }
