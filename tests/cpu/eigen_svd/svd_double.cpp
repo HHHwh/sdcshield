@@ -49,7 +49,7 @@ static int eigen_svd_double_init_common(struct test *test, const char *test_id)
     if (v == 0)
         sdc_env_knob_int_clamped(test_id, "mdim", &v, 64, 2048);
     d->dim = (v > 0) ? (int)v
-                     : sdc_auto_square_dim(8, 6, 12.0, 650, thread_count(), 64, 2048, test->id, "mdim");
+                     : eigen_svd_double_test::calibrated_auto_dim(test, 8, 6, 12.0, 650, 64, 2048);
     test->data = d;
     return EXIT_SUCCESS;
 }

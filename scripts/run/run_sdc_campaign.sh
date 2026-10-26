@@ -50,7 +50,12 @@ TEST_FILTER="${TEST_FILTER:-}"         # 逗号分隔，支持通配（冒烟/�
 SMOKE="${SMOKE:-0}"
 SKIP_MONITOR="${SKIP_MONITOR:-0}"
 MIN_DISK_KB=$((5*1024*1024))           # 磁盘守卫阈值 5G
-KNOWN_FLAKY="eigen_svd_double eigen_sparse"   # CLAUDE.md: 全核 ULP 抖动，-n 1 必过
+# 2026-10-24 修复(feat/eigen-svd-multithread): eigen_svd_double/eigen_sparse 改用
+# per-thread 同源 golden, 跨线程 Eigen SIMD 路径分歧的满核假阳消除, 白名单清空——
+# 满核挂 = SDC 嫌疑, 与其它测试同等进入定位流程(README 结果判读口径一致)。
+# 旧预构建二进制(2026-09-12 构建, 修复前行为)如需旧口径可
+# KNOWN_FLAKY="eigen_svd_double eigen_sparse" 环境变量恢复。
+KNOWN_FLAKY="${KNOWN_FLAKY:-}"
 FAKE_PASS_RE='^(vmx_|isal_crc|crc32|fma$)'    # 审计 D1/D6/D11: 装饰性 pass（无检出意义）
 
 if [ "$SMOKE" = 1 ]; then

@@ -47,6 +47,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <chrono>
 #include <map>
 #include <string>
 #include <unistd.h>
@@ -347,6 +348,119 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
                     expect / gib, 100.0 * expect / phys);
     }
     return n;
+}
+
+/*
+ * 时间校准模型 (sdc_calibrated_dim):
+ *   内存自适应(sdc_auto_square_dim)只约束 RSS, 不约束单次求解时长——
+ *   大维度下单次 SVD/Cholesky 求解可达分钟级, -t 到时后 TERM 无法打断
+ *   迭代内计算, 框架只能 SIGQUIT 判 timed out(实测 eigen_sparse 自适应
+ *   档满核 600s 仍无法退出; eigen SVD mdim=2048 单次数分钟)。
+ *   本函数在自适应路径上叠加时间上限: 在 lo 与 2*lo 两档各完整求解一次
+ *   (结果丢弃, 只为计时), 幂律 t(n)=c*n^k 拟合指数 k, 外推使单次求解
+ *   <= max_single_ms 的维度, 再乘安全系数 0.5 吸收外推偏差。
+ *   外推后再实测选定维度一次, 超预算按实测幂律收缩并复验——构造性
+ *   保证 one solve <= max_single_ms(外推/安全系数失准的兜底)。
+ *   口径(检视 #44/#45): (1) probe 的计时单位 = 构造 + 一次完整求解,
+ *   与 run 期迭代同构(保守方向——构造被计入预算); (2) 该保证是
+ *   单线程探针口径。run 期满核并发时 memory-bound 求解受带宽/缓存
+ *   竞争显著放大——2026-10-25 鲲鹏 920(128 CPUs)实测: n=1191 稀疏
+ *   Cholesky 单解 574ms(单线程) → 14268ms(128 线程, ~24.9×), 含
+ *   reroll 的最坏迭代 ~29s; -t 的 TERM 兑现最终由框架硬宽限保证
+ *   (sandstone.cpp test_timeout = max(5×-t + 30s, 300s) 后才
+ *   SIGQUIT), 校准的作用是把未校准档的分钟级(600s)压到 O(10s)
+ *   量级、远低于该宽限。
+ *   k clamp [1.5, 4.0] 抑制小档计时噪声; 试解总成本两小档+一验证档。
+ *   注意: 验证探针本身**不受 max_single_ms 约束**——它是预算的执行者,
+ *   初选落点在幂律/k_floor 失准时可超预算数倍(本文件 :434 段自引的实测
+ *   落点 8.3s vs 2s 预算即此情形), 只有其后的收缩轮才按预算收敛。
+ *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
+ * 调用契约:
+ *   int dim = sdc_auto_square_dim(...);        // 内存上限
+ *   if (dim > lo)
+ *       dim = sdc_calibrated_dim(lo, dim, max_single_ms,
+ *                                test_id, knob, k_floor, solve_once);
+ */
+template <typename F>
+static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
+                                     const char *test_id, const char *knob,
+                                     double k_floor, F solve_once)
+{
+    if (hi <= lo)
+        return lo;
+    auto probe = [&](int n) -> double {
+        auto t0 = std::chrono::steady_clock::now();
+        solve_once(n);
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - t0).count();
+    };
+    /* probe 档自适应抬升: 小档求解太快(<1ms)时计时噪声淹没幂律拟合,
+     * 翻倍 probe 档直到可测量(>=1ms)或触及 hi——否则外推基数失真
+     * (实测稀疏 Cholesky 规则带状 probe 在 64 档仅 0.1ms, 外推失控)。 */
+    int p1 = lo;
+    double t1 = probe(p1);
+    while (t1 < 1.0 && p1 * 2 <= hi) {
+        p1 *= 2;
+        t1 = probe(p1);
+    }
+    int mid = (p1 * 2 <= hi) ? p1 * 2 : hi;
+    double t2 = probe(mid);
+    if (t1 <= 0.0 || t2 <= 0.0) {
+        /* 任一档计时不可测即无法拟合 k。仅当两档皆不可测(t1 = t2 = 0)时,
+         * 才能断定"时间不是约束"(求解快到连时钟都读不出), 此时交还内存
+         * 上限是安全的。若只是一档读数为 0, 按『上限宁小勿大』退守校准
+         * 下限 lo——与两个调用方 catch (...) → lo 的方向一致。绝不在此
+         * 交还未校准的 hi: 那会静默复活分钟级、TERM 打不断的单次求解,
+         * 正是本函数要消除的故障模式。 */
+        const bool both_unmeasurable = (t1 <= 0.0 && t2 <= 0.0);
+        log_warning("[时间校准] %s.%s: 试解计时不足(%.2f/%.2fms) → %s %ld",
+                    test_id, knob, t1, t2,
+                    both_unmeasurable ? "维持内存上限" : "退守校准下限",
+                    both_unmeasurable ? (long)hi : (long)lo);
+        return both_unmeasurable ? hi : lo;
+    }
+    double k = std::log2(t2 / t1);
+    if (k < 1.5) k = 1.5;
+    if (k > 4.0) k = 4.0;
+    /* k_floor: 求解器复杂度下限(稠密 SVD ~3.0; 随机 ~10% 密度稀疏
+     * Cholesky 的 fill-in 近稠密, 理论同 ~3.0——随机谱系实测
+     * 3.3~3.5, 而旧口径误写 2.0)。小档 probe 的实测 k 偏低(BDCSVD
+     * 64→128 实测 1.8——预处理开销主导的小尺度行为), 直接外推会把
+     * 大维度单次求解低估几个数量级(实测外推出 2048 维"1 秒内",
+     * 实际数分钟)。取 max(实测, 理论)。 */
+    if (k < k_floor) k = k_floor;
+    double budget = (double)max_single_ms * 0.5;   /* 安全系数 0.5 */
+    int dim = (int)((double)p1 * std::pow(budget / t1, 1.0 / k));
+    if (dim < lo) dim = lo;
+    if (dim > hi) dim = hi;
+    /* 外推后验证探针(2026-10-24 检视 #11): 幂律外推与 k_floor 都是
+     * 启发式, 失准时单解可远超预算(检视实证: 大内存主机旧口径外推
+     * 落点单解 8.3s >> 2s)。在选定 dim 再实测一次, 超预算按实测幂律
+     * 收缩并复验——构造性保证 one solve ≤ max_single_ms; 收缩到 lo
+     * 仍超限则如实记录(机器极慢/lo 过大, 后果与显式 knob 同级)。
+     * newdim 强制单调递减吸收计时噪声, 轮数上限 4 防抖动。 */
+    int xdim = dim;
+    double td = probe(dim);
+    double td0 = td;
+    int shrinks = 0;
+    while (td > (double)max_single_ms && dim > lo && shrinks < 4) {
+        int newdim = (int)((double)dim * std::pow(budget / td, 1.0 / k));
+        if (newdim >= dim) newdim = dim - 1;
+        if (newdim < lo) newdim = lo;
+        dim = newdim;
+        ++shrinks;
+        td = probe(dim);
+    }
+    if (td0 > (double)max_single_ms)
+        log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
+                    test_id, knob, xdim, td0, shrinks);
+    log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
+                "k=%.2f) → %d (验证 %.1fms%s)",
+                test_id, knob, max_single_ms, p1, t1, mid, t2, k, dim, td,
+                td > (double)max_single_ms
+                    ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
+                    : "");
+    return dim;
 }
 
 /*
