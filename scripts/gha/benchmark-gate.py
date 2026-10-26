@@ -7,12 +7,14 @@
 # 两道闸门(空 JSON 流入 gh-pages 的威胁模型换壳重现)。本脚本把分类收敛到
 # 一处, 两个步骤共用同一口径:
 #
-#   ok   = wall_seconds 为有限数值(float 可解析且 math.isfinite, 与
-#          benchmark-to-json.py 完全一致)
+#   ok   = wall_seconds 为正的有限数值(float 可解析、math.isfinite 且 >0,
+#          与 benchmark-to-json.py 完全一致; 墙钟 ≤0 与 nan/inf 同属不可用
+#          数据——物理上不可能的值不做趋势基线)
 #   skip = "skip"——运行时跳过(result: skip; 缺席在采集侧 benchmark.sh 已
 #          升级为中止/不产 TSV), 良性, 无数据点
 #   fail = "fail"——在列但未产出可用数据(进程失败/测试 fail/字段缺失), 以及
-#          一切非 skip 非有限数值的行(格式漂移/nan/inf, 按消费方口径视为坏行)
+#          一切非 skip 非正有限数值的行(格式漂移/nan/inf/非正墙钟, 按消费方
+#          口径视为坏行)
 #
 # 用法: benchmark-gate.py {verify|trend} <benchmark.tsv>
 #   verify 角色: ok=0(采集整体废掉)或 fail>0 → ::error:: + exit 1;
@@ -92,13 +94,16 @@ def classify(path):
                     except ValueError:
                         fails.append(name)  # 非 skip 非数值:消费方口径下的坏行
                     else:
-                        if math.isfinite(value):
+                        if math.isfinite(value) and value > 0:
                             ok.append(name)
                         else:
                             # nan/inf/1e999→inf:float 可解析, 但 RFC 8259 无法表示,
                             # json.dump 默认写出 NaN/Infinity 非法 JSON, 下游 strict
                             # 解析(JS JSON.parse / benchmark-action)必挂——按格式
-                            # 漂移(坏行)红, 而非放行染红 trend job
+                            # 漂移(坏行)红, 而非放行染红 trend job。
+                            # ≤0:墙钟为非正量纲(计时回拨/解析错位), 物理上不可能
+                            # 的值不做趋势基线(alert-threshold 对非正基线行为未
+                            # 定义)——同属不可用数据, 按 bad 行红
                             fails.append(name)
     except (OSError, UnicodeDecodeError) as err:
         # UnicodeDecodeError 是 ValueError 子类, 不在 OSError 之下——非 UTF-8

@@ -43,9 +43,9 @@ GHA 的 `ubuntu-24.04-arm` 是**共享 aarch64 云实例**（AWS Graviton 系）
 
 | 值 | 含义 | 闸门（[`benchmark-gate.py`](benchmark-gate.py)，verify 与 benchmark-trend 共用） |
 |---|---|---|
-| 有限数值 | 数据行（目标测试 `result: pass` 且取到它自己的 `test-runtime`，`float` 可解析且 `math.isfinite`） | 进 JSON/趋势 |
+| 正的有限数值 | 数据行（目标测试 `result: pass` 且取到它自己的 `test-runtime`，`float` 可解析、`math.isfinite` 且 `>0`） | 进 JSON/趋势 |
 | `skip` | 运行时跳过（`result: skip`） | `::warning::` 点名，数据点缺失 |
-| `fail` | 在列但未产出可用数据（进程失败 / 测试 fail / 字段缺失 / 非有限值） | verify 红 |
+| `fail` | 在列但未产出可用数据（进程失败 / 测试 fail / 字段缺失 / 非有限值 / 非正墙钟） | verify 红 |
 
 失败现场留档：每测试 `stdout/stderr` 存 `<outdir>/<t>.log`、运行 YAML 存
 `<outdir>/<t>.yaml`（均随 artifact 上传），失败摘要（退出码 + 末尾 15 行）同时进

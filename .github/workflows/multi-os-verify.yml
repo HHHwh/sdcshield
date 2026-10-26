@@ -279,12 +279,13 @@ jobs:
           cat benchmark.log
           # 闸门(scripts/gha/benchmark-gate.py——verify 与 benchmark-trend 共用
           # 的同一分类权威, 取代原先 YAML 内联的三份 awk 拷贝):
-          #   ok   = wall_seconds 为有限数值(float 可解析且 math.isfinite,
-          #          与 benchmark-to-json.py 口径一致;nan/inf 属格式漂移)
+          #   ok   = wall_seconds 为正的有限数值(float 可解析且 math.isfinite
+          #          且 >0, 与 benchmark-to-json.py 口径一致;nan/inf/非正属
+          #          格式漂移/不可用数据)
           #   skip = 运行时跳过——良性缺数据点, ::warning:: 点名(缺席已在
           #          采集侧 benchmark.sh 升级为重试/中止, 不再产 skip 行)
           #   fail = 在列但未产出可用数据(进程失败/测试 fail/格式漂移/非有限
-          #          值)——红
+          #          值/非正墙钟)——红
           # ok=0(采集整体废掉)与行缺失(BENCH_TESTS 完备性, producer 写入
           # 失败/截断的最后防线)同样红。原「≥1 行非 skip 即绿」的全有全无阈值
           # 废弃:缺席/失败已在采集侧(benchmark.sh)区分, 闸门不再需要妥协。

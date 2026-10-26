@@ -5,9 +5,9 @@
 #   无数据行的测试 wall_seconds 为 skip(运行时跳过)或 fail(在列但未产出
 #   可用数据))。
 # 输出:[{"name": <test>, "value": <wall_seconds>, "unit": "s"}, ...](skip/fail
-#   等一切非数值行与 nan/inf 非有限值剔除——RFC 8259 无法表示非有限值,
-#   写出 NaN/Infinity 是非法 JSON;闸门侧的状态判别见 benchmark-gate.py,
-#   口径一致)。
+#   等一切非数值行、nan/inf 非有限值与 ≤0 非正墙钟剔除——RFC 8259 无法表示
+#   非有限值, 写出 NaN/Infinity 是非法 JSON;非正墙钟物理上不可能;闸门侧的
+#   状态判别见 benchmark-gate.py, 口径一致)。
 # 供 benchmark-action/github-action-benchmark 的 tool: custom 消费,趋势线只取
 # 固定基准 SP(24.03-LTS-SP3),跨 commit 可比。
 #
@@ -40,8 +40,10 @@ with open(tsv_path, encoding="utf-8") as f:
             value = float(wall)
         except ValueError:
             continue  # 非数值行(skip/fail)
-        if not math.isfinite(value):
-            continue  # nan/inf:非法 JSON 常量,剔除(闸门侧按 fail 红)
+        if not math.isfinite(value) or value <= 0:
+            # nan/inf:非法 JSON 常量;≤0:物理上不可能的墙钟——均剔除
+            # (闸门侧同口径按 fail 红)
+            continue
         entries.append({"name": name, "value": value, "unit": "s"})
 
 with open(out_path, "w", encoding="utf-8") as f:
