@@ -154,7 +154,7 @@ long arm64_require_sme_svl(struct test *t, long min_bits, long max_bits);
 | P2 SME 收尾 | `sme_fmopa_za_arm` 全 VL 化（新 API + `#16` 步距寄存器化 + 范围检查）+ dual kernel | SME 侧全部达标 |
 | P3 sve512×10 | 逐孪生对（_arm/_svd）重构：512 单值门控 → 范围检查、几何 svcnt 化 | ≈5-6 个 dual kernel |
 | P4 ipsec×17 | SHA 流数参数化（VL=128 可跑），基于现成 `tests/cpu/sve/ipsec/sve_sha_kernels.h` | ≈3 个 dual kernel 模式 |
-| P5 sleef/eigen×8 | **spike 先行**：Eigen SVE packet 后端 VLA 能力调查 + sleef VL=256 编译回归根因（progress-log:223 open item）；据证据定深度 | spike 报告（spec 附录）→ 重构或如实上报 |
+| P5 sleef/eigen×8 | **spike 先行**：Eigen SVE packet 后端 VLA 能力调查 + sleef VL=256 编译回归根因（progress-log:223 open item）；据证据定深度 | spike 报告（spec 附录，**已回写：附录 B**）→ 重构或如实上报（as-built：sleef 真迁移 / Eigen 自 pin 回退） |
 | P6 存量迁移 | A 类已达标测试分批机械迁移到新 API（按目录分批，每批构建 + `-e <test> -t 2000 -n 1` 抽查） | 样板清零 |
 
 阶段内 work item 串行（验证 → commit → push，one-patch-per-unit）；跨仓流水沿用 PR #242
@@ -198,7 +198,7 @@ long arm64_require_sme_svl(struct test *t, long min_bits, long max_bits);
 | sve512×10 | init 期标量同序重算（现行模式） | 几何 svcnt 化后自动适配 |
 | ipsec×17 | 同一 SVE 内核 init 期预计算（现行设计，OpenSSL 交叉验证由 `scripts/sve-sha-verify` 兜底） | 流数参数化后同内核重算保持自一致 |
 | SME fmopa_za | 精确整数操作数标量累加（现行） | 列数按实测 SVL 重算 |
-| sleef/eigen×8 | spike 后定，结论写入本 spec 附录 | 不预设 |
+| sleef/eigen×8 | **已定（附录 B）**：sleef = same-kernel golden（双 noinline 位点）+ 保真闭环；eigen = 维持 init 期 golden + 字节级 memcmp（自 pin 128） | sleef 真 VLA 全档（128..1024 四档实证）；eigen pin 编译档 128 |
 
 **军规不变式**（PR #242 review 产出）：逐 lane/元素**字节级 memcmp/memcmp_or_fail**，
 禁止 sum/xor/reduce 跨 lane 聚合。
@@ -255,3 +255,41 @@ long arm64_require_sme_svl(struct test *t, long min_bits, long max_bits);
   导航（单文件级可用；跨文件索引因 builddir 缺失降级，以 grep 兜底）+ 本机 /proc 实测。
 - 清点口径：以 `-msve-vector-bits` 编译归属、`svcnt*/svwhilelt/rdvl/rdsvl` 使用形态、
   `"=w"` 约束 asm、HWCAP 门控文案为准逐文件核验；分类定义见 §3.1 表。
+
+## 附录 B：P5（sleef/eigen×8）spike 结论与 golden 策略回写
+
+> 兑现 §6 P5 交付物「spike 报告（spec 附录）」与 §8 表 sleef/eigen×8 行「结论写入本
+> spec 附录」。双 spike 2026-10-24；实施 PR #286（feat/sleef-eigen-allvl）+ 计划 PR #285；
+> 验证 gem5-fi feat/sleef-vla-dual @ 6d740525 + feat/sve-rot-vla-dual @ faae123f。
+
+- **sleef 真 VLA 迁移成立**：sleef_sve TU 零 128-ism 构造（sizeless 类型 +
+  svcntd/svcntw 步进 + svwhilelt 尾截断）；vendored SLEEF 3.9.0 静态库纯 VLA 机器码
+  （反汇编：cntd/cntp/rdvl、零 pattern 立即数 ptrue）；三态编译探针（128/256/无 flag）
+  零告警；历史「VL=256 编译回归」裁定实验污染（H1：整库翻 flag 连 Eigen 定宽 TU 重编
+  的堆损坏被归因 sleef，§11.2）。→ sleef_sve + sve_rot×5 迁入真 VLA 库 `tests_sve_vla`
+  （`-march=armv8.2-a+sve`，无 `-msve-vector-bits`，sve_sanitize_exempt）。
+- **Eigen 撞墙回退（§11.1 (c) 被行使）**：`arm_sve_vector_bits(EIGEN_ARM64_SVE_VL)`
+  定宽 + PacketXcd struct 成员/NumTraits sizeof 语言级死结，两次 spike 独立确证 →
+  gemm/svd 自 pin 回退（test_run 每 worker 首行 `arm64_sve_pin_vl(16)` + 返回值核对 +
+  `arm64_sve_vl_bytes()` fail-closed 守卫；消灭外部 /tmp/vlrun launcher 依赖）。
+- **golden 策略结论（§8 表行兑现）**：sleef = same-kernel golden（init 期同函数算，
+  golden_pass/compute_out 双 noinline 位点规避 SLEEF_CONST CSE）+ 字节级比对 + FNV +
+  三重保真闭环（跨档逐位一致；gem5 向量 vs 标量 worst 0.00 ulp；真硬件标量锚——宿主
+  同一 libsleef.a 标量路径 4 输入集 checksum 与 gem5 向量逐位一致）+ 阴性对照
+  （golden/输入 1-ulp 毒化 → FAILS=1/4，检测链非空转）。eigen = 维持现行 init 期
+  golden + 字节级 memcmp 不变式（§8 军规），pin 编译档 128。
+- **验证口径与边界**：16-run ×2 全绿——**sleef**（12 函数矩阵 × 四档 × {fixed,
+  random×3}）：全部 `SDCSHIELD_FAILS=0`、random 各 seed checksum 互异、四档逐位一致
+  （§12.1 判据）；**sve_rot 家族**（k7pattern 默认几何 × {zero,one,rand,hiham} 四 cell ×
+  四档）：全部 `SDCSHIELD_FAILS=0`、fixed 32 位拆分编码四档 tag dups=0、legacy 16 位
+  阴性对照按 max_byte_off≥65536 精确换算（1024-bit 档 dups=8192、512-bit 档 65528<65536
+  dups=0）——通道 B checksum 档间互异为设计预期（fill 是位置函数），**不主张跨档
+  一致性**，与 sleef 口径不同（gem5-fi findings @ faae123f）；变体几何（k5inter 交错
+  布局 / k3res 驻留几何 / base·rowmajor fill 谱）无独立 kernel 模式，覆盖边界与残留
+  风险按 P3 Ruling 纪律在 P5 计划（2026-10-24-sve-sme-all-vl2-p5.md Task 2）显式点名。
+  128 档锚定（§12.2，§7 回归锚的 P5 形态）：迁移前定宽产物无 gem5 基线
+  （sleef kernel 系 P5 新建，非重构旧 kernel），以真硬件标量锚闭合——强于旧产物比对
+  （闭合 gem5==真硬件，而非新代码==旧代码的模拟器共模）。gem5 SE 不传播 guest 退出码
+  （exit(7) 实证 gem5 进程退 0），FAILS 判定以 kernel stdout 行为准（编排层程序化
+  门禁）。eigen pin 成功路径 gem5 内不可达（prctl → -ENOSYS），以 objdump 机器码核对
+  + gem5 行使诚实 SKIP 路径为等效验证，真机 SVE pin 成功记为未验证边界。
