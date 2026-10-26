@@ -109,8 +109,9 @@ per-thread runtime quantities, while feature bits are process-wide.
 Verification: the `.inst` encodings (rdvl/rdsvl) are derived via
 `as`+`objdump` (recorded in the header comments) and included in every
 aarch64 build — but the instructions only *execute* where the capability
-probes pass, so their runtime verification still awaits an SVE/SME host
-(the probes and SKIP paths do run on this host).
+probes pass, so their runtime verification runs wherever the host has
+SVE/SME (probe the host — CLAUDE.md rule 2; the probes and SKIP paths run
+everywhere).
 Verification boundary, stated honestly: an earlier "validated at all four
 tiers in gem5-fi" claim could not be verified on audit (the referenced
 probe/branch no longer exists locally and no gem5 build is present on
@@ -172,9 +173,9 @@ The vendored Eigen 5.0 SVE backend carries `double`/`complex<double>` packets
 (`PacketXd` in `arch/SVE/PacketMath.h`, `PacketXcd` + `arch/SVE/Complex.h`),
 making `eigen_svd_cdouble_sve` run vectorized SVD (~0.7 s at M_DIM 300 vs
 >10 min scalar). **Runtime-VL rule**: size-specific SVE code requires the
-process vector length to equal the compile-time `-msve-vector-bits`. The
-earlier "this host is VL=256" record was written on the cortex x3b machine;
-the current host (0xd01, Kunpeng 920) has no SVE at all, so the SVD SVE test
-cleanly skips here — on SVE hosts with VL≠128 it needs a
-`prctl(PR_SVE_SET_VL, 16)` pin (see `scripts/eigen-sve-double/` and
-`arm64_sve_pin_vl()`). `sleef_sve` compiles at 128 by design.
+process vector length to equal the compile-time `-msve-vector-bits`.
+Whether a host has SVE at all is per-machine: probe it (CLAUDE.md rule 2)
+instead of assuming — on a host without SVE the SVD SVE test cleanly skips,
+and on SVE hosts with VL≠128 it needs a `prctl(PR_SVE_SET_VL, 16)` pin (see
+`scripts/eigen-sve-double/` and `arm64_sve_pin_vl()`). `sleef_sve` compiles
+at 128 by design.
