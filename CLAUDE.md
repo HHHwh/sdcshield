@@ -22,7 +22,7 @@ routes you; consult it before guessing.
    capability (missing HWCAP/HWCAP2 bit such as SME, an unsupported VL/SVL
    tier, a newer ISA generation), then verifying only the SKIP path is NOT
    sufficient — the change MUST be validated in gem5-fi
-   (`/home/sdc/wangxu/code-review/gem5-fi`, CHAOS/SE, same-source dual kernel under
+   (`/home/sdc/wangxu/operator/gem5-fi`, CHAOS/SE, same-source dual kernel under
    `workloads/sdcshield/`) at the affected VL/SVL tiers, quoting real run
    output (tier, checksum, `SDCSHIELD_FAILS=0`); if gem5 validation is
    genuinely impossible, state that verification boundary honestly instead.
