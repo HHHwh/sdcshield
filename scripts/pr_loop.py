@@ -339,16 +339,26 @@ def bot_of(item: dict) -> Optional[str]:
     return LOGIN_TO_BOT.get((item.get("user") or {}).get("login") or "")
 
 
-def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
-    """commit 锚定: 条目锚定的 commit 匹配当前 head 才计入。
-    sha_keys 按优先级取第一个非空字段(review 用 commit_id;行级评论用
+def _commit_sha_match(item: dict, sha_keys: tuple, head_sha: str,
+                      missing_ok: bool) -> bool:
+    """commit 锚字段比对的单一真源(检视意见 R4-#43): sha_keys 按优先级取
+    第一个非空字段与 head 比对(review 用 commit_id;行级评论用
     original_commit_id——重锚定会改写 commit_id,原值才可靠)。
-    字段缺失时回退 True(时间锚定兜底,不因数据缺字段而丢意见)。"""
+    commit_anchored(字段缺失回退 True)与 commit_strict_match(回退 False)
+    此前是循环体逐行相同、仅缺失回退值不同的孪生函数——sha 优先级逻辑
+    演进只改一处即严格锚/兜底锚取字段口径分叉,故收敛到本函数,回退语义
+    由 missing_ok 参数显式表达。"""
     for key in sha_keys:
         sha = item.get(key)
         if sha:
             return sha == head_sha
-    return True
+    return missing_ok
+
+
+def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
+    """commit 锚定(兜底口径): 条目锚定的 commit 匹配当前 head 才计入。
+    字段缺失时回退 True(时间锚定兜底,不因数据缺字段而丢意见)。"""
+    return _commit_sha_match(item, sha_keys, head_sha, missing_ok=True)
 
 
 # 时钟偏差容差: 条目锚定的 commit 严格匹配当前 head 时,时间锚放宽的下界。
@@ -381,13 +391,10 @@ def anchor_and_skew(push_time: Optional[datetime],
 
 
 def commit_strict_match(item: dict, sha_keys: tuple, head_sha: str) -> bool:
-    """commit 锚严格匹配: 锚定字段存在且 == 当前 head(区别于 commit_anchored
-    的「字段缺失回退 True」——那只是兜底,不能作为放宽时间锚的依据)。"""
-    for key in sha_keys:
-        sha = item.get(key)
-        if sha:
-            return sha == head_sha
-    return False
+    """commit 锚严格匹配(严格口径): 锚定字段存在且 == 当前 head(区别于
+    commit_anchored 的「字段缺失回退 True」——那只是兜底,不能作为放宽
+    时间锚的依据)。字段缺失回退 False。"""
+    return _commit_sha_match(item, sha_keys, head_sha, missing_ok=False)
 
 
 def head_anchored(item: dict, ts_key: str, anchor: datetime,
