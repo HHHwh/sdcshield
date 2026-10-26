@@ -138,7 +138,7 @@ SME(Armv9.2-A 引入)在 SVE 之上增加**矩阵引擎**,核心组件与各自�
 
 | 硅片 | 核/微架构 | SVE | SVE2 | SME/SME2 | 实现向量长度 | HWCAP 暴露要求 |
 |---|---|---|---|---|---|---|
-| **Kunpeng 920(本机,0xd01)** | TaiShan v110(ARMv8.2) | ✗(NEON only) | ✗ | ✗ | 128b NEON | —(实测 /proc/cpuinfo 无 sve) |
+| **Kunpeng 920(当次实测机,0xd01)** | TaiShan v110(ARMv8.2) | ✗(NEON only) | ✗ | ✗ | 128b NEON | —(实测 /proc/cpuinfo 无 sve) |
 | **cn23154 目标机(HiSilicon 0xd22)** | 未公开 TaiShan 核,ARMv9 | ✓ | ✓ 全集(sveaes/sha3/sm4) | **硬件有 SME+SME2**(SMFR0 实测 f64f64/b16f32/f32f32/i8i32=1, fa64=0;f16f32 未见) | **SVE 512-bit(VL=64B)** | SVE2 位 5.10 内核已暴露;**SME 位需 ≥5.19 内核——5.10 不暴露(关键,见 §5)** |
 | AWS Graviton3 | Neoverse V1 | ✓ | ✗(SVE1) | ✗ | 256-bit | 内核 ≥5.10 |
 | AWS Graviton4 | Neoverse V2 | ✓ | ✓ | ✗(公开资料无 SME) | 256-bit | 同上 |
