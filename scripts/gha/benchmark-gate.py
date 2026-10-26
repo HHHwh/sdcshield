@@ -16,15 +16,43 @@
 #
 # 用法: benchmark-gate.py {verify|trend} <benchmark.tsv>
 #   verify 角色: ok=0(采集整体废掉)或 fail>0 → ::error:: + exit 1;
-#               skip>0 → ::warning:: 点名(数据点缺失, 可观测不红)
+#               skip>0 → ::warning:: 点名(数据点缺失, 可观测不红);
+#               行完备性:BENCH_TESTS(从 benchmark.sh 解析, 单一权威)中任一
+#               测试无行 → ::error:: + exit 1——benchmark.sh 无 set -e 且
+#               printf 写入错误不检查, 磁盘写满/截断可留下「有 ok 行但缺行」
+#               的 TSV 且 exit 0, 闸门是行完备性的最后防线
 #   trend  角色: ok=0 → ::warning:: + exit 1(不产 JSON、不更新 gh-pages);
-#               ok>0 → exit 0(fail/skip 行不进 JSON, 数据点缺失由 verify 报)
+#               ok>0 → exit 0(fail/skip 行不进 JSON, 数据点缺失由 verify 报;
+#               行完备性报警同样归 verify——缺行只意味着当日无新数据点,
+#               已发布的历史点不受影响, trend 不越位)
 # TSV 缺失/不可读: 两角色都按「无数据」处理(verify 红 / trend 不发布), 打
 # ::warning:: 说明原因, 不抛异常不红趋势 job(趋势更新非闸门)。
 #
 # SPDX-License-Identifier: Apache-2.0
 import math
+import re
 import sys
+from pathlib import Path
+
+
+def expected_tests():
+    """TSV 行完备性的期望名单:从同目录 benchmark.sh 的 BENCH_TESTS 数组解析。
+
+    名单从 producer 本体解析而非在 gate 里复制第二份——单一权威, 名单演进
+    (加/删基准)自动跟随。解析失败返回 None:此时 benchmark.sh 自身也无法运行
+    (数组语法坏), 采集根本产不出 TSV → ok=0 红, 不存在静默漏洞, 故仅告警
+    跳过完备性校验而不红。
+    """
+    try:
+        text = (Path(__file__).resolve().parent / "benchmark.sh").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"^BENCH_TESTS=\((.*?)^\)", text, re.S | re.M)
+    if not m:
+        return None
+    # bash 数组字面量:空白分隔;行尾续行符 \<newline> 先归一为空白
+    names = m.group(1).replace("\\\n", " ").split()
+    return names or None
 
 
 def classify(path):
@@ -82,8 +110,19 @@ def main():
                   "——在列但未产出可用数据, 现场见 benchmark.log 与 artifact 的 "
                   "benchmark/<test>.yaml|.log")
             rc = 1
+        expected = expected_tests()
+        if expected is None:
+            print("::warning::benchmark-gate: cannot parse BENCH_TESTS from benchmark.sh"
+                  " — TSV 行完备性校验跳过(状态分类判定不受影响)")
+        else:
+            present = set(ok) | set(skips) | set(fails)
+            missing = [t for t in expected if t not in present]
+            if missing:
+                print(f"::error::benchmark.tsv 缺 {len(missing)} 行(预期在列但无记录): "
+                      f"{' '.join(missing)}——producer 写入失败/截断, 数据点无声丢失")
+                rc = 1
         if skips:
-            print(f"::warning::benchmark 无数据点 {len(skips)} 行(缺席或运行时跳过): "
+            print(f"::warning::benchmark 无数据点 {len(skips)} 行(运行时跳过): "
                   f"{' '.join(skips)}——对应趋势数据点将缺失")
         sys.exit(rc)
     # trend 角色:消费侧拦截, 不产 JSON 不 push;报警归 verify 侧, 不重复红
