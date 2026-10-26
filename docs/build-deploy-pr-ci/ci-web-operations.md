@@ -64,3 +64,11 @@ nightly 跑完后 `benchmark-trend` job 自动维护 gh-pages 分支;
   PR #292 三轮检视实证);`.gitleaks.toml` 的版本特定论断
   (regexTarget 缺省=secret、无 targetRules)均锚定 8.24.3。升级版本:
   同步改 env + 重验 `.gitleaks.toml` 不变式 + 重跑豁免探针。
+- gitleaks 豁免安全不变式由 `scripts/gitleaks_allowlist_probe.py`
+  在 CI(gitleaks job,先于 gitleaks-action)每次运行机械强制:形态层
+  (useDefault 保留、豁免正则整值锚定无分支)+ 行为层(固定样本集双态:
+  公开向量整值含大小写两形必须豁免,前拼/内嵌向量片段的逃逸凭据与无关
+  对照必须仍检出)。改动 `.gitleaks.toml` 后本地自验:
+  `python3 scripts/gitleaks_allowlist_probe.py --gitleaks <8.24.3 二进制>`。
+  背景:PR 口径扫描只扫 PR 自身 commits,历史误报与逃逸形态不在扫描集,
+  不变式曾可全绿违反(PR #292 三轮检视实证),探针把其变为可证伪。
