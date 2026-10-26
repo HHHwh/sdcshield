@@ -29,9 +29,9 @@ python3 scripts/pr_loop.py status  # 3) 总览 open PR 与五 bot 完成度
 
 | 阶段 | 动作 | 产出 |
 | --- | --- | --- |
-| 1 现状总览 | `status`（全部 open PR）/ `status <PR>`（单 PR 详情） | head SHA、五 bot 完成度、意见数、建议动作（按状态路由） |
+| 1 现状总览 | `status`（全部 open PR）/ `status <PR>`（单 PR 详情） | head SHA、五 bot 完成度、意见数（总览行含超带 pending「(+M 超带)」提示）、建议动作（按状态路由） |
 | 2 等待五 bot | `wait <PR>` 阻塞轮询（默认 timeout 7200 / interval 60 / quiet 900）；进入轮询前先 `ensure_local_review` 触发第 5 bot（同 head 幂等，失败仅告警降级、继续轮询） | 完成 → 五 bot 时间线（exit 0）；超时 → 逐 bot 报告缺失者（exit 1），可复跑 |
-| 3 导出意见 | `collect <PR> -o /tmp/pr<N>-review.md` | 结构化 Markdown：四类意见源（reviews / 行级评论 / PR 评论 / check runs + annotations）按时间排序，含五 bot 意见，头部防注入横幅，旧意见标「历史轮次」 |
+| 3 导出意见 | `collect <PR> -o /tmp/pr<N>-review.md` | 结构化 Markdown：四类意见源（reviews / 行级评论 / PR 评论 / check runs + annotations）按时间排序，含五 bot 意见，头部防注入横幅，旧意见标「历史轮次」、超容差待处置意见标「当前 head(超容差待处置)」 |
 | 4 subagent 处置修复 | 范围按用户指令绑定：指定 PR 时只处置该 PR；「全部 open PR」时逐 PR 派**上下文隔离 subagent**（提示词见命令文件）；处置后 `reply <PR> -f <处置结果.json>` 逐条闭环答复 | 逐条批判性处置（采纳/变通/驳回，驳回须实证）→ 修复 → 验证 → `-s` 提交 push → 逐条答复（采纳带 SHA、驳回带实证、漏答报错） |
 | 5 循环 | 新 head 自动触发新一轮检视 → 回到阶段 2，直到 `READY_TO_MERGE` | 每轮闭环记录；建议 4 轮上限转人工 |
 | 6 人工 merge 提醒 | 向用户报告 PR 链接与状态摘要 | **由人执行 merge；工具绝不自动 merge、不自动 resolve review threads** |
@@ -82,7 +82,8 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   校验——采纳缺修复 SHA / 驳回缺实证抛 `GhError` 拒绝答复；完整性校验——答复前先
   `fetch_pr` 拉当前 head 的真实待处置意见集，与处置 JSON 做双向集合差（行级意见按
   `(path, line, id)` 三元组精确比对；body 意见按条数比对，覆盖五 bot 的 reviews body
-  findings + 待处置 issue 评论 + check annotations 的 failure/warning 级），漏答 / 多答
+  findings + 待处置 issue 评论 + check annotations 的 failure/warning 级 + 超容差
+  待处置（pending）意见——锚定口径与计数一致：计入或超容差严格锚命中），漏答 / 多答
   / id 错绑 / body 条数不符分别抛 `GhError`（闭环必须逐条答复，见反目标 3）。
 - **五 bot 判据**：前四 bot 与 [bot-coverage.yml](../../.github/workflows/bot-coverage.yml) 一致
   （同步维护）——codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]`
@@ -111,7 +112,14 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   `QUIET_WINDOW`（五 bot 完成但最新信号距今 < quiet）/ `READY_TO_FIX`（完成 + 过静默窗
   + 有待处置意见或数据不完整）/ `READY_TO_MERGE`（完成 + 过静默窗 + 零意见）。
   annotations 拉取失败时数据不完整，不给 `READY_TO_MERGE`（诚实性：无法确认「零意见」
-  时不提示合并），转 `READY_TO_FIX` 由人工复核。
+  时不提示合并），转 `READY_TO_FIX` 由人工复核；**超容差疑似误杀的可行动意见**
+  （`pending_skew_opinions`：严格锚定当前 head、却落在锚前 >容差 被时间锚排除的
+  可行动意见，判据与意见计数完全同口径、仅锚定分支不同）同理阻断 `READY_TO_MERGE`
+  ——不因超带静默丢意见后误判「零意见可合并」。此类意见按可处置闭环：collect 明细
+  标「当前 head(超容差待处置)」、纳入 reply 完整性校验的真实意见集（处置与答复
+  口径同常规意见——采纳修复 push 新 head 后锚点随 head 移动 pending 自然清零；纯
+  驳回轮次 head 不变则维持阻断，按阶段 5 四轮上限转人工）；status 总览行以
+  「意见 N(+M 超带)」提示，单 PR 详情/wait/collect 均有告警行，各出口均提示。
 - **双锚定（防误判）**：review / 评论类信号须 `submitted_at`/`created_at` ≥ 当前 head
   的 **push 时间**（仓库 events 的 PushEvent `created_at`——本地 commit 与 push 之间
   存在窗口期，窗口内旧 head 的意见会被 committer date 锚误计入；events API 只保留
@@ -122,7 +130,21 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   review-state JSON 的 `last_run.head_sha` 均须匹配当前 head（字段缺失/解析失败回退
   时间锚定）。PR(issue)评论仅时间锚：无 commit 绑定字段，timeline 的 `committed`
   事件无 `created_at` 字段、`head_ref_force_pushed` 仅 force push 产生（均实证）——
-  PushEvent 的 push 时间是可作下界的最强锚定。check-run 信号须 `head_sha` 精确等于
+  PushEvent 的 push 时间是可作下界的最强锚定。时钟偏差容差（±300s）**仅限回退锚**：
+  push 时间可得时（PushEvent `created_at` 与条目时间同属 GitHub 服务器钟，无本机偏差
+  可言），时间锚保持严格——防同 SHA 强推回退（意见#22 先例）；仅回退 committer
+  date（本机钟盖戳，可快/慢于服务器约 1 分钟，2026-10-24 九个 open PR 实证）时，
+  commit 锚**严格匹配**（锚定字段存在且 `== head`，字段缺失不算）的条目在锚前
+  300s 内仍计入。pr-agent 检视评论是 PR(issue)评论的唯一例外：回退锚容差窗口内仅
+  `last_run.head_sha` 严格命中者计入；无 commit 绑定字段的其余 issue 评论不放宽
+  （放宽须以「可证属于当前 head」为前提）。严格锚命中却落在锚前 **>容差** 的条目
+  （时钟超带或同 SHA 强推回退）只剩两种解释：记入 `skew_suspects` 诊断（status
+  总览/详情/wait/collect 告警行），其中**可行动意见**（判据与意见计数同口径）
+  另计入 `pending_skew_opinions` 阻断 `READY_TO_MERGE`，并在 collect 明细标
+  「当前 head(超容差待处置)」、纳入 reply 完整性校验（处置/答复口径同常规意见）；
+  锚定推导（push 锚严格 / 回退锚放宽 300s）由 `anchor_and_skew()` 单一真源提供，
+  计入/超容差分类（counted, over）由 `classify_anchor()` 单一真源提供
+  （kind→ts_key/sha_keys 映射集中一处）。check-run 信号须 `head_sha` 精确等于
   PR head 且 `status == completed`。
 - **意见计数口径**：双锚定后的**待处置意见**数 = 有正文的 COMMENTED/CHANGES_REQUESTED
   review + 行级评论 + PR 评论 + check annotations。摘要/LGTM 类不计：APPROVED/
@@ -133,6 +155,11 @@ python3 scripts/pr_loop.py selftest                             # 离线自检(�
   全量含 notice 级）。annotations 拉取失败时如实提示「计数可能低估」，不假报。
 - **collect 全量导出**：意见明细不因「摘要/计数排除」而丢弃——摘要/报告类条目标注
   「未计入待处置意见数」，锚定不符的条目标注「非当前 head」，由 subagent 通读甄别。
+  「当前 head / 历史轮次」标注**直接复用计入判定的锚定结果**（`classify_anchor` 的
+  counted 分支，与意见计数同源）——容差窗口内被计数排除的条目（无严格锚 /
+  锚不命中 / pr-agent 显式错误 `last_run.head_sha`）标「历史轮次」，杜绝导出与计数
+  两口径分叉导致的重复处置；超容差待处置意见（pending，阻断合并）标
+  「当前 head(超容差待处置)」，不被「勿重复处置」豁免（否则闭环停在不动点）。
   check-run 的 `output.summary`/`output.text` 一并导出（标注为不可信检视数据）。
 - **范围**：只处理同仓库分支的 PR；fork / draft 如实标注跳过。
 
