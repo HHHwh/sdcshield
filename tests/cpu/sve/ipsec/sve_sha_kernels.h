@@ -46,6 +46,13 @@
 #define SVE_SHA_STREAMS_MAX_32 32   /* svcntw() at VL=1024-bit */
 #define SVE_SHA_STREAMS_MAX_64 16   /* svcntd() at VL=1024-bit */
 
+/* CONTRACT (PR #294 review round 2): the kernels below svst1 full-width
+   (svptrue) into [..][SVE_SHA_STREAMS_MAX_*] arrays — callers MUST gate
+   the runtime VL to <= 1024-bit (svcntw() <= 32 / svcntd() <= 16). The
+   HMAC layer (sve_hmac.h) enforces this with a return -1 stream-count
+   capacity guard alongside its key_len/padded guards; direct kernel
+   reusers must apply the equivalent gate (see the standalone verifier). */
+
 /* ================= SHA-256 family (SHA-224/SHA-256), 8×32-bit lanes ================= */
 
 static const uint32_t sha256_k[64] = {
