@@ -22,7 +22,9 @@
 #               行完备性:BENCH_TESTS(从 benchmark.sh 解析, 单一权威)中任一
 #               测试无行 → ::error:: + exit 1——benchmark.sh 无 set -e 且
 #               printf 写入错误不检查, 磁盘写满/截断可留下「有 ok 行但缺行」
-#               的 TSV 且 exit 0, 闸门是行完备性的最后防线
+#               的 TSV 且 exit 0, 闸门是行完备性的最后防线;BENCH_TESTS 解析
+#               失败(数组改名等契约漂移, producer 可正常运行)同样红——
+#               防线不静默失效
 #   trend  角色: ok=0 → ::warning:: + exit 1(不产 JSON、不更新 gh-pages);
 #               ok>0 → exit 0(fail/skip 行不进 JSON, 数据点缺失由 verify 报;
 #               行完备性报警同样归 verify——缺行只意味着当日无新数据点,
@@ -49,9 +51,12 @@ def expected_tests():
     """TSV 行完备性的期望名单:从同目录 benchmark.sh 的 BENCH_TESTS 数组解析。
 
     名单从 producer 本体解析而非在 gate 里复制第二份——单一权威, 名单演进
-    (加/删基准)自动跟随。解析失败返回 None:此时 benchmark.sh 自身也无法运行
-    (数组语法坏), 采集根本产不出 TSV → ok=0 红, 不存在静默漏洞, 故仅告警
-    跳过完备性校验而不红。
+    (加/删基准)自动跟随。解析失败返回 None:这是 gate 与 producer 的名单
+    契约漂移——如数组改名(BENCHMARK_TESTS=(...))且定义/引用同步改,
+    benchmark.sh 照常运行并产出合法 TSV(实测复现), 行完备性防线就此
+    静默失效;原「benchmark.sh 自身也无法运行(数组语法坏), 不存在静默
+    漏洞」的降级论证不成立。verify 角色对 None 按红处理(强制同步解析,
+    与表头契约同款), 由调用方打 ::error::。
     """
     try:
         text = (Path(__file__).resolve().parent / "benchmark.sh").read_text(encoding="utf-8")
@@ -156,8 +161,10 @@ def main():
                 rc = 1
             expected = expected_tests()
             if expected is None:
-                print("::warning::benchmark-gate: cannot parse BENCH_TESTS from benchmark.sh"
-                      " — TSV 行完备性校验跳过(状态分类判定不受影响)")
+                print("::error::benchmark-gate: cannot parse BENCH_TESTS from benchmark.sh"
+                      " — 行完备性校验无法进行, gate 与 producer 的名单契约漂移"
+                      "(数组改名/书写演进), 须同步本脚本的解析正则")
+                rc = 1
             else:
                 present = set(ok) | set(skips) | set(fails)
                 missing = [t for t in expected if t not in present]
