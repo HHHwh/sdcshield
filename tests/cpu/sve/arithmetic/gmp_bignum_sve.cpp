@@ -41,10 +41,12 @@ struct TestData {
 #ifdef __aarch64__
 /* SVE 512-bit 乘: 学校园算法 — 每 (i,j) 词对 64x64->128 部分积,
  * 低半 svmul (真 SVE 乘法), 高半 __int128 折叠 (SVE1 无 svmulh),
- * 累加用逐字加进位。 */
-static void sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *out_lo) {
+ * 累加用逐字加进位。返回 true = 每个 SVE 低半积都与 __int128 参考的
+ * 低半逐项一致 (per-lane 校验, PR #294 检视 round 2)。 */
+static bool sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *out_lo) {
     uint64_t acc[NUM_WORDS * 2];
     memset(acc, 0, sizeof(acc));
+    bool sve_ok = true;
 
     for (int i = 0; i < NUM_WORDS; ++i) {
         /* a[i] 广播后与 b 分块 svmul —— 谓词 svwhilelt 限定在 NUM_WORDS
@@ -62,10 +64,14 @@ static void sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *ou
         uint64_t carry = 0;
         for (int j = 0; j < NUM_WORDS; ++j) {
             unsigned __int128 prod = (unsigned __int128)a[i] * b[j];   /* 高半折叠 */
-            /* acc[i+j] += low(SVE 积) + carry; carry = high + 溢出。
-             * SVE 低半积直接参与累加 —— 原版 (void)lo 把它丢弃, SVE
-             * 乘法从不影响输出 (乘法器 SDC 不可检); 健康硬件上
-             * lo_row[j] == (uint64_t)prod, 结果逐位不变。 */
+            /* per-lane 独立比对 (PR #294 检视 round 2): SVE 积进入累加器
+             * 前逐项对 __int128 低半积校验 —— i+j >= NUM_WORDS 的积
+             * (28/64 词对) 只进高位结果字, out_lo 的 8 字 memcmp 观察
+             * 不到这些乘法的错误 (乘法器盲区); 健康硬件上
+             * lo_row[j] == (uint64_t)prod 恒成立, 累加结果逐位不变。 */
+            if (lo_row[j] != (uint64_t)prod)
+                sve_ok = false;
+            /* acc[i+j] += low(SVE 积) + carry; carry = high + 溢出。 */
             unsigned __int128 s = (unsigned __int128)acc[i + j] + lo_row[j] + carry;
             acc[i + j] = (uint64_t)s;
             carry = (uint64_t)(prod >> 64) + (uint64_t)(s >> 64);
@@ -73,6 +79,7 @@ static void sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *ou
         acc[i + NUM_WORDS] += carry;
     }
     memcpy(out_lo, acc, NUM_WORDS * sizeof(uint64_t));
+    return sve_ok;
 }
 
 /* __int128 学校园 golden (init 用, 与 SVE 实现独立交叉核对) */
@@ -122,10 +129,12 @@ static int gmp_bignum_sve_init(struct test *test) {
     /* golden: 软件参考 (与 SVE 实现独立交叉核对) */
     sw_bigint_mul512(data->a_words.data(), data->b_words.data(),
                      data->golden_product.data());
-    /* 交叉核对: SVE 实现首跑必须与 golden 一致 (实现错在 init 就暴露) */
+    /* 交叉核对: SVE 实现首跑必须与 golden 一致 (实现错在 init 就暴露)。
+     * per-lane 校验一并纳入 (SVE 积 vs __int128 逐项不符同样算
+     * self-check 失败 —— 该硬件上的乘法器可疑, 不进入 run)。 */
     uint64_t check[NUM_WORDS];
-    sve_bigint_mul512(data->a_words.data(), data->b_words.data(), check);
-    if (memcmp(check, data->golden_product.data(), NUM_WORDS * sizeof(uint64_t)) != 0) {
+    if (!sve_bigint_mul512(data->a_words.data(), data->b_words.data(), check) ||
+        memcmp(check, data->golden_product.data(), NUM_WORDS * sizeof(uint64_t)) != 0) {
         log_skip(TestResourceIssueSkipCategory,
                  "gmp_bignum_sve: SVE mul512 self-check failed in init");
         delete data;
@@ -147,7 +156,24 @@ static int gmp_bignum_sve_run(struct test *test, int cpu) {
     uint64_t product[NUM_WORDS];
 
     do {
-        sve_bigint_mul512(data->a_words.data(), data->b_words.data(), product);
+        /* per-lane 通道先行 (PR #294 检视 round 2): 每个乘法在进入
+         * 累加器前已对 __int128 参考逐项校验, 覆盖 memcmp 观察不到的
+         * i+j >= NUM_WORDS 词对; report_fail 中止线程。 */
+        const bool sve_lanes_ok =
+            sve_bigint_mul512(data->a_words.data(), data->b_words.data(), product);
+        if (!sve_lanes_ok) {
+            char msg[200];
+            snprintf(msg, sizeof(msg),
+                     "gmp_bignum_sve (SVE): svmul low-half lane mismatch vs "
+                     "__int128 reference on CPU %d (per-lane check)", cpu);
+            log_data("gmp_bignum_sve a (8 words)",
+                     data->a_words.data(), NUM_WORDS * sizeof(uint64_t));
+            log_data("gmp_bignum_sve b (8 words)",
+                     data->b_words.data(), NUM_WORDS * sizeof(uint64_t));
+            log_data("gmp_bignum_sve product (SVE svmul, 8 words)",
+                     product, NUM_WORDS * sizeof(uint64_t));
+            report_fail_msg("%s", msg);
+        }
 
         bool data_ok = (memcmp(product, data->golden_product.data(),
                                NUM_WORDS * sizeof(uint64_t)) == 0);
