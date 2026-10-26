@@ -19,6 +19,8 @@
 #include <boost/type_traits/is_complex.hpp>
 #include <Eigen/Eigenvalues>
 
+#include <cstdint>
+
 namespace {
 /* EigenSVDTest<SVD, Dim>: golden-value SVD test template.
  *
@@ -70,12 +72,39 @@ template <typename SVD, int Dim> struct EigenSVDTest
             calibrated = sdc_calibrated_dim(
                 lo, mem_dim, kMaxSingleSolveMs, test->id, "mdim", 3.0,
                 [](int n) {
-                /* deterministic fill — timing probe only, no RNG dependency */
+                /* deterministic hash fill — timing probe only, no RNG
+                 * dependency. 谱系契约(检视 #51): probe 填充必须与 run()
+                 * 的 fill_matrix_random 同谱系(满秩随机 [-1,1))——旧
+                 * (r*31+c*17)%13 条纹阵是 13×13 模式的周期平铺, 秩 ≤13
+                 * (实测 512² rank=12), BDCSVD/JacobiSVD 对零尾奇异值走
+                 * deflation/快收敛路径, probe 系统性低估真实求解
+                 * (2026-10-26 鲲鹏 920 -O3 实测 probe/random 比值:
+                 * BDCSVD<double> 0.25~0.54×、Jacobi<double> 0.15~0.46×
+                 * 且随维度恶化、BDCSVD<complex> 0.47~0.70×; 对照
+                 * eigen_sparse 侧同谱系 probe 实测 0.95×)。splitmix 散列
+                 * [-1,1)(complex 独立 re/im)与随机阵同谱系, 校准计时
+                 * 口径与 run 期单解一致。改这里的值域/结构必须与
+                 * fill_matrix_random 同步演化。 */
                 Mat m(n, n);
+                using Scalar = typename Mat::Scalar;
                 for (int r = 0; r < n; ++r)
-                    for (int c = 0; c < n; ++c)
-                        m(r, c) = (typename Mat::Scalar)(((r * 31 + c * 17) % 13) - 6)
-                                  / (typename Mat::Scalar)7;
+                    for (int c = 0; c < n; ++c) {
+                        std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
+                                        ^ (std::uint64_t)c * 0xC2B2AE3D27D4EB4Full;
+                        h ^= h >> 32;
+                        h *= 0xD6E8FEB86659FD93ull;
+                        h ^= h >> 32;
+                        if constexpr (boost::is_complex<Scalar>::value) {
+                            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
+                                             + 0x9E3779B97F4A7C15ull;
+                            h2 ^= h2 >> 32;
+                            m(r, c) = Scalar(
+                                (typename Scalar::value_type)((double)(h % 2000u) / 1000.0 - 1.0),
+                                (typename Scalar::value_type)((double)(h2 % 2000u) / 1000.0 - 1.0));
+                        } else {
+                            m(r, c) = (Scalar)((double)(h % 2000u) / 1000.0 - 1.0);
+                        }
+                    }
                 Mat u, v;
                 calculate_once(m, u, v);
             });
