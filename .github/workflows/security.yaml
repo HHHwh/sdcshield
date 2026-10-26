@@ -32,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Run zizmor
-        # 上游最高 tag 只有 v0.6.4,无 v1(写 v1 会 action 解析失败)
+        # 上游全程 0.x 系列无 v1 tag(写 v1 会 action 解析失败),须 pin 具体版本
         uses: zizmorcore/zizmor-action@v0.7.1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
