@@ -52,6 +52,7 @@ struct Arm0102KregSelectSveData {
     uint32_t *srcB;
     uint32_t *expected;
     int count;                /* 运行时元素数 (≤64M, int 足够) */
+    int lanes;               /* init 期 f32 lanes (svl/4) — run 侧漂移守卫基准 */
 };
 
 #if defined(__aarch64__)
@@ -129,6 +130,7 @@ static int arm0102_kreg_select_sve_init(struct test *test) {
      * (VL=128 -> 4112, VL=256 -> 4128 违规; VL=512 -> 4160 恰为倍数),
      * 违规时原生 aligned_alloc 违反 C11 size 倍数前提, 新 libasan abort (issue #252) */
     data->count = count;
+    data->lanes = lanes;   /* run 侧以 svcntw() 复读核对 (漂移守卫, round 3 #49 同款) */
     data->srcA = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->srcB = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
     data->expected = static_cast<uint32_t *>(aligned_alloc_safe(64, total));
@@ -174,6 +176,17 @@ static int arm0102_kreg_select_sve_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<Arm0102KregSelectSveData *>(test->data);
     const int count = data->count;
+
+    /* All-VL policy #3 (PR #294 检视 round 4, 发现 #49 传播): fail closed on
+     * init/run VL drift — golden 的旋转相位按 init lanes 步进预计算
+     * ((base+sub)/KSEL_SVE_SUBLANES), 而下面的批循环步进用运行时
+     * svcntw(); 漂移即相位错位报假 SDC, 且全宽 ldr z 尾批越过按 init
+     * lanes 定容的 srcA/srcB slack。以复读比对把漂移本身报出来。 */
+    if ((int)svcntw() != data->lanes) {
+        log_error("%s: SVE VL drifted between init (lanes=%d) and run (svcntw()=%d)",
+                  test->id, data->lanes, (int)svcntw());
+        report_fail_msg("%s: SVE VL drifted between init and run", test->id);
+    }
 
     uint32_t *temp = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));
     uint32_t *dst  = static_cast<uint32_t *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(uint32_t)));

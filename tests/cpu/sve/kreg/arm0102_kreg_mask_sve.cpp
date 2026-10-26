@@ -39,6 +39,9 @@ struct Arm0102KregMaskSveData {
     uint32_t *srcB;
     uint32_t *expected;
     int count;                /* 运行时元素数 (≤64M, int 足够) */
+    int lanes;                /* init 期 f32 lanes (SVL bytes/4): run 侧以
+                               * svcntw() 复读核对, 漂移则 fail-closed
+                               * (PR #294 检视 round 4 发现 #49) */
 };
 
 #if defined(__aarch64__)
@@ -123,6 +126,7 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
                   test->id, lanes, svl);
         return EXIT_FAILURE;
     }
+    data->lanes = lanes;   /* run 侧以 svcntw() 复读核对 (漂移守卫) */
     /* 尾批 asm 全宽读松弛 = lanes (kreg_logic 同款, a6f753ce): run 侧
      * ldr z 按 svcntb() 全宽载, 最末子块最多读到 (count-1)+svcntw()
      * 个元素, slack=lanes 严格充分 (任意 VL)。aligned_alloc_safe 为
@@ -168,6 +172,16 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
 static int arm0102_kreg_mask_sve_run(struct test *test, int cpu) {
     auto *data = static_cast<Arm0102KregMaskSveData *>(test->data);
     const int count = data->count;
+
+    /* 漂移 fail-closed (all-VL policy #3; PR #294 检视 round 4 发现 #49):
+     * golden 的旋转相位按 init lanes 预计算 ((base+sub)/KREG_SVE_SUBLANES),
+     * 下面的批循环步进却用运行时 svcntw() —— 两者在 VL 漂移时不再同构。
+     * 以 svcntw() 复读核对, 不一致即报错退出而非静默比错。 */
+    if ((int)svcntw() != data->lanes) {
+        log_error("%s: SVE VL drifted between init (lanes=%d) and run "
+                  "(svcntw()=%d)", test->id, data->lanes, (int)svcntw());
+        report_fail_msg("%s: SVE VL drifted between init and run", test->id);
+    }
 
     /* run 侧 temp/dst 同享尾批松弛: load_vec_sve 的 asm ldr z 全宽读
      * 最末子块, (count + svcntw()) 与 init 的 total 同界 (kreg_logic 同款)。 */
