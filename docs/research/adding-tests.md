@@ -153,7 +153,7 @@ ARM NEON/CRC/Crypto/inline-asm 专属？
      （整个子目录只在 aarch64 进构建，x86 完全不编）
 需要 SVE（<arm_sve.h> / svmla_*）？
   → tests/cpu/arm64/ 源文件 + 加进 tests_arm64_sve 库（+sve march）
-     且 init 里必须 arm64_require_sve_vl()，负返回值即 EXIT_SKIP（本机 0xd01 无 SVE）
+     且 init 里必须 arm64_require_sve_vl()，负返回值即 EXIT_SKIP（本机是否有 SVE 须现场探测，见 CLAUDE.md 第 2 条——不要照抄任何写死的 part 号）
 依赖 Eigen 且要 SVE 后端？
   → tests_set_sve（EigenSVE 命名空间隔离）
 系统级/架构无关跨设备（mce_check, smi_count 类）

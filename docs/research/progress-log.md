@@ -5,6 +5,38 @@
 
 ---
 
+## 2026-10-26（会话：主机向量能力「先探测、不假设」规则化）
+
+### 结论（本机实测）
+
+- 当前工作机 MIDR `0x480fd020` = HiSilicon impl `0x48` / part **`0xd02`** / rev 0：
+  **有 SVE**，默认 **VL=256-bit**（`prctl(PR_SVE_GET_VL)`=32B；`rdvl #1`=32B 真执行），
+  可 pin 到 128-bit（`SET_VL 16B→回读 16B`；≥64B 一律钳到 32B）。
+- **无 SVE2**：HWCAP2_SVE2=0；`smulh z.b` / `sqrshl p/m` / `bdep` / `bext` 实测 SIGILL。
+- **有** SVE 矩阵扩展（Armv8.6 族）：`smmla`/`ummla`/`bfdot`/`bfmmla`/`fmmla(z.s)`/`fmmla(z.d)`
+  实测可执行。⇒ 该核是「SVE1 + 矩阵扩展、无 SVE2」的组合，不是 Armv9。
+- **SME 软件不可见**：HWCAP2_SME=0、`SMSTART`/`mrs smidr_el1` SIGILL、内核
+  `CONFIG_ARM64_SME` 未设置（`/proc/sys/abi/` 无 `sme_default_vector_length`）。
+  **诚实边界**：这只证明"内核未启用"；`ID_AA64PFR1_EL1` 读得 `0x20`（SME 字段=0b0000，
+  本世代核疑为 RES0），硬件层面需 `CONFIG_ARM64_SME=y` 内核复测才能定案。
+- **原生 SVE 功能测试可跑**：`-e sve_rot_ldr_at_top -t 2000 -n 1`、`-e sleef_sve` 均 `exit: pass`。
+- 同一台机器上 `nproc`=127（CPU122 隔离下线）、4 个 `thermal_zone`、`cppc_cpufreq` 400M–2.9GHz。
+  ⇒ 旧文档里「本机 96 核 / 无 cpufreq / 无 thermal_zone」记录属**另一批板子**，不是本机。
+
+### 落盘改动（分支 `docs/host-vector-probe-rule`）
+
+- CLAUDE.md 规则 2 → **"Probe the host before assuming anything"**：先测 MIDR/features/在线核数/
+  真实 VL/SME，**本机支持的档位必须原生验证（SKIP-only 不算证据）**，不支持的档位才走 gem5-fi；
+  文件头与平台怪癖节撤掉写死的芯片身份，新增 SME caveat（"软件不可见 ≠ 硬件不存在"）。
+- docs/architecture.md 同步；两份 2026-10-23 快照加更正注记；7 处**活文档**把「本机」改为
+  「当次开发机／须现场探测（CLAUDE.md 第 2 条）」，清除当下时态的设备断言。
+
+### 下一步
+
+- 未做（有意保留）：16 份**日期化快照**按原样保留（记录当时那台机器，非错误）；是否开 PR 由人决定。
+
+---
+
 ## 2026-09-19（会话 3：全量测试随机化加固审计 + P1-P17 方案）
 
 ### 完成内容
@@ -558,7 +590,7 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **P1**(#277,5 commit 含双评审修复轮):arm64_vl.h(能力探测/VL 查询/自 pin/
   require 助手)+ selftest×2 + --dump-cpu-info 输出 + 文档同步
   (architecture/adding-tests/README)。
-- **本机(0xd01 无 SVE)**:~~TDD RED(缺头文件构建失败)→ GREEN [461/461] 0 告警~~
+- **当时本机(0xd01 无 SVE)**:~~TDD RED(缺头文件构建失败)→ GREEN [461/461] 0 告警~~
   【2026-10-23 三 bot 评审修复轮复核:**原 GREEN 声明不可复现,按不实修正**——
   本机 oe2203 kernel-headers(5.10.0-60.139)无 HWCAP2_SME 定义(止于
   HWCAP2_RPRES),PR head 原样源码在本机以 build.sh/compile_commands 命令编译
