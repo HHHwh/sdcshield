@@ -165,9 +165,14 @@ template <typename SVD, int Dim> struct EigenSVDTest
      * "iteration batch" (same-source repeat, fresh operands — the
      * verify property is unchanged, the operand freshness is new).
      * Per-thread matrices also mean no shared state is written after
-     * init, so no cross-thread races. The known multi-thread ULP
-     * flakiness of parallel SVD (CLAUDE.md: use -n 1) is unaffected:
-     * each thread's SVD is unchanged, only its input differs. */
+     * init, so no cross-thread races. Because the golden is also
+     * per-thread and same-source (recomputed on the SAME thread from
+     * the SAME fresh matrix), cross-thread Eigen SIMD/scalar path
+     * divergence (heap-alignment-steered — the old shared-golden
+     * mismatch source) can no longer produce false mismatches: the
+     * multi-thread ULP flakiness this family used to record in
+     * CLAUDE.md is gone (2026-10-24 fix; CLAUDE.md now says run
+     * full-core, `-n 1` only as a cross-check, no longer required). */
     static constexpr int kRerollEvery = 16;
 
     static void fill_matrix_random(Mat &m, int dim)
