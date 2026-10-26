@@ -257,9 +257,16 @@ long arm64_require_sme_svl(struct test *t, long min_bits, long max_bits);
   同一 libsleef.a 标量路径 4 输入集 checksum 与 gem5 向量逐位一致）+ 阴性对照
   （golden/输入 1-ulp 毒化 → FAILS=1/4，检测链非空转）。eigen = 维持现行 init 期
   golden + 字节级 memcmp 不变式（§8 军规），pin 编译档 128。
-- **验证口径与边界**：16-run ×2 全绿（sleef 12 函数矩阵 × 四档；sve_rot 家族四 cell ×
-  四档）——全部 `SDCSHIELD_FAILS=0`、random 各 seed checksum 互异、四档逐位一致
-  （§12.1）。128 档锚定（§12.2，§7 回归锚的 P5 形态）：迁移前定宽产物无 gem5 基线
+- **验证口径与边界**：16-run ×2 全绿——**sleef**（12 函数矩阵 × 四档 × {fixed,
+  random×3}）：全部 `SDCSHIELD_FAILS=0`、random 各 seed checksum 互异、四档逐位一致
+  （§12.1 判据）；**sve_rot 家族**（k7pattern 默认几何 × {zero,one,rand,hiham} 四 cell ×
+  四档）：全部 `SDCSHIELD_FAILS=0`、fixed 32 位拆分编码四档 tag dups=0、legacy 16 位
+  阴性对照按 max_byte_off≥65536 精确换算（1024-bit 档 dups=8192、512-bit 档 65528<65536
+  dups=0）——通道 B checksum 档间互异为设计预期（fill 是位置函数），**不主张跨档
+  一致性**，与 sleef 口径不同（gem5-fi findings @ faae123f）；变体几何（k5inter 交错
+  布局 / k3res 驻留几何 / base·rowmajor fill 谱）无独立 kernel 模式，覆盖边界与残留
+  风险按 P3 Ruling 纪律在 P5 计划（2026-10-24-sve-sme-all-vl2-p5.md Task 2）显式点名。
+  128 档锚定（§12.2，§7 回归锚的 P5 形态）：迁移前定宽产物无 gem5 基线
   （sleef kernel 系 P5 新建，非重构旧 kernel），以真硬件标量锚闭合——强于旧产物比对
   （闭合 gem5==真硬件，而非新代码==旧代码的模拟器共模）。gem5 SE 不传播 guest 退出码
   （exit(7) 实证 gem5 进程退 0），FAILS 判定以 kernel stdout 行为准（编排层程序化
