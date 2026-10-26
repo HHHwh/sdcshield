@@ -1282,6 +1282,36 @@ def test_anchor_and_skew_single_source():
     assert ">0s" in pr_loop.format_skew_warning(pr)
 
 
+def test_pragent_head_accepted_single_source():
+    """意见 R3-#37: pr-agent head 认可判定是 issue_comment_bot(bot 识别)与
+    _collect_entries(导出锚定标注)的单一真源——head 缺失回退时间锚定语义
+    (宽松),显式匹配认可,显式错误 head 两处一致排除(修复前 collect 三行
+    手工复刻该排除语义,属 797d10ef 式复制漂移)。"""
+    head = "e" * 40
+
+    def _comment(head_sha_in_state):
+        body = "<!-- pr-agent:review:full -->\n检视正文\n"
+        if head_sha_in_state is None:
+            body += '<!-- pr-agent-review-state:v1 {"last_run": {}} -->'
+        else:
+            body += ('<!-- pr-agent-review-state:v1 {"last_run": '
+                     '{"head_sha": "' + head_sha_in_state + '"}} -->')
+        return {"user": {"login": "github-actions[bot]"}, "body": body}
+
+    # head 缺失/解析失败 → 认可(回退时间锚定);bot 识别同判
+    assert pr_loop.pragent_head_accepted(_comment(None), head)
+    assert pr_loop.issue_comment_bot(_comment(None), head) == "pr-agent"
+    # 显式匹配当前 head → 认可
+    assert pr_loop.pragent_head_accepted(_comment(head), head)
+    assert pr_loop.issue_comment_bot(_comment(head), head) == "pr-agent"
+    # 显式错误 head → 不认: 计数侧排除(bot 判 None),导出侧同口径标非当前
+    assert not pr_loop.pragent_head_accepted(_comment("f" * 40), head)
+    assert pr_loop.issue_comment_bot(_comment("f" * 40), head) is None
+    # 严格锚对照: head 缺失不构成放宽依据(pragent_strict_head,语义不同)
+    assert not pr_loop.pragent_strict_head(_comment(None), head)
+    assert pr_loop.pragent_strict_head(_comment(head), head)
+
+
 # ---------------------------------------------------------------------------
 # PR #289 第三轮检视闭环(当前 head d3d880c7): pending 意见 collect 可处置化
 # (意见 R2-#30)。#27/#31 的护栏测试见上方 R2-#27 / classify_anchor 用例。

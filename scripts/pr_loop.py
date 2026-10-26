@@ -515,19 +515,31 @@ def pragent_comment_head(item: dict) -> Optional[str]:
     return ((obj.get("last_run") or {}).get("head_sha") or None) if obj else None
 
 
+def pragent_head_accepted(item: dict, head_sha: str) -> bool:
+    """pr-agent 评论的 head 认可判定(单一真源,检视意见 R3-#37):
+    last_run.head_sha 缺失/解析失败(None)→ 认可(回退时间锚定语义——
+    无证据证明属旧 head 时按时间锚走,不丢数据);显式给出 → 须 == 当前
+    head(显式错误 head 不认,排除语义)。issue_comment_bot 的 bot 识别与
+    _collect_entries 的导出锚定标注共用本谓词——计数侧不认的评论导出侧
+    不得标「当前 head」,两侧口径一处演进,杜绝 797d10ef 式复制漂移
+    (手工三行复刻排除语义正是该反模式的新实例)。与 pragent_strict_head
+    的区别: 那是严格锚(head 缺失不认),只作容差窗口的放宽依据。"""
+    head = pragent_comment_head(item)
+    return head is None or head == head_sha
+
+
 def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
     """issue 评论的 bot 判定(信号/计数用):
-    LOGIN_TO_BOT 作者直接命中;pr-agent 须内容标记命中且 last_run.head_sha
-    匹配当前 head(旧 head 的检视不算当前信号;解析失败回退时间锚定语义);
+    LOGIN_TO_BOT 作者直接命中;pr-agent 须内容标记命中且 head 认可判定
+    (pragent_head_accepted: last_run.head_sha 匹配当前 head 或缺失回退,
+    旧 head 的检视不算当前信号;解析失败回退时间锚定语义);
     local-claude 须「作者 wangxumarshall(claude and glm) 且正文含标记」双条件命中(时间锚定,
     无 commit 绑定字段——与 issue 评论总体策略一致)。"""
     bot = bot_of(item)
     if bot is not None:
         return bot
-    if pragent_comment(item):
-        head = pragent_comment_head(item)
-        if head is None or head == head_sha:
-            return "pr-agent"
+    if pragent_comment(item) and pragent_head_accepted(item, head_sha):
+        return "pr-agent"
     if local_claude_comment((item.get("user") or {}).get("login") or "",
                             item.get("body") or ""):
         return "local-claude"
@@ -1441,10 +1453,11 @@ def _collect_entries(pr: PRData) -> list:
         # pr-agent 显式错误 last_run.head_sha: 计数侧 issue_comment_bot 不认
         # (排除语义,pr_loop.py issue_comment_bot),导出标注同口径不标
         # 「当前 head」(检视意见 7);head 缺失/解析失败保持 anchored 原值
-        # (回退时间锚定语义,与计数侧一致)。
-        if (pragent_comment(c)
-                and pragent_comment_head(c) is not None
-                and not pragent_strict_head(c, pr.head_sha)):
+        # (回退时间锚定语义,与计数侧一致)。认可判定与计数侧共用
+        # pragent_head_accepted 单一真源(检视意见 R3-#37——此前此处三行
+        # 手工复刻排除语义,是 anchor_and_skew/classify_anchor 刚根除的
+        # 复制漂移模式的新实例,演进漏改一处即口径分叉)。
+        if pragent_comment(c) and not pragent_head_accepted(c, pr.head_sha):
             anchored = False
         pending = (("issue_comment", c.get("id")) in pr.pending_skew_ids)
         extra = ""
