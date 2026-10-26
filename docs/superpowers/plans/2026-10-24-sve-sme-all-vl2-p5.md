@@ -32,7 +32,7 @@
 ### Task 1: gem5-fi `sleef_vla_dual.c` + 16 run
 
 - [x] kernel：链 `libsleef.a`（sha256 基线钉版见 Global Constraints）；四函数组（Sleef_sindx_u10sve/cosdx/expdx/logdx + u35 二档）；输入 nelems=1024；**same-kernel golden**（init 期同函数算）+ 逐字节比对 + FNV。kernel 输出为 **as-built 两行约定（三轮检视修正）**——stdout = `SDCSHIELD_FAILS=<n>` 独立行 + **裸 16-hex checksum 独立行（无 `checksum=` 字段前缀）**（sleef_vla_dual.c:381-382；家族惯例同 stencil_axis_dual.c:156-157 亦为裸 hex 行——P2 sme_fmopa_za_dual 计划 :229 同是两行约定、但其 checksum 行带 `checksum=` 前缀，旧 grep 即沿自该形态），几何行在 stderr（`sleef_vla_dual: mode=<m> seed=<s> nelems=<n> vl_bytes=<b> svcntd=<d> svcntw=<w>`，无 checksum 字段）——原文「`mode=sleef_vla lanes=N seed=S checksum=<fnv-16hex> SDCSHIELD_FAILS=<n>` 组合单行记录」沿自 P0/P1 vl_api_probe 形态（p0-p1 计划 :737），与 as-built kernel 不符，照它写门禁对真实日志零命中——**每次 gem5 run 只见单档，判据 1（四档 golden 逐位一致）由编排层完成**：run 循环外比对四档同 mode+seed 的 checksum；kernel 内不做跨档断言、不输出 cross-tier-match 类字段（单档进程拿不到其余三档的 golden 缓冲，按字面实现只能伪造比对或空断言）。Makefile 目标注明 libsleef.a 绝对路径依赖。**退出码契约（二轮检视补钉）**：kernel 必须 `return g_fails ? 1 : 0`（dual-kernel 家族惯例，stencil_axis_dual.c:147；as-built sleef_vla_dual.c:383 实装）——且 gem5 SE **不传播 guest 退出码**（exit(7) 实证：gem5 进程退 0，findings 诚实边界条目），故编排层对 FAILS 的门禁只能解析 `SDCSHIELD_FAILS=` 输出行（下方脚本的门禁 1），rc 检查对 kernel FAILS 结构性失明。as-built 规格强于本条：12 函数矩阵（double u10 ×4 + float u10 ×4 + double u35 ×4，u35 无 exp、exp2 为独立链替补）；NELEMS=1028（≡4 mod 32，使 256/512/1024 档尾真正截断）；golden_pass/compute_out 双 noinline 规避 SLEEF_CONST 单函数内 CSE（反汇编实证两函数各含 12 个 SLEEF bl）；另加有限性哨兵 + 阴性对照（golden 1-ulp 毒化→FAILS=1；输入 1-ulp 毒化→FAILS=4 + checksum 变化）与保真闭环（见 Review Focus 2）。
-- [x] 16 run（四档 × {fixed 1, random 1/2/3}）隔离代理；**四档同 seed**——每个 random case 的 xs32 seed 钉定为 {1,2,3}，四档复用同一输入序列，seed 随输出行记录（失败可重放）；命令形态沿 P2 计划闭环版（`tee` 留全档日志、`rc=${PIPESTATUS[0]}` 取 gem5 真实退出码而非管道末 grep 的、overall 汇总）——**初版漏带了 P2 闭环版的 fails_ok 程序化门禁，二轮检视补齐并加两条**（门禁 1 FAILS 行——gem5 SE 不传播 guest 退出码，rc 对 kernel FAILS 失明；门禁 2 记录在场——缺日志/缺记录不得经 `wc -l` 的退出状态静默通过；门禁 3 random 互异——防恒定输出 kernel 的假一致）：
+- [x] 16 run（四档 × {fixed 1, random 1/2/3}）隔离代理；**四档同 seed**——每个 random case 的 xs32 seed 钉定为 {1,2,3}，四档复用同一输入序列，seed 随输出行记录（失败可重放）；命令形态沿 P2 计划闭环版（`tee` 留全档日志、`rc=${PIPESTATUS[0]}` 取 gem5 真实退出码而非管道末 grep 的、overall 汇总）——**四轮检视改分离流**（`>"$LOG" 2>"${LOG%.log}.stderr"` 双档留痕 + `rc=$?` + `cat` 双档过 grep 展示，tee/PIPESTATUS 形态退役：门禁 2 的「FAILS 行下一行」邻接锚在 `2>&1` 合并流里依赖 stdout/stderr 缓冲交错的环境行为，分离后定义域 = 纯 stdout 流、由 kernel 两次连续 printf 的源码结构保证，依据与实证见偏差登记 10）——**初版漏带了 P2 闭环版的 fails_ok 程序化门禁，二轮检视补齐并加两条**（门禁 1 FAILS 行——gem5 SE 不传播 guest 退出码，rc 对 kernel FAILS 失明；门禁 2 记录在场——缺日志/缺记录不得经 `wc -l` 的退出状态静默通过；门禁 3 random 互异——防恒定输出 kernel 的假一致）：
 
 ```bash
 G5=/home/sdc/wangxu/operator/gem5-fi/build/ARM/gem5.opt
@@ -42,9 +42,10 @@ for T in 1 2 4 8; do
     LOG=/tmp/sleef_sve${T}_$(echo $ARGS | tr ' ' '_').log
     timeout 600 $G5 configs/se/arm_chaos.py --cpu O3 \
       --cmd workloads/sdcshield/sleef_vla_dual --sve_vl $T \
-      --workload_args "$ARGS" 2>&1 | tee "$LOG" \
+      --workload_args "$ARGS" >"$LOG" 2>"${LOG%.log}.stderr"
+    rc=$?                    # timeout/gem5 的真实退出码(无管道, 不再需要 PIPESTATUS)
+    cat "$LOG" "${LOG%.log}.stderr" \
       | grep -E 'sleef_vla_dual|SDCSHIELD_FAILS|^[0-9a-f]{16}$'
-    rc=${PIPESTATUS[0]}      # timeout/gem5 的真实退出码,不是 grep 的
     echo "tier=$T args='$ARGS' exit=$rc"
     [ "$rc" -ne 0 ] && overall=1
     # 门禁 1(FAILS 行): gem5 SE 不传播 guest 退出码, kernel FAILS 只能由此行判定
@@ -52,6 +53,9 @@ for T in 1 2 4 8; do
     grep -q '^SDCSHIELD_FAILS=0$' "$LOG" || { overall=1; echo "tier=$T args='$ARGS' FAILS-gate: 行缺失或非 0"; }
     # 门禁 2(记录在场): 每 run 必须产出 FAILS 行 + 紧随的裸 16-hex checksum 行
     # (checksum 无字段前缀——只认 FAILS 行的下一行, 'checksum=' 字面量在真实日志零命中)
+    # (四轮检视: $LOG 已分离为纯 stdout——邻接由 kernel :381-382 两次连续 printf 的
+    #  源码结构保证(guest 仅有的两次 stdout 写, 之间无第三写者), 不再依赖 2>&1 合并
+    #  流的缓冲交错行为; 几何行/mismatch/警告行在 .stderr, 物理上无法插入两行之间)
     awk '/^SDCSHIELD_FAILS=/{if((getline nxt)>0 && nxt ~ /^[0-9a-f]{16}$/)ok=1} END{exit !ok}' "$LOG" \
       || { overall=1; echo "tier=$T args='$ARGS' checksum-gate: 记录缺失"; }
   done
@@ -72,7 +76,7 @@ echo "random-unique-checksums=$nu"     # 期望 3
 exit $overall
 ```
 
-判据（全部程序化，无悬挂文本判据）：每 run `SDCSHIELD_FAILS=0`（门禁 1）且 gem5 exit=0 且 checksum 记录在场（门禁 2）；四档同 mode+seed 的 checksum 逐位一致（判据 1，编排层比对 + 日志在场门禁）；random 各 seed checksum 互异（判据 3，门禁 3）；128 档为回归锚基准（锚定形态见 Review Focus 2 的 as-built 修正）。**Task 1 全绿是 Task 2/3 合并的前置硬门。** as-built 对账（6d740525，16/16）：gem5 进程退出码全 0、`SDCSHIELD_FAILS=0` 全 16 run；fixed_1 四档同值 `0e7d323699e93b79`，random_1/2/3 四档各同值 `d57c395eaedf525e` / `93386fc81537269b` / `b44f6cd4c1e83633`（互异成立）——三条门禁所断言的事实已在执行记录中逐项成立。本轮补强的脚本是**未来重跑**的口径：修脚本不追认旧证据、亦不必为补门禁重跑 16 run（权威证据 = kernel stdout 的 FAILS/checksum 列，P2 先例 Erratum 3 同款）；/tmp 日志易失，持久记录 = gem5-fi findings.md 16-run 表。三轮检视再修：门禁 2/3 与跨档比对原沿 P0/P1 的 `checksum=` 字面前缀，对 as-built 裸 hex 行零命中（照原文执行每 run 会误报 checksum-gate 失败——**误报失败而非假绿**，方向与检视意见所述相反，见偏差登记 7）；已按两行约定改写为「FAILS 行的下一行且为 16-hex」提取，门禁 1 整行锚定与 as-built 形态恰好匹配、保留；修正后门禁逻辑以合成日志（按 kernel 源码 :381-382 格式 + findings 真实 checksum 值构造）正/负用例实测通过。
+判据（全部程序化，无悬挂文本判据）：每 run `SDCSHIELD_FAILS=0`（门禁 1）且 gem5 exit=0 且 checksum 记录在场（门禁 2）；四档同 mode+seed 的 checksum 逐位一致（判据 1，编排层比对 + 日志在场门禁）；random 各 seed checksum 互异（判据 3，门禁 3）；128 档为回归锚基准（锚定形态见 Review Focus 2 的 as-built 修正）。**Task 1 全绿是 Task 2/3 合并的前置硬门。** as-built 对账（6d740525，16/16）：gem5 进程退出码全 0、`SDCSHIELD_FAILS=0` 全 16 run；fixed_1 四档同值 `0e7d323699e93b79`，random_1/2/3 四档各同值 `d57c395eaedf525e` / `93386fc81537269b` / `b44f6cd4c1e83633`（互异成立）——三条门禁所断言的事实已在执行记录中逐项成立。本轮补强的脚本是**未来重跑**的口径：修脚本不追认旧证据、亦不必为补门禁重跑 16 run（权威证据 = kernel stdout 的 FAILS/checksum 列，P2 先例 Erratum 3 同款）；/tmp 日志易失，持久记录 = gem5-fi findings.md 16-run 表。三轮检视再修：门禁 2/3 与跨档比对原沿 P0/P1 的 `checksum=` 字面前缀，对 as-built 裸 hex 行零命中（照原文执行每 run 会误报 checksum-gate 失败——**误报失败而非假绿**，方向与检视意见所述相反，见偏差登记 7）；已按两行约定改写为「FAILS 行的下一行且为 16-hex」提取，门禁 1 整行锚定与 as-built 形态恰好匹配、保留；修正后门禁逻辑以合成日志（按 kernel 源码 :381-382 格式 + findings 真实 checksum 值构造）正/负用例实测通过。四轮检视再修：`2>&1 | tee` 合并流改 stdout/stderr 分离留档（`>"$LOG" 2>"${LOG%.log}.stderr"`）——门禁 2 的邻接锚自此定义在纯 stdout 流上（kernel :381-382 两次连续 printf 是 guest 仅有的 stdout 写，单线程顺序模拟下无第三写者可插入其间），不再依赖合并流缓冲交错的环境行为；两份真实 gem5 合并日志（/tmp/sleef_vla_16run/probe_vl1_fixed.log、poison_vl4_random1.log）回放核验邻接在真实样本成立、且「stderr 行插入两行之间」的坏例在旧合并流形态下可构造误报（分离流免疫）——正/负用例实测见偏差登记 10。
 
 ### Task 2: sdcshield sleef_sve + sve_rot×5 迁移（每文件一 commit）
 
@@ -115,4 +119,5 @@ exit $overall
   7. Task 1 输出格式描述与门禁 grep 沿 P0/P1「组合单行 / `checksum=` 前缀」形态，与 as-built 两行约定（stdout `SDCSHIELD_FAILS=<n>` 行 + 裸 16-hex 行，sleef_vla_dual.c:381-382）失配——门禁 1 整行锚定恰好命中，门禁 2/3 与跨档比对对真实日志零命中（照原文执行会**误报失败**而非假绿）；三轮检视修正格式描述与三条 checksum 提取，见 Task 1。
   8. Task 2 compile_commands 逐 TU 复核原登记为「合并前树重建后可复跑」而未执行（复选框已勾）——三轮检视补执行：#286 迁移树 scratch meson setup 后逐 TU 核验（仅 eigen×2 带定宽 flag、六迁移 TU 全净），见 Task 2。
   9. 「一个家族 kernel 四档实证覆盖全族 / 无未验证边界残留」超出证据支撑，且未按被引先例（P3 计划 :169 Ruling）的纪律显式点名未覆盖组合与残留风险；spec 附录 B 还把 sleef 判据（random 互异 + 四档逐位一致）笼统套到 rot 矩阵（rot 四 cell 无 seed、通道 B 跨档互异为设计预期）——三轮检视按 Ruling 纪律改写：覆盖边界/支撑推理/残留触发条件显式化，spec 判据按矩阵分列，见 Task 2 与 spec 附录 B。
+  10. 二/三轮脚本的 `2>&1 | tee` 把 gem5 的 stdout 与 stderr 合并写入同一 `$LOG`，门禁 2 的「FAILS 行物理下一行 = checksum」邻接锚因此依赖合并流的缓冲交错行为（guest libc 缓冲策略 + gem5 转发实现 + 宿主管道缓冲——均未钉定的环境事实，非源码结构保证）——四轮检视改分离流（stdout 归 `$LOG`、stderr 归 `${LOG%.log}.stderr`）。实证基线：两份真实 gem5 合并日志（/tmp/sleef_vla_16run/probe_vl1_fixed.log、poison_vl4_random1.log，2026-10-24）中邻接均成立——几何行在 stderr、guest 启动期写，时间上先于结果行，未插入其间（与全部观察一致的机理：guest stdout 全缓冲，两条 printf 退出时一次 write 整体交给 gem5），意见设想的插入故障迄今零发生、方向为误报失败（checksum-gate 拒绝好 run，非假绿）；但环境依赖不是结构保证——分离后邻接由 kernel 源码结构（:381-382 两次连续 printf 是 guest 仅有的 stdout 写）保证，合并流交错类风险整体消除。16-run 既有证据不受影响（权威证据 = findings 表，本脚本是未来重跑口径，修脚本不追认旧证据）。
 - **G5 路径勘误**：Task 1 脚本原写 `/home/sdc/wangxu/code-review/gem5-fi/...`，本机实际为 `/home/sdc/wangxu/operator/gem5-fi/...`（gem5.opt 在位实证）——已改。
