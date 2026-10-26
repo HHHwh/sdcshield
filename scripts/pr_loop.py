@@ -467,7 +467,8 @@ def count_local_claude_findings(review: dict) -> int:
     list reviews 端点不返回 comments(行级评论在 pulls/{n}/comments 单独拉取),
     pr_loop 的意见计数把行级评论从 n_rcomment 另行计入,故此处在该端点下等价
     于 body findings 数;review['comments'] 仅用于 create-review 响应/测试形态
-    (一条 review 同时携带行级评论)。
+    (一条 review 同时携带行级评论)。fetch_pr 计数与 _real_opinion_inventory
+    的 body_count 共用本函数(检视意见 R3-#35,两侧同计数器不漂移)。
     """
     review = review or {}
     n = len(_local_claude_body_findings(review.get("body") or ""))
@@ -995,8 +996,9 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
         inline.add((path, line, c.get("id")))
 
     body_count = 0
-    # reviews: 全部 bot 的 body findings(local-claude 按 body JSON 段条数计,
-    # 其余 bot 每条非摘要 review 计 1)——与 fetch_pr 的 n_review 同口径。
+    # reviews: 全部 bot 的 body findings(local-claude 按 count_local_claude_findings
+    # 计——body JSON 段 + 嵌入 comments,与 fetch_pr 的 n_review/pending 同计数器,
+    # 检视意见 R3-#35;其余 bot 每条非摘要 review 计 1)。
     for r in pr.reviews:
         raw_body = r.get("body") or ""
         bot = bot_of(r)
@@ -1011,7 +1013,14 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
         if not raw_body.strip() or is_summary_text(raw_body):
             continue
         if bot == "local-claude":
-            body_count += len(_local_claude_body_findings(raw_body))
+            # 检视意见 R3-#35: 与 fetch_pr 计数循环同计数器(单一真源)——
+            # 修复前此处直接 len(_local_claude_body_findings(...)) 只计 body 段,
+            # review 携带 comments 字段(create-review 响应/测试形态)时两侧分叉:
+            # pending(或 n_review)恒大于 body_count,verify_reply_completeness
+            # 永报「body 意见条数不符」,答复通道断裂。嵌入 comments 不在
+            # pr.review_comments 时 subagent 只能从 review 正文处置它们,body
+            # 口径按同一计数器收口。
+            body_count += count_local_claude_findings(r)
         else:
             body_count += 1
     # issue 评论: pr-agent 按尾部 JSON 的 ACTIVE findings 计,其余 bot 每条非

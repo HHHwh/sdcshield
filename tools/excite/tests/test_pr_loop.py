@@ -1177,6 +1177,41 @@ def test_reply_covers_pending_skew_opinions_end_to_end(monkeypatch, tmp_path):
     assert "body 意见条数不符" in str(exc2.value)
 
 
+def test_reply_inventory_local_claude_counter_single_source(monkeypatch):
+    """意见 R3-#35: local-claude review 携带 comments 字段(create-review
+    响应/测试形态)时,fetch_pr 计数与 _real_opinion_inventory 必须同计数器
+    (count_local_claude_findings = body JSON 段 + 嵌入 comments)——修复前
+    inventory 只计 body 段(len(_local_claude_body_findings)),over 路径
+    pending 恒大于 body_count,verify_reply_completeness 永报「body 意见
+    条数不符」,答复通道断裂;counted 路径 n_review 与 body_count 同分叉。"""
+    head = "e" * 40
+    # 回退锚 = committer date 11:55(skew=300s): 11:48:20 落带外 → over;
+    # 12:10 ≥ 锚 → counted。两条均带嵌入 comments(2+3 / 2+2)。
+    over_review = {"id": 1, "user": {"login": "wangxumarshall"},
+                   "state": "COMMENTED", "commit_id": head,
+                   "submitted_at": "2026-10-24T11:48:20Z",
+                   "body": _local_review_body(2),
+                   "comments": [{"id": 11}, {"id": 12}, {"id": 13}]}
+    counted_review = {"id": 2, "user": {"login": "wangxumarshall"},
+                      "state": "COMMENTED", "commit_id": head,
+                      "submitted_at": "2026-10-24T12:10:00Z",
+                      "body": _local_review_body(2),
+                      "comments": [{"id": 21}, {"id": 22}]}
+    fake_gh_api, fake_paged = _fetch_pr_with(
+        [], [over_review, counted_review], [], [])
+    monkeypatch.setattr(pr_loop, "gh_api", fake_gh_api)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    pr_loop._EVENTS_CACHE.clear()
+    pr = pr_loop.fetch_pr("test/repo", 9)
+
+    # 计数侧: over 2 body + 3 comments = 5 计 pending;counted 2+2 = 4 计 n_review
+    assert pr.pending_skew_opinions == 5
+    assert pr.opinion_breakdown["review"] == 4
+    # 清单侧同计数器: 5 + 4 = 9(修复前 2+2 = 4,与计数侧分叉)
+    _, body_count = pr_loop._real_opinion_inventory(pr)
+    assert body_count == 9
+
+
 def test_collect_era_mark_uses_actual_anchoring():
     """意见 7: era_mark 标注 = 计入判定的锚定结果(非时间阈值)——回退锚容差
     窗口内被计数排除的条目(无绑定 issue 评论/旧 commit review)标「历史轮次」,
