@@ -849,34 +849,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   终态 477 测试构建零告警+zstd19 pass; 全仓审计如上。
 - **战役状态**: P0-P6 全部落地; PR 编队 #277→#283→#284→#286→#288
   (+计划文档 #279/#281/#282/#285/#287)等人工 merge 门。
-<<<<<<< HEAD
-
-- **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
-  gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
-  (128/256/512/1024-bit)×{fixed,random×3},全部 SDCSHIELD_FAILS=0;
-  同一输入集 checksum 四档逐位一致(跨档字节同一性成立,per-lane 纯度
-  +尾精确的设计预期);三重保真闭环——gem5 向量 vs 标量 worst 0.00 ulp
-  + 真硬件标量锚(宿主用同一 libsleef.a 逐位一致),阴性对照(金标准/
-  输入 1-ulp 毒化)确认检测链非空转。内核直链 vendored libsleef.a
-  (与 tests_sve_vla 同一机器码),12 函数矩阵镜像 sleef_sve.cpp。
-- **sve_rot×5 家族归并裁定**(诚实边界):与 sleef_sve 同批迁入真 VLA
-  库、迁移机制同构(同库同 flag),但**风险面不同构**——sleef 拉入整库
-  VLA 机器码(深),sve_rot 是自写浅内核(裸 z-ldr/str + 整数 _x 算子,
-  无 whilelt 尾无库代码);本矩阵可背书"库迁移模式"半边,**不能**当作
-  sve_rot 指令面验证。sve_rot 维持 compile-probe-only,若需收口应补
-  小型 sve_rot_vla_dual(z-ldr/str + 整数算子 × 四档)——登记为后续
-  可选工作项,不阻塞本 PR。
-- **gem5 SE 边界新实证**:guest 退出码不传播(exit(7)→gem5 退 0),
-  "真实退出码"记 gem5 进程码;F3(SVE2_MOVI 读回 DEVIATION)根因 open
-  (上下文相关 O3 现象,孤立复现失败),SLEEF 不受影响由价值级证据独立
-  证明——均入档 gem5-fi findings.md。
-- **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
-  现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
-  (git-sanity)+ 本实证收口。
-<<<<<<< HEAD
->>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
-=======
-
 ## 2026-10-25（all-VL Phase 2 收尾硬化单元——终审递延清单清零）
 
 - **六类先存越界修复**(f7716fcf, 20 文件): vsum[8]→[16]×10(adcx/adox
@@ -908,7 +880,31 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **战役终态**: P0-P6 + 收尾硬化全部落地; 12 个 PR(#272-#288 + 硬化
   PR)等人工 merge 门; 累计 gem5 四档实证 ~200 run 全绿。
 <<<<<<< HEAD
->>>>>>> 6c4dc121 (docs(progress): 收尾硬化单元条目 + 战役终态总览)
+
+- **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
+  gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
+  (128/256/512/1024-bit)×{fixed,random×3},全部 SDCSHIELD_FAILS=0;
+  同一输入集 checksum 四档逐位一致(跨档字节同一性成立,per-lane 纯度
+  +尾精确的设计预期);三重保真闭环——gem5 向量 vs 标量 worst 0.00 ulp
+  + 真硬件标量锚(宿主用同一 libsleef.a 逐位一致),阴性对照(金标准/
+  输入 1-ulp 毒化)确认检测链非空转。内核直链 vendored libsleef.a
+  (与 tests_sve_vla 同一机器码),12 函数矩阵镜像 sleef_sve.cpp。
+- **sve_rot×5 家族归并裁定**(诚实边界):与 sleef_sve 同批迁入真 VLA
+  库、迁移机制同构(同库同 flag),但**风险面不同构**——sleef 拉入整库
+  VLA 机器码(深),sve_rot 是自写浅内核(裸 z-ldr/str + 整数 _x 算子,
+  无 whilelt 尾无库代码);本矩阵可背书"库迁移模式"半边,**不能**当作
+  sve_rot 指令面验证。sve_rot 维持 compile-probe-only,若需收口应补
+  小型 sve_rot_vla_dual(z-ldr/str + 整数算子 × 四档)——登记为后续
+  可选工作项,不阻塞本 PR。
+- **gem5 SE 边界新实证**:guest 退出码不传播(exit(7)→gem5 退 0),
+  "真实退出码"记 gem5 进程码;F3(SVE2_MOVI 读回 DEVIATION)根因 open
+  (上下文相关 O3 现象,孤立复现失败),SLEEF 不受影响由价值级证据独立
+  证明——均入档 gem5-fi findings.md。
+- **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
+  现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
+  (git-sanity)+ 本实证收口。
+<<<<<<< HEAD
+>>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
 =======
 
 ## 2026-10-26（PR #294 检视 round 2 处置——六发现逐条裁决 + 验证边界入档）
@@ -1087,4 +1083,40 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   全部 result: skip + skip-reason 'test compiled with sve' + exit:
   pass（SKIP 路径逐字不变）; zstd19/mce_check → exit: pass; x86-64
   零触碰（全部改动在 aarch64 门控目录/条件编译内）。
+<<<<<<< HEAD
 >>>>>>> ee42739d (docs(progress): PR #294 round 3 处置入档——8 意见裁决 + 3 移交项 + round 1 补档 + 三处勘误 + 越界修复全量审计)
+=======
+
+## 2026-10-26（PR #294 检视 round 4 处置——head ee42739d 两条 findings, robot5 指定检视）
+
+- **触发**: 用户指令"robot5 检视 pr294"——`scripts/pr_local_review.py 294`
+  对 round-3 处置后 head ee42739d 的定向检视（非 pr-loop 全 bot 轮）。
+  local-claude 发布 marker-only review + 2 条 body findings（挂不上
+  diff 行）: #49 传播（kreg 四兄弟漏漂移守卫, 重要）+ #50（k7p GPS
+  tag 16-bit byte_off 模 65536 别名, 次要）。
+- **裁决**: 2 条全采纳, 修复 commit ×2:
+  - d1d709c0 kreg 四兄弟（logic/not/select/mask）补 init/run VL 漂移
+    fail-closed 守卫——round 3 的 ee6a4a7d 只给 arm0102_fma_f32_sve
+    落了 #49 守卫, 同批四个 kreg 兄弟同构结构全漏（修复传播不完整）;
+    Data struct 增 lanes 字段 + init 保存 + run 入口复读比对（mask
+    因 data->count 赋值先于 lanes 定义, 保存锚点取 lanes 定义行）。
+  - dac72d0e k7p GPS tag byte_off 从绝对偏移改槽内偏移编码
+    （k3res 纪律同款）——1024 slots × 128B（1024-bit 档）绝对偏移
+    最大 ≈131064 > 65535, 相差 64 KiB 的两偏移产出逐字节相同 payload,
+    错偏移读不可判别; 槽内偏移值域 0..vl_bytes-8 恒安全, 槽号离线可
+    恢复（dump 携带完整缓冲区）; P_HIHAM 奇偶语义不受影响（vl_bytes
+    恒偶）; docblock '512b inclusive 够用' 过时声明同步更新。
+- **验证**: 每 commit ./scripts/build.sh 零新警告; 受影响测试
+  （arm0102_kreg_{logic,not,select,mask}_sve ×4 +
+  sve_rot_ldr_at_top_rowmajor_k7p_{zero,rand} ×2）-t 2000 -n 1 -v
+  全部 result: skip + CpuNotSupported + 框架 exit: pass（SKIP 路径
+  逐字不变）; zstd19 → exit: pass; x86-64 零触碰。边界如实声明:
+  守卫 SVE 触发路径与 k7p 填充路径本机不可达（无 SVE）且 kreg/k7p
+  族无 gem5 探针载体——守卫为纯防御代码（正常路径不变由 SKIP 输出
+  背书）; k7p 仅 tag 编码内容变化, 比较两侧同源（expected 由同一
+  填充链派生）, 与 round 3 同款守卫的验证口径一致。
+- **过程事故（诚实记录）**: 批量正则首版把 mask 的 data->lanes 保存
+  插到 lanes 定义之前（编译失败 'lanes was not declared'）, 四文件
+  回滚后按文件结构差异分锚点重做——盲目 count=1 正则对同构文件群的
+  结构差异（字段定义序不同）不安全, 已以逐文件锚点修正。
+>>>>>>> c62861e8 (docs(progress): PR #294 检视 round 4 处置入档——robot5 定向检视两 findings 全采纳)
