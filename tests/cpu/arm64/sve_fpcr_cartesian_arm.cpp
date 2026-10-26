@@ -19,8 +19,10 @@
  * HWCAP_SVE capability + 128..1024-bit range in one call, all-VL
  * Phase 2 P6) and returns a clean EXIT_SKIP on SVE-less CPUs (e.g.
  * this Kunpeng 920 dev host). The run side reads the VL fresh (svcntw)
- * and sizes its operand buffers from the same lanes, so no init/run VL
- * state exists to drift. Built in tests_arm64_sve.
+ * and sizes its operand buffers from the same lanes, and re-checks it
+ * against the init-time value recorded in test->data — a drifted VL
+ * fails closed instead of running ungated geometry (all-VL policy #3).
+ * Built in tests_arm64_sve.
  * @endparblock
  */
 
@@ -84,6 +86,12 @@ static const int ROUND_FE[4] = { FE_TONEAREST, FE_UPWARD,
                                  FE_DOWNWARD, FE_TOWARDZERO };
 static const char *ROUND_NAME[4] = { "RNE", "RP", "RM", "RZ" };
 
+/* init 期记录的 VL (f32 lanes): run 侧漂移比对用 (all-VL policy #3,
+ * stencil_axis/xlswave sibling 同款 fail-closed 形态)。 */
+struct SveFpcrCartesianData {
+    size_t vl_w;
+};
+
 static uint32_t golden_fma_f32(uint32_t ua, uint32_t ub, uint32_t uc,
                                int r, int fz)
 {
@@ -114,13 +122,17 @@ static int sve_fpcr_cartesian_arm_init(struct test *test)
     return EXIT_SUCCESS;
 #else
     /* All-VL Phase 2 P6: capability + 128..1024-bit range check in one
-       framework-layer call, replacing the getauxval hand-probe. Gate
-       only: the run side re-reads svcntw() and sizes its buffers from
-       the same lanes (no init/run VL state to drift). */
+       framework-layer call, replacing the getauxval hand-probe. The
+       init-time VL (f32 lanes) is recorded in test->data; the run side
+       re-reads svcntw(), sizes its buffers from the same lanes, and
+       fails closed on drift from the recorded value (all-VL policy #3). */
     const long svl = arm64_require_sve_vl(test, 128, 1024);
     if (svl < 0)
         return EXIT_SKIP;
-    (void)svl;
+    auto *fpcr_data = static_cast<SveFpcrCartesianData *>(
+        malloc(sizeof(SveFpcrCartesianData)));
+    fpcr_data->vl_w = (size_t)svl / sizeof(float);
+    test->data = fpcr_data;
     return EXIT_SUCCESS;
 #endif
 }
@@ -135,7 +147,17 @@ static int sve_fpcr_cartesian_arm_run(struct test *test, int cpu)
              "sve_fpcr_cartesian_arm");
     return EXIT_SKIP;
 #else
+    auto *data = static_cast<SveFpcrCartesianData *>(test->data);
     const size_t vl_w = svcntw();
+    /* All-VL policy #3 (fail-closed): a VL that drifted between init
+     * and run was never range-gated — refuse to run it on stale
+     * geometry (stencil_axis/xlswave sibling form). */
+    if (vl_w != data->vl_w) {
+        log_error("sve_fpcr_cartesian_arm: VL drifted between init "
+                  "(%zu lanes) and run (%zu lanes)", data->vl_w, vl_w);
+        report_fail_msg("sve_fpcr_cartesian_arm: SVE VL drifted "
+                        "between init and run");
+    }
     const uint64_t orig_fpcr = rd_fpcr();
     const svbool_t all = svptrue_b32();
     bool all_passed = true;
@@ -270,7 +292,8 @@ static int sve_fpcr_cartesian_arm_run(struct test *test, int cpu)
 
 static int sve_fpcr_cartesian_arm_cleanup(struct test *test)
 {
-    (void)test;
+    free(static_cast<SveFpcrCartesianData *>(test->data));
+    test->data = nullptr;
     return EXIT_SUCCESS;
 }
 
