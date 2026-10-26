@@ -37,6 +37,27 @@ GHA 的 `ubuntu-24.04-arm` 是**共享 aarch64 云实例**（AWS Graviton 系）
 
 ## 输出
 
-`<outdir>/benchmark.tsv`：`test<TAB>wall_seconds<TAB>loop_count`。
+`<outdir>/benchmark.tsv`：首行表头 `test<TAB>wall_seconds<TAB>loop_count` 是三方契约
+（`benchmark.sh` 写、`benchmark-gate.py` 与 `benchmark-to-json.py` 校验，格式演进须三处
+同步）；数据行 `wall_seconds` 三态：
+
+| 值 | 含义 | 闸门（[`benchmark-gate.py`](benchmark-gate.py)，verify 与 benchmark-trend 共用） |
+|---|---|---|
+| 正的有限数值 | 数据行（目标测试 `result: pass` 且取到它自己的 `test-runtime`，`float` 可解析、`math.isfinite` 且 `>0`） | 进 JSON/趋势 |
+| `skip` | 运行时跳过（`result: skip`） | `::warning::` 点名，数据点缺失 |
+| `fail` | 在列但未产出可用数据（进程失败 / 测试 fail / 字段缺失 / 非有限值 / 非正墙钟） | verify 红 |
+
+失败现场留档：每测试 `stdout/stderr` 存 `<outdir>/<t>.log`、运行 YAML 存
+`<outdir>/<t>.yaml`（均随 artifact 上传），失败摘要（退出码 + 末尾 15 行）同时进
+`benchmark.log`。`--list-tests` 捕获的有效性 = 退出码 0 且非空且 **BENCH_TESTS 交集
+完整**（`grep -qxF` 字面匹配；测试名含正则元字符时 `-x` 的 BRE 解释会误判定）；
+任一不满足即重试一次，连续失败中止采集（stderr 留档 `list-tests.err`）——run
+40177906937（2026-10-25）24.03-LTS-SP2 的 `memcpy_l2_cache_size` 曾因该捕获一次性
+部分输出被误记「缺席」（同 job allquality 全量扫描里该测试存在且 pass，此前两天同
+OS 同测试均为正常数值；该次 rc 已不可考，`rc=0` 部分输出变体无法被「rc≠0 或空表」
+拦截，故补交集完整性校验）。BENCH_TESTS 声明为跨三系列交集，正常应全部在列（3
+run × 15 OS = 495 行实证：唯一一次缺席就是上述事故）——缺席即异常，中止而非降级
+`skip`。
+
 此基准 tsv 仍上传进 artifact，但不再进最终 report summary（最终 summary 由
 `report-summary.py` 生成「用例 × 版本」结果矩阵，见 `report-summary.py` 注释）。

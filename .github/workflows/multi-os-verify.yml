@@ -146,10 +146,27 @@ jobs:
           ninja -C builddir
           echo "::endgroup::"
           echo "::group::self-check"
-          N="$(builddir/sdcshield --list-tests 2>/dev/null | wc -l)"
+          # 同 verify 步骤的 -e 陷阱: 2>/dev/null + pipefail 下二进制崩溃 → 赋值语句
+          # 非零 → step 在此行零诊断死亡(下行 echo/闸门均不可达)。stderr 落盘、
+          # 失败时回放, 崩溃现场不再丢。
+          rc=0
+          N="$(builddir/sdcshield --list-tests 2>/tmp/selfcheck-list.err | wc -l)" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::list-tests exited $rc (stderr:)"
+            cat /tmp/selfcheck-list.err
+            exit 1
+          fi
           echo "list-tests: $N"
           [ "$N" -gt 100 ] || { echo "::error::too few tests ($N)"; exit 1; }
-          builddir/sdcshield --dump-cpu-info | head -1
+          # --dump-cpu-info | head -1 的 SIGPIPE 陷阱:写端输出超过 stdio 缓冲后,
+          # head 取完首行即退出,写端后续 write 全部 EPIPE(141)→ pipefail + -e
+          # 在此行零诊断死亡(下行 ::endgroup:: 不可达)。96 核 kunpeng920 实测
+          # 全量输出 4143 字节、200 次中 199 次写端 141;GHA 4 核 runner(~300
+          # 字节,单次 write)暂不触发,但本 workflow 顶部注释明示可切 self-hosted
+          # kunpeng920。改为落盘再取首行:无管道无竞态;dump-cpu-info 自身失败
+          # 仍按 -e 语义红(stderr 未重定向,现场直接在 step 日志)。
+          builddir/sdcshield --dump-cpu-info > /tmp/dump-cpu-info.txt
+          head -1 /tmp/dump-cpu-info.txt
           echo "::endgroup::"
 
       # ---- 打包自包含 built/(bin+libs+脚本+元数据),与本地 podman 链路的
@@ -168,8 +185,11 @@ jobs:
           # 自诊断:失败时日志里直接有环境现场(uid/工具/目录),不再盲猜
           echo "pkg-debug: uid=$(id -u) tar=$(command -v tar || echo MISSING) bsdtar=$(command -v bsdtar || echo MISSING) strip=$(command -v strip || echo MISSING) ldd=$(command -v ldd || echo MISSING) git=$(command -v git || echo MISSING) readlink=$(command -v readlink || echo MISSING)"
           echo "pkg-debug: builddir/sdcshield: $(ls -la builddir/sdcshield 2>&1)"
-          bash -x scripts/gha/package-built.sh builddir "dist/$OS_TAG" "$SERIES" "$SP" 2>&1 | tee /tmp/pkg-trace.log
-          rc=${PIPESTATUS[0]}
+          # pipefail + -e 下管道失败时 step 在管道行即死, 原 rc=${PIPESTATUS[0]}
+          # 与 pkg-debug 回放是失败路径上的死代码(成功路径才执行)。改用
+          # || rc=$? 接住(与 verify/benchmark 步骤同款), 失败诊断才真正可达。
+          rc=0
+          bash -x scripts/gha/package-built.sh builddir "dist/$OS_TAG" "$SERIES" "$SP" 2>&1 | tee /tmp/pkg-trace.log || rc=$?
           echo "pkg-debug: exit=$rc; dist 树:"
           find dist -maxdepth 3 2>/dev/null || true
           exit $rc
@@ -185,28 +205,53 @@ jobs:
           # 与 package-built.sh 的归一化同语义(非 LTS 时剥 LTS- 前缀)。
           [ "$SP" != "LTS" ] && SP="${SP#LTS-}"
           OS_TAG="openEuler-${SERIES}$(case "$SP" in LTS) echo LTS;; SP*) echo LTS_$SP;; esac)"
-          TARBALL=$(ls dist/$OS_TAG/sdcshield-$OS_TAG-*.tar.gz 2>/dev/null | sed -n 1p)
+          # ls 无匹配时 pipefail 使替换非零 → -e 在赋值行零诊断死亡(下行设计好的
+          # ::error:: 闸门永不可达); || true 接住, 空值交给既有 -n 闸门报错。
+          TARBALL=$(ls dist/$OS_TAG/sdcshield-$OS_TAG-*.tar.gz 2>/dev/null | sed -n 1p || true)
           [ -n "$TARBALL" ] || { echo "::error::no tarball in dist/$OS_TAG (package step output above)"; exit 1; }
           rm -rf /tmp/pristine && mkdir -p /tmp/pristine
           tar -xzf "$TARBALL" -C /tmp/pristine 2>/dev/null || bsdtar -xzf "$TARBALL" -C /tmp/pristine
           PKG="/tmp/pristine/$OS_TAG"
           export LD_LIBRARY_PATH="$PKG/libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          N="$($PKG/sdcshield --list-tests 2>/dev/null | wc -l)"
+          # 同 Build self-check: 解包产物损坏时 --list-tests 崩溃 → 原 2>/dev/null +
+          # pipefail + -e 在赋值行零诊断死亡(本步骤是「失败即红」的产物闸门,
+          # 恰在最该抓的包损坏场景上无诊断)。stderr 落盘、失败时回放。
+          rc=0
+          N="$($PKG/sdcshield --list-tests 2>/tmp/pristine-list.err | wc -l)" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::pristine list-tests exited $rc (stderr:)"
+            cat /tmp/pristine-list.err
+            exit 1
+          fi
           echo "pristine list-tests: $N"
           [ "$N" -gt 100 ] || { echo "::error::pristine too few tests ($N)"; exit 1; }
-          out=$($PKG/sdcshield -e zstd19 -t 2000 -n 1 2>&1 | grep -iE 'exit:' | tail -1 || echo "exit: unknown")
+          # 同上: zstd19 实跑是本步骤「包损坏」场景的主闸门, 但 2>&1 合流进
+          # grep 后崩溃现场(loader 错误/fail 细节行)全被过滤, 诊断只剩判定行;
+          # 且 pipefail 下二进制非零会连带触发 || echo "exit: unknown", 把 out
+          # 污染成两行。改为全量落盘、判定行从落盘提取、失败时回放现场。
+          rc=0
+          $PKG/sdcshield -e zstd19 -t 2000 -n 1 > /tmp/pristine-zstd19.log 2>&1 || rc=$?
+          out=$(grep -iE 'exit:' /tmp/pristine-zstd19.log | tail -n 1) || out=""
+          [ -n "$out" ] || out="exit: unknown"
           echo "pristine zstd19: $out"
-          echo "$out" | grep -qi 'exit: pass'
+          if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -qi 'exit: pass'; then
+            echo "::error::pristine zstd19 failed (rc=$rc); full output:"
+            cat /tmp/pristine-zstd19.log
+            exit 1
+          fi
 
       # ---- 全量参数功能验证(脚本见 scripts/gha/verify-params.py) ----
+      # 注意: shell: bash 展开为 bash -e -o pipefail, 失败行会即刻终止 step,
+      # 后续 rc=$?/tail 根本到不了(run 38242267210 的 4 个 verify job 因此
+      # 在 CI 日志里零诊断输出); 必须 || rc=$? 接住退出码再打摘要。
       - name: Verify (full parameter sweep)
         if: ${{ inputs.verify_depth != 'smoke' }}
         shell: bash
         run: |
           mkdir -p results
+          rc=0
           python3 -u scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" \
-            > verify.log 2>&1
-          rc=$?
+            > verify.log 2>&1 || rc=$?
           tail -40 verify.log
           exit $rc
 
@@ -216,21 +261,38 @@ jobs:
         shell: bash
         run: |
           mkdir -p results
+          rc=0
           python3 -u scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" --smoke \
-            > verify.log 2>&1
-          rc=$?
+            > verify.log 2>&1 || rc=$?
           tail -40 verify.log
           exit $rc
 
       # ---- 跨 OS 基准(固定 loop 数,同工作量墙钟对比) ----
+      # 同上: bash -e 下 cat benchmark.log 需 || rc=$? 接住才能在失败时打出。
       - name: Benchmark (fixed loop count)
         shell: bash
         run: |
           mkdir -p benchmark
+          rc=0
           bash scripts/gha/benchmark.sh "$(pwd)/builddir/sdcshield" "$(pwd)/benchmark" \
-            > benchmark.log 2>&1
-          rc=$?
+            > benchmark.log 2>&1 || rc=$?
           cat benchmark.log
+          # 闸门(scripts/gha/benchmark-gate.py——verify 与 benchmark-trend 共用
+          # 的同一分类权威, 取代原先 YAML 内联的三份 awk 拷贝):
+          #   ok   = wall_seconds 为正的有限数值(float 可解析且 math.isfinite
+          #          且 >0, 与 benchmark-to-json.py 口径一致;nan/inf/非正属
+          #          格式漂移/不可用数据)
+          #   skip = 运行时跳过——良性缺数据点, ::warning:: 点名(缺席已在
+          #          采集侧 benchmark.sh 升级为重试/中止, 不再产 skip 行)
+          #   fail = 在列但未产出可用数据(进程失败/测试 fail/格式漂移/非有限
+          #          值/非正墙钟)——红
+          # ok=0(采集整体废掉)与行缺失(BENCH_TESTS 完备性, producer 写入
+          # 失败/截断的最后防线)同样红。原「≥1 行非 skip 即绿」的全有全无阈值
+          # 废弃:缺席/失败已在采集侧(benchmark.sh)区分, 闸门不再需要妥协。
+          # 注:原注释把 run 40177906937 SP2 的 memcpy skip 行归因为「单基准
+          # 崩溃」有误——同 job allquality 全量扫描里该测试存在且 pass, 该行
+          # 实为 --list-tests 一次性部分输出被静默当缺席(已在 benchmark.sh 修)。
+          python3 scripts/gha/benchmark-gate.py verify benchmark/benchmark.tsv || rc=1
           exit $rc
 
       # ---- 上传结果(成功与否都传,便于诊断) ----
@@ -244,7 +306,7 @@ jobs:
           path: |
             results/
             verify.log
-            benchmark/benchmark.tsv
+            benchmark/
             benchmark.log
             builddir/sdcshield-*.yaml
             builddir/sdcshield-*.log
@@ -343,11 +405,38 @@ jobs:
           path: bench
           merge-multiple: true
       - name: Convert to benchmark JSON
+        id: convert
+        # shell: bash 显式声明(与全 workflow 其余步骤统一, bash -eo pipefail):
+        # 此前无 shell: 时走 GHA 默认 bash -e(无 pipefail), 下行 tsv 探测的
+        # 「ls 失败 | head 成功」管道仅在无 pipefail 下整体为 0——加 pipefail
+        # 后同一行会在赋值语句处 -e 即死(实测 rc=2 零输出), no-TSV 场景从
+        # 「跳过发布」翻转为零诊断红。尾部 || true 显式声明「探测失败=无
+        # TSV」是预期路径, 两种 shell 语义下行为一致。
+        shell: bash
         run: |
-          tsv=$(ls bench/benchmark/benchmark.tsv 2>/dev/null || ls bench/*/benchmark/benchmark.tsv 2>/dev/null | head -1)
-          [ -n "$tsv" ] || { echo "no benchmark.tsv (unexpected) — skip trend update"; exit 0; }
-          python3 scripts/gha/benchmark-to-json.py "$tsv" bench/benchmark.json
+          tsv=$(ls bench/benchmark/benchmark.tsv 2>/dev/null || ls bench/*/benchmark/benchmark.tsv 2>/dev/null | head -1 || true)
+          if [ -z "$tsv" ]; then
+            echo "no benchmark.tsv (unexpected) — skip trend update"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 消费侧闸门(benchmark-gate.py trend——与 verify 同一分类权威, 取代
+          # 原内联 awk): 无数据行(全 skip/fail 或 TSV 不可读)不产 JSON、不
+          # push, 报警归 verify 侧不重复。原内联 awk 无兜底, TSV 不可读时
+          # ok 为空串, [ "$ok" -eq 0 ] 报 integer expression → -e 直接红,
+          # 违背「趋势更新非闸门」定位;gate 非零走 else, step 保持绿。
+          if python3 scripts/gha/benchmark-gate.py trend "$tsv"; then
+            python3 scripts/gha/benchmark-to-json.py "$tsv" bench/benchmark.json
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+      # publish 门控:Convert 在无 TSV / 全 skip 路径 exit 0 且不产
+      # bench/benchmark.json, 无条件运行的 benchmark-action 会因读取缺失的
+      # output-file-path 失败, 把本「非闸门」job 染红成下游症状(run 39577407937
+      # 实发: Convert success + benchmark-action failure)——只在可发布时运行。
       - uses: benchmark-action/github-action-benchmark@v1
+        if: ${{ steps.convert.outputs.publish == 'true' }}
         with:
           name: sdcshield benchmark (24.03-LTS-SP3)
           tool: customSmallerIsBetter
