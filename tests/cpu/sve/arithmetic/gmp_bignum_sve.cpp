@@ -39,11 +39,26 @@ struct TestData {
 }
 
 #ifdef __aarch64__
+/* per-lane 失配冷路径诊断 (PR #294 检视 round 3): 高位词对 (i+j >=
+ * NUM_WORDS) 出错时 out_lo 的 8 字 memcmp 仍可能全对 —— 首个失配词对
+ * + 出错 svmul lane 直方图把乘法器 SDC 的现场留下来 (健康硬件零进入,
+ * 零成本)。 */
+struct Mul512LaneDiag {
+    bool     any;                 /* 是否出现过失配 */
+    int      first_i, first_j;    /* 首个失配 (i,j) 词对 */
+    uint64_t first_actual;        /* lo_row[j] — SVE svmul 低半积 */
+    uint64_t first_expected;      /* (uint64_t)prod — __int128 参考低半 */
+    uint64_t first_xor;           /* 位差 */
+    uint32_t lane_hist[16];       /* 出错 lane (j % svcntd()) 直方图 — 门内 svcntd() <= 16 */
+    uint32_t total;               /* 失配词对总数 (<= 64) */
+};
+
 /* SVE 512-bit 乘: 学校园算法 — 每 (i,j) 词对 64x64->128 部分积,
  * 低半 svmul (真 SVE 乘法), 高半 __int128 折叠 (SVE1 无 svmulh),
  * 累加用逐字加进位。返回 true = 每个 SVE 低半积都与 __int128 参考的
  * 低半逐项一致 (per-lane 校验, PR #294 检视 round 2)。 */
-static bool sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *out_lo) {
+static bool sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *out_lo,
+                              struct Mul512LaneDiag *diag) {
     uint64_t acc[NUM_WORDS * 2];
     memset(acc, 0, sizeof(acc));
     bool sve_ok = true;
@@ -69,8 +84,23 @@ static bool sve_bigint_mul512(const uint64_t *a, const uint64_t *b, uint64_t *ou
              * (28/64 词对) 只进高位结果字, out_lo 的 8 字 memcmp 观察
              * 不到这些乘法的错误 (乘法器盲区); 健康硬件上
              * lo_row[j] == (uint64_t)prod 恒成立, 累加结果逐位不变。 */
-            if (lo_row[j] != (uint64_t)prod)
+            if (lo_row[j] != (uint64_t)prod) {
                 sve_ok = false;
+                if (diag) {   /* 冷路径: 健康硬件不进入 */
+                    if (!diag->any) {
+                        diag->any = true;
+                        diag->first_i = i;
+                        diag->first_j = j;
+                        diag->first_actual = lo_row[j];
+                        diag->first_expected = (uint64_t)prod;
+                        diag->first_xor = lo_row[j] ^ (uint64_t)prod;
+                    }
+                    const int lane = (int)((unsigned)j % (unsigned)svcntd());
+                    if (lane < 16)
+                        diag->lane_hist[lane]++;
+                    diag->total++;
+                }
+            }
             /* acc[i+j] += low(SVE 积) + carry; carry = high + 溢出。 */
             unsigned __int128 s = (unsigned __int128)acc[i + j] + lo_row[j] + carry;
             acc[i + j] = (uint64_t)s;
@@ -130,15 +160,30 @@ static int gmp_bignum_sve_init(struct test *test) {
     sw_bigint_mul512(data->a_words.data(), data->b_words.data(),
                      data->golden_product.data());
     /* 交叉核对: SVE 实现首跑必须与 golden 一致 (实现错在 init 就暴露)。
-     * per-lane 校验一并纳入 (SVE 积 vs __int128 逐项不符同样算
-     * self-check 失败 —— 该硬件上的乘法器可疑, 不进入 run)。 */
+     * per-lane 校验一并纳入。乘积/逐项不符 = 该硬件乘法器可疑 —— 报告
+     * 为检出于 init 的失败而非跳过: 持续性乘法器错误若只记 skip 会被
+     * 熔断/汇总口径吞掉 (PR #294 检视 round 3); init 返回 > 0 →
+     * TestResult::Failed (framework/sandstone_run.cpp)。仅能力/资源
+     * 不足才走 skip。 */
     uint64_t check[NUM_WORDS];
-    if (!sve_bigint_mul512(data->a_words.data(), data->b_words.data(), check) ||
-        memcmp(check, data->golden_product.data(), NUM_WORDS * sizeof(uint64_t)) != 0) {
-        log_skip(TestResourceIssueSkipCategory,
-                 "gmp_bignum_sve: SVE mul512 self-check failed in init");
+    Mul512LaneDiag diag = {};
+    const bool lanes_ok =
+        sve_bigint_mul512(data->a_words.data(), data->b_words.data(), check, &diag);
+    const bool prod_ok = (memcmp(check, data->golden_product.data(),
+                                 NUM_WORDS * sizeof(uint64_t)) == 0);
+    if (!lanes_ok || !prod_ok) {
+        log_error("gmp_bignum_sve: SVE mul512 self-check FAILED in init "
+                  "(per-lane %s, product %s) — multiplier suspect on this CPU",
+                  lanes_ok ? "ok" : "MISMATCH", prod_ok ? "ok" : "MISMATCH");
+        if (diag.any)
+            log_error("gmp_bignum_sve: first mismatch at (i=%d, j=%d): "
+                      "sve=0x%016llx ref=0x%016llx xor=0x%016llx (%u word-pairs)",
+                      diag.first_i, diag.first_j,
+                      (unsigned long long)diag.first_actual,
+                      (unsigned long long)diag.first_expected,
+                      (unsigned long long)diag.first_xor, diag.total);
         delete data;
-        return EXIT_SKIP;
+        return EXIT_FAILURE;
     }
 #else
     return EXIT_SKIP;
@@ -158,21 +203,40 @@ static int gmp_bignum_sve_run(struct test *test, int cpu) {
     do {
         /* per-lane 通道先行 (PR #294 检视 round 2): 每个乘法在进入
          * 累加器前已对 __int128 参考逐项校验, 覆盖 memcmp 观察不到的
-         * i+j >= NUM_WORDS 词对; report_fail 中止线程。 */
+         * i+j >= NUM_WORDS 词对; report_fail 中止线程。冷路径把首个
+         * 失配词对 + 出错 lane 直方图留下 (PR #294 检视 round 3) —
+         * 高位词对出错时 product 的 8 字可能全对, 没有现场无法定位。 */
+        Mul512LaneDiag diag = {};
         const bool sve_lanes_ok =
-            sve_bigint_mul512(data->a_words.data(), data->b_words.data(), product);
+            sve_bigint_mul512(data->a_words.data(), data->b_words.data(),
+                              product, &diag);
         if (!sve_lanes_ok) {
-            char msg[200];
-            snprintf(msg, sizeof(msg),
-                     "gmp_bignum_sve (SVE): svmul low-half lane mismatch vs "
-                     "__int128 reference on CPU %d (per-lane check)", cpu);
+            if (diag.any) {
+                log_error("gmp_bignum_sve (SVE): per-lane mismatch first at "
+                          "(i=%d, j=%d): sve=0x%016llx ref=0x%016llx "
+                          "xor=0x%016llx (%u word-pairs) on CPU %d",
+                          diag.first_i, diag.first_j,
+                          (unsigned long long)diag.first_actual,
+                          (unsigned long long)diag.first_expected,
+                          (unsigned long long)diag.first_xor, diag.total, cpu);
+                char hist[160];
+                int off = 0;
+                for (int l = 0; l < 16 && off < (int)sizeof(hist) - 12; ++l)
+                    if (diag.lane_hist[l])
+                        off += snprintf(hist + off, sizeof(hist) - off,
+                                        "lane%d=%u ", l, diag.lane_hist[l]);
+                log_error("gmp_bignum_sve (SVE): failing svmul lane "
+                          "histogram: %s", hist);
+            }
             log_data("gmp_bignum_sve a (8 words)",
                      data->a_words.data(), NUM_WORDS * sizeof(uint64_t));
             log_data("gmp_bignum_sve b (8 words)",
                      data->b_words.data(), NUM_WORDS * sizeof(uint64_t));
             log_data("gmp_bignum_sve product (SVE svmul, 8 words)",
                      product, NUM_WORDS * sizeof(uint64_t));
-            report_fail_msg("%s", msg);
+            report_fail_msg("gmp_bignum_sve (SVE): svmul low-half lane "
+                            "mismatch vs __int128 reference on CPU %d "
+                            "(per-lane check)", cpu);
         }
 
         bool data_ok = (memcmp(product, data->golden_product.data(),
