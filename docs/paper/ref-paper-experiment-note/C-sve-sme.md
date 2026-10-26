@@ -211,7 +211,7 @@ SME(Armv9.2-A 引入)在 SVE 之上增加**矩阵引擎**,核心组件与各自�
 
 ## 来源
 
-**本仓实测(命令/文件)**:`framework/device/cpu/simd-arm.conf` 全文;`framework/device/cpu/scripts/armsimd_generate.pl`(140-220 行);`builddir/framework/device/cpu/cpu_features.h`(grep);`tests/cpu/arm64/meson.build` 全文;`tests/cpu/meson.build`(380-530/880-930 行);`tests/cpu/arm64/sve512_f64_chain_arm.cpp` 全文;`sve512_gather_scatter_arm.cpp`、`sve512_stencil_axis_arm.cpp`、`tests/cpu/sleef/sleef_sve.cpp`(grep/节选);`framework/sandstone.cpp:450-480`、`sandstone.h:163`、`selftest.cpp:2748-2770`、`cpuid_internal.h:269-284`;`docs/cpu/cn23154.md` 全文;memory cn23154-numa3-va-path-fault。主机 GCC 12.3.1 / clang 17.0.6 / glibc 2.38 / 内核 6.6;`asm/hwcap.h` SME 位;arm_sme.h 两编译器对比编译实验(§5.1);/proc/cpuinfo(本机 0xd01 无 sve)。
+**本仓实测(命令/文件)**:`framework/device/cpu/simd-arm.conf` 全文;`framework/device/cpu/scripts/armsimd_generate.pl`(140-220 行);`builddir/framework/device/cpu/cpu_features.h`(grep);`tests/cpu/arm64/meson.build` 全文;`tests/cpu/meson.build`(380-530/880-930 行);`tests/cpu/arm64/sve512_f64_chain_arm.cpp` 全文;`sve512_gather_scatter_arm.cpp`、`sve512_stencil_axis_arm.cpp`、`tests/cpu/sleef/sleef_sve.cpp`(grep/节选);`framework/sandstone.cpp:450-480`、`sandstone.h:163`、`selftest.cpp:2748-2770`、`cpuid_internal.h:269-284`;`docs/cpu/cn23154.md` 全文;memory cn23154-numa3-va-path-fault。主机 GCC 12.3.1 / clang 17.0.6 / glibc 2.38 / 内核 6.6;`asm/hwcap.h` SME 位;arm_sme.h 两编译器对比编译实验(§5.1);/proc/cpuinfo(当次实测机 0xd01 无 sve;换机须现场探测,见 CLAUDE.md 第 2 条)。
 
 **联网查证**:
 - AWS Graviton4/Graviton3 SVE 能力:AWS HPC blog「An overview of the AWS Graviton4 processor」、Red Hat Graviton4 tuning、AWS Graviton GitHub wiki(经 WebSearch 摘要)
