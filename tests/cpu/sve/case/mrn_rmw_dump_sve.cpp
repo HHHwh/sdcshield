@@ -17,6 +17,12 @@
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
+
+#ifndef SVE_MAX_VECTOR_BYTES
+/* GCC 12 的 arm_sve.h 不提供该 ACLE 宏 (movbe_slf_sweep 同款自定义):
+ * SVE 架构最大 VL 2048bit = 256 字节 */
+#define SVE_MAX_VECTOR_BYTES 256
+#endif
 #include <device/cpu/arm64/arm64_vl.h>
 #endif
 
@@ -110,8 +116,11 @@ static int mrn_rmw_dump_sve_run(struct test *test, int cpu)
             svuint64_t r_sub = svsub_u64_x(pg, va, vb);
             svuint64_t r_eor = sveor_u64_x(pg, va, vb);
             svuint64_t r_and = svand_u64_x(pg, va, vb);
-            /* 相位谓词: lane k → (base+k)%4 */
-            uint64_t phase[8];
+            /* 相位谓词: lane k → (base+k)%4 (phase 缓冲按架构最大 VL
+             * 定容: svcntd() 最多 32 lane, 原 phase[8] 在 VL>512-bit 时
+             * 被 svld1_u64 全宽越界读 + 填充循环越界写, mrn_rmw/
+             * nuke_2src_alu 同款 SVE_MAX_VECTOR_BYTES 范式) */
+            uint64_t phase[SVE_MAX_VECTOR_BYTES / 8];
             for (int k = 0; k < n; ++k) phase[k] = (base + k) % 4;
             svuint64_t vphase = svld1_u64(pg, phase);
             svuint64_t res = svsel_u64(svcmpeq_n_u64(pg, vphase, 0), r_add,
