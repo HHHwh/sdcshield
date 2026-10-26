@@ -215,6 +215,13 @@ Known platform quirks 中：
 - SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 96 CPUs) has NO SVE/SME — all SVE/SME functional verification is gem5-fi only (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). Earlier "host is VL=256" records refer to a different machine (cortex x3b, docs/architecture.md:130). `tests_sve` still compiles at fixed 128-bit; on SVE hosts with VL≠128 the eigen SVD test needs a VL-pinning launcher (`scripts/eigen-sve-double/` precedent; the external `/tmp/vlrun` tool no longer exists); `sleef_sve` stays at 128 by design.
 ```
 
+> **2026-10-26 更正（本步执行时未生效，事后修正）**：上面这段替换文本**不要照抄**——
+> 本机实测 MIDR `0x480fd020`（part `0xd02`）**有 SVE**，默认 VL=256-bit（`rdvl`=32B），
+> 可 pin 到 128-bit；HWCAP2 无 `SVE2`/`SME`（SVE2 指令实测 SIGILL；SME 仅"软件不可见"）。
+> 现行规则见 CLAUDE.md 第 2 条"Probe the host before assuming anything"与平台怪癖节
+> （改为按机探测：支持的档位本机原生验证，不支持的才走 gem5-fi）。本注记只更正事实，
+> 不改写当日结论。
+
 - [ ] **Step 3: 提交推送 + PR**
 
 ```bash

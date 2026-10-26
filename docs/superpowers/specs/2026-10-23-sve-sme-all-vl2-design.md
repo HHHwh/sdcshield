@@ -68,6 +68,13 @@ SVE/SME 测试的统一入口。
 4. CLAUDE.md 的 gem5 路径 `/home/sdc/wangxu/gem5-fi-fuzz` 本机不存在（实际
    `/home/sdc/wangxu/code-review/gem5-fi`）；「host is VL=256」是另一台机器（cortex x3b，
    `docs/architecture.md:130`）的过时记录。
+
+   > **2026-10-26 更正**：本机实测 MIDR `0x480fd020`（part `0xd02`）**有 SVE**，
+   > 默认 VL=256-bit（`rdvl`=32B），可 pin 到 128-bit；HWCAP2 无 `SVE2`/`SME`
+   > （SVE2 指令实测 SIGILL；SME 仅"软件不可见"，见 CLAUDE.md 第 2 条与平台怪癖节）。
+   > 因此"host is VL=256 属于另一台机器"的断言不成立，机器身份一律现场探测。
+   > 本注记只更正事实，不改写当日结论。
+
 5. progress-log 缺 PR #242 条目；`sme_za_tileview_arm` 注释声称的五相位 dual kernel 与四档
    checksum 不在本机任何 gem5-fi checkout（历史验证仓已消失）。
 
