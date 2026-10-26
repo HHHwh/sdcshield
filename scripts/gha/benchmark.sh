@@ -97,10 +97,12 @@ for t in "${BENCH_TESTS[@]}"; do
   "$BIN" --max-test-loop-count "$LOOP" --retest-on-failure=0 \
           -n 1 -e "$t" -o "$YAML" >"$LOG" 2>&1 || rc=$?
   # 只取目标测试自己的 result/test-runtime:-e 单测运行会附带伴随段(mce_check),
-  # 原 grep|head -1 取首个匹配依赖「目标段恰好在前」的隐式顺序。
-  RES=$(awk -v t="$t" '$0 == "- test: " t {in_t=1}
+  # 原 grep|head -1 取首个匹配依赖「目标段恰好在前」的隐式顺序。每个 "- test: "
+  # 行都重置匹配状态:目标段缺字段/被截断时不跨段读伴随段(否则 RES/RT 会窃取
+  # 下一测试段的数据——错误数值写进目标行且闸门无从识别)。
+  RES=$(awk -v t="$t" '/^- test: / {in_t=($0 == "- test: " t)}
                        in_t && /^  result:/ {print $2; exit}' "$YAML" 2>/dev/null)
-  RT=$(awk -v t="$t" '$0 == "- test: " t {in_t=1}
+  RT=$(awk -v t="$t" '/^- test: / {in_t=($0 == "- test: " t)}
                       in_t && /^  test-runtime:/ {print $2; exit}' "$YAML" 2>/dev/null)
   if [ "$rc" -ne 0 ]; then
     printf '%s\tfail\t%s\n' "$t" "$LOOP" >> "$OUT"
