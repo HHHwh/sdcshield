@@ -792,37 +792,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **承接**:P5(SLEEF/Eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
   语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
   遗留手探文件)待做。
-<<<<<<< HEAD
-  语言级不可编译); P6 存量迁移(含本阶段 6 个遗留手探文件)待做。
-
-<<<<<<< HEAD
-
-- **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
-  gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
-  (128/256/512/1024-bit)×{fixed,random×3},全部 SDCSHIELD_FAILS=0;
-  同一输入集 checksum 四档逐位一致(跨档字节同一性成立,per-lane 纯度
-  +尾精确的设计预期);三重保真闭环——gem5 向量 vs 标量 worst 0.00 ulp
-  + 真硬件标量锚(宿主用同一 libsleef.a 逐位一致),阴性对照(金标准/
-  输入 1-ulp 毒化)确认检测链非空转。内核直链 vendored libsleef.a
-  (与 tests_sve_vla 同一机器码),12 函数矩阵镜像 sleef_sve.cpp。
-- **sve_rot×5 家族归并裁定**(诚实边界):与 sleef_sve 同批迁入真 VLA
-  库、迁移机制同构(同库同 flag),但**风险面不同构**——sleef 拉入整库
-  VLA 机器码(深),sve_rot 是自写浅内核(裸 z-ldr/str + 整数 _x 算子,
-  无 whilelt 尾无库代码);本矩阵可背书"库迁移模式"半边,**不能**当作
-  sve_rot 指令面验证。sve_rot 维持 compile-probe-only,若需收口应补
-  小型 sve_rot_vla_dual(z-ldr/str + 整数算子 × 四档)——登记为后续
-  可选工作项,不阻塞本 PR。
-- **gem5 SE 边界新实证**:guest 退出码不传播(exit(7)→gem5 退 0),
-  "真实退出码"记 gem5 进程码;F3(SVE2_MOVI 读回 DEVIATION)根因 open
-  (上下文相关 O3 现象,孤立复现失败),SLEEF 不受影响由价值级证据独立
-  证明——均入档 gem5-fi findings.md。
-- **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
-  现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
-  (git-sanity)+ 本实证收口。
-<<<<<<< HEAD
->>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
-=======
-
 ## 2026-10-25 · PR #286 检视 round 1 处置(head 11cdd2c5,当前 head 5 条意见)
 
 - **意见清单与裁定**:当前 head 待处置 5 条——k7pattern GPS tag 16-bit
@@ -853,7 +822,34 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **验证**:build.sh 零新警告;本机四 k7p cell + xlswave SKIP 路径不变
   (CpuNotSupported, 'test compiled with sve');zstd19 -t 2000 -n 1 pass;
   x86-64 非回归(纯 aarch64 段内改动)。
->>>>>>> 679c4610 (docs(progress): PR #286 检视 round 1 处置记录——k7pattern tag 32 位拆分 + sve_rot_vla_dual 16-run 实证)
+  语言级不可编译); P6 存量迁移(含本阶段 6 个遗留手探文件)待做。
+
+<<<<<<< HEAD
+
+- **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
+  gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
+  (128/256/512/1024-bit)×{fixed,random×3},全部 SDCSHIELD_FAILS=0;
+  同一输入集 checksum 四档逐位一致(跨档字节同一性成立,per-lane 纯度
+  +尾精确的设计预期);三重保真闭环——gem5 向量 vs 标量 worst 0.00 ulp
+  + 真硬件标量锚(宿主用同一 libsleef.a 逐位一致),阴性对照(金标准/
+  输入 1-ulp 毒化)确认检测链非空转。内核直链 vendored libsleef.a
+  (与 tests_sve_vla 同一机器码),12 函数矩阵镜像 sleef_sve.cpp。
+- **sve_rot×5 家族归并裁定**(诚实边界):与 sleef_sve 同批迁入真 VLA
+  库、迁移机制同构(同库同 flag),但**风险面不同构**——sleef 拉入整库
+  VLA 机器码(深),sve_rot 是自写浅内核(裸 z-ldr/str + 整数 _x 算子,
+  无 whilelt 尾无库代码);本矩阵可背书"库迁移模式"半边,**不能**当作
+  sve_rot 指令面验证。sve_rot 维持 compile-probe-only,若需收口应补
+  小型 sve_rot_vla_dual(z-ldr/str + 整数算子 × 四档)——登记为后续
+  可选工作项,不阻塞本 PR。
+- **gem5 SE 边界新实证**:guest 退出码不传播(exit(7)→gem5 退 0),
+  "真实退出码"记 gem5 进程码;F3(SVE2_MOVI 读回 DEVIATION)根因 open
+  (上下文相关 O3 现象,孤立复现失败),SLEEF 不受影响由价值级证据独立
+  证明——均入档 gem5-fi findings.md。
+- **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
+  现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
+  (git-sanity)+ 本实证收口。
+<<<<<<< HEAD
+>>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
 =======
 
 ## 2026-10-24（all-VL Phase 2 P6：存量迁移收官——142 文件框架层化 + 分支拓扑修复）
@@ -910,4 +906,66 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   独立编译零告警; zstd19 → exit: pass。
 - **战役终态**: P0-P6 + 收尾硬化全部落地; 12 个 PR(#272-#288 + 硬化
   PR)等人工 merge 门; 累计 gem5 四档实证 ~200 run 全绿。
+<<<<<<< HEAD
 >>>>>>> 6c4dc121 (docs(progress): 收尾硬化单元条目 + 战役终态总览)
+=======
+
+## 2026-10-26（PR #294 检视 round 2 处置——六发现逐条裁决 + 验证边界入档）
+
+- **裁决总览**: #36/#39 采纳合一 commit（per-lane 比对, 79542f9d）、
+  #40 变通（无代码改动——钳制本身修复真越界读不可回退, 处置=如实
+  声明边界, 见下）、#41 采纳（计数同步, CLAUDE.md/README）、#42 采纳
+  （流数守卫, a9a4fdd8）、#43 采纳（lcm, dc2dc471）。#1-#35 为历史
+  轮次（旧 head）未重复处置。
+- **乘法器盲区消除**(79542f9d, #36 coderabbit Major + #39 claude
+  Important): NUM_WORDS=8 时 i+j>=NUM_WORDS 的 28/64 词对, SVE 低半积
+  lo_row[j] 只进高位结果字 acc[8..14]（进位只前进不回传）, out_lo 仅
+  memcpy acc[0..7]——运行 memcmp 观察不到这些乘法的错误。修复:
+  标量 j 循环累加前逐项比对 lo_row[j] != (uint64_t)prod 即置位,
+  sve_bigint_mul512 改返回 bool; run 侧 per-lane 通道先行
+  report_fail（log_data 四组诊断）, init 并入首跑 self-check;
+  gmp_bignum_sve.cpp 双胞胎同款。健康硬件恒等, 累加结果逐位不变。
+- **流数守卫对称封口**(a9a4fdd8, #42): sve_hmac.h 五个 hmac_*_xn 入口
+  补 svcntw()/svcntd() > SVE_SHA_STREAMS_MAX_32/64 → return -1, 与
+  key_len/padded 守卫同款同位; sve_sha_kernels.h 定义处补 kernel
+  前置条件契约注释。18 个消费 TU 均先经 arm64_require_sve_vl(128,1024)
+  门控（守卫为防御性）; verify.cpp 自带同款门控（52-57 行）; 7 个无
+  VL 门控的 ipsec TU（cmac/xcbc/gcm 族）不含 sve_hmac.h。
+- **非 2 幂 VL 对齐修复**(dc2dc471, #43): neon_rot_u8x16_sve init/run
+  的 align 由 max(svcntb,64) 改 std::lcm(svcntb,64)。SVE 架构只保证
+  VL 为 16B 倍数, 96B（768-bit）合法过门: max(96,64)=96≠lcm=192,
+  96 的奇数倍非 64 倍数, aligned_alloc(64,·) 违反 C11 7.22.3.1。
+  2 幂 VL 档 lcm≡max 行为不变。条文核实边界: 本机网络策略阻断
+  open-std.org 抓取, N1570 引文以检视意见为准; 算术本地可证
+  （96×171=16416 非 64 倍数）, 同文件 LDR_SLACK 注释本已承认非 2 幂
+  VL 合法, 与旧注释『均为 2 的幂』自相矛盾。
+- **验证边界声明（CLAUDE.md 规则 2 兜底条款, 诚实入档）**: 下列路径
+  在本机 0xd01（无 SVE/SME）零执行; gem5-fi 本机不可用（无 gem5
+  源码/二进制, 2026-10-23 全盘搜索 + 2026-10-26 复核; CLAUDE.md 所写
+  /home/sdc/wangxu/code-review/gem5-fi 路径不存在）。本机验证仅覆盖
+  编译 + SKIP 路径（skip-reason 'test compiled with sve'）+ zstd19
+  回归, **首次真实执行将在目标硅片**:
+  1. bigint_mulx/gmp_bignum 的 per-lane 比对与 bool 返回语义（含
+     round-1 引入的低半积参与累加 + svwhilelt 分块循环）（#39）;
+  2. movmskpspd_sve 谓词钳制路径（svwhilelt_b32/b64(0, FPS_LANES/
+     FPD_LANES)）——旧版 svwhilelt(0, lanes<32?lanes:32) 在 VL=256
+     激活 8 lane 越 4-float 行读堆（f7716fcf diff 实证）, 钳制后仅
+     4/2 lane; 4-bit 掩码结果数学等价为纯分析论证, 无运行证据（#40）;
+  3. neon_rot_u8x16_sve lcm 取整路径（非 2 幂档本机无硬件）（#43）。
+- **计数同步**(#41): worktree 全保真构建（openssl/openblas/sleef/
+  isa-l/acl 五 install 符号链接齐备）实测 --list-tests = 478（PROD）/
+  484（--quality=0）/ 489（--quality=-1）, 2026-10-26; CLAUDE.md 477
+  →478, README 440→478（446→484/451→489）。D-tests.md 的 279 系历史
+  实验时点记录（自述 vendored 缺失降级构建）, 保留不改。
+- **git-sanity failure 诊断（只诊断不改历史）**: check runs 里
+  git-sanity 红 = 分支含 6 个 merge commit（ec65712b..7fe83a97:
+  20a79b88/c5bc95b3/9a72140a/680307c4/a1ce89b7/b82ff2bf）触发
+  .github/scripts/check-git-history.sh 的 no-merges 检查
+  （pr.yaml:59 传 github.base_ref + GITHUB_SHA）; Signed-off-by 检查
+  全绿（95/95 非合并提交）。修复需 rebase 改写历史, 本轮约束不做,
+  留人工 merge 门裁决。
+- **验证**: 每 commit ./scripts/build.sh 零新警告（基线仅
+  stacksize.cpp _XOPEN_SOURCE redefined 一条宿主配方既有警告）;
+  受影响测试 --quality=-1 -t 2000 -n 1 全部干净 skip + exit: pass;
+  zstd19 → exit: pass（每 commit 一轮）。
+>>>>>>> a8640ffd (docs(progress): PR #294 检视 round 2 处置入档——六发现裁决 + 三路径零执行边界声明 (发现 #40 处置))
