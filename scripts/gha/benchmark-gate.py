@@ -100,8 +100,11 @@ def classify(path):
                             # 解析(JS JSON.parse / benchmark-action)必挂——按格式
                             # 漂移(坏行)红, 而非放行染红 trend job
                             fails.append(name)
-    except OSError as err:
-        print(f"::warning::benchmark-gate: cannot read {path} ({err})")
+    except (OSError, UnicodeDecodeError) as err:
+        # UnicodeDecodeError 是 ValueError 子类, 不在 OSError 之下——非 UTF-8
+        # 字节的 TSV(传输损坏/磁盘错)若不显式接住会裸 traceback, verify 丢
+        # 失全部分类诊断(只剩堆栈), 违背本脚本「不抛异常」的书面契约
+        print(f"::warning::benchmark-gate: cannot read/decode {path} ({err})")
     return ok, skips, fails, header_ok
 
 
