@@ -27,12 +27,18 @@
 #               已发布的历史点不受影响, trend 不越位)
 # TSV 缺失/不可读: 两角色都按「无数据」处理(verify 红 / trend 不发布), 打
 # ::warning:: 说明原因, 不抛异常不红趋势 job(趋势更新非闸门)。
+# 表头契约:首行必须是 test\twall_seconds\tloop_count(与 benchmark.sh 写入方
+# 和 benchmark-to-json.py 一致)。盲跳首行的旧写法在格式演进(加列/改列序/丢
+# 表头)时会把首行真实数据静默吃掉——数据点无声丢失;表头不符按格式漂移处理
+# (verify 红 / trend 不发布), 强制三处同步演进。
 #
 # SPDX-License-Identifier: Apache-2.0
 import math
 import re
 import sys
 from pathlib import Path
+
+EXPECTED_HEADER = "test\twall_seconds\tloop_count"
 
 
 def expected_tests():
@@ -56,10 +62,14 @@ def expected_tests():
 
 
 def classify(path):
+    """→ (ok, skips, fails, header_ok)。header_ok=False 表示表头不符契约
+    (含空文件/丢表头/格式演进), 由调用方按角色决定红/不发布。"""
     ok, skips, fails = [], [], []
+    header_ok = False
     try:
         with open(path, encoding="utf-8") as f:
-            f.readline()  # header: test\twall_seconds\tloop_count
+            first = f.readline().rstrip("\n")
+            header_ok = first == EXPECTED_HEADER
             for line in f:
                 parts = line.rstrip("\n").split("\t")
                 if len(parts) == 1 and parts[0] == "":
@@ -90,17 +100,23 @@ def classify(path):
                             fails.append(name)
     except OSError as err:
         print(f"::warning::benchmark-gate: cannot read {path} ({err})")
-    return ok, skips, fails
+    return ok, skips, fails, header_ok
 
 
 def main():
     if len(sys.argv) != 3 or sys.argv[1] not in ("verify", "trend"):
         sys.exit(f"usage: {sys.argv[0]} {{verify|trend}} <benchmark.tsv>")
     role, path = sys.argv[1], sys.argv[2]
-    ok, skips, fails = classify(path)
-    print(f"benchmark-gate[{role}]: ok={len(ok)} skip={len(skips)} fail={len(fails)}")
+    ok, skips, fails, header_ok = classify(path)
+    print(f"benchmark-gate[{role}]: ok={len(ok)} skip={len(skips)} "
+          f"fail={len(fails)} header={'ok' if header_ok else 'BAD'}")
     if role == "verify":
         rc = 0
+        if not header_ok:
+            print("::error::benchmark.tsv 表头不符契约(预期 'test\\twall_seconds\\t"
+                  "loop_count')——格式漂移/丢表头会吃掉首行数据, 须同步 benchmark.sh/"
+                  "benchmark-gate.py/benchmark-to-json.py 三处")
+            rc = 1
         if not ok:
             print(f"::error::benchmark.tsv 无数据行(ok=0, skip={len(skips)}, "
                   f"fail={len(fails)})——采集整体废掉或基准全部失败(见上方 benchmark.log)")
@@ -126,6 +142,9 @@ def main():
                   f"{' '.join(skips)}——对应趋势数据点将缺失")
         sys.exit(rc)
     # trend 角色:消费侧拦截, 不产 JSON 不 push;报警归 verify 侧, 不重复红
+    if not header_ok:
+        print("::warning::benchmark.tsv 表头不符契约——不更新 gh-pages 趋势")
+        sys.exit(1)
     if not ok:
         print(f"::warning::benchmark.tsv 无数据行(ok=0;verify 闸门已红或已告警)"
               "——不更新 gh-pages 趋势")

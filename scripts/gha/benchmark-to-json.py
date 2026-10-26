@@ -16,13 +16,21 @@ import json
 import math
 import sys
 
+# 表头契约:与 benchmark.sh 写入方、benchmark-gate.py 校验方一致(三方契约,
+# 格式演进须三处同步)。盲跳首行的旧写法在丢表头/加列时会把首行真实数据
+# 静默吃掉。
+EXPECTED_HEADER = "test\twall_seconds\tloop_count"
+
 if len(sys.argv) != 3:
     sys.exit(f"usage: {sys.argv[0]} <benchmark.tsv> <out.json>")
 
 tsv_path, out_path = sys.argv[1], sys.argv[2]
 entries = []
 with open(tsv_path, encoding="utf-8") as f:
-    f.readline()  # header: test\twall_seconds\tloop_count
+    first = f.readline().rstrip("\n")
+    if first != EXPECTED_HEADER:
+        sys.exit(f"{sys.argv[0]}: unexpected header {first!r} "
+                 f"(expected {EXPECTED_HEADER!r}) — TSV 契约不符")
     for line in f:
         parts = line.rstrip("\n").split("\t")
         if len(parts) != 3:
