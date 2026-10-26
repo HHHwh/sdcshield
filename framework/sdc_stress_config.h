@@ -370,8 +370,10 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  *   (sandstone.cpp test_timeout = max(5×-t + 30s, 300s) 后才
  *   SIGQUIT), 校准的作用是把未校准档的分钟级(600s)压到 O(10s)
  *   量级、远低于该宽限。
- *   k clamp [1.5, 4.0] 抑制小档计时噪声; 试解总成本两小档+一验证档
- *   (秒级, 失准收缩时验证档可至 max_single_ms 量级)。
+ *   k clamp [1.5, 4.0] 抑制小档计时噪声; 试解总成本两小档+一验证档。
+ *   注意: 验证探针本身**不受 max_single_ms 约束**——它是预算的执行者,
+ *   初选落点在幂律/k_floor 失准时可超预算数倍(本文件 :434 段自引的实测
+ *   落点 8.3s vs 2s 预算即此情形), 只有其后的收缩轮才按预算收敛。
  *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
@@ -404,10 +406,18 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
     int mid = (p1 * 2 <= hi) ? p1 * 2 : hi;
     double t2 = probe(mid);
     if (t1 <= 0.0 || t2 <= 0.0) {
-        /* 计时分辨率不足(极快求解)——时间不是约束, 交还内存上限 */
-        log_warning("[时间校准] %s.%s: 试解计时不足(%.2f/%.2fms) → 维持内存上限 %ld",
-                    test_id, knob, t1, t2, (long)hi);
-        return hi;
+        /* 任一档计时不可测即无法拟合 k。仅当两档皆不可测(t1 = t2 = 0)时,
+         * 才能断定"时间不是约束"(求解快到连时钟都读不出), 此时交还内存
+         * 上限是安全的。若只是一档读数为 0, 按『上限宁小勿大』退守校准
+         * 下限 lo——与两个调用方 catch (...) → lo 的方向一致。绝不在此
+         * 交还未校准的 hi: 那会静默复活分钟级、TERM 打不断的单次求解,
+         * 正是本函数要消除的故障模式。 */
+        const bool both_unmeasurable = (t1 <= 0.0 && t2 <= 0.0);
+        log_warning("[时间校准] %s.%s: 试解计时不足(%.2f/%.2fms) → %s %ld",
+                    test_id, knob, t1, t2,
+                    both_unmeasurable ? "维持内存上限" : "退守校准下限",
+                    both_unmeasurable ? (long)hi : (long)lo);
+        return both_unmeasurable ? hi : lo;
     }
     double k = std::log2(t2 / t1);
     if (k < 1.5) k = 1.5;
