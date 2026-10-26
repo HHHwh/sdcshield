@@ -37,7 +37,7 @@
  *     greptile 4254737399; PR #237 review, coderabbit).
  *   - Shape B (fully randomized): per-thread grid and coefficients
  *     re-rolled from the framework RNG every round, run through the
- *     very same axis_generic_dual hot path, then compared against an
+ *     very same axis_generic_16x2 hot path, then compared against an
  *     INDEPENDENT scalar std::fma chain that mirrors the kernel's
  *     r=1..6 up-then-down order. Shape A varies only the grid per
  *     fragment; shape B re-rolls both the grid and the coefficients
@@ -79,7 +79,6 @@
  */
 
 #include <sandstone.h>
-#include <cassert>
 #include <cinttypes>
 #include <cstdint>
 #include <cstddef>
@@ -153,10 +152,7 @@ static inline uint64_t bits_of(double d)
     return u;
 }
 
-/* (was axis_generic_16x2 — named for the retired 512-bit B_TILE=16 ×
- * 2-vector geometry; renamed for the bt-parameterized all-VL kernel.
- * The gem5-fi dual-kernel counterpart is stencil_axis_dual.) */
-inline void axis_generic_dual(
+inline void axis_generic_16x2(
     const double* s_base, const size_t coord,
     const size_t extent, const size_t stride,
     const svbool_t ptrue, const double* coeff, const size_t bt,
@@ -205,10 +201,10 @@ static int sve512_stencil_axis_arm_init(struct test *test)
      * 128..1024-bit range in one call), replacing the getauxval
      * hand-probe. The bt = 2*svcntd() geometry below and its [4,
      * kTileMax] stack-buffer guard are the P1-242-verified parameterized
-     * geometry and stay untouched; the run side re-checks 2*svcntd()
-     * against init's bt (release-effective drift guard, all-VL policy
-     * #3), and the run-side assert() additionally pins the kTileMax
-     * buffer bound. */
+     * geometry and stay untouched; the run-side release-effective checks
+     * re-pin init's bt invariant and fail closed on init/run VL drift
+     * (PR #294 review round 3 — the former assert() evaporated under
+     * NDEBUG and never covered runtime drift). */
     const long svl = arm64_require_sve_vl(test, 128, 1024);
     if (svl < 0)
         return EXIT_SKIP;
@@ -275,19 +271,6 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
     (void)cpu;
     auto *d = static_cast<SveStencilAxisData *>(test->data);
 
-    /* All-VL policy #3 (fail-closed): re-check the geometry fresh. The
-     * assert() further down only pins the stored invariant and is
-     * NDEBUG-sensitive (writing_tests.md: re-check the VL in test_run and
-     * report_fail on drift — never continue with stale geometry; the
-     * xlswave/gather_scatter siblings use the same release-effective
-     * form). */
-    if (2 * svcntd() != d->bt) {
-        log_error("sve512_stencil_axis_arm: VL drifted between init (bt=%zu) "
-                  "and run (bt=%zu)", d->bt, (size_t)(2 * svcntd()));
-        report_fail_msg("sve512_stencil_axis_arm: SVE VL drifted between "
-                        "init and run");
-    }
-
     // Stack-local coefficient table (the svdup_f64 / ld1rd source), as in
     // the original main(). 0.125 is exactly representable.
     double coeff[RADIUS + 1] = {};
@@ -300,7 +283,28 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
      * arrays below are sized kTileMax, so pin init's invariant (bt within
      * [4, kTileMax]) before any buffer math (PR #242 review, coderabbit
      * Learnings). */
-    assert(bt >= 4 && bt <= kTileMax);
+    /* Release-effective replacement for the original assert (assert is
+     * compiled out under NDEBUG — the P2 finding; PR #294 review round 3,
+     * finding #48a); same invariant. */
+    if (!(bt >= 4 && bt <= kTileMax)) {
+        log_error("sve512_stencil_axis_arm: init invariant bt=%zu outside "
+                  "[4,%d]", bt, (int)kTileMax);
+        report_fail_msg("sve512_stencil_axis_arm: tile geometry invariant broken");
+    }
+    /* All-VL policy #3: fail closed on init/run VL drift — the src layout
+     * (bt = 2*svcntd() at init), expected[] and the result[] staging are
+     * all sized at init's bt while the kernel below drives full-width
+     * ptrue vectors at the RUNTIME svcntd(); a drifted VL either reads
+     * neighbouring slots (garbage lanes) or compares unwritten stack —
+     * both surface as false SDC, so drift itself must be the reported
+     * failure (PR #294 review round 3, finding #48a). */
+    if ((size_t)2 * svcntd() != bt) {
+        log_error("sve512_stencil_axis_arm: SVE VL drifted between init "
+                  "(bt=%zu) and run (2*svcntd()=%zu)",
+                  bt, (size_t)2 * svcntd());
+        report_fail_msg("sve512_stencil_axis_arm: SVE VL drifted between "
+                        "init and run");
+    }
     const size_t lanes = bt / 2;
     const svbool_t ptrue = svptrue_b64();
 
@@ -341,7 +345,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                 log_warning("sve512_stencil_axis: iteration=%zu, &res0=%p",
                             j, static_cast<void *>(&res0));
             }
-            axis_generic_dual(
+            axis_generic_16x2(
                 s_base, coord, extent, stride, ptrue, coeff, bt, res0, res1);
         }
 
@@ -372,7 +376,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
         }
 
         /* ---- 形态 B: 全随机第二形态 (B6 / R2b 冻结盲区) ----
-         * 同一热路径 (axis_generic_dual 原样), 输入换成框架 RNG 每轮重掷
+         * 同一热路径 (axis_generic_16x2 原样), 输入换成框架 RNG 每轮重掷
          * 的随机格点/系数 (per-thread); 期望由独立标量 std::fma 链式参考
          * 按内核顺序 (r=1..6, 每半径先上后下) 计算 —— 形态 A 仅按
          * fragment 变化格点, 形态 B 每轮连系数一起重掷。 */
@@ -432,7 +436,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                                 "iteration=%zu, &b_res0=%p",
                                 j, static_cast<void *>(&b_res0));
                 }
-                axis_generic_dual(
+                axis_generic_16x2(
                     r_base, coord, extent, stride, ptrue, r_coeff,
                     bt, b_res0, b_res1);
             }
