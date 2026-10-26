@@ -121,6 +121,8 @@ for t in "${BENCH_TESTS[@]}"; do
         printf '%s\tfail\t%s\n' "$t" "$LOOP" >> "$OUT"
         echo "benchmark: $t: result=pass but no test-runtime — YAML tail:"
         tail -n 15 "$YAML" 2>/dev/null
+        echo "benchmark: $t: tail of $t.log:"
+        tail -n 15 "$LOG" 2>/dev/null
       fi
       ;;
     skip)
@@ -131,6 +133,8 @@ for t in "${BENCH_TESTS[@]}"; do
       printf '%s\tfail\t%s\n' "$t" "$LOOP" >> "$OUT"
       echo "benchmark: $t: result='${RES:-<missing>}' (not pass/skip) — YAML tail:"
       tail -n 15 "$YAML" 2>/dev/null
+      echo "benchmark: $t: tail of $t.log:"
+      tail -n 15 "$LOG" 2>/dev/null
       ;;
   esac
 done
