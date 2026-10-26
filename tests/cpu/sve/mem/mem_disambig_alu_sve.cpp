@@ -73,6 +73,7 @@ struct MemDisambigAluSveData {
 
 static int mem_disambig_alu_sve_init(struct test *test)
 {
+#if defined(__aarch64__)
     /* All-VL Phase 2 P6: per-test auxv hand-probe -> framework
      * layer: arm64_require_sve_vl does the SVE capability check
      * + 128..1024-bit range gate in one call (skip reason
@@ -80,14 +81,21 @@ static int mem_disambig_alu_sve_init(struct test *test)
     const long svl = arm64_require_sve_vl(test, 128, 1024);
     if (svl < 0)
         return EXIT_SKIP;
-    auto *data = static_cast<MemDisambigAluSveData *>(malloc(sizeof(MemDisambigAluSveData)));
-    data->buffer_bytes = disambig_alu_sve_buffer_bytes(test);
-    data->lanes = (int)(svl / 8);   /* f64 lanes = SVL bytes / 8 */
-    if (data->lanes < 2 || data->lanes > 16) {   /* [2,16] vs 128..1024-bit, NDEBUG-proof */
+    const int lanes = (int)(svl / 8);   /* f64 lanes = SVL bytes / 8 */
+    if (lanes < 2 || lanes > 16) {   /* [2,16] vs 128..1024-bit, NDEBUG-proof */
         log_error("mem_disambig_alu_sve: f64 lanes %d outside [2,16]"
-                  " -- unit drift (svl %ld bytes)", data->lanes, svl);
+                  " -- unit drift (svl %ld bytes)", lanes, svl);
         return EXIT_FAILURE;
     }
+#else
+    /* TU is aarch64-only in meson (tests/cpu/sve guard); keep the
+     * translation unit self-contained for single-TU compiles (the
+     * arm64_vl.h include above is conditionally compiled). */
+    const int lanes = 0;
+#endif
+    auto *data = static_cast<MemDisambigAluSveData *>(malloc(sizeof(MemDisambigAluSveData)));
+    data->buffer_bytes = disambig_alu_sve_buffer_bytes(test);
+    data->lanes = lanes;
     data->offsets = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));
     data->values = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));
     data->expected = static_cast<uint64_t *>(malloc(DISAMBIG_ALU_SVE_PATTERNS * sizeof(uint64_t)));
