@@ -406,8 +406,15 @@ jobs:
           merge-multiple: true
       - name: Convert to benchmark JSON
         id: convert
+        # shell: bash 显式声明(与全 workflow 其余步骤统一, bash -eo pipefail):
+        # 此前无 shell: 时走 GHA 默认 bash -e(无 pipefail), 下行 tsv 探测的
+        # 「ls 失败 | head 成功」管道仅在无 pipefail 下整体为 0——加 pipefail
+        # 后同一行会在赋值语句处 -e 即死(实测 rc=2 零输出), no-TSV 场景从
+        # 「跳过发布」翻转为零诊断红。尾部 || true 显式声明「探测失败=无
+        # TSV」是预期路径, 两种 shell 语义下行为一致。
+        shell: bash
         run: |
-          tsv=$(ls bench/benchmark/benchmark.tsv 2>/dev/null || ls bench/*/benchmark/benchmark.tsv 2>/dev/null | head -1)
+          tsv=$(ls bench/benchmark/benchmark.tsv 2>/dev/null || ls bench/*/benchmark/benchmark.tsv 2>/dev/null | head -1 || true)
           if [ -z "$tsv" ]; then
             echo "no benchmark.tsv (unexpected) — skip trend update"
             echo "publish=false" >> "$GITHUB_OUTPUT"
