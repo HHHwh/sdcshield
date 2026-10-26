@@ -13,9 +13,9 @@
  * andnot (bic) — the direct SVE 1:1 intrinsic mapping (kreg1_sve
  * precedent). pg4 sub-block predicates preserve the 4-lane NEON
  * semantics; svcntw() elements (runtime VL) of buffer slack cover the
- * asm full-VL ldr z at the final sub-block (documented deviation from
- * the mask_sve template). Back-to-back str z -> ldr z -> str z
- * amplifier.
+ * asm full-VL ldr z at the final sub-block (kreg-family slack pattern;
+ * the mask cell adopted it in PR #294 review round 5, completing the
+ * family). Back-to-back str z -> ldr z -> str z amplifier.
  * The element count (originally ARM0102_KREG_LOGIC_SVE_COUNT=1024) is
  * runtime configurable via -O arm0102_kreg_logic_sve.count=N /
  * SDC_ARM0102_KREG_LOGIC_SVE_COUNT, with a memory-adaptive default

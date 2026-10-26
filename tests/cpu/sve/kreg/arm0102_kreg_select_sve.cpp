@@ -22,8 +22,9 @@
  * (arm0102_kreg_mask_sve discipline: svptrue at VL=256 is 8 lanes and
  * would overrun the 4-element sub-block — the batch-1 heap-corruption
  * bug). Buffers carry svcntw() elements (runtime VL) of slack so the asm
- * full-VL ldr z at the final sub-block cannot overread (deviation from
- * the mask_sve template, documented).
+ * full-VL ldr z at the final sub-block cannot overread (kreg-family
+ * slack pattern; the mask cell adopted it in PR #294 review round 5,
+ * completing the family).
  * The element count (originally ARM0102_KREG_SELECT_SVE_COUNT=1024) is
  * runtime configurable via -O arm0102_kreg_select_sve.count=N /
  * SDC_ARM0102_KREG_SELECT_SVE_COUNT, with a memory-adaptive default
