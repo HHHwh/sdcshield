@@ -643,6 +643,29 @@ def classify_anchor(item: dict, kind: str, anchor: datetime,
     return counted, over
 
 
+def issue_comment_classification(item: dict, anchor: datetime,
+                                 head_sha: str, skew: timedelta) -> tuple:
+    """issue(PR)评论的三元分类单一真源(检视意见 R4-#42): (bot, counted, over)。
+    bot = issue_comment_bot 认可结果(None = 不认可——显式错误 last_run.head_sha
+    的 pr-agent 评论即被排除);counted/over = 锚定分类(classify_anchor 的
+    issue_comment 分支)。
+    两者必须合取的原因: classify_anchor 对 issue_comment 返回的 counted
+    **不蕴含 bot 认可**——issue_comment_anchored 常规路径(ts ≥ anchor)不看
+    last_run.head_sha,显式错误 head 的 pr-agent 评论锚定口径仍 counted=True,
+    须由 bot 认可判定排除。此前该合取散布 4 个调用点、三种形态(fetch_pr
+    信号循环先过滤 / 计数循环后合取 / _collect_entries 后修正),新增调用点
+    漏一处合取即重现 797d10ef 式口径分叉——本函数让合取只发生一次。
+    bot 为 None 时恒 (None, False, False)。_collect_entries 的「收录一切
+    pr-agent 检视输出(含旧 head)」语义靠收录判定(bot_of + pragent_comment
+    标记)保留,anchored 标注取本函数的 counted 即计数口径。"""
+    bot = issue_comment_bot(item, head_sha)
+    if bot is None:
+        return None, False, False
+    counted, over = classify_anchor(item, "issue_comment", anchor,
+                                    head_sha, skew)
+    return bot, counted, over
+
+
 # ============ 拉取与判定 ============
 
 _EVENTS_CACHE: dict = {}   # slug → events 列表(进程内缓存;status 总览多 PR 只拉一次)
@@ -815,12 +838,11 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # 唯一例外(意见 2): pr-agent 评论有 last_run.head_sha 严格锚,回退锚容差
     # 窗口内严格命中者计入——见 issue_comment_anchored。
     for c in issue_comments:
-        bot = issue_comment_bot(c, head_sha)
+        bot, counted, over = issue_comment_classification(c, anchor,
+                                                          head_sha, skew)
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
-        counted, over = classify_anchor(c, "issue_comment", anchor,
-                                        head_sha, skew)
         if over:
             data.skew_suspects.append(
                 ("issue_comment", ts, (anchor - ts).total_seconds()))
@@ -894,9 +916,11 @@ def fetch_pr(slug: str, number: int) -> PRData:
     n_icomment = 0
     for c in issue_comments:
         body = (c.get("body") or "")
-        counted, over = classify_anchor(c, "issue_comment", anchor,
-                                        head_sha, skew)
-        if not (issue_comment_bot(c, head_sha) and (counted or over)):
+        # bot 认可 × 锚定分类的合取单一真源(检视意见 R4-#42)——显式错误
+        # last_run.head_sha 的 pr-agent 评论在此即被排除,不再由本循环合取。
+        _, counted, over = issue_comment_classification(c, anchor,
+                                                        head_sha, skew)
+        if not (counted or over):
             continue
         if not body.strip() or is_summary_text(body):
             continue
@@ -1046,10 +1070,11 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
     # 摘要评论计 1——与 fetch_pr 的 n_icomment 同口径。
     for c in pr.issue_comments:
         body = c.get("body") or ""
-        counted, over = classify_anchor(c, "issue_comment", anchor,
-                                        pr.head_sha, skew)
-        if not (issue_comment_bot(c, pr.head_sha) and (counted or over)
-                and body.strip() and not is_summary_text(body)):
+        # bot 认可 × 锚定分类的合取单一真源(检视意见 R4-#42,与 fetch_pr
+        # 计数循环同源)——counted/over 已蕴含 issue_comment_bot 认可。
+        _, counted, over = issue_comment_classification(c, anchor,
+                                                        pr.head_sha, skew)
+        if not ((counted or over) and body.strip() and not is_summary_text(body)):
             continue
         if pragent_comment(c):
             state = pragent_state_json(body)
@@ -1455,17 +1480,16 @@ def _collect_entries(pr: PRData) -> list:
         ts = parse_ts(c.get("created_at"))
         if ts is None:
             continue
-        anchored = classify_anchor(c, "issue_comment", anchor,
-                                   pr.head_sha, skew)[0]
-        # pr-agent 显式错误 last_run.head_sha: 计数侧 issue_comment_bot 不认
-        # (排除语义,pr_loop.py issue_comment_bot),导出标注同口径不标
-        # 「当前 head」(检视意见 7);head 缺失/解析失败保持 anchored 原值
-        # (回退时间锚定语义,与计数侧一致)。认可判定与计数侧共用
-        # pragent_head_accepted 单一真源(检视意见 R3-#37——此前此处三行
-        # 手工复刻排除语义,是 anchor_and_skew/classify_anchor 刚根除的
-        # 复制漂移模式的新实例,演进漏改一处即口径分叉)。
-        if pragent_comment(c) and not pragent_head_accepted(c, pr.head_sha):
-            anchored = False
+        # anchored 标注 = 计数口径的 counted(bot 认可 × 锚定分类,单一真源
+        # issue_comment_classification,检视意见 R4-#42)——显式错误
+        # last_run.head_sha 的 pr-agent 评论 bot 认可为 None、counted=False,
+        # 不标「当前 head」(检视意见 7 的排除语义由单一真源承担,此前是
+        # classify_anchor[0] + pragent_head_accepted 后修正三行,合取靠调用
+        # 点约定维持);head 缺失/解析失败保持回退时间锚定语义(与计数侧
+        # 一致)。收录判定(上方 bot_of + pragent_comment 标记)不受影响:
+        # 旧 head 条目仍收录供参考,靠本标注甄别。
+        anchored = issue_comment_classification(c, anchor, pr.head_sha,
+                                                skew)[1]
         pending = (("issue_comment", c.get("id")) in pr.pending_skew_ids)
         extra = ""
         if bot == "pr-agent":

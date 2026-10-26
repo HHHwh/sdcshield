@@ -1312,6 +1312,74 @@ def test_pragent_head_accepted_single_source():
     assert pr_loop.pragent_strict_head(_comment(head), head)
 
 
+def test_issue_comment_classification_single_source():
+    """意见 R4-#42: issue 评论「bot 认可 × 锚定分类」的合取单一真源
+    issue_comment_classification → (bot, counted, over)。classify_anchor 对
+    issue_comment 的 counted 不蕴含 bot 认可(常规路径不看 last_run.head_sha),
+    显式错误 head 的 pr-agent 评论在此合取一处排除——修复前该合取散布 4 个
+    调用点(信号循环先过滤/计数循环后合取/collect 后修正),漏一处即口径分叉。
+    """
+    head = "e" * 40
+    anchor = pr_loop.parse_ts("2026-10-24T12:00:00Z")
+    zero, wide = timedelta(0), timedelta(seconds=300)
+
+    def _pragent(head_sha_in_state, created_at):
+        body = "<!-- pr-agent:review:full -->\n检视正文\n"
+        if head_sha_in_state is None:
+            body += '<!-- pr-agent-review-state:v1 {"last_run": {}} -->'
+        else:
+            body += ('<!-- pr-agent-review-state:v1 {"last_run": '
+                     '{"head_sha": "' + head_sha_in_state + '"}} -->')
+        return {"id": 5, "user": {"login": "github-actions[bot]"},
+                "body": body, "created_at": created_at}
+
+    # 显式错误 head,锚后(常规路径): 锚定口径 counted 本可为 True,
+    # 合取后 (None, False, False)——计数/导出两侧同一排除
+    bad = _pragent("f" * 40, "2026-10-24T12:05:00Z")
+    assert (pr_loop.issue_comment_classification(bad, anchor, head, zero)
+            == (None, False, False))
+    # 对照: 不合取的锚定口径确实 counted=True(证明合取必要,非摆设)
+    assert pr_loop.issue_comment_anchored(bad, anchor, head, zero) is True
+    # head 缺失,锚后 → 回退时间锚定语义,认可计入
+    nohead = _pragent(None, "2026-10-24T12:05:00Z")
+    assert (pr_loop.issue_comment_classification(nohead, anchor, head, zero)
+            == ("pr-agent", True, False))
+    # 正确 head,回退锚容差窗口内(锚前 240s)→ 严格锚放宽计入
+    okhead = _pragent(head, "2026-10-24T11:56:00Z")
+    assert (pr_loop.issue_comment_classification(okhead, anchor, head, wide)
+            == ("pr-agent", True, False))
+    # 正确 head,push 锚(skew=0)锚前 → over(同 SHA 强推回退,见意见 R4-#41)
+    assert (pr_loop.issue_comment_classification(okhead, anchor, head, zero)
+            == ("pr-agent", False, True))
+    # 非 bot 用户评论 → None,恒不计入
+    someone = {"id": 8, "user": {"login": "someone"}, "body": "x",
+               "created_at": "2026-10-24T12:05:00Z"}
+    assert (pr_loop.issue_comment_classification(someone, anchor, head, zero)
+            == (None, False, False))
+    # local-claude issue 评论锚后 → 计入
+    lc = {"id": 9, "user": {"login": "wangxumarshall"},
+          "body": "<!-- local-claude-review -->\n意见",
+          "created_at": "2026-10-24T12:05:00Z"}
+    assert (pr_loop.issue_comment_classification(lc, anchor, head, zero)
+            == ("local-claude", True, False))
+    # collect 侧 anchored 标注取同一 counted(显式错误 head 不标「当前 head」,
+    # 修复前靠 pragent_head_accepted 后修正三行,现由单一真源承担)
+    pr = pr_loop.PRData(
+        number=9, title="t", state="open", draft=False, fork=False,
+        head_sha=head, head_ref="feat/x", base_ref="main",
+        head_time=pr_loop.parse_ts("2026-10-24T11:55:00Z"),
+        url="", author="a", push_time=anchor,
+        issue_comments=[bad, nohead])
+    entries = pr_loop._collect_entries(pr)
+    assert len(entries) == 2
+    # nohead(认可)标「当前 head」;bad(显式错误 head)标「历史轮次」——
+    # 断言按内容配对,不依赖 entries 的排序稳定性
+    cur = [t for _, t, _ in entries if "— 当前 head" in t]
+    old = [t for _, t, _ in entries if "历史轮次" in t]
+    assert len(cur) == 1 and len(old) == 1
+    assert cur[0].startswith("[pr-agent]") and old[0].startswith("[pr-agent]")
+
+
 # ---------------------------------------------------------------------------
 # PR #289 第三轮检视闭环(当前 head d3d880c7): pending 意见 collect 可处置化
 # (意见 R2-#30)。#27/#31 的护栏测试见上方 R2-#27 / classify_anchor 用例。
