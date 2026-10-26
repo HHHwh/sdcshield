@@ -53,7 +53,9 @@ def expected_tests():
         text = (Path(__file__).resolve().parent / "benchmark.sh").read_text(encoding="utf-8")
     except OSError:
         return None
-    m = re.search(r"^BENCH_TESTS=\((.*?)^\)", text, re.S | re.M)
+    # 兼容多行(原生态: ") 独立成行, 行尾 \ 续行)与单行两种数组书写;
+    # 数组元素是 C 标识符测试名, 不含 ")", 首个 ")" 即数组收尾
+    m = re.search(r"^BENCH_TESTS=\((.*?)\)", text, re.S | re.M)
     if not m:
         return None
     # bash 数组字面量:空白分隔;行尾续行符 \<newline> 先归一为空白
