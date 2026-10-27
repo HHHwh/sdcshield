@@ -43,7 +43,10 @@ HAS_TAG = re.compile(r"^\s*\.arm64_requires\s*=", re.M)
 
 def required_bits(path: pathlib.Path) -> str:
     name = path.name
-    if "fmmla" in name or "sve2_cross_precision" in name:
+    # svmmla_f32/f64 are FEAT_F32MM/F64MM, not SVE2 — a host without SVE2
+    # can still execute them (measured 2026-10-27). Only the genuinely
+    # SVE2-instruction test gets the SVE2 tag.
+    if "sve2_cross_precision" in name:
         return "ARM64_REQUIRES_SVE2"
     if name.startswith("sme_"):
         return "ARM64_REQUIRES_SME"

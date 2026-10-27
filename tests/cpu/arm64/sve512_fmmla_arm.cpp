@@ -77,15 +77,26 @@ static constexpr size_t CHAIN_STEPS = 256;
 
 // Finite high-Hamming f64 patterns (|x| <= 2; chain can never overflow —
 // sve512_f64_chain_arm precedent).
+/* EXACT integer operands, deliberately (same doctrine as
+ * sme_fmopa_za_arm's "精确整数操作数"): FMMLA computes each output as a FUSED
+ * 2-product — both products exact, summed exactly, rounded ONCE. Measured
+ * 2026-10-27 on real silicon: for a=-1.4…,b=-0.833…,c=1.6,d=1.333… the
+ * hardware returns 0x400a666666666666 (3.3) while a sequential
+ * fma(c,d,fma(a,b,0)) chain returns 0x400a666666666667 — one ULP apart. No
+ * scalar std::fma chain can reproduce a fused 2-product, so a byte-exact
+ * golden over arbitrary doubles is impossible. With small integers every
+ * product AND every chain accumulator stays exactly representable
+ * (|acc| <= CHAIN_STEPS * 2 * 4 * 4 = 8192 << 2^53), so the golden is
+ * order- and rounding-independent by construction. */
 static const uint64_t F64_FINITE[] = {
-    0x3FF5555555555555ULL,   //  1.3333...
-    0xBFFAAAAAAAAAAAAAULL,   // -1.6667...
-    0x3FD5555555555555ULL,   //  0.3333...
-    0xBFEAAAAAAAAAAAAAULL,   // -0.8333...
+    0x4008000000000000ULL,   //  3.0
+    0xC000000000000000ULL,   // -2.0
     0x3FF0000000000000ULL,   //  1.0
+    0xC010000000000000ULL,   // -4.0
+    0x4000000000000000ULL,   //  2.0
     0xBFF0000000000000ULL,   // -1.0
-    0x3FF999999999999AULL,   //  1.6
-    0xBFF6666666666667ULL,   // -1.4
+    0x4010000000000000ULL,   //  4.0
+    0xC008000000000000ULL,   // -3.0
 };
 static constexpr size_t F64_FINITE_SIZE =
     sizeof(F64_FINITE) / sizeof(F64_FINITE[0]);
@@ -100,28 +111,48 @@ struct FmmlaData {
 #ifdef __aarch64__
 
 // ---------------------------------------------------------------------------
-// Scalar golden for ONE FMMLA f64 step: tile side n = vl_f64_rows.
-//   res[r][c] = sum_k fma(A[r][k], B[k][c], res[r][c])   (k ascending,
-//   single rounding each accumulate — identical to the hardware order)
-// ---------------------------------------------------------------------------
+// Scalar golden for ONE FMMLA step.
+//
+// Hardware semantics were established by basis-vector probing on real silicon
+// (2026-10-27; this host has FEAT_F32MM/F64MM without SVE2, and these were the
+// first executions of the instructions this project ever had):
+//
+//   for every group g of FOUR lanes:
+//     out[g + 2*r + c] = sum_{k<2} Zn[g + 2*r + k] * Zm[g + 2*c + k]
+//
+// i.e. each 4-lane group is a 2x2 matrix product Zn_seg * Zm_seg^T. Two
+// details the pre-fix golden got wrong:
+//   1. the SECOND operand is indexed [2*c + k], not [2*k + c] — the hardware
+//      multiplies by the transpose;
+//   2. the tile is per-group 2x2, NOT one n x n matrix with n = lanes/2;
+//      the two agree only when lanes == 4.
+// The run-side one-step self-check below is what catches this class of error;
+// it exists precisely because this golden had never executed anywhere.
 static void fmmla_f64_step_golden(double *tile, const double *Zn,
-                                  const double *Zm, size_t n)
+                                  const double *Zm, size_t lanes)
 {
-    for (size_t r = 0; r < n; ++r)
-        for (size_t c = 0; c < n; ++c)
-            for (size_t k = 0; k < n; ++k)
-                tile[r * n + c] = std::fma(Zn[r * n + k], Zm[k * n + c],
-                                           tile[r * n + c]);
+    for (size_t g = 0; g + 4 <= lanes; g += 4)
+        for (size_t r = 0; r < 2; ++r)
+            for (size_t c = 0; c < 2; ++c) {
+                double acc = tile[g + 2 * r + c];
+                for (size_t k = 0; k < 2; ++k)
+                    acc = std::fma(Zn[g + 2 * r + k], Zm[g + 2 * c + k], acc);
+                tile[g + 2 * r + c] = acc;
+            }
 }
 
 static void fmmla_f32_step_golden(float *tile, const float *Zn,
-                                  const float *Zm, size_t n)
+                                  const float *Zm, size_t lanes)
 {
-    for (size_t r = 0; r < n; ++r)
-        for (size_t c = 0; c < n; ++c)
-            for (size_t k = 0; k < n; ++k)
-                tile[r * n + c] = std::fmaf(Zn[r * n + k], Zm[k * n + c],
-                                            tile[r * n + c]);
+    /* Same per-4-lane 2x2 rule as the f64 golden above (basis-probed). */
+    for (size_t g = 0; g + 4 <= lanes; g += 4)
+        for (size_t r = 0; r < 2; ++r)
+            for (size_t c = 0; c < 2; ++c) {
+                float acc = tile[g + 2 * r + c];
+                for (size_t k = 0; k < 2; ++k)
+                    acc = std::fmaf(Zn[g + 2 * r + k], Zm[g + 2 * c + k], acc);
+                tile[g + 2 * r + c] = acc;
+            }
 }
 
 // Hardware: one FMMLA step via the unpredicated ACLE intrinsic. Zn/Zm/tile
@@ -159,17 +190,25 @@ static int sve512_fmmla_arm_init(struct test *test)
        HWCAP2 conjunction stays a getauxval hand-probe: it is this test's
        own semantic gate (FEAT_F32MM + FEAT_F64MM matrix-multiply
        instructions), which the generic require helper does not cover. */
-    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    /* F64MM needs a 256-bit segment to hold its 2x2 double matrix: at
+       VL=128 svmmla_f64 raises SIGILL (measured 2026-10-27 on silicon —
+       the instruction is UNDEFINED there, not a no-op). Gate from 256. */
+    const long svl = arm64_require_sve_vl(test, 256, 1024);
     if (svl < 0)
         return EXIT_SKIP;
+    /* Only FEAT_F32MM + FEAT_F64MM matter: svmmla_f32/f64 are the matrix
+       multiply extension, NOT SVE2 instructions. Measured 2026-10-27 on a
+       host with HWCAP2_SVE2=0 but F32MM=F64MM=1: the instructions execute
+       and produce correct results, so requiring SVE2 here made the test skip
+       on hardware that can run it — the reason it had never executed
+       anywhere and its golden was never validated. */
     unsigned long hwcap2 = getauxval(AT_HWCAP2);
-    if ((hwcap2 & (HWCAP2_SVE2 | HWCAP2_SVEF32MM | HWCAP2_SVEF64MM))
-            != (HWCAP2_SVE2 | HWCAP2_SVEF32MM | HWCAP2_SVEF64MM)) {
+    if ((hwcap2 & (HWCAP2_SVEF32MM | HWCAP2_SVEF64MM))
+            != (HWCAP2_SVEF32MM | HWCAP2_SVEF64MM)) {
         log_skip(CpuNotSupportedSkipCategory,
-                 "SVE2 F32MM/F64MM matrix-multiply not available "
-                 "(HWCAP2: sve2=%lu f32mm=%lu f64mm=%lu); "
+                 "F32MM/F64MM matrix-multiply not available "
+                 "(HWCAP2: f32mm=%lu f64mm=%lu); "
                  "sve512_fmmla_arm requires FEAT_F32MM + FEAT_F64MM",
-                 (hwcap2 & HWCAP2_SVE2) ? 1UL : 0UL,
                  (hwcap2 & HWCAP2_SVEF32MM) ? 1UL : 0UL,
                  (hwcap2 & HWCAP2_SVEF64MM) ? 1UL : 0UL);
         return EXIT_SKIP;
@@ -189,19 +228,17 @@ static int sve512_fmmla_arm_init(struct test *test)
 
         // ---- golden: f64 chain ----
         {
-            const size_t n = data->vl_f64_rows;
             std::vector<double> Zn(vl_d), Zm(vl_d), tile(vl_d, 0.0);
             for (size_t i = 0; i < vl_d; ++i) {
                 memcpy(&Zn[i], &F64_FINITE[(i * 7 + 1) % F64_FINITE_SIZE], 8);
                 memcpy(&Zm[i], &F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE], 8);
             }
             for (size_t step = 0; step < CHAIN_STEPS; ++step)
-                fmmla_f64_step_golden(tile.data(), Zn.data(), Zm.data(), n);
+                fmmla_f64_step_golden(tile.data(), Zn.data(), Zm.data(), vl_d);
             data->golden_f64 = tile;
         }
         // ---- golden: f32 chain (f32 view of the same finite table) ----
         {
-            const size_t n = data->vl_f32_rows;
             std::vector<float> Zn(vl_w), Zm(vl_w), tile(vl_w, 0.0f);
             for (size_t i = 0; i < vl_w; ++i) {
                 double d;
@@ -211,7 +248,7 @@ static int sve512_fmmla_arm_init(struct test *test)
                 Zm[i] = (float)d;
             }
             for (size_t step = 0; step < CHAIN_STEPS; ++step)
-                fmmla_f32_step_golden(tile.data(), Zn.data(), Zm.data(), n);
+                fmmla_f32_step_golden(tile.data(), Zn.data(), Zm.data(), vl_w);
             data->golden_f32 = tile;
         }
 
@@ -265,7 +302,7 @@ static int sve512_fmmla_arm_run(struct test *test, int cpu)
         {
             std::vector<double> one_tile(vl_d, 0.0);
             fmmla_f64_step_golden(one_tile.data(), Zn.data(), Zm.data(),
-                                  d->vl_f64_rows);
+                                  (size_t)vl_d);
             std::vector<double> hw_tile(vl_d, 0.0);
             fmmla_f64_step_hw(hw_tile.data(), Zn.data(), Zm.data(), vl_d);
             if (memcmp(one_tile.data(), hw_tile.data(), vl_d * 8) != 0) {
@@ -307,7 +344,7 @@ static int sve512_fmmla_arm_run(struct test *test, int cpu)
         {
             std::vector<float> one_tile(vl_w, 0.0f);
             fmmla_f32_step_golden(one_tile.data(), Zn.data(), Zm.data(),
-                                  d->vl_f32_rows);
+                                  (size_t)vl_w);
             std::vector<float> hw_tile(vl_w, 0.0f);
             fmmla_f32_step_hw(hw_tile.data(), Zn.data(), Zm.data());
             if (memcmp(one_tile.data(), hw_tile.data(), vl_w * 4) != 0) {
@@ -393,5 +430,6 @@ DECLARE_TEST(sve512_fmmla_arm,
     .test_run = sve512_fmmla_arm_run,
     .test_cleanup = sve512_fmmla_arm_cleanup,
     .quality_level = TEST_QUALITY_PROD,
-    .arm64_requires = ARM64_REQUIRES_SVE2,
+    .arm64_requires = ARM64_REQUIRES_SVE,
+    .arm64_min_vl_bits = 256,   /* F64MM is UNDEFINED below 256-bit (SIGILL) */
 END_DECLARE_TEST

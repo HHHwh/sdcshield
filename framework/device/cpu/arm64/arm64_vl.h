@@ -346,7 +346,20 @@ static inline long arm64_require_sve_vl(struct test *test, long min_bits, long m
                  "ARM64 SVE not available; %s exercises the SVE datapath", test->id);
         return EXIT_SKIP;
     }
+    /* Align with the tier the worker will run at: test_init executes on a
+     * throwaway aux thread that still carries the PROCESS default VL, while
+     * arm64_spec_prepare_test() pins the worker to the spec maximum. When the
+     * spec is lower than the process default (possible only through the
+     * SDCSHIELD_ARM64_SPEC_MAX_VL override — the kernel default otherwise
+     * equals the maximum) the two would disagree and the run-side drift guard
+     * would fire for an artificial reason. Clamp to the spec so init sizes its
+     * geometry for the tier that will actually execute. */
     long bits = arm64_sve_vl_bytes() * 8;
+    {
+        const struct arm64_spec *spec = arm64_spec_get();
+        if (spec->max_sve_vl_bits > 0 && bits > spec->max_sve_vl_bits)
+            bits = spec->max_sve_vl_bits;
+    }
     if (bits < min_bits || bits > max_bits) {
         log_skip(CpuNotSupportedSkipCategory,
                  "%s: SVE vector length %ld bits is outside the supported %ld..%ld-bit range",
