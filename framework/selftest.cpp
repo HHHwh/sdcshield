@@ -1635,6 +1635,58 @@ const static test_group group_test_hw_features = {
 };
 #endif
 
+#if defined(__aarch64__) && defined(__linux__)
+/* Design §4.1: the spec probe must be self-consistent and architecturally
+ * plausible. This is the only runtime gate for the max-tier probe's
+ * save/request-ceiling/restore sequence: a broken restore or a bogus granted
+ * value shows up here on the first SVE host that runs --selftests. */
+static int selftest_arm64_spec_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    const struct arm64_spec *s = arm64_spec_get();
+
+    if (s->has_sve != arm64_cpu_has_sve() || s->has_sve2 != arm64_cpu_has_sve2()
+            || s->has_sme != arm64_cpu_has_sme()) {
+        log_error("%s: cached spec disagrees with the raw auxv probes", test->id);
+        return EXIT_FAILURE;
+    }
+    if (s->has_sve) {
+        if (s->max_sve_vl_bits < 128
+                || s->max_sve_vl_bits > ARM64_SPEC_MAX_TIER_BITS
+                || (s->max_sve_vl_bits % 128) != 0) {
+            log_error("%s: max_sve_vl_bits %ld is not an architectural tier "
+                      "in [128,%d]", test->id, s->max_sve_vl_bits,
+                      ARM64_SPEC_MAX_TIER_BITS);
+            return EXIT_FAILURE;
+        }
+        /* The probe requests the ceiling then restores, so the caller's VL is
+           whatever it was before. When the maximum could not be measured the
+           fallback is that same current VL — assert the two agree. */
+        if (!s->max_vl_known
+                && arm64_sve_vl_bytes() * 8 != s->max_sve_vl_bits) {
+            log_error("%s: unmeasured max fell back to %ld but the current VL "
+                      "is %ld", test->id, s->max_sve_vl_bits,
+                      arm64_sve_vl_bytes() * 8);
+            return EXIT_FAILURE;
+        }
+    } else if (s->max_sve_vl_bits != 0 || s->max_vl_known) {
+        log_error("%s: no SVE but max_sve_vl_bits=%ld max_vl_known=%d",
+                  test->id, s->max_sve_vl_bits, (int)s->max_vl_known);
+        return EXIT_FAILURE;
+    }
+    if (!s->has_sme && s->max_sme_svl_bits != 0) {
+        log_error("%s: no SME but max_sme_svl_bits=%ld",
+                  test->id, s->max_sme_svl_bits);
+        return EXIT_FAILURE;
+    }
+    {
+        char buf[128];
+        log_info("%s: %s", test->id, arm64_spec_describe(buf, sizeof(buf)));
+    }
+    return EXIT_SUCCESS;
+}
+#endif
+
 static struct test selftests_array[] = {
 {
     .id = "selftest_pass",
@@ -2698,6 +2750,14 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
     .test_init = selftest_arm64_vl_require_sve_init,
     .test_run = selftest_arm64_vl_require_sve_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_arm64_spec",
+    .description = "arm64_spec probe invariants (extension bits vs auxv, max tier is architectural, no-SVE/SME zeroing)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_arm64_spec_run,
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
 },

@@ -44,6 +44,8 @@
 
 #if defined(__aarch64__) && defined(__linux__)
 #include <errno.h>
+#include <stdio.h>
+#include <string.h>
 #include <sys/auxv.h>
 #include <sys/prctl.h>
 #include <asm/hwcap.h>
@@ -82,6 +84,9 @@
 #endif
 #ifndef HWCAP2_SME
 #define HWCAP2_SME (1UL << 23)
+#endif
+#ifndef HWCAP2_SME2
+#define HWCAP2_SME2 (1UL << 37)   /* uapi 6.0 */
 #endif
 
 /* ---- capability probes: honest runtime, immune to the compile-time
@@ -193,6 +198,115 @@ static inline long arm64_sme_pin_vl(long bytes)
     if (rc == 0)
         return -ENOSYS; /* a real kernel returns the new VL (>= 16); 0 = ignored */
     return rc & PR_SME_VL_LEN_MASK;
+}
+
+/* ---- chip spec: one-shot probe, cached (design §4.1) ----
+ *
+ * Why a separate probe from the queries above: "current VL" is not "maximum
+ * supported VL". The kernel default (and any per-process lowering via
+ * /proc/sys/abi/sve_default_vector_length) can be below what the silicon
+ * supports, so a policy that says "run at the highest tier this chip has"
+ * must ask the kernel for the ceiling and read back what it granted.
+ *
+ * PR_SVE_SET_VL is per-thread with round-down semantics, so the probe is
+ * save → request 2048-bit → read the granted value → restore. The calling
+ * thread's VL is left exactly as it was (verified natively 2026-10-27:
+ * requests 512/1024/2048/4096 all grant 256 on this host, and the restore
+ * brings the saved value back).
+ *
+ * If prctl is refused entirely (seccomp sandbox, emulator) the granted value
+ * is 0: fall back to the current thread's VL and mark max_vl_known=false —
+ * never claim a maximum we could not measure.
+ *
+ * ARM64_SPEC_MAX_TIER_BITS = 2048 is the architectural probing ceiling and
+ * the reserved 2048-bit tier; this project implements 128/256/512/1024 only
+ * (spec §6), so nothing downstream branches on 2048.
+ */
+#define ARM64_SPEC_MAX_TIER_BITS 2048
+#define ARM64_REQUIRES_SVE  (1u << 0)
+#define ARM64_REQUIRES_SVE2 (1u << 1)
+#define ARM64_REQUIRES_SME  (1u << 2)
+#define ARM64_REQUIRES_SME2 (1u << 3)
+
+struct arm64_spec {
+    bool has_sve, has_sve2, has_sme, has_sme2;
+    long max_sve_vl_bits;    /* 0 when SVE is absent */
+    long max_sme_svl_bits;   /* 0 when SME is absent */
+    bool max_vl_known;       /* false = prctl refused; max_* is the fallback */
+};
+
+/* Request `want_bytes`, keep what the kernel granted, then put the thread's
+ * original VL back. Returns the granted bytes (0 = refused). */
+static inline long arm64_vl_probe_max(int set_vl_cmd, int get_vl_cmd, long want_bytes)
+{
+    int saved = prctl(get_vl_cmd);
+    if (saved <= 0)
+        return 0;
+    int rc = prctl(set_vl_cmd, (unsigned long)(want_bytes & 0xffff));
+    int granted = (rc > 0) ? rc : 0;
+    prctl(set_vl_cmd, (unsigned long)(saved & 0xffff));   /* restore */
+    return granted;
+}
+
+/* Benign-race caching: two threads racing here at worst both probe, and each
+ * probe restores its own thread's VL. Kept deliberately simple so the header
+ * stays usable from C (no C++ static-init guard). */
+static inline const struct arm64_spec *arm64_spec_get(void)
+{
+    static struct arm64_spec spec;
+    static bool done;
+
+    if (done)
+        return &spec;
+
+    spec.has_sve  = arm64_cpu_has_sve();
+    spec.has_sve2 = arm64_cpu_has_sve2();
+    spec.has_sme  = arm64_cpu_has_sme();
+    spec.has_sme2 = (getauxval(AT_HWCAP2) & HWCAP2_SME2) != 0;
+    spec.max_sve_vl_bits = 0;
+    spec.max_sme_svl_bits = 0;
+    spec.max_vl_known = false;
+
+    if (spec.has_sve) {
+        long granted = arm64_vl_probe_max(PR_SVE_SET_VL, PR_SVE_GET_VL,
+                                          ARM64_SPEC_MAX_TIER_BITS / 8);
+        long bytes = granted > 0 ? granted : arm64_sve_vl_bytes();
+        spec.max_sve_vl_bits = bytes > 0 ? bytes * 8 : 0;
+        spec.max_vl_known = granted > 0;
+    }
+    if (spec.has_sme) {
+        long granted = arm64_vl_probe_max(PR_SME_SET_VL, PR_SME_GET_VL,
+                                          ARM64_SPEC_MAX_TIER_BITS / 8);
+        long bytes = granted > 0 ? granted : arm64_sme_svl_bytes();
+        spec.max_sme_svl_bits = bytes > 0 ? bytes * 8 : 0;
+    }
+    done = true;
+    return &spec;
+}
+
+/* Human-readable one-liner for --dump-cpu-info and run logs. Caller owns the
+ * buffer; 128 bytes is enough for every path below. */
+static inline const char *arm64_spec_describe(char *buf, size_t len)
+{
+    const struct arm64_spec *s = arm64_spec_get();
+    size_t used;
+
+    if (!s->has_sve)
+        used = (size_t)snprintf(buf, len, "SVE no");
+    else if (s->max_vl_known)
+        used = (size_t)snprintf(buf, len, "SVE yes (max VL %ld bits)",
+                                s->max_sve_vl_bits);
+    else
+        used = (size_t)snprintf(buf, len,
+                                "SVE yes (max VL unknown, fell back to %ld bits)",
+                                s->max_sve_vl_bits);
+
+    if (used < len)
+        snprintf(buf + used, len - used, " | SVE2 %s | SME %s | SME2 %s",
+                 s->has_sve2 ? "yes" : "no",
+                 s->has_sme ? "yes" : "no",
+                 s->has_sme2 ? "yes" : "no");
+    return buf;
 }
 
 /* ---- test-flow helpers ---- */
