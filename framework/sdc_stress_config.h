@@ -614,15 +614,18 @@ struct sdc_joint_args {
     double shared_bytes_per_slice;  /* init 共享矩阵, 0 无 */
     int mem_fraction_permille;
     enum sdc_mem_family ar_fam;
-    long run_budget_ms;             /* 200000; 0=不限时间 */
+    long run_budget_ms;             /* 全核单迭代(2解×AR)预算 ms, 调用方传
+                                       200000(spec: 300s 宽限×0.67≈200s);
+                                       0=不限时间 */
 };
 
 /*
  * 联合求解 n_opt = min(n_mem, n_run, hi), lo 兜底:
  *   n_mem = sqrt((node_budget − node_slices·shared) / (node_threads · c))
- *   n_run = (run_budget_ms×0.67 / (AR(ar_fam) × 2 × fit.a_ms))^(1/fit.p)
- * 时间侧: 300s 硬宽限下的 200s 预算(spec M1)×0.67; ×2 = init 填充+一次
- * 求解; AR = 全核争抢慢化(族×拓扑, spec M2); fit 来自
+ *   n_run = (run_budget_ms / (AR(ar_fam) × 2 × fit.a_ms))^(1/fit.p)
+ * 时间侧: run_budget_ms 即全核单迭代预算(×2 = init 填充+一次求解,
+ * ×AR = 全核争抢慢化(族×拓扑, spec M2); 调用方传 200000 = 300s 硬宽限
+ * ×0.67(spec M1), 本函数不再二次折算——200s 已是折算后的值); fit 来自
  * sdc_calibrated_dim 的两点差分(已扣固定开销, M3), 无效时跳过 n_run。
  * 内存侧 c 优先 RSS_RATIO_TABLE(族), 否则调用方传统三元组
  * (bytes_per_elem×matrices_per_thread×rss_ratio)。
@@ -699,7 +702,7 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         /* k_floor=3.0: 现役/规划消费方(稠密 SVD/GEMM/稀疏 Cholesky/
          * bidiag)的复杂度下限同为 ~3.0(各自旧调用方同值);
          * sdc_joint_args 不带此参(签名契约)。 */
-        double per_solve_ms = (double)a->run_budget_ms * 0.67 / (ar * 2.0);
+        double per_solve_ms = (double)a->run_budget_ms / (ar * 2.0);
         long per_solve = (long)per_solve_ms;
         if (per_solve < 1)
             per_solve = 1;
@@ -712,7 +715,7 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                            test ? test->id : "(global)", knob, 3.0,
                            solve_once, &fit);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
-            double nr = std::pow((double)a->run_budget_ms * 0.67
+            double nr = std::pow((double)a->run_budget_ms
                                  / (ar * 2.0 * fit.a_ms), 1.0 / fit.p);
             if (nr >= 2147483647.0)
                 n_run = 2147483647;        /* 防溢出截断 */
