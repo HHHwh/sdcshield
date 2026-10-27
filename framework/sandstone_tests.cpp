@@ -13,6 +13,9 @@
 #include "sandstone_p.h"
 #include "sandstone_tests.h"
 #include "sandstone_chrono.h"
+#if defined(__aarch64__) && defined(__linux__)
+#include <device/cpu/arm64/arm64_vl.h>
+#endif
 
 void SandstoneTestSet::load_all_tests()
 {
@@ -91,6 +94,29 @@ SandstoneTestSet::SandstoneTestSet(struct test_set_cfg cfg, unsigned int flags)
             continue;
         if (test.quality_level < sApp->requested_quality)
             continue;
+#if defined(__aarch64__) && defined(__linux__)
+        /* Design §4.3: the default set contains only what THIS chip can run,
+           so "default to the highest spec the chip supports" is visible in
+           --list-tests instead of showing a wall of unavoidable SKIPs.
+           Explicit requests (-e / --test-list-file) never reach this branch
+           (they construct the set with enable_all_tests clear), so naming an
+           unsupported test by hand still registers it and lets it skip
+           honestly at run time. */
+        {
+            const struct arm64_spec *spec = arm64_spec_get();
+            if ((test.arm64_requires & ARM64_REQUIRES_SVE) && !spec->has_sve)
+                continue;
+            if ((test.arm64_requires & ARM64_REQUIRES_SVE2) && !spec->has_sve2)
+                continue;
+            if ((test.arm64_requires & ARM64_REQUIRES_SME) && !spec->has_sme)
+                continue;
+            if ((test.arm64_requires & ARM64_REQUIRES_SME2) && !spec->has_sme2)
+                continue;
+            if (test.arm64_min_vl_bits && spec->max_sve_vl_bits
+                    && spec->max_sve_vl_bits < test.arm64_min_vl_bits)
+                continue;
+        }
+#endif
         struct test_cfg_info ti;
         ti.status = test_cfg_info::enabled;
         ti.test = &test;
