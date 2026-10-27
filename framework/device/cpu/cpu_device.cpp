@@ -78,6 +78,16 @@ void dump_device_info()
     } else {
         printf("SME streaming vector length: n/a (SME not present)\n");
     }
+    /* Chip spec: the extension set plus the MAXIMUM tier this silicon
+       supports. Distinct from the two lines above, which report the
+       CURRENT per-thread lengths (the kernel default may be lower than
+       the maximum; the spec probe asks for the ceiling and reads back
+       what the kernel granted). See design
+       docs/superpowers/specs/2026-10-27-arm64-spec-policy-and-vl-tier-cases-design.md §4.1 */
+    {
+        char specbuf[128];
+        printf("ARM64 spec: %s\n", arm64_spec_describe(specbuf, sizeof(specbuf)));
+    }
 #endif
     printf("# CPU\tPkgID\tCoreID\tThrdID\tModId\tDieId\tNUMAId\tApicId\tMicrocode\tPPIN\n");
     for (i = 0; i < device_count(); ++i) {

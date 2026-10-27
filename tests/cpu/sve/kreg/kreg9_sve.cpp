@@ -194,4 +194,5 @@ DECLARE_TEST(kreg9_sve, "Mask register moves (KMOVB/W/D/Q) via SVE vector/predic
     .test_run = kreg9_sve_run,
     .test_cleanup = kreg9_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

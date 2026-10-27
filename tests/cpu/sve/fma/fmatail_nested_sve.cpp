@@ -138,4 +138,5 @@ DECLARE_TEST(fmatail_nested_sve, "SVE double FMA exhaustive tail precision with 
     .test_run = fmatail_nested_sve_run,
     .test_cleanup = fmatail_nested_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -55,6 +55,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <device/cpu/arm64/arm64_spec_prepare.h>
+
 #ifdef _WIN32
 #  include <ntstatus.h>
 #  include <shlwapi.h>
@@ -818,7 +820,14 @@ static uintptr_t thread_runner(int thread_number)
         this_thread->thread_state.store(thread_running, std::memory_order_relaxed);
 
         test_start();
-        ret = test_run_wrapper_function(current_test(), thread_number);
+        /* Design §4.4: pin THIS worker to the chip's highest supported tier
+           before the test body runs — the only thread whose VL matters (see
+           arm64_spec_prepare.h and arm64_vl.h's thread-model boundary).
+           Returns EXIT_SUCCESS unconditionally on non-arm64, so x86-64 is
+           untouched. */
+        ret = arm64_spec_prepare_test(current_test());
+        if (ret == EXIT_SUCCESS)
+            ret = test_run_wrapper_function(current_test(), thread_number);
 
         // cleanup resets thread_state
     }
@@ -1200,6 +1209,14 @@ static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread 
             return state;
         }
         sApp->prepare_test_tests(test);
+
+        /* ARM64 spec policy (design §4.4): raise the CONTROL thread to the
+           chip's highest tier before test_init's aux thread and the per-CPU
+           workers are created — both inherit this thread's VL, so init's
+           goldens/buffers and the run-side lanes agree even when the kernel
+           default VL is below the silicon maximum. Workers re-verify and
+           carry the SKIP/FAIL verdict (arm64_spec_prepare.h). */
+        arm64_spec_pin_control_thread(test);
 
         if (test->test_init) {
             if (init_in_aux_thread) {

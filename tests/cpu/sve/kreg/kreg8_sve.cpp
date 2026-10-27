@@ -192,4 +192,5 @@ DECLARE_TEST(kreg8_sve, "VPMOVM2 mask-to-vector expansion (B/W/D) on real SVE pr
     .test_run = kreg8_sve_run,
     .test_cleanup = kreg8_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -202,4 +202,5 @@ DECLARE_TEST(adcxlong_sve, "Long SVE carry chain (4096 words, port of adcxlong)"
     .test_run = adcxlong_sve_run,
     .test_cleanup = adcxlong_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

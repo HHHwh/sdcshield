@@ -375,4 +375,5 @@ DECLARE_TEST(sme_za_tileview_arm,
     .test_cleanup = sme_za_tileview_arm_cleanup,
     .fracture_loop_count = 0,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SME,
 END_DECLARE_TEST

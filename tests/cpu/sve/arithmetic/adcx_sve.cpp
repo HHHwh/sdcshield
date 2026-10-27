@@ -202,4 +202,5 @@ DECLARE_TEST(adcx_sve, "Unsigned add with carry on SVE lanes (port of adcx)")
     .test_run = adcx_sve_run,
     .test_cleanup = adcx_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

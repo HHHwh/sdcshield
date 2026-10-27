@@ -282,4 +282,5 @@ DECLARE_TEST(operand_space_sve,
     .test_run = operand_space_sve_run,
     .test_cleanup = operand_space_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

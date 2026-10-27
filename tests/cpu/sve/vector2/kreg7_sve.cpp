@@ -213,4 +213,5 @@ DECLARE_TEST(kreg7_sve, "Top-bit mask extraction at four widths (VPMOVB/W/D/Q2M)
     .test_run = kreg7_sve_run,
     .test_cleanup = kreg7_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

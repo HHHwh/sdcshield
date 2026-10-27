@@ -194,4 +194,5 @@ DECLARE_TEST(arm64_sdc_sve, "SVE SDC detection: CRC32/CRC64/checksum computed ov
     .test_run = arm64_sdc_sve_run,
     .test_cleanup = arm64_sdc_sve_cleanup,
     .quality_level = TEST_QUALITY_BETA,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

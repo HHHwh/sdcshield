@@ -202,4 +202,5 @@ DECLARE_TEST(adox_arm_sve, "ARM64 overflow-carry chain on SVE lanes (port of ado
     .test_run = adox_arm_sve_run,
     .test_cleanup = adox_arm_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

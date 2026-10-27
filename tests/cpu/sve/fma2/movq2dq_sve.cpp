@@ -121,4 +121,5 @@ DECLARE_TEST(movq2dq_sve, "GPR to SVE z-register moves with value checks (port o
     .test_run     = movq2dq_sve_run,
     .test_cleanup = movq2dq_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

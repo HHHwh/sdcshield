@@ -185,5 +185,6 @@ DECLARE_TEST(fisttp_sve, "Floating-point to integer conversion (round-toward-zer
     .test_init = fisttp_sve_init,
     .test_run = fisttp_sve_run,
     .test_cleanup = fisttp_sve_finish,
-    .quality_level = TEST_QUALITY_PROD
+    .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

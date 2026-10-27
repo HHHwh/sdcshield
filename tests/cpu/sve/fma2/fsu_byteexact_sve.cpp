@@ -320,4 +320,5 @@ DECLARE_TEST(fsu_byteexact_sve,
     .test_run = fsu_byteexact_sve_run,
     .test_cleanup = fsu_byteexact_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

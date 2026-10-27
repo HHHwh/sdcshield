@@ -162,4 +162,5 @@ DECLARE_TEST(crt_builtins_sve, "compiler-rt soft-float builtins (__addsf3/__muls
   .test_run = crt_builtins_sve_run,
   .test_cleanup = crt_builtins_sve_cleanup,
   .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

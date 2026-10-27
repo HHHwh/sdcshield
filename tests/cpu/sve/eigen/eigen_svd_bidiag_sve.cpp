@@ -559,4 +559,5 @@ DECLARE_TEST(eigen_svd_bidiag_sve,
     .test_cleanup = eigen_svd_bidiag_sve_cleanup,
     .fracture_loop_count = 5,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

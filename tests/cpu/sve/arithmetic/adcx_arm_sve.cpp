@@ -201,4 +201,5 @@ DECLARE_TEST(adcx_arm_sve, "ARM64 carry chain on SVE lanes (port of adcx_arm)")
     .test_run = adcx_arm_sve_run,
     .test_cleanup = adcx_arm_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

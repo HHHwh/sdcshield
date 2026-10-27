@@ -310,16 +310,56 @@ if host_machine.cpu_family() == 'aarch64'
     # also exempt from sanitizer instrumentation like every SVE library
     # (GCC 12.3 SVE-intrinsics + b_sanitize codegen ICE, see
     # tests/cpu/meson.build).
+    # FMMLA (FEAT_F32MM / FEAT_F64MM) — deliberately NOT compiled with
+    # +sve2: svmmla_f32/f64 are the matrix-multiply extension, available on
+    # cores that have no SVE2 at all (measured 2026-10-27: a host with
+    # FEAT_F32MM+F64MM and HWCAP2_SVE2=0 executes them correctly). Compiling
+    # this TU with +sve2 made the framework's compiler_minimum_device gate
+    # skip it on such hardware even though every instruction it uses works.
+    # The test's own init still requires SVE2|F32MM|F64MM ... — narrowed
+    # here to F32MM|F64MM, which is what the code actually uses.
+    sve_mm_march = '-march=armv8.2-a+sve+f32mm+f64mm'
+    if cpp.has_argument(sve_mm_march)
+        arm64_sve_mm_lib = static_library(
+            'tests_arm64_sve_mm',
+            files(
+                # FMMLA f32/f64 dependent chain over the packed 2D-tile lane
+                # mapping, byte-exact vs a same-k-order scalar golden, with a
+                # one-step lane-mapping self-check. That self-check is what
+                # caught the ORIGINAL golden's two errors (transposed second
+                # operand; whole-vector n x n instead of per-4-lane 2x2) the
+                # first time the instructions ever executed — see the golden's
+                # comment for the basis-probed semantics.
+                'sve512_fmmla_arm.cpp',
+            ),
+            build_by_default: false,
+            include_directories: [
+                framework_incdir,
+            ],
+            dependencies: [
+                boost_dep,
+            ],
+            cpp_args: [
+                debug_c_flags,
+                default_cpp_warn,
+                default_cpp_flags,
+                march_generic_flags,
+                sve_mm_march,
+                sve_sanitize_exempt,
+                sve_bitpattern_exempt,
+            ],
+        )
+        sandstone_tests += [arm64_sve_mm_lib]
+    else
+        message('Compiler lacks SVE FMMLA support (' + sve_mm_march +
+                ') - the FMMLA test is not built.')
+    endif
+
     sve2_march = '-march=armv9-a+sve2+bf16+f32mm+f64mm'
     if cpp.has_argument(sve2_march)
         arm64_sve2_lib = static_library(
             'tests_arm64_sve2',
             files(
-                # FMMLA f32/f64 dependent chain over the packed 2D-tile lane
-                # mapping, byte-exact vs a same-k-order scalar golden, with a
-                # one-step lane-mapping self-check (the mapping is worked out
-                # in the docblock — a golden bug must never report as SDC).
-                'sve512_fmmla_arm.cpp',
                 # Cross-precision chains: svmlalb/svmlalt (FP16->FP32) and
                 # svbfdot (BF16->FP32) — independent low-precision pipelines
                 # and widening accumulators the regular FMLA tests never

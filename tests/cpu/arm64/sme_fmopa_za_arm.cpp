@@ -359,4 +359,5 @@ DECLARE_TEST(sme_fmopa_za_arm,
     .test_run = sme_fmopa_za_arm_run,
     .test_cleanup = sme_fmopa_za_arm_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SME,
 END_DECLARE_TEST

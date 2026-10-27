@@ -787,7 +787,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   Failed——knob 钳制后不可达, 纯纵深防御, 记账。
 - **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
 ## 2026-10-24 · P5 sleef 半侧实证收口(PR #286 检视闭环)
-=======
 ## 2026-10-24（all-VL Phase 2 P5：SLEEF/Eigen×8 按 spike 证据分流——真 VLA 迁移 + 自 pin 回退）
 - **承接**:P5(SLEEF/Eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
   语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
@@ -937,7 +936,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   stacksize.cpp _XOPEN_SOURCE redefined 一条宿主配方既有警告）;
   受影响测试 --quality=-1 -t 2000 -n 1 全部干净 skip + exit: pass;
   zstd19 → exit: pass（每 commit 一轮）。
-<<<<<<< HEAD
 
 - **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
   gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
@@ -961,9 +959,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
   现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
   (git-sanity)+ 本实证收口。
-<<<<<<< HEAD
->>>>>>> 11cdd2c5 (docs(sleef): 真 VLA 迁移 gem5-fi 16-run 实证收口——merge blocker 解除)
-=======
 - **勘误（round 3, 2026-10-26）**: 上方"验证边界声明"中"gem5-fi 本机
   不可用（无 gem5 源码/二进制）"**失实**——真实 checkout 在
   /home/sdc/wangxu/operator/gem5-fi（build/ARM/gem5.opt 在位,
@@ -1079,9 +1074,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   全部 result: skip + skip-reason 'test compiled with sve' + exit:
   pass（SKIP 路径逐字不变）; zstd19/mce_check → exit: pass; x86-64
   零触碰（全部改动在 aarch64 门控目录/条件编译内）。
-<<<<<<< HEAD
->>>>>>> ee42739d (docs(progress): PR #294 round 3 处置入档——8 意见裁决 + 3 移交项 + round 1 补档 + 三处勘误 + 越界修复全量审计)
-=======
 
 ## 2026-10-26（PR #294 检视 round 4 处置——head ee42739d 两条 findings, robot5 指定检视）
 
@@ -1115,9 +1107,6 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   插到 lanes 定义之前（编译失败 'lanes was not declared'）, 四文件
   回滚后按文件结构差异分锚点重做——盲目 count=1 正则对同构文件群的
   结构差异（字段定义序不同）不安全, 已以逐文件锚点修正。
-<<<<<<< HEAD
->>>>>>> c62861e8 (docs(progress): PR #294 检视 round 4 处置入档——robot5 定向检视两 findings 全采纳)
-=======
 
 ## 2026-10-26（PR #294 检视 round 5 处置——head c62861e8 两条 coderabbit findings）
 
@@ -1164,4 +1153,3 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   实际恒走 case 0（eq）, "rotating" 语义退化; logic 兄弟已改
   (base+sub)/4, mask 未跟。golden/run 同源自洽, 无 SDC 检出损失,
   非本轮意见范围; 修复需独立单元 + 独立 gem5 验证, 留待后续轮次。
->>>>>>> 97cd08a1 (docs(progress): PR #294 检视 round 5 处置入档——两 coderabbit findings 全采纳 + 21-run gem5 实证 + 移交观察)

@@ -359,4 +359,5 @@ DECLARE_TEST(iex_operand_combo_sve,
     .test_run = iex_operand_combo_sve_run,
     .test_cleanup = iex_operand_combo_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

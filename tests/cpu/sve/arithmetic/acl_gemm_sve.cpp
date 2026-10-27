@@ -184,4 +184,5 @@ DECLARE_TEST(acl_gemm_sve, "F32 GEMM (64x64) on SVE svmla micro-kernels vs naive
     .test_run = acl_gemm_sve_run,
     .test_cleanup = acl_gemm_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

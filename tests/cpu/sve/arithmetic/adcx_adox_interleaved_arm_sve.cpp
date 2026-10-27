@@ -203,4 +203,5 @@ DECLARE_TEST(adcx_adox_interleaved_arm_sve, "ARM64 interleaved CF/OF carry chain
     .test_run = adcx_adox_interleaved_arm_sve_run,
     .test_cleanup = adcx_adox_interleaved_arm_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

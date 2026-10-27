@@ -253,4 +253,5 @@ DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k3res, "K3 residency cell (SVE): 4096 V
     .test_run     = sve_k3res_run,
     .test_cleanup = sve_k3res_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

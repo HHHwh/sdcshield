@@ -164,4 +164,5 @@ DECLARE_TEST(mesh_upi_sve_read_L3_int, "Mutual read stress MESH and UPI or Ring 
     .test_run = mesh_upi_sve_read_L3_int_run,
     .test_cleanup = mesh_upi_sve_read_L3_int_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -193,4 +193,5 @@ DECLARE_TEST(sve_rot_ldr_at_top_rowmajor, "Order variant of sve_rot_ldr_at_top: 
     .test_run     = sve_rot_rowmajor_run,
     .test_cleanup = sve_rot_rowmajor_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

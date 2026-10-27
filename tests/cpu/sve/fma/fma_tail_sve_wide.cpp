@@ -122,4 +122,5 @@ DECLARE_TEST(fma_tail_sve_wide, "SVE wide-vector double FMA tail precision test 
     .test_run = fma_tail_sve_wide_run,
     .test_cleanup = fma_tail_sve_wide_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

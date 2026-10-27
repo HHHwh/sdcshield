@@ -129,4 +129,5 @@ DECLARE_TEST(movdq2q_sve, "SVE z-register low-64-bit to GPR moves with value che
     .test_run = movdq2q_sve_run,
     .test_cleanup = movdq2q_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

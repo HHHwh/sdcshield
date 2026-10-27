@@ -115,4 +115,5 @@ DECLARE_TEST(kreg5_sve, "Mask register unpack (KUNPCK) and not (KNOT) on real SV
     .test_run = kreg5_sve_run,
     .test_cleanup = kreg5_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

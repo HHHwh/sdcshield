@@ -44,6 +44,10 @@
 
 #if defined(__aarch64__) && defined(__linux__)
 #include <errno.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/auxv.h>
 #include <sys/prctl.h>
 #include <asm/hwcap.h>
@@ -82,6 +86,18 @@
 #endif
 #ifndef HWCAP2_SME
 #define HWCAP2_SME (1UL << 23)
+#endif
+#ifndef HWCAP2_SME2
+#define HWCAP2_SME2 (1UL << 37)   /* uapi 6.0 */
+#endif
+/* Matrix-multiply extensions (uapi 5.10); openEuler 20.03-LTS headers predate
+ * them, same fallback doctrine as the bits above. Values verified against
+ * this host's /usr/include/asm/hwcap.h (2026-10-27). */
+#ifndef HWCAP2_SVEF32MM
+#define HWCAP2_SVEF32MM (1UL << 10)
+#endif
+#ifndef HWCAP2_SVEF64MM
+#define HWCAP2_SVEF64MM (1UL << 11)
 #endif
 
 /* ---- capability probes: honest runtime, immune to the compile-time
@@ -195,6 +211,172 @@ static inline long arm64_sme_pin_vl(long bytes)
     return rc & PR_SME_VL_LEN_MASK;
 }
 
+/* ---- chip spec: one-shot probe, cached (design §4.1) ----
+ *
+ * Why a separate probe from the queries above: "current VL" is not "maximum
+ * supported VL". The kernel default (and any per-process lowering via
+ * /proc/sys/abi/sve_default_vector_length) can be below what the silicon
+ * supports, so a policy that says "run at the highest tier this chip has"
+ * must ask the kernel for the ceiling and read back what it granted.
+ *
+ * PR_SVE_SET_VL is per-thread, so the probe runs on a throwaway thread
+ * (design §4.1) and the calling thread's VL, PR_SVE_VL_INHERIT flag and any
+ * PR_SVE_SET_VL_ONEXEC setting are left untouched. The throwaway thread
+ * requests 2048-bit; the kernel rounds down to the largest supported tier
+ * and returns it (verified natively 2026-10-27 on an SVE host: requests
+ * 512/1024/2048/4096 on a 256-bit chip all return 256). Only the low
+ * PR_*_VL_LEN_MASK bits of that return are used: a caller that had
+ * PR_SVE_VL_INHERIT set gets the flag ORed into PR_SVE_GET_VL results, and
+ * treating it as part of the length would fabricate a ~1M-bit maximum.
+ *
+ * If prctl is refused entirely (seccomp sandbox, emulator) the granted value
+ * is 0: fall back to the current thread's VL and mark max_vl_known=false —
+ * never claim a maximum we could not measure.
+ *
+ * ARM64_SPEC_MAX_TIER_BITS = 2048 is the architectural probing ceiling and
+ * the reserved 2048-bit tier; this project implements 128/256/512/1024 only
+ * (spec §6), so nothing downstream branches on 2048.
+ */
+#define ARM64_SPEC_MAX_TIER_BITS 2048
+/* ARM64_REQUIRES_{SVE,SVE2,SME,SME2} live in sandstone.h, next to the
+ * struct test field that carries them, so test TUs can declare the
+ * requirement without including this header. */
+
+struct arm64_spec {
+    bool has_sve, has_sve2, has_sme, has_sme2;
+    long max_sve_vl_bits;    /* 0 when SVE is absent */
+    long max_sme_svl_bits;   /* 0 when SME is absent */
+    bool max_vl_known;       /* false = prctl refused; max_* is the fallback */
+};
+
+/* Throwaway-thread probe body: request `want_bytes`, keep the granted length.
+ * Runs on a thread the caller just created, so nothing here can disturb the
+ * caller's per-thread VL state. */
+struct arm64_spec_probe_arg {
+    int set_vl_cmd;
+    long want_bytes;
+    long granted_bytes;
+};
+
+static inline void *arm64_spec_probe_thread(void *p)
+{
+    struct arm64_spec_probe_arg *arg = (struct arm64_spec_probe_arg *)p;
+    int rc = prctl(arg->set_vl_cmd,
+                   (unsigned long)(arg->want_bytes & PR_SVE_VL_LEN_MASK));
+    /* A successful PR_SVE_SET_VL returns the effective VL, possibly ORed with
+       the INHERIT flag; only the length field is meaningful here. */
+    arg->granted_bytes = (rc > 0) ? (rc & PR_SVE_VL_LEN_MASK) : 0;
+    return NULL;
+}
+
+/* Request `want_bytes` on a scratch thread; returns the granted bytes
+ * (0 = the kernel/execution layer refused or the thread could not start). */
+static inline long arm64_vl_probe_max(int set_vl_cmd, long want_bytes)
+{
+    struct arm64_spec_probe_arg arg = { set_vl_cmd, want_bytes, 0 };
+    pthread_t thread;
+
+    if (pthread_create(&thread, NULL, arm64_spec_probe_thread, &arg) != 0)
+        return 0;
+    pthread_join(thread, NULL);
+    return arg.granted_bytes;
+}
+
+/* One-shot, once-per-process probe. Publication is an atomic state machine so
+ * concurrent first callers cannot observe a half-written `spec`: the winner
+ * fills it and releases; losers wait for the ready state. (The first call
+ * normally happens during test-set construction, before any worker exists.) */
+static inline const struct arm64_spec *arm64_spec_get(void)
+{
+    static struct arm64_spec spec;
+    static int state;      /* 0 = cold, 1 = probing, 2 = ready */
+
+    if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) == 2)
+        return &spec;
+
+    int expected = 0;
+    if (!__atomic_compare_exchange_n(&state, &expected, 1, false,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        while (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2)
+            ;   /* bounded: the probe is a handful of prctl/getauxv calls */
+        return &spec;
+    }
+
+    spec.has_sve  = arm64_cpu_has_sve();
+    spec.has_sve2 = arm64_cpu_has_sve2();
+    spec.has_sme  = arm64_cpu_has_sme();
+    spec.has_sme2 = (getauxval(AT_HWCAP2) & HWCAP2_SME2) != 0;
+    spec.max_sve_vl_bits = 0;
+    spec.max_sme_svl_bits = 0;
+    spec.max_vl_known = false;
+
+    if (spec.has_sve) {
+        long granted = arm64_vl_probe_max(PR_SVE_SET_VL,
+                                          ARM64_SPEC_MAX_TIER_BITS / 8);
+        long bytes = granted > 0 ? granted : arm64_sve_vl_bytes();
+        spec.max_sve_vl_bits = bytes > 0 ? bytes * 8 : 0;
+        spec.max_vl_known = granted > 0;
+
+        /* Explicit override, honoured everywhere the spec is consumed
+           (selection, worker pin, per-tier dispatch) so all three stay
+           consistent. Purpose: exercise a lower tier on a host whose
+           maximum is higher (otherwise the highest-tier default makes
+           those code paths untestable), and let an operator pin a tier for
+           a targeted campaign. Only lowering is allowed, and the request is
+           re-probed: a value the silicon does not implement (e.g. 384-bit
+           where only 128/256/512 exist) is accepted at the tier the kernel
+           actually grants, never at a tier the worker pin would then fail
+           to reproduce. */
+        const char *want = getenv("SDCSHIELD_ARM64_SPEC_MAX_VL");
+        if (want && *want) {
+            char *end = NULL;
+            long bits = strtol(want, &end, 10);
+            if (end != want && bits >= 128 && bits <= ARM64_SPEC_MAX_TIER_BITS
+                    && (bits % 128) == 0
+                    && (bits < spec.max_sve_vl_bits || !spec.max_vl_known)) {
+                long granted = arm64_vl_probe_max(PR_SVE_SET_VL, bits / 8);
+                if (granted > 0)
+                    spec.max_sve_vl_bits = granted * 8;
+                else if (!spec.max_vl_known)
+                    spec.max_sve_vl_bits = bits;   /* cannot measure: keep request */
+            }
+        }
+    }
+    if (spec.has_sme) {
+        long granted = arm64_vl_probe_max(PR_SME_SET_VL,
+                                          ARM64_SPEC_MAX_TIER_BITS / 8);
+        long bytes = granted > 0 ? granted : arm64_sme_svl_bytes();
+        spec.max_sme_svl_bits = bytes > 0 ? bytes * 8 : 0;
+    }
+    __atomic_store_n(&state, 2, __ATOMIC_RELEASE);
+    return &spec;
+}
+
+/* Human-readable one-liner for --dump-cpu-info and run logs. Caller owns the
+ * buffer; 128 bytes is enough for every path below. */
+static inline const char *arm64_spec_describe(char *buf, size_t len)
+{
+    const struct arm64_spec *s = arm64_spec_get();
+    size_t used;
+
+    if (!s->has_sve)
+        used = (size_t)snprintf(buf, len, "SVE no");
+    else if (s->max_vl_known)
+        used = (size_t)snprintf(buf, len, "SVE yes (max VL %ld bits)",
+                                s->max_sve_vl_bits);
+    else
+        used = (size_t)snprintf(buf, len,
+                                "SVE yes (max VL unknown, fell back to %ld bits)",
+                                s->max_sve_vl_bits);
+
+    if (used < len)
+        snprintf(buf + used, len - used, " | SVE2 %s | SME %s | SME2 %s",
+                 s->has_sve2 ? "yes" : "no",
+                 s->has_sme ? "yes" : "no",
+                 s->has_sme2 ? "yes" : "no");
+    return buf;
+}
+
 /* ---- test-flow helpers ---- */
 /* Note: an empty range (min_bits > max_bits) skips unconditionally with the
  * range message — callers own their argument sanity. Units: min_bits/max_bits
@@ -213,6 +395,14 @@ static inline long arm64_require_sve_vl(struct test *test, long min_bits, long m
                  "ARM64 SVE not available; %s exercises the SVE datapath", test->id);
         return EXIT_SKIP;
     }
+    /* Read THIS thread's ACTUAL VL. The framework raises the control thread
+     * to the probed tier before test_init (arm64_spec_prepare.h), and the
+     * init aux thread inherits it, so this is already the tier the workers
+     * will run at — in both directions (a lowered sysctl default is raised,
+     * an SDCSHIELD_ARM64_SPEC_MAX_VL override is honoured). Do NOT clamp to
+     * spec->max_sve_vl_bits here: if the pin was refused, the workers SKIP
+     * and init must keep the VL its SVE instructions actually execute at, or
+     * geometry sized from a clamped value would disagree with the code. */
     long bits = arm64_sve_vl_bytes() * 8;
     if (bits < min_bits || bits > max_bits) {
         log_skip(CpuNotSupportedSkipCategory,

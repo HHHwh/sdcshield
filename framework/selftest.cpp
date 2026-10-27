@@ -31,6 +31,7 @@
 #include "sandstone_kvm.h"
 #endif // _WIN32
 #include "sandstone_p.h"
+#include "sandstone_tests.h"
 #include "topology.h"
 
 #include <exception>
@@ -1635,6 +1636,129 @@ const static test_group group_test_hw_features = {
 };
 #endif
 
+#if defined(__aarch64__) && defined(__linux__)
+/* Design §4.1: the spec probe must be self-consistent and architecturally
+ * plausible. This is the only runtime gate for the max-tier probe's
+ * save/request-ceiling/restore sequence: a broken restore or a bogus granted
+ * value shows up here on the first SVE host that runs --selftests. */
+static int selftest_arm64_spec_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    const struct arm64_spec *s = arm64_spec_get();
+
+    if (s->has_sve != arm64_cpu_has_sve() || s->has_sve2 != arm64_cpu_has_sve2()
+            || s->has_sme != arm64_cpu_has_sme()) {
+        log_error("%s: cached spec disagrees with the raw auxv probes", test->id);
+        return EXIT_FAILURE;
+    }
+    if (s->has_sve) {
+        if (s->max_sve_vl_bits < 128
+                || s->max_sve_vl_bits > ARM64_SPEC_MAX_TIER_BITS
+                || (s->max_sve_vl_bits % 128) != 0) {
+            log_error("%s: max_sve_vl_bits %ld is not an architectural tier "
+                      "in [128,%d]", test->id, s->max_sve_vl_bits,
+                      ARM64_SPEC_MAX_TIER_BITS);
+            return EXIT_FAILURE;
+        }
+        /* The probe requests the ceiling then restores, so the caller's VL is
+           whatever it was before. When the maximum could not be measured the
+           fallback is that same current VL — assert the two agree. */
+        if (!s->max_vl_known
+                && arm64_sve_vl_bytes() * 8 != s->max_sve_vl_bits) {
+            log_error("%s: unmeasured max fell back to %ld but the current VL "
+                      "is %ld", test->id, s->max_sve_vl_bits,
+                      arm64_sve_vl_bytes() * 8);
+            return EXIT_FAILURE;
+        }
+    } else if (s->max_sve_vl_bits != 0 || s->max_vl_known) {
+        log_error("%s: no SVE but max_sve_vl_bits=%ld max_vl_known=%d",
+                  test->id, s->max_sve_vl_bits, (int)s->max_vl_known);
+        return EXIT_FAILURE;
+    }
+    if (!s->has_sme && s->max_sme_svl_bits != 0) {
+        log_error("%s: no SME but max_sme_svl_bits=%ld",
+                  test->id, s->max_sme_svl_bits);
+        return EXIT_FAILURE;
+    }
+    /* Design §4.2: arm64_min_vl_bits may only hold an architectural tier and
+       arm64_requires may only use the four defined bits. Catches a typo in a
+       test's declaration before the selection filter silently misclassifies it. */
+    for (struct test &t : regular_tests) {
+        long v = t.arm64_min_vl_bits;
+        if (v != 0 && v != 128 && v != 256 && v != 512 && v != 1024 && v != 2048) {
+            log_error("%s: test %s declares non-tier arm64_min_vl_bits=%ld",
+                      test->id, t.id, v);
+            return EXIT_FAILURE;
+        }
+        if (t.arm64_requires > (ARM64_REQUIRES_SVE | ARM64_REQUIRES_SVE2
+                                | ARM64_REQUIRES_SME | ARM64_REQUIRES_SME2)) {
+            log_error("%s: test %s sets unknown arm64_requires bits 0x%x",
+                      test->id, t.id, t.arm64_requires);
+            return EXIT_FAILURE;
+        }
+    }
+    {
+        char buf[128];
+        log_info("%s: %s", test->id, arm64_spec_describe(buf, sizeof(buf)));
+    }
+    return EXIT_SUCCESS;
+}
+
+/* Design §4.4: proves the framework actually raised THIS worker to the chip's
+ * highest tier before test_run — the pin lives in sandstone_run.cpp, so this
+ * body sees the pinned value without pinning anything itself. */
+static int selftest_arm64_spec_worker_pin_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    const struct arm64_spec *s = arm64_spec_get();
+    if (!s->has_sve) {
+        log_skip(CpuNotSupportedSkipCategory, "%s: no SVE on this host", test->id);
+        return EXIT_SKIP;
+    }
+    const long now = arm64_sve_vl_bytes() * 8;
+    if (now != s->max_sve_vl_bits) {
+        log_error("%s: worker runs at %ld bits but the chip maximum is %ld",
+                  test->id, now, s->max_sve_vl_bits);
+        return EXIT_FAILURE;
+    }
+    log_info("%s: worker pinned to the %ld-bit tier (chip maximum)",
+             test->id, now);
+    return EXIT_SUCCESS;
+}
+
+/* The init/run invariant the control-thread pin exists for: test_init runs on
+ * an aux thread created by the control thread and must see the SAME tier the
+ * workers run at, even when the kernel default VL was lowered below the chip
+ * maximum (design §4.1/§4.4). Without the control-thread pin this fails on
+ * exactly such a host: init freezes the default tier, workers run the max. */
+static long selftest_arm64_spec_init_vl_bits;
+
+static int selftest_arm64_spec_init_pin_init(struct test *test)
+{
+    const struct arm64_spec *s = arm64_spec_get();
+    if (!s->has_sve) {
+        log_skip(CpuNotSupportedSkipCategory, "%s: no SVE on this host", test->id);
+        return EXIT_SKIP;
+    }
+    selftest_arm64_spec_init_vl_bits = arm64_sve_vl_bytes() * 8;
+    log_info("%s: test_init ran at the %ld-bit tier (chip max %ld)",
+             test->id, selftest_arm64_spec_init_vl_bits, s->max_sve_vl_bits);
+    return EXIT_SUCCESS;
+}
+
+static int selftest_arm64_spec_init_pin_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    const long now = arm64_sve_vl_bytes() * 8;
+    if (selftest_arm64_spec_init_vl_bits != now) {
+        log_error("%s: test_init saw %ld bits but this worker runs at %ld",
+                  test->id, selftest_arm64_spec_init_vl_bits, now);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+#endif
+
 static struct test selftests_array[] = {
 {
     .id = "selftest_pass",
@@ -2700,6 +2824,33 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .test_run = selftest_arm64_vl_require_sve_run,
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_arm64_spec",
+    .description = "arm64_spec probe invariants (extension bits vs auxv, max tier is architectural, no-SVE/SME zeroing)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_arm64_spec_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_arm64_spec_worker_pin",
+    .description = "Framework pinned this worker to the chip's highest SVE tier before test_run (design §4.4)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_arm64_spec_worker_pin_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
+},
+{
+    .id = "selftest_arm64_spec_init_pin",
+    .description = "test_init and the workers saw the same SVE tier (control-thread pin, design §4.1/§4.4)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_init = selftest_arm64_spec_init_pin_init,
+    .test_run = selftest_arm64_spec_init_pin_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 },
 #endif
 #ifdef _WIN32

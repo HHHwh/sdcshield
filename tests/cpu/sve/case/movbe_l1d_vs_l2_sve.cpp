@@ -305,6 +305,7 @@ DECLARE_TEST(movbe_l1d_sve,
     .test_run = movbe_l1d_sve_run,
     .test_cleanup = movbe_l1d_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(movbe_l2_sve,
@@ -314,4 +315,5 @@ DECLARE_TEST(movbe_l2_sve,
     .test_run = movbe_l2_sve_run,
     .test_cleanup = movbe_l1d_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -109,4 +109,5 @@ DECLARE_TEST(kreg2_sve, "Mask register shift operations (KSHIFTL, KSHIFTR) on re
     .test_run = kreg2_sve_run,
     .test_cleanup = kreg2_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

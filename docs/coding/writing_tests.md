@@ -646,19 +646,11 @@ instead of assuming one tier:
 - **Probe via the framework layer**: `#include
   <device/cpu/arm64/arm64_vl.h>` and call
   `arm64_require_sve_vl(test, min_bits, max_bits)` /
-<<<<<<< HEAD
   `arm64_require_sme_svl(...)` from `test_init`; on skip the helper
-  already logged the reason and returns `EXIT_SKIP` (a negative value,
-  −255 — the unified require contract, never a bare −1: any other
-  negative would surface as a misleading "Unexpected OS error") —
-  `return EXIT_SKIP` immediately (consume with `< 0`, never `== -1`
-  / `== EXIT_SKIP`). Do
-=======
-  `arm64_require_sme_svl(...)` from `test_init`; on skip the helper
-  returns `EXIT_SKIP` (a negative value, −255 — not a bare −1: any other
+  returns `EXIT_SKIP` (a negative value, −255 — never a bare −1: any other
   negative would surface as a misleading "Unexpected OS error") after
-  logging the reason — `return EXIT_SKIP` immediately. Do
->>>>>>> 52c2d755 (docs(coding): writing_tests.md all-VL 政策返回值措辞修正——EXIT_SKIP 而非 -1 (PR #288 检视 round 2))
+  logging the reason — `return EXIT_SKIP` immediately (consume with
+  `< 0`, never `== -1` / `== EXIT_SKIP`). Do
   not hand-write getauxval probes: `device_has_feature()` is
   short-circuited by compile-time `__ARM_FEATURE_*` macros in +sve/+sme
   TUs (docs/architecture.md).
@@ -677,6 +669,31 @@ instead of assuming one tier:
   memcmp_or_fail against a golden recomputed for the actual VL;
   sum/xor/reduce cross-lane aggregation is forbidden (it can cancel a
   flipped bit).
+
+### 声明用例的 ARM64 规格要求（选填，向量用例必填）
+
+任何含 SVE/SME 指令（或 include `<arm_sve.h>` / `arm64_vl.h`）的用例，必须在
+**每个** `DECLARE_TEST` 块里声明所需扩展，否则本机跑不了的用例会一直出现在默认
+集合里、只能靠运行时 SKIP 掩盖：
+
+```c
+DECLARE_TEST(my_sve_test, "…")
+    .groups = DECLARE_TEST_GROUPS(&group_math),
+    .test_run = my_sve_test_run,
+    .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,   /* SVE / SVE2 / SME / SME2 */
+END_DECLARE_TEST
+```
+
+- 选择期过滤只保留本机扩展具备、且 `arm64_min_vl_bits`（0 = 任意档）不超过本机
+  最高档的用例；`-e` / `--test-list-file` 显式点名不过滤。
+- 框架随后把**控制线程**（`test_init` 的 aux 线程与各 worker 都由它创建、继承其
+  VL）和每个 worker 都 pin 到本机最高档：init 侧冻结的 golden/缓冲区与 run 侧
+  的 lane 数因此一致，即使内核默认 VL 被 sysctl 调低。worker 侧再读回校验：
+  pin 被拒 → SKIP，读回不符 → FAIL。需要特定最低档时写 `arm64_min_vl_bits`
+  （只允许 0/128/256/512/1024/2048）；`SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` 只能
+  调低，且按内核实际授予档位归一（如硬件无 384 档则落到 256）。
+- 自检：`python3 scripts/check-arm64-requires.py` 必须通过。
 
 ## Additional information
 

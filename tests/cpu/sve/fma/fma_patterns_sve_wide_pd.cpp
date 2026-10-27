@@ -121,4 +121,5 @@ DECLARE_TEST(fma_patterns_sve_wide_pd, "SVE wide-vector double FMA pattern stres
     .test_run = fma_patterns_sve_wide_pd_run,
     .test_cleanup = fma_patterns_sve_wide_pd_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

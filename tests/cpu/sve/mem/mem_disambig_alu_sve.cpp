@@ -213,4 +213,5 @@ DECLARE_TEST(mem_disambig_alu_sve,
     .test_run = mem_disambig_alu_sve_run,
     .test_cleanup = mem_disambig_alu_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

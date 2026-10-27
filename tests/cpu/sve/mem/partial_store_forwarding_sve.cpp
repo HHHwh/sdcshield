@@ -107,4 +107,5 @@ DECLARE_TEST(partial_store_forwarding_sve,
     .test_init    = partial_store_forwarding_sve_init,
     .test_run     = partial_store_forwarding_sve_run,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

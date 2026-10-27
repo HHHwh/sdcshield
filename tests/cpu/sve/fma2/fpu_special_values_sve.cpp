@@ -290,4 +290,5 @@ DECLARE_TEST(fpu_special_values_sve,
     .test_cleanup = fpu_special_values_sve_finish,
     .fracture_loop_count = 0,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

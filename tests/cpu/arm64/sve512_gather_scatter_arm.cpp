@@ -398,4 +398,5 @@ DECLARE_TEST(sve512_gather_scatter_arm,
     .test_cleanup = sve512_gather_scatter_arm_cleanup,
     .fracture_loop_count = 0,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
