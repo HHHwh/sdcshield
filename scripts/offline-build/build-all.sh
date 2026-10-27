@@ -205,7 +205,7 @@ for series in $SERIES_LIST; do
     done
 done | xargs -P "$JOBS" -L1 bash -c '
     _worker_main "$1" "$2" "$RESULTS_DIR" || echo "RESULT: FAIL openEuler-${1} (worker-exit)"
-' _ 2>&1 | grep -E "RESULT:|====" || true
+' _ 2>&1 | grep -E "RESULT:|====|error:|Error |ERROR|FAILED|fatal|ninja: build stopped|Traceback|Permission denied" || true
 
 unset BASH_ENV; rm -f "$WORKER_SCRIPT"
 
