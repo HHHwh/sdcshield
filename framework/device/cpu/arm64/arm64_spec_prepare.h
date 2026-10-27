@@ -30,6 +30,35 @@
  *   pin succeeded but readback differs -> FAIL (invariant broken; never let
  *                                         fixed-width code run at the wrong VL)
  */
+
+/*
+ * Design §4.4 + the init/run invariant: test_init runs on an aux thread that
+ * the CONTROL thread creates, and that aux thread freezes goldens and sizes
+ * buffers from ITS current VL; the per-CPU workers are created later by the
+ * same control thread and inherit its VL. Pinning only the workers is wrong on
+ * a host whose kernel default VL is below the silicon maximum (the very case
+ * §4.1 exists for): init would freeze the default tier, the workers would run
+ * the maximum tier, and every init/run drift guard would fire. So the control
+ * thread must reach the target tier BEFORE test_init is called.
+ *
+ * Deliberately silent and best-effort: the authoritative verdict stays with
+ * arm64_spec_prepare_test() on each worker (refused pin -> SKIP, readback
+ * mismatch -> FAIL). Here we only need the pin attempt on the thread whose
+ * children inherit it.
+ */
+static inline void arm64_spec_pin_control_thread(const struct test *test)
+{
+    const struct arm64_spec *s = arm64_spec_get();
+    const uint8_t need = test->arm64_requires;
+
+    if ((need & (ARM64_REQUIRES_SVE | ARM64_REQUIRES_SVE2))
+            && s->max_sve_vl_bits > 0)
+        (void)arm64_sve_pin_vl(s->max_sve_vl_bits / 8);
+    if ((need & (ARM64_REQUIRES_SME | ARM64_REQUIRES_SME2))
+            && s->max_sme_svl_bits > 0)
+        (void)arm64_sme_pin_vl(s->max_sme_svl_bits / 8);
+}
+
 static inline int arm64_spec_prepare_test(const struct test *test)
 {
     const struct arm64_spec *s = arm64_spec_get();
@@ -79,6 +108,11 @@ static inline int arm64_spec_prepare_test(const struct test *test)
 }
 #else
 /* x86-64 and every other architecture: no behaviour change (rule 5). */
+static inline void arm64_spec_pin_control_thread(const struct test *test)
+{
+    (void)test;
+}
+
 static inline int arm64_spec_prepare_test(const struct test *test)
 {
     (void)test;

@@ -1725,6 +1725,38 @@ static int selftest_arm64_spec_worker_pin_run(struct test *test, int cpu)
              test->id, now);
     return EXIT_SUCCESS;
 }
+
+/* The init/run invariant the control-thread pin exists for: test_init runs on
+ * an aux thread created by the control thread and must see the SAME tier the
+ * workers run at, even when the kernel default VL was lowered below the chip
+ * maximum (design §4.1/§4.4). Without the control-thread pin this fails on
+ * exactly such a host: init freezes the default tier, workers run the max. */
+static long selftest_arm64_spec_init_vl_bits;
+
+static int selftest_arm64_spec_init_pin_init(struct test *test)
+{
+    const struct arm64_spec *s = arm64_spec_get();
+    if (!s->has_sve) {
+        log_skip(CpuNotSupportedSkipCategory, "%s: no SVE on this host", test->id);
+        return EXIT_SKIP;
+    }
+    selftest_arm64_spec_init_vl_bits = arm64_sve_vl_bytes() * 8;
+    log_info("%s: test_init ran at the %ld-bit tier (chip max %ld)",
+             test->id, selftest_arm64_spec_init_vl_bits, s->max_sve_vl_bits);
+    return EXIT_SUCCESS;
+}
+
+static int selftest_arm64_spec_init_pin_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    const long now = arm64_sve_vl_bytes() * 8;
+    if (selftest_arm64_spec_init_vl_bits != now) {
+        log_error("%s: test_init saw %ld bits but this worker runs at %ld",
+                  test->id, selftest_arm64_spec_init_vl_bits, now);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
 #endif
 
 static struct test selftests_array[] = {
@@ -2806,6 +2838,16 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .description = "Framework pinned this worker to the chip's highest SVE tier before test_run (design §4.4)",
     .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
     .test_run = selftest_arm64_spec_worker_pin_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
+},
+{
+    .id = "selftest_arm64_spec_init_pin",
+    .description = "test_init and the workers saw the same SVE tier (control-thread pin, design §4.1/§4.4)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_init = selftest_arm64_spec_init_pin_init,
+    .test_run = selftest_arm64_spec_init_pin_run,
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
     .arm64_requires = ARM64_REQUIRES_SVE,

@@ -1210,6 +1210,14 @@ static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread 
         }
         sApp->prepare_test_tests(test);
 
+        /* ARM64 spec policy (design §4.4): raise the CONTROL thread to the
+           chip's highest tier before test_init's aux thread and the per-CPU
+           workers are created — both inherit this thread's VL, so init's
+           goldens/buffers and the run-side lanes agree even when the kernel
+           default VL is below the silicon maximum. Workers re-verify and
+           carry the SKIP/FAIL verdict (arm64_spec_prepare.h). */
+        arm64_spec_pin_control_thread(test);
+
         if (test->test_init) {
             if (init_in_aux_thread) {
                 // ensure the init function is run pinned to a specific logical
