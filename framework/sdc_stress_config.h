@@ -79,6 +79,68 @@ static inline uint64_t sdc_phys_mem_bytes(void)
     return (uint64_t)pages * (uint64_t)page_size;
 }
 
+/* ------------------------------------------------------------------ */
+/* 可用内存预算: 三源取 min(spec §4.2)                                  */
+/* ------------------------------------------------------------------ */
+
+/* [可用内存预算] 三源取 min(spec §4.2): 物理×‰ / MemAvailable×0.9 /
+ * cgroup 限额−已用。任一来源读失败(返回 0)即跳过该来源。
+ * 动机: 旧口径只读 _SC_PHYS_PAGES, 批处理/容器限额下超分——
+ * "job oom" 实测前科(svd_cdouble_sve.cpp:114-120 注释)。 */
+static inline uint64_t sdc_memavailable_bytes(void)
+{
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return 0;
+    char line[256];
+    uint64_t kb = 0;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, "MemAvailable: %lu kB", &kb) == 1) break;
+    fclose(f);
+    return kb * 1024;
+}
+
+static inline uint64_t sdc_cgroup_limit_bytes(void)
+{
+    /* v2: memory.max - memory.current ("max" = 无限 → 0)
+     * v1: memory/memory.limit_in_bytes - memory.usage_in_bytes
+     *      (limit >= 物理内存视为无限 → 0)。本机(openEuler)实测为 v1。 */
+    uint64_t lim, cur;
+    FILE *f = fopen("/sys/fs/cgroup/memory.max", "r");           /* v2 */
+    if (f) {
+        char buf[64];
+        bool ok = fgets(buf, sizeof buf, f) != nullptr;
+        fclose(f);
+        if (ok && strcmp(buf, "max\n") != 0) {
+            lim = strtoull(buf, nullptr, 10);
+            f = fopen("/sys/fs/cgroup/memory.current", "r");
+            if (!f) return 0;
+            ok = fscanf(f, "%lu", &cur) == 1 && lim > cur;
+            fclose(f);
+            return ok ? lim - cur : 0;
+        }
+    }
+    f = fopen("/sys/fs/cgroup/memory/memory.limit_in_bytes", "r"); /* v1 */
+    if (!f) return 0;
+    bool ok = fscanf(f, "%lu", &lim) == 1;
+    fclose(f);
+    if (!ok || lim >= sdc_phys_mem_bytes()) return 0;   /* 无限 */
+    f = fopen("/sys/fs/cgroup/memory/memory.usage_in_bytes", "r");
+    if (!f) return 0;
+    ok = fscanf(f, "%lu", &cur) == 1 && lim > cur;
+    fclose(f);
+    return ok ? lim - cur : 0;
+}
+
+static inline uint64_t sdc_budget_bytes(int permille)
+{
+    uint64_t b = sdc_phys_mem_bytes() * (uint64_t)permille / 1000;
+    uint64_t ma = sdc_memavailable_bytes();
+    if (ma > 0 && ma * 9 / 10 < b) b = ma * 9 / 10;
+    uint64_t cg = sdc_cgroup_limit_bytes();
+    if (cg > 0 && cg < b) b = cg;
+    return b;
+}
+
 /* 在线 CPU 数(带 1 兜底)。 */
 static inline int sdc_online_cpus(void)
 {
