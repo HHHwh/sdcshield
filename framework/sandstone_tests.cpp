@@ -112,8 +112,13 @@ SandstoneTestSet::SandstoneTestSet(struct test_set_cfg cfg, unsigned int flags)
                 continue;
             if ((test.arm64_requires & ARM64_REQUIRES_SME2) && !spec->has_sme2)
                 continue;
-            if (test.arm64_min_vl_bits && spec->max_sve_vl_bits
-                    && spec->max_sve_vl_bits < test.arm64_min_vl_bits)
+            /* A minimum tier on an SME-only test refers to SVL, not SVE VL. */
+            const long max_vl_bits =
+                (test.arm64_requires & (ARM64_REQUIRES_SME | ARM64_REQUIRES_SME2))
+                    && !(test.arm64_requires & (ARM64_REQUIRES_SVE | ARM64_REQUIRES_SVE2))
+                ? spec->max_sme_svl_bits : spec->max_sve_vl_bits;
+            if (test.arm64_min_vl_bits && max_vl_bits
+                    && max_vl_bits < test.arm64_min_vl_bits)
                 continue;
         }
 #endif
