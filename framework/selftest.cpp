@@ -31,6 +31,7 @@
 #include "sandstone_kvm.h"
 #endif // _WIN32
 #include "sandstone_p.h"
+#include "sandstone_tests.h"
 #include "topology.h"
 
 #include <exception>
@@ -1678,6 +1679,23 @@ static int selftest_arm64_spec_run(struct test *test, int cpu)
         log_error("%s: no SME but max_sme_svl_bits=%ld",
                   test->id, s->max_sme_svl_bits);
         return EXIT_FAILURE;
+    }
+    /* Design §4.2: arm64_min_vl_bits may only hold an architectural tier and
+       arm64_requires may only use the four defined bits. Catches a typo in a
+       test's declaration before the selection filter silently misclassifies it. */
+    for (struct test &t : regular_tests) {
+        long v = t.arm64_min_vl_bits;
+        if (v != 0 && v != 128 && v != 256 && v != 512 && v != 1024 && v != 2048) {
+            log_error("%s: test %s declares non-tier arm64_min_vl_bits=%ld",
+                      test->id, t.id, v);
+            return EXIT_FAILURE;
+        }
+        if (t.arm64_requires > (ARM64_REQUIRES_SVE | ARM64_REQUIRES_SVE2
+                                | ARM64_REQUIRES_SME | ARM64_REQUIRES_SME2)) {
+            log_error("%s: test %s sets unknown arm64_requires bits 0x%x",
+                      test->id, t.id, t.arm64_requires);
+            return EXIT_FAILURE;
+        }
     }
     {
         char buf[128];

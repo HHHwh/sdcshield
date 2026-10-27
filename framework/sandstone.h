@@ -383,6 +383,18 @@ struct test {
     /// minimum device required to be run, skipped if too old
     device_features_t minimum_cpu; // we need to keep that name for legacy reasons, ideally should be `minimum_device_to_run`
 
+    /// ARM64 spec requirements: bit0=SVE bit1=SVE2 bit2=SME bit3=SME2
+    /// (0 = no vector requirement; the default for every non-arm64 test).
+    /// Checked at SELECTION time (SandstoneTestSet) so the default run on a
+    /// chip only contains cases that chip can execute, and used by the
+    /// per-worker VL pin. Deliberately NOT folded into device_features:
+    /// VL/SVL are per-thread runtime quantities (see arm64_vl.h).
+    uint8_t arm64_requires;
+
+    /// Minimum VL tier this test needs, in bits (0 = any tier).
+    /// Only meaningful when arm64_requires names an SVE-family extension.
+    long arm64_min_vl_bits;
+
     /// duration (in ms) the test wants to run for
     /// Special values:
     /// INT_MAX runs forever and must be killed
