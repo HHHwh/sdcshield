@@ -120,4 +120,5 @@ DECLARE_TEST(fma_sve, "FMA instruction basic test (SVE single-precision, port of
     .test_cleanup = fma_sve_finish,
     .fracture_loop_count = 0,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

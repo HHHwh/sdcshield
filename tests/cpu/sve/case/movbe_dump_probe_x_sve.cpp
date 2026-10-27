@@ -163,4 +163,5 @@ DECLARE_TEST(movbe_dump_probe_x_sve,
     .test_run = movbe_dump_probe_x_sve_run,
     .test_cleanup = movbe_dump_probe_x_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

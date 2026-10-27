@@ -354,4 +354,5 @@ DECLARE_TEST(lsu_store_forward_sve,
     .test_run = lsu_store_forward_sve_run,
     .test_cleanup = lsu_store_forward_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

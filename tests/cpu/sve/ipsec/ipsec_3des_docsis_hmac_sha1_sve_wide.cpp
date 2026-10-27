@@ -349,6 +349,7 @@ DECLARE_TEST(ipsec_3des_docsis_hmac_sha1_sve_wide, "Intel IPSEC SVE port: encryp
     .test_cleanup = ipsec_3des_docsis_hmac_sha1_sve_wide_cleanup,
     .minimum_cpu = IPSEC_X86_GATE(cpu_haswell),
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 #else
@@ -368,6 +369,7 @@ DECLARE_TEST(ipsec_3des_docsis_hmac_sha1_sve_wide, "Intel IPSEC SVE port: encryp
     .test_run = ipsec_3des_docsis_hmac_sha1_sve_wide_run,
     .minimum_cpu = IPSEC_X86_GATE(cpu_haswell),
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 #endif

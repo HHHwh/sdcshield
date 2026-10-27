@@ -290,4 +290,5 @@ DECLARE_TEST(gmp_bignum_sve,
     .test_run = gmp_bignum_sve_run,
     .test_cleanup = gmp_bignum_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

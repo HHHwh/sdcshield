@@ -347,6 +347,7 @@ DECLARE_TEST(ipsec_aes192_ctr_hmac_sha384_sve, "Intel IPSEC SVE port: encryption
     .test_cleanup = aes192_ctr_hmac_sha384_sve_cleanup,
     .minimum_cpu = IPSEC_X86_GATE(cpu_haswell),
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 #else
@@ -366,6 +367,7 @@ DECLARE_TEST(ipsec_aes192_ctr_hmac_sha384_sve, "Intel IPSEC SVE port: encryption
     .test_run = aes192_ctr_hmac_sha384_sve_run,
     .minimum_cpu = IPSEC_X86_GATE(cpu_haswell),
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 #endif

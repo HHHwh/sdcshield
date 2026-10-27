@@ -147,4 +147,5 @@ DECLARE_TEST(mrn_pairs_sve, "SVE batched store/load pairing stress (port of mrn_
     .test_run = mrn_pairs_sve_run,
     .test_cleanup = mrn_pairs_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

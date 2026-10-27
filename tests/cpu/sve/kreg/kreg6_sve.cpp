@@ -116,4 +116,5 @@ DECLARE_TEST(kreg6_sve, "16-bit mask expansion to per-element all-ones/zeros on 
     .test_run = kreg6_sve_run,
     .test_cleanup = kreg6_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

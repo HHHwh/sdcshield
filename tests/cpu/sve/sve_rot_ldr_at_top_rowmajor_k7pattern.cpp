@@ -309,6 +309,7 @@ DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k7p_zero, "K7 pattern cell (SVE): all-z
     .test_run     = sve_k7p_zero_run,
     .test_cleanup = sve_k7p_cleanup_common,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k7p_one, "K7 pattern cell (SVE): all-one operands (complementary activation floor)")
@@ -316,6 +317,7 @@ DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k7p_one, "K7 pattern cell (SVE): all-on
     .test_run     = sve_k7p_one_run,
     .test_cleanup = sve_k7p_cleanup_common,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k7p_rand, "K7 pattern cell (SVE): GPS-tagged operands (B-track baseline; doubles as dump-capable A-track for Phase 0.5)")
@@ -323,6 +325,7 @@ DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k7p_rand, "K7 pattern cell (SVE): GPS-t
     .test_run     = sve_k7p_rand_run,
     .test_cleanup = sve_k7p_cleanup_common,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k7p_hiham, "K7 pattern cell (SVE): 0x55/0xAA alternating high-Hamming operands (maximum transition density)")
@@ -330,4 +333,5 @@ DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k7p_hiham, "K7 pattern cell (SVE): 0x55
     .test_run     = sve_k7p_hiham_run,
     .test_cleanup = sve_k7p_cleanup_common,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

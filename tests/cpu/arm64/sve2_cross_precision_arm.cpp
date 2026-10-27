@@ -379,4 +379,5 @@ DECLARE_TEST(sve2_cross_precision_arm,
     .test_run = sve2_cross_precision_arm_run,
     .test_cleanup = sve2_cross_precision_arm_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE2,
 END_DECLARE_TEST

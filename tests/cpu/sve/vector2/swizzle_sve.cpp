@@ -146,4 +146,5 @@ DECLARE_TEST(swizzle_sve, "Vector swizzle (pairwise-swap permute) via SVE svtbl 
     .test_run = swizzle_sve_run,
     .test_cleanup = swizzle_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

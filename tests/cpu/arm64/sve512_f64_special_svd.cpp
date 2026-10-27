@@ -235,4 +235,5 @@ DECLARE_TEST(sve512_f64_special_svd,
     .test_run = sve512_f64_special_svd_run,
     .test_cleanup = sve512_f64_special_svd_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

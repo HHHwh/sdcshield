@@ -299,4 +299,5 @@ DECLARE_TEST(sme_fmopa_stress_arm,
     .test_cleanup = sme_fmopa_stress_arm_cleanup,
     .fracture_loop_count = 0,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SME,
 END_DECLARE_TEST

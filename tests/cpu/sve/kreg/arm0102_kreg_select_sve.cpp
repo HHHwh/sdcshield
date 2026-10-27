@@ -266,4 +266,5 @@ DECLARE_TEST(arm0102_kreg_select_sve,
     .test_run     = arm0102_kreg_select_sve_run,
     .test_cleanup = arm0102_kreg_select_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

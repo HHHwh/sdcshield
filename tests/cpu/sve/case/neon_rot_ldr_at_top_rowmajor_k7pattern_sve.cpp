@@ -361,6 +361,7 @@ DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_k7p_zero_sve,
     .test_run     = k7p_zero_sve_run,
     .test_cleanup = k7p_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_k7p_one_sve,
@@ -370,6 +371,7 @@ DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_k7p_one_sve,
     .test_run     = k7p_one_sve_run,
     .test_cleanup = k7p_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_k7p_rand_sve,
@@ -380,6 +382,7 @@ DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_k7p_rand_sve,
     .test_run     = k7p_rand_sve_run,
     .test_cleanup = k7p_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_k7p_hiham_sve,
@@ -389,4 +392,5 @@ DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_k7p_hiham_sve,
     .test_run     = k7p_hiham_sve_run,
     .test_cleanup = k7p_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

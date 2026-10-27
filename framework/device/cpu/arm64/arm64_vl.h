@@ -223,10 +223,9 @@ static inline long arm64_sme_pin_vl(long bytes)
  * (spec §6), so nothing downstream branches on 2048.
  */
 #define ARM64_SPEC_MAX_TIER_BITS 2048
-#define ARM64_REQUIRES_SVE  (1u << 0)
-#define ARM64_REQUIRES_SVE2 (1u << 1)
-#define ARM64_REQUIRES_SME  (1u << 2)
-#define ARM64_REQUIRES_SME2 (1u << 3)
+/* ARM64_REQUIRES_{SVE,SVE2,SME,SME2} live in sandstone.h, next to the
+ * struct test field that carries them, so test TUs can declare the
+ * requirement without including this header. */
 
 struct arm64_spec {
     bool has_sve, has_sve2, has_sme, has_sme2;

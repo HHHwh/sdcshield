@@ -139,4 +139,5 @@ DECLARE_TEST(neon_add_sve, "Repeatedly add arrays of unsigned integers using ARM
         .test_run = neon_add_sve_run,
         .test_cleanup = neon_add_sve_cleanup,
         .quality_level = TEST_QUALITY_BETA,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

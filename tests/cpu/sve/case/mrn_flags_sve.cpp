@@ -154,4 +154,5 @@ DECLARE_TEST(mrn_flags_sve, "SVE bitwise-not + zero-conditional magic select on 
     .test_run = mrn_flags_sve_run,
     .test_cleanup = mrn_flags_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

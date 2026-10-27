@@ -124,4 +124,5 @@ DECLARE_TEST(fma_tail_sve, "SVE double FMA tail precision test (SVE port of fma_
     .test_run = fma_tail_sve_run,
     .test_cleanup = fma_tail_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -2806,9 +2806,9 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .description = "Framework pinned this worker to the chip's highest SVE tier before test_run (design §4.4)",
     .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
     .test_run = selftest_arm64_spec_worker_pin_run,
-    .arm64_requires = ARM64_REQUIRES_SVE,
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 },
 #endif
 #ifdef _WIN32

@@ -320,6 +320,7 @@ DECLARE_TEST(mrn_rmw_nop_sve,
     .test_run = mrn_rmw_nop_sve_run,
     .test_cleanup = mrn_rmw_nop_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(mrn_rmw_nop1_sve,
@@ -329,6 +330,7 @@ DECLARE_TEST(mrn_rmw_nop1_sve,
     .test_run = mrn_rmw_nop1_sve_run,
     .test_cleanup = mrn_rmw_nop_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(mrn_rmw_nop4_sve,
@@ -338,6 +340,7 @@ DECLARE_TEST(mrn_rmw_nop4_sve,
     .test_run = mrn_rmw_nop4_sve_run,
     .test_cleanup = mrn_rmw_nop_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(mrn_rmw_nop8_sve,
@@ -347,6 +350,7 @@ DECLARE_TEST(mrn_rmw_nop8_sve,
     .test_run = mrn_rmw_nop8_sve_run,
     .test_cleanup = mrn_rmw_nop_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(mrn_rmw_nop16_sve,
@@ -356,6 +360,7 @@ DECLARE_TEST(mrn_rmw_nop16_sve,
     .test_run = mrn_rmw_nop16_sve_run,
     .test_cleanup = mrn_rmw_nop_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(mrn_rmw_nop64_sve,
@@ -365,4 +370,5 @@ DECLARE_TEST(mrn_rmw_nop64_sve,
     .test_run = mrn_rmw_nop64_sve_run,
     .test_cleanup = mrn_rmw_nop_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -147,4 +147,5 @@ DECLARE_TEST(mrn_nuke_sve, "SVE array copy via temp buffer stressing memory rena
     .test_run = mrn_nuke_sve_run,
     .test_cleanup = mrn_nuke_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -351,6 +351,14 @@ struct kvm_config;
 typedef struct kvm_config kvm_config_t;
 typedef const kvm_config_t *(*kvmconfigfunc)(void);
 
+/// ARM64 ISA-extension requirement bits for struct test::arm64_requires.
+/// Defined here (not in arm64_vl.h) so a test TU can declare its requirement
+/// without pulling in the arch-specific VL header.
+#define ARM64_REQUIRES_SVE  (1u << 0)
+#define ARM64_REQUIRES_SVE2 (1u << 1)
+#define ARM64_REQUIRES_SME  (1u << 2)
+#define ARM64_REQUIRES_SME2 (1u << 3)
+
 struct test {
     /* metadata */
     /// filled in by the DECLARE_TEST macro
@@ -383,18 +391,6 @@ struct test {
     /// minimum device required to be run, skipped if too old
     device_features_t minimum_cpu; // we need to keep that name for legacy reasons, ideally should be `minimum_device_to_run`
 
-    /// ARM64 spec requirements: bit0=SVE bit1=SVE2 bit2=SME bit3=SME2
-    /// (0 = no vector requirement; the default for every non-arm64 test).
-    /// Checked at SELECTION time (SandstoneTestSet) so the default run on a
-    /// chip only contains cases that chip can execute, and used by the
-    /// per-worker VL pin. Deliberately NOT folded into device_features:
-    /// VL/SVL are per-thread runtime quantities (see arm64_vl.h).
-    uint8_t arm64_requires;
-
-    /// Minimum VL tier this test needs, in bits (0 = any tier).
-    /// Only meaningful when arm64_requires names an SVE-family extension.
-    long arm64_min_vl_bits;
-
     /// duration (in ms) the test wants to run for
     /// Special values:
     /// INT_MAX runs forever and must be killed
@@ -424,6 +420,21 @@ struct test {
 
     /// flags for this test. See enum for possible values
     test_flags flags;
+
+    /// ARM64 spec requirements: OR of the ARM64_REQUIRES_* bits below
+    /// (0 = no vector requirement — the default for every non-arm64 test).
+    /// Checked at SELECTION time (SandstoneTestSet) so a default run on a chip
+    /// only contains cases that chip can execute, and used by the per-worker
+    /// VL pin. Deliberately NOT folded into device_features: VL/SVL are
+    /// per-thread runtime quantities (see arm64_vl.h).
+    /// Declared in this position (last of the public metadata) so that a
+    /// DECLARE_TEST block may append `.arm64_requires` after `.quality_level`
+    /// and stay in declaration order, as C++ designated initializers require.
+    uint8_t arm64_requires;
+
+    /// Minimum VL tier this test needs, in bits (0 = any tier).
+    /// Only meaningful when arm64_requires names an SVE-family extension.
+    long arm64_min_vl_bits;
 
     /* private fields for test use only */
 

@@ -393,4 +393,5 @@ DECLARE_TEST(sve512_fmmla_arm,
     .test_run = sve512_fmmla_arm_run,
     .test_cleanup = sve512_fmmla_arm_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE2,
 END_DECLARE_TEST

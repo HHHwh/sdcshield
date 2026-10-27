@@ -284,6 +284,7 @@ DECLARE_TEST(mrn_rmw_fwd_sve,
     .test_run = mrn_rmw_fwd_sve_run,
     .test_cleanup = mrn_rmw_fwd_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 DECLARE_TEST(mrn_rmw_l1d_sve,
@@ -293,4 +294,5 @@ DECLARE_TEST(mrn_rmw_l1d_sve,
     .test_run = mrn_rmw_l1d_sve_run,
     .test_cleanup = mrn_rmw_fwd_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

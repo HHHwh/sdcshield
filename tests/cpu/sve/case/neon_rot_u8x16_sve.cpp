@@ -256,4 +256,5 @@ DECLARE_TEST(neon_rot_u8x16_sve,
     .test_run = neon_rot_u8x16_sve_run,
     .test_cleanup = neon_rot_u8x16_sve_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

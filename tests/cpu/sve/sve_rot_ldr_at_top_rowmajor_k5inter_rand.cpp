@@ -226,4 +226,5 @@ DECLARE_TEST(sve_rot_ldr_at_top_rowmajor_k5inter_rand, "K5 layout control (SVE):
     .test_run     = sve_k5ir_run,
     .test_cleanup = sve_k5ir_cleanup,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

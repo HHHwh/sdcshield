@@ -161,4 +161,5 @@ DECLARE_TEST(gmp_bigadd_sve, "Large-integer addition on the SVE carry chain (204
     .test_run = gmp_bigadd_sve_run,
     .test_cleanup = gmp_bigadd_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -429,4 +429,5 @@ DECLARE_TEST(mmu_split_tlb_sve,
     .test_run = mmu_split_tlb_sve_run,
     .test_cleanup = mmu_split_tlb_sve_finish,
     .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
