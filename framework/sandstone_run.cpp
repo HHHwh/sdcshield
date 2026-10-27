@@ -55,6 +55,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <device/cpu/arm64/arm64_spec_prepare.h>
+
 #ifdef _WIN32
 #  include <ntstatus.h>
 #  include <shlwapi.h>
@@ -818,7 +820,14 @@ static uintptr_t thread_runner(int thread_number)
         this_thread->thread_state.store(thread_running, std::memory_order_relaxed);
 
         test_start();
-        ret = test_run_wrapper_function(current_test(), thread_number);
+        /* Design §4.4: pin THIS worker to the chip's highest supported tier
+           before the test body runs — the only thread whose VL matters (see
+           arm64_spec_prepare.h and arm64_vl.h's thread-model boundary).
+           Returns EXIT_SUCCESS unconditionally on non-arm64, so x86-64 is
+           untouched. */
+        ret = arm64_spec_prepare_test(current_test());
+        if (ret == EXIT_SUCCESS)
+            ret = test_run_wrapper_function(current_test(), thread_number);
 
         // cleanup resets thread_state
     }

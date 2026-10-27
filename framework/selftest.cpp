@@ -1703,6 +1703,28 @@ static int selftest_arm64_spec_run(struct test *test, int cpu)
     }
     return EXIT_SUCCESS;
 }
+
+/* Design §4.4: proves the framework actually raised THIS worker to the chip's
+ * highest tier before test_run — the pin lives in sandstone_run.cpp, so this
+ * body sees the pinned value without pinning anything itself. */
+static int selftest_arm64_spec_worker_pin_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    const struct arm64_spec *s = arm64_spec_get();
+    if (!s->has_sve) {
+        log_skip(CpuNotSupportedSkipCategory, "%s: no SVE on this host", test->id);
+        return EXIT_SKIP;
+    }
+    const long now = arm64_sve_vl_bytes() * 8;
+    if (now != s->max_sve_vl_bits) {
+        log_error("%s: worker runs at %ld bits but the chip maximum is %ld",
+                  test->id, now, s->max_sve_vl_bits);
+        return EXIT_FAILURE;
+    }
+    log_info("%s: worker pinned to the %ld-bit tier (chip maximum)",
+             test->id, now);
+    return EXIT_SUCCESS;
+}
 #endif
 
 static struct test selftests_array[] = {
@@ -2776,6 +2798,15 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .description = "arm64_spec probe invariants (extension bits vs auxv, max tier is architectural, no-SVE/SME zeroing)",
     .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
     .test_run = selftest_arm64_spec_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_arm64_spec_worker_pin",
+    .description = "Framework pinned this worker to the chip's highest SVE tier before test_run (design §4.4)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_arm64_spec_worker_pin_run,
+    .arm64_requires = ARM64_REQUIRES_SVE,
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
 },
