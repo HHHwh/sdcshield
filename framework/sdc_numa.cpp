@@ -107,7 +107,8 @@ double sdc_ar_factor(enum sdc_mem_family fam, const struct sdc_numa_topology *t)
 {
     if (!t) t = sdc_numa_probe();
     /* 分档表(spec §4.1): 行=有内存节点数, 列=负载族。
-     * 探测失败(nodes_with_mem==0)与未知档一律最差档。 */
+     * 探测失败(nodes_with_mem==0)一律最差档; 中间档向下取整(取
+     * nodes<=n 的最大行)——表值宁高估, 永不向上猜。 */
     static const struct { int nodes; double mem, comp; } tbl[] = {
         { 1, 25.0, 5.0 },   /* 单节点内存: SVD 实测带 18-25 取上界; GEMM 4.4+余量 */
         { 2, 10.0, 4.0 },   /* 保守估计, TODO(实测): 无真 2 节点内存机器 */
@@ -115,11 +116,13 @@ double sdc_ar_factor(enum sdc_mem_family fam, const struct sdc_numa_topology *t)
         { 8,  4.0, 2.5 },   /* >=8 节点 */
     };
     int n = t->nodes_with_mem;
-    double worst = fam == SDC_FAM_MEM_BOUND ? 25.0 : 5.0;
-    if (n <= 0) return worst;
+    if (n <= 0) return fam == SDC_FAM_MEM_BOUND ? 25.0 : 5.0;
+    /* 表按 nodes 升序; 取最大的 r.nodes <= n 的行。
+     * n>=1 必命中首行; n 超过所有行仍取 >=8 档(最后一行)。 */
+    const auto *row = &tbl[0];
     for (const auto &r : tbl)
-        if (n <= r.nodes) return fam == SDC_FAM_MEM_BOUND ? r.mem : r.comp;
-    return fam == SDC_FAM_MEM_BOUND ? 4.0 : 2.5;
+        if (r.nodes <= n) row = &r;
+    return fam == SDC_FAM_MEM_BOUND ? row->mem : row->comp;
 }
 
 int sdc_numa_node_of_cpu(int cpu)
