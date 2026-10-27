@@ -90,6 +90,15 @@
 #ifndef HWCAP2_SME2
 #define HWCAP2_SME2 (1UL << 37)   /* uapi 6.0 */
 #endif
+/* Matrix-multiply extensions (uapi 5.10); openEuler 20.03-LTS headers predate
+ * them, same fallback doctrine as the bits above. Values verified against
+ * this host's /usr/include/asm/hwcap.h (2026-10-27). */
+#ifndef HWCAP2_SVEF32MM
+#define HWCAP2_SVEF32MM (1UL << 10)
+#endif
+#ifndef HWCAP2_SVEF64MM
+#define HWCAP2_SVEF64MM (1UL << 11)
+#endif
 
 /* ---- capability probes: honest runtime, immune to the compile-time
  * short-circuit of device_has_feature() in +sve/+sme-compiled TUs ---- */
