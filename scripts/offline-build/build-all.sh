@@ -185,6 +185,11 @@ _worker_main() {
     out=$(build_one "$series" "$sp" 2>&1) || true
     result=$(echo "$out" | grep -oE 'RESULT: [A-Z]+ [^ ]+( [^ ]+)*' | tail -1)
     [ -z "$result" ] && result="RESULT: FAIL ${tag} (no-result)"
+    # 失败时把完整构建日志透出：build_one 在 $() 里执行，容器/编译器的
+    # 报错原本全部被吞掉，CI 只剩一行 RESULT: FAIL，无法定位。
+    case "$result" in
+        "RESULT: FAIL"*) echo "$out" ;;
+    esac
     echo "$result"                                    # stdout(实时可见)
     echo "$result" > "${results_dir}/${tag}.result"  # 文件(汇总用)
 }
