@@ -30,20 +30,18 @@
  * SVE (e.g. Kunpeng 920). On SVE-capable hardware (e.g. Kunpeng 930)
  * the test runs and stresses the SVE FMA/vector units for SDC detection.
  *
- * All-VL Phase 2 P5 (spike verdict): Eigen's SVE packet backend is
+ * All-VL Phase 2 (design 2026-10-27 §4.7): Eigen's SVE packet backend is
  * compile-time fixed-width (arm_sve_vector_bits(EIGEN_ARM64_SVE_VL));
  * VLA is un-compilable at the C++ language level (sizeless struct
- * members / NumTraits sizeof — twice-confirmed spike), so this TU stays
- * at the 128-bit lock and pins ITSELF instead: the test_run wrapper
- * pins each worker thread to the compile-time VL via arm64_sve_pin_vl(16)
- * before any packet code runs (then delegates to the shared EigenSVDTest
- * template run), replacing the external VL-pinning launcher (prctl
- * PR_SVE_SET_VL before exec, the scripts/eigen-sve-double/ precedent;
- * the /tmp/vlrun tool no longer exists). The pin lives in test_run,
- * NOT test_init: init runs on a throwaway aux thread whose prctl does
- * not reach the per-CPU workers (they inherit the control thread's VL
- * — the hard boundary documented in
- * framework/device/cpu/arm64/arm64_vl.h).
+ * members / NumTraits sizeof — twice-confirmed spike). The payload is
+ * therefore compiled once per tier under its own Eigen namespace and the
+ * vector-length-agnostic dispatch TU here selects the variant matching
+ * the framework-pinned worker VL (128/256/512; the 1024-bit complex
+ * variant is not built because Eigen's SVE complex ptranspose reads past
+ * buf[N][NC] when NC > N — upstream defect, GCC -Warray-bounds). test_init
+ * allocates for the tier it observes and test_run re-checks the worker's
+ * readback against that tier; a refused pin skips, a mismatch fails
+ * closed.
  *
  * @note This test requires at least 2 threads to run.
  * @endparblock
@@ -209,7 +207,12 @@ static int sve_probe_and_init(struct test *test)
      * matrices — removed. Timing note: desired_duration now covers exactly
      * the two run-side decompositions (prime + DUT); init no longer
      * contributes a third. */
-    const long tier = arm64_spec_get()->max_sve_vl_bits;
+    /* The framework pinned the control thread before this aux thread was
+     * created, so `svl` is the tier the workers will run at. Allocate the
+     * variant for the tier init ACTUALLY observed; test_run compares the
+     * worker's readback against this value and fails closed on any
+     * divergence instead of reinterpreting objects built for another tier. */
+    const long tier = svl * 8;
     void *data = nullptr;
     switch (tier) {
     case 128:  data = svd_vl128::make_data(g_dim);  break;
@@ -237,17 +240,15 @@ static int sve_probe_and_init(struct test *test)
 }
 
 /*
- * All-VL Phase 2 P5 (spike verdict) run wrapper: pin THIS worker thread
- * to the compile-time 128-bit VL before any Eigen packet code runs, then
- * delegate to the shared EigenSVDTest template run — replacing the lost
- * external VL-pinning launcher. In test_run, not test_init: init runs on
- * a throwaway aux thread whose prctl never reaches the per-CPU workers
- * (arm64_vl.h hard boundary — the kernel only propagates a pin to
- * threads the pinning thread itself creates). The drift guard uses
- * arm64_sve_vl_bytes() (.inst-encoded rdvl), NOT svcntb(): under
- * -msve-vector-bits=128 GCC constant-folds svcntb() to 16, which would
- * silently compile the guard away, while the raw rdvl reads the actual
- * per-thread runtime VL (same evidence as gemm_double_max_arm).
+ * Per-tier run wrapper (design §4.7): re-read and re-pin THIS worker to
+ * the framework-chosen tier, verify the readback equals both the pin and
+ * the tier test_init allocated for, then dispatch to that tier's payload.
+ * The framework pinned the control thread before init (so init saw the
+ * same tier); the re-pin here is an idempotent second check that a silent
+ * environment downgrade cannot slip a fixed-width packet onto the wrong
+ * VL. The readback uses arm64_sve_vl_bytes() (.inst-encoded rdvl), NOT
+ * svcntb(): in a -msve-vector-bits TU GCC constant-folds svcntb(), while
+ * the raw rdvl reads the actual per-thread runtime VL.
  */
 static int eigen_svd_cdouble_sve_run(struct test *test, int cpu)
 {
@@ -306,7 +307,7 @@ static int eigen_svd_cdouble_sve_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend self-pinned to the compile-time 128-bit VL, dimension sized from available memory); counterpart of eigen_svd_cdouble")
+DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend with per-tier 128/256/512-bit variants selected at the framework-pinned VL, dimension sized from available memory); counterpart of eigen_svd_cdouble")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_preinit = size_matrix_preinit,
   .test_init = sve_probe_and_init,

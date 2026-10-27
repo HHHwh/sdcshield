@@ -38,22 +38,19 @@
  * gemm_double_dynamic_square stays at M_DIM 256). Non-aarch64 hosts:
  * the file is not even in the build (meson guard).
  *
- * All-VL Phase 2 P5 (spike verdict): Eigen's SVE packet backend is
+ * All-VL Phase 2 (design 2026-10-27 §4.7): Eigen's SVE packet backend is
  * compile-time fixed-width (arm_sve_vector_bits(EIGEN_ARM64_SVE_VL));
  * VLA is un-compilable at the C++ language level (sizeless struct
- * members / NumTraits sizeof — twice-confirmed spike), so this TU stays
- * at the 128-bit lock and pins ITSELF instead: test_run pins the worker
- * thread to the compile-time VL via arm64_sve_pin_vl(16) before any
- * packet code runs, replacing the external VL-pinning launcher (prctl
- * PR_SVE_SET_VL before exec, the scripts/eigen-sve-double/ precedent;
- * the /tmp/vlrun tool no longer exists). The pin lives in test_run,
- * NOT test_init: init runs on a throwaway aux thread whose prctl does
- * not reach the per-CPU workers (they inherit the control thread's VL
- * — the hard boundary documented in
- * framework/device/cpu/arm64/arm64_vl.h). Bare runs at mismatched VL
- * used to overflow SVE packet tails and heap-corrupt the process
+ * members / NumTraits sizeof — twice-confirmed spike). Instead of locking
+ * the whole test to 128-bit, the payload is compiled once per tier
+ * (128/256/512/1024) under its own Eigen namespace and this TU — kept
+ * vector-length agnostic — dispatches on the tier the framework pinned
+ * this worker to. test_run re-reads the ACTUAL VL and re-pins as a second
+ * check before calling the matching variant: a refused pin skips, a
+ * readback mismatch fails closed. Bare runs at a mismatched VL used to
+ * overflow SVE packet tails and heap-corrupt the process
  * (free()/munmap_chunk aborts in validate4b; clean under pinning per
- * validate4c3) — a failed pin now skips honestly instead.
+ * validate4c3).
  * @endparblock
  */
 
@@ -144,8 +141,8 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
  * in, so a clean skip must be reachable before any of them; the
  * framework's compiler_minimum_device gate already skips non-SVE hosts
  * before init — this keeps a test-specific reason if that ordering ever
- * changes. The GEMM payload itself is VL-agnostic except for the packet
- * width, which test_run pins to the compile-time 128-bit. */
+ * changes. The GEMM payload itself is VL-agnostic; test_run dispatches to
+ * the per-tier variant that matches the worker's pinned VL (design §4.7). */
 static int eigen_gemm_double_max_arm_init(struct test *test)
 {
     const long svl = arm64_require_sve_vl(test, 128, 1024);
@@ -202,7 +199,7 @@ static int eigen_gemm_double_max_arm_run(struct test *test, int cpu)
     }
 }
 
-DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, dynamic, memory-safe max square, ARM64+SVE packet backend self-pinned to the compile-time 128-bit VL)")
+DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, dynamic, memory-safe max square, ARM64+SVE packet backend with per-tier 128/256/512/1024-bit variants selected at the framework-pinned VL)")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_preinit = eigen_gemm_double_max_arm_preinit,
   .test_init = eigen_gemm_double_max_arm_init,
