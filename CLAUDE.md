@@ -135,6 +135,21 @@ END_DECLARE_TEST
   needs a VL-pinning launcher (`scripts/eigen-sve-double/` precedent; the
   external `/tmp/vlrun` tool no longer exists); `sleef_sve` stays at 128 by
   design.
+- **ARM64 spec policy (2026-10-27)**: sdcshield probes the chip's spec once
+  (`arm64_spec_get()`: extension bits + the MAXIMUM tier, measured by asking
+  the kernel for the architectural ceiling and reading back what it granted —
+  "current VL" is not "max VL", a sysctl can lower the default). The default
+  test set is filtered at selection time to what the chip can execute
+  (`struct test::arm64_requires` / `arm64_min_vl_bits`), and every SVE/SVE2
+  worker is pinned to the chip maximum before `test_run` (a refused pin is a
+  SKIP, a readback mismatch is a FAIL). `-e` / `--test-list-file` bypass the
+  filter (explicit requests still register and skip honestly). Override the
+  assumed maximum with `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` (only lowers).
+  The Eigen SVE pair is tier-locked by the language (fixed-width packets) and
+  is built once per tier with a runtime function-pointer dispatch; the
+  complex SVD payload has no 1024-bit variant because Eigen's SVE complex
+  `ptranspose` reads past `buf[N][NC]` when NC > N (upstream defect).
+  `scripts/check-arm64-requires.py` keeps the tag coverage honest.
 - **SME caveat**: "HWCAP2_SME=0 / `SMSTART` raises SIGILL" only proves SME is
   *not enabled by this kernel* — with `CONFIG_ARM64_SME=n` (check
   `/boot/config-$(uname -r)`; the SME sysctl

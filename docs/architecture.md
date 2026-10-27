@@ -81,6 +81,19 @@ consume the generated tables.
 
 ## SVE/SME vector-length layer (arm64_vl.h)
 
+Two consumers sit on top of this layer (design
+`docs/superpowers/specs/2026-10-27-arm64-spec-policy-and-vl-tier-cases-design.md`):
+
+- **Selection** (`framework/sandstone_tests.cpp`, `SandstoneTestSet` ctor):
+  tests declaring `arm64_requires` / `arm64_min_vl_bits` are dropped from the
+  default set when the probed chip spec cannot run them, so `--list-tests`
+  shows what this machine can actually execute. Explicit `-e` /
+  `--test-list-file` selections bypass the filter and skip at run time.
+- **Per-worker pin** (`framework/device/cpu/arm64/arm64_spec_prepare.h`,
+  called from `sandstone_run.cpp` just before `test_run`): the worker is
+  pinned to the chip's maximum tier and the value is read back. This is the
+  only thread whose VL matters — `test_init` runs on a throwaway aux thread.
+
 `framework/device/cpu/arm64/arm64_vl.h` is the single entry point for
 per-thread SVE vector length (VL) and SME streaming vector length (SVL):
 
