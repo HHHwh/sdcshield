@@ -167,10 +167,18 @@ if (test.arm64_min_vl_bits && s->max_sve_vl_bits < test.arm64_min_vl_bits)
 
 ### 4.4 worker 线程按最高档拉起
 
-**位置**：per-CPU worker 线程内、调用 `test_run` 之前（不是 `test_init` ——init 跑在一次性 aux 线程上，
-其 pin 不传导到 worker；这是 `arm64_vl.h:19-29` 已文档化的硬边界）。
+**位置（as-built，评审修正）**：必须在 **控制线程**（`test_init` 的 aux 线程与
+per-CPU worker 的创建者）调用 `test_init` **之前** pin 一次，再在每个 worker 的
+`test_run` 之前 pin 并读回校验。只 pin worker 会在"内核默认 VL < 芯片最高档"
+（§4.1 的存在前提）时让 init 按默认档冻结 golden/缓冲区、worker 按最高档运行，
+触发全部 init/run 漂移守卫（无守卫的用例则可能越界）。控制线程的 pin 是
+best-effort（静默），权威判定仍在 worker：
 
 ```
+# 控制线程，test_init 之前（子线程继承此 VL）
+arm64_spec_pin_control_thread(test)      # 静默；失败留给 worker 判定
+
+# 每个 worker，test_run 之前
 if (test->arm64_requires & (SVE|SVE2)):
     target = spec->max_sve_vl_bits
     rc = arm64_sve_pin_vl(target/8)
@@ -180,8 +188,9 @@ if (test->arm64_requires & (SVE|SVE2)):
 同理 SME/SME2 用 max_sme_svl_bits + PR_SME_SET_VL + rdsvl
 ```
 
-**Eigen 两例的覆盖**：它们要求 SVE，框架先 pin 到最高档；随后 Eigen 自己的
-`test_run` 再 pin 到所选变体的档位（§4.7），后者覆盖前者，语义不变。
+**Eigen 两例的覆盖**：它们要求 SVE，控制线程先 pin 到最高档（init 按同一档
+分配变体）；随后 Eigen 的分派 TU 在 worker 上再 pin/读回并选择对应变体（§4.7），
+幂等确认，语义不变。
 
 ### 4.5 用例分型
 

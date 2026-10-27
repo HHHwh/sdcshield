@@ -63,7 +63,7 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 # Fresh clone: run the vendored build.sh first (openssl/openblas/sleef/isa-l/
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
-./builddir/sdcshield --list-tests             # 478 tests at default PROD quality (gcc + vendored, 2026-10-26, PR #294 round 2 re-measured)
+./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent: ~478 on an SVE1 host, 297 on a no-SVE Kunpeng 920 (2026-10-27)
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
 ./builddir/sdcshield --quality=-1 -e <test>   # include SKIP-level tests
@@ -131,20 +131,25 @@ END_DECLARE_TEST
   wider VL. Verification path follows rule 2: tiers the host supports are
   verified natively here; tiers it lacks go to gem5-fi
   (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). `tests_sve`
-  compiles at fixed 128-bit, so on SVE hosts with VL≠128 the eigen SVD test
-  needs a VL-pinning launcher (`scripts/eigen-sve-double/` precedent; the
-  external `/tmp/vlrun` tool no longer exists); `sleef_sve` stays at 128 by
-  design.
+  compiles at fixed 128-bit; `sleef_sve` stays there by design. The two Eigen
+  SVE tests no longer need a VL-pinning launcher: each payload is built once
+  per tier (GEMM 128/256/512/1024, complex SVD 128/256/512) under its own
+  Eigen namespace and a vector-length-agnostic dispatcher picks the variant
+  matching the framework-pinned worker VL.
 - **ARM64 spec policy (2026-10-27)**: sdcshield probes the chip's spec once
   (`arm64_spec_get()`: extension bits + the MAXIMUM tier, measured by asking
   the kernel for the architectural ceiling and reading back what it granted —
   "current VL" is not "max VL", a sysctl can lower the default). The default
   test set is filtered at selection time to what the chip can execute
-  (`struct test::arm64_requires` / `arm64_min_vl_bits`), and every SVE/SVE2
-  worker is pinned to the chip maximum before `test_run` (a refused pin is a
-  SKIP, a readback mismatch is a FAIL). `-e` / `--test-list-file` bypass the
-  filter (explicit requests still register and skip honestly). Override the
-  assumed maximum with `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` (only lowers).
+  (`struct test::arm64_requires` / `arm64_min_vl_bits`). The **control thread**
+  is pinned to the chip maximum before `test_init` (its aux thread and the
+  per-CPU workers inherit that VL, so init goldens and run lanes agree even
+  when a sysctl lowered the default), and every SVE/SVE2 worker re-pins and
+  verifies the readback (a refused pin is a SKIP, a readback mismatch is a
+  FAIL). `-e` / `--test-list-file` bypass the filter (explicit requests still
+  register and skip honestly). Override the assumed maximum with
+  `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` (only lowers; re-probed so an
+  unimplemented tier such as 384 falls back to what the kernel grants).
   The Eigen SVE pair is tier-locked by the language (fixed-width packets) and
   is built once per tier with a runtime function-pointer dispatch; the
   complex SVD payload has no 1024-bit variant because Eigen's SVE complex

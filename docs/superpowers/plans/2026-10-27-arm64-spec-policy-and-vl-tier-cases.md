@@ -670,3 +670,38 @@ done
 **类型一致性**：`arm64_requires`（`uint8_t`）在 T2 定义、T3/T4/T5 使用；`arm64_min_vl_bits`（`long`）在 T2 定义、T3 使用；`ARM64_REQUIRES_*` 在 T1 定义、T5 使用；`arm64_spec_prepare_test` 在 T4 定义并使用。`GEMM_TEST_NAMESPACE`/`SVD_TEST_NAMESPACE` 在 T7 的 meson 与源码一致。
 
 **已知顺序依赖**：Task 3 的 Step 3 断言依赖 Task 5 的标签；已在 Task 3 中显式标注，Task 5 Step 4 复核。
+
+---
+
+## 评审修复（2026-10-27，as-built）
+
+首轮实现合入前的独立检视发现并修复以下缺陷（逐项独立 commit）：
+
+| # | 缺陷 | 修复 | 证据/边界 |
+|---|---|---|---|
+| A | 探测在调用线程上 save/restore：`PR_SVE_SET_VL` 返回可能带 `PR_SVE_VL_INHERIT` 位，被当成长度 → 虚假 ~1M-bit 最大值；restore 掩掉 INHERIT/ONEXEC；override 接受硬件不实现的中间档（如 384）→ worker 读回不符而 FAIL；缓存 `bool done` 无同步 | 改**临时线程**探测（设计 §4.1 原意），只取 `PR_*_VL_LEN_MASK` 长度；override 重新探测并按内核实际授予档归一；`__atomic` 状态机发布 | 内核源码 4.19/v5.10/master `sve_set_current_vl` 成功后返回 `sve_prctl_status()`（VL+INHERIT 位），不是 0——确认既有 pin 语义正确；本机无 SVE，线程探测路径不可达，诚实声明未在本机执行 |
+| B | 只 pin worker：内核默认 VL < 芯片最高档时（§4.1 的存在前提），init 按默认档冻结 golden/缓冲区、worker 按最高档运行 → 全部漂移守卫 FAIL，无守卫用例可能越界 | `arm64_spec_pin_control_thread()` 在 `test_init` 前 pin 控制线程（init aux 与 worker 都继承其 VL）；worker 仍 pin+读回作权威判定；新增 `selftest_arm64_spec_init_pin` 断言 init 与 worker 档位一致 | 本机无 SVE → SKIP；CI N2（VL=128，默认=最大）可跑通但**不能**覆盖 default<max 场景；该场景需真 SVE 主机降 sysctl 默认档验证，列为验证边界 |
+| C | `sve512_fmmla_arm` 从未在硬件执行过，golden 存在三重缺陷（第二操作数转置被漏掉；整向量当 n×n 而非每 4-lane 一组 2×2；FMMLA 是融合 2-积、顺序 `std::fma` 链差 1 ULP），且门控错误要求 SVE2、缺 VL 下界（f64 在 VL=128 SIGILL） | 由 09a0efdb 以真机基向量探测修正：每 4-lane 组 `out[g+2r+c]=Σ_k Zn[g+2r+k]·Zm[g+2c+k]`；改用精确整数操作数使 golden 与舍入/顺序无关；拆出 `tests_arm64_sve_mm`（`+f32mm+f64mm`，不要求 SVE2）；门控 256..1024 + `arm64_min_vl_bits=256` | 真机 256 档 `result: pass`（该用例首次通过）、128 档干净 SKIP；gem5 `--sve_vl 4/8` `SDCSHIELD_FAILS=0`。注：本轮初版仅把 Zm 改为列主序（n×n 口径），复算虽匹配 PR 记录的 `[-1,-4,3,-6]`，但被 09a0efdb 证明仅在 lanes==4 巧合成立，已在该提交合入时丢弃。本机 GCC 10.3 不支持 `+f32mm+f64mm`，该 TU 不在本机构建 |
+| D | `sleef_sve`（tests/cpu/sleef，真 VLA）漏标 `arm64_requires`；检查器目录表也不含该目录；脚本 `tuple[str,int]` 在 Python 3.8（openEuler 20.03）直接 TypeError | 补标签；`SCAN_DIRS` 增 `tests/cpu/sleef`；加 `from __future__ import annotations` | `python3 scripts/check-arm64-requires.py` → ok（3.8.18 实跑）；默认集不再含 `sleef_sve`，显式 `-e` 仍注册并诚实 SKIP |
+| E | `writing_tests.md` / `progress-log.md` 在 main 上遗留已提交的合并冲突标记；PR 新章节又插进句子中间 | 移除冲突标记、修复章节顺序 | `grep` 计数 0；纯文档 |
+| F | 选择期最小档过滤对 SME-only 用例误用 SVE 最大值 | 按扩展选择 SVE/SME 最大值 | 当前无用例设置 `arm64_min_vl_bits`，为字段语义正确性 |
+
+**本机验证（0202 cathelper-k8s-worker2，Kunpeng-920，无 SVE/SVE2/SME）**：
+
+```
+./scripts/build.sh                                  → 0 error / 0 new warning
+./builddir/sdcshield --dump-cpu-info                → ARM64 spec: SVE no | SVE2 no | SME no | SME2 no
+./builddir/sdcshield --list-tests | wc -l            → 296（spec 过滤后；main 上 478 已随本策略变为 host-dependent）
+-e sve512_f64_chain_svd / eigen_* / sleef_sve        → skip 'test compiled with sve'，exit: pass
+--selftests selftest_arm64_spec                      → pass
+selftest_arm64_spec_worker_pin / _init_pin           → skip（no SVE）
+zstd19 -t 2000 -n 1                                  → exit: pass
+python3 scripts/check-arm64-requires.py              → ok
+```
+
+**未闭环边界（如实）**：本机（0202）无任何向量扩展；gem5-fi SE 的 prctl 无 handler（框架二进制
+不可运行），因此临时线程探测、控制线程继承、worker pin/读回、default<max 一致性、Eigen 512/1024
+变体均未在本机/本机 gem5 执行。FMMLA 已由 09a0efdb 在真机（F32MM/F64MM，无 SVE2，256 档）与
+gem5（vl4/vl8）验证，但其修正本身不在本机执行。CI 的 N2 runner（VL=128）能覆盖 pin 成功路径与
+init/worker 一致性（默认=最大时），覆盖不到 default<max；需在可 pin 的真 SVE 主机上把
+`/proc/sys/abi/sve_default_vector_length` 调低后复测。SVE2 `sve2_cross_precision_arm` 仍无执行证据。

@@ -89,10 +89,14 @@ Two consumers sit on top of this layer (design
   default set when the probed chip spec cannot run them, so `--list-tests`
   shows what this machine can actually execute. Explicit `-e` /
   `--test-list-file` selections bypass the filter and skip at run time.
-- **Per-worker pin** (`framework/device/cpu/arm64/arm64_spec_prepare.h`,
-  called from `sandstone_run.cpp` just before `test_run`): the worker is
-  pinned to the chip's maximum tier and the value is read back. This is the
-  only thread whose VL matters — `test_init` runs on a throwaway aux thread.
+- **Control-thread pin before `test_init`** and **per-worker verification**
+  (`framework/device/cpu/arm64/arm64_spec_prepare.h`, called from
+  `sandstone_run.cpp`): both `test_init`'s aux thread and the per-CPU workers
+  are created by the control thread and inherit its VL, so the control thread
+  is raised to the chip maximum first — init's goldens/buffers and the run-side
+  lane count must agree even when the kernel default VL was lowered by a
+  sysctl. Each worker then re-pins and reads the value back: a refused pin is
+  a SKIP, a readback mismatch is a FAIL.
 
 `framework/device/cpu/arm64/arm64_vl.h` is the single entry point for
 per-thread SVE vector length (VL) and SME streaming vector length (SVL):
