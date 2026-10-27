@@ -35,39 +35,89 @@
 #include <cstring>
 using namespace Eigen;
 
+typedef Matrix < float, Dynamic, Dynamic > Mat;
+
+#if defined(__aarch64__) && defined(__linux__)
+/* 联合求解 sizing 探针(T9): 填充与 run() 的 fill_rand 同谱系(均匀随机
+ * [-1,1), 检视 #51)——splitmix 确定性哈希满足该契约, 且不依赖 init aux
+ * 线程上未定义的 per-thread RNG 状态。GEMM 计时对数值不敏感(无 SVD 式
+ * deflation 路径), 谱系由分布一致性满足; 填充 O(n²) 相对乘法 O(n³) 已
+ * 计入探针计时(保守方向)。同 T6 gemm_double_max_arm_body 的 solve_once
+ * (float 标量转型)。 */
+static int gemm_solve_once(int n)
+{
+    Mat a(n, n), b(n, n), c;
+    for (int r = 0; r < n; ++r)
+        for (int col = 0; col < n; ++col) {
+            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
+                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
+            h ^= h >> 32;
+            h *= 0xD6E8FEB86659FD93ull;
+            h ^= h >> 32;
+            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h2 ^= h2 >> 32;
+            a(r, col) = (float)((double)(h % 2000u) / 1000.0 - 1.0);
+            b(r, col) = (float)((double)(h2 % 2000u) / 1000.0 - 1.0);
+        }
+    c = a * b;
+    return 0;
+}
+#endif
+
 // Matrix dimension. Configurable without recompiling via the unified
 // priority chain (see sdc_stress_config.h):
 //   1. -O eigen_gemm_float_dynamic_square_dump.mdim=N (or the same key in
 //      sdc_stress.conf / $SDC_STRESS_CONFIG)
 //   2. legacy GEMM_K_DIM env var (kept for old scripts)
-//   3. environment-adaptive default (85% of RAM, 4 matrices/thread, 6x RSS)
+//   3. environment-adaptive default (arm64: joint memory/time solver; other
+//      arches: the legacy 85%-of-RAM memory model)
+// The dimension is solved ONCE in test_init and cached into
+// eigen_test_data.dim — workers read the cache and never re-solve (T9: the
+// old static-in-function cache existed for run()-side re-entry, which is
+// gone).
 static int gemm_k_dim(struct test *test) {
-    static int dim = -1;
-    if (dim < 0) {
-        int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 8192);
-        if (v == 0) {
-            if (const char *env = getenv("GEMM_K_DIM")) {
-                int parsed = atoi(env);
-                if (parsed > 0) v = parsed;
-            }
-        }
-        if (v > 0) {
-            dim = (int)(v < 16 ? 16 : (v > 8192 ? 8192 : v));
-        } else {
-            dim = sdc_auto_square_dim(4, 4, 6.0, 850, thread_count(), 16, 8192, test->id, "mdim");
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 8192);
+    if (v == 0) {
+        if (const char *env = getenv("GEMM_K_DIM")) {
+            int parsed = atoi(env);
+            if (parsed > 0) v = parsed;
         }
     }
-    return dim;
+    if (v > 0)
+        return (int)(v < 16 ? 16 : (v > 8192 ? 8192 : v));
+#if defined(__aarch64__) && defined(__linux__)
+    /* 联合求解(T9, 参数依据见 gemm_double_dynamic_square.cpp 同位注释;
+     * 本文件差异仅 clamp [16,8192] 与 fam GEMM_F32)。 */
+    struct sdc_joint_args ja = {
+        .lo = 16, .hi = 8192,
+        .fam = SDC_RSS_GEMM_F32,    /* 0.0159 KB/n²/线程, 实测表值 */
+        .bytes_per_elem = 4, .matrices_per_thread = 4, .rss_ratio = 6.0,
+        .shared_bytes_per_slice = 0,
+        .mem_fraction_permille = 850,
+        .ar_fam = SDC_FAM_COMPUTE_BOUND,
+        .run_budget_ms = 200000,    /* 全核单迭代(填充+一次乘法×AR)预算 */
+    };
+    try {
+        return sdc_joint_dim_slice(test, "mdim", &ja, gemm_solve_once);
+    } catch (...) {
+        log_warning("[联合求解] %s.%s: 探针异常 → 退守下限 %d",
+                    test->id, "mdim", 16);
+        return 16;
+    }
+#else
+    return sdc_auto_square_dim(4, 4, 6.0, 850, thread_count(), 16, 8192, test->id, "mdim");
+#endif
 }
-#define M_DIM gemm_k_dim(test)
-
-typedef Matrix < float, Dynamic, Dynamic > Mat;
 
 namespace {
 struct eigen_test_data {
     Mat lhs;
     Mat rhs;
     Mat prod;
+    int dim;    /* init 求解的最终维度(T9): worker 读缓存不重算;
+                 * new(eigen_test_data) 默认初始化下未定值, init 在任何
+                 * 可抛路径前赋值 */
 };
 }
 
@@ -75,10 +125,13 @@ struct eigen_test_data {
 
 static int eigen_gemm_float_dynamic_square_init(struct test *test) {
     test->data = new(eigen_test_data);
+    auto d = CAST(test->data);
     try {
-        CAST(test->data)->lhs = Mat::Random(M_DIM, M_DIM);
-        CAST(test->data)->rhs = Mat::Random(M_DIM, M_DIM);
-        CAST(test->data)->prod = CAST(test->data)->lhs * CAST(test->data)->rhs;
+        const int dim = gemm_k_dim(test);   /* knob > env > 自适应, 只解一次 */
+        d->dim = dim;
+        d->lhs = Mat::Random(dim, dim);
+        d->rhs = Mat::Random(dim, dim);
+        d->prod = d->lhs * d->rhs;
     } catch (...) {
         report_fail_msg("Exception on Eigen code, most probably OOM");
     }
@@ -101,10 +154,11 @@ static int eigen_gemm_float_dynamic_square_run(struct test *test, int cpu) {
             for (int c = 0; c < m.cols(); ++c)
                 m(r, c) = frandomf_scale(2.0f) - 1.0f;
     };
+    const int dim = d->dim;   /* init 缓存值——worker 不重算 */
     Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(M_DIM, M_DIM);
-    l_rhs.resize(M_DIM, M_DIM);
-    l_prod.resize(M_DIM, M_DIM);
+    l_lhs.resize(dim, dim);
+    l_rhs.resize(dim, dim);
+    l_prod.resize(dim, dim);
     fill_rand(l_lhs);
     fill_rand(l_rhs);
     l_prod = l_lhs * l_rhs;
@@ -142,14 +196,14 @@ static int eigen_gemm_float_dynamic_square_run(struct test *test, int cpu) {
         // IEEE-754 bit xor and per-byte breakdown, then fail. All of this
         // is cold: the hot path only does the gemm + the compare branch.
         bool ok = true;
-        for (int idx = 0; idx < M_DIM * M_DIM; ++idx) {
+        for (int idx = 0; idx < dim * dim; ++idx) {
             if (xd[idx] != pd[idx]) {
                 ok = false;
                 uint32_t golden_bits, actual_bits;
                 memcpy(&golden_bits, &pd[idx], sizeof(uint32_t));
                 memcpy(&actual_bits, &xd[idx], sizeof(uint32_t));
                 uint32_t xorv = golden_bits ^ actual_bits;
-                int row = idx / M_DIM, col = idx % M_DIM;
+                int row = idx / dim, col = idx % dim;
                 unsigned char *gb = (unsigned char *)&golden_bits;
                 unsigned char *ab = (unsigned char *)&actual_bits;
                 unsigned char *xb = (unsigned char *)&xorv;

@@ -10,7 +10,7 @@
  * Dump-on-failure variant of eigen_gemm_cdouble_dynamic_square. The FMA
  * hot path (x = lhs*rhs) is byte-for-byte identical to the original;
  * only the verification changes: instead of memcmp_or_fail over the raw
- * double stream (2*M_DIM*M_DIM doubles = real,imag interleaved), a cold
+ * double stream (2*dim*dim doubles = real,imag interleaved), a cold
  * element-wise compare locates the first mismatch and dumps its complex
  * element index, the golden/actual real and imag doubles, their IEEE-754
  * bit xors, and a per-byte breakdown, so an SDC bit-flip can be located.
@@ -34,29 +34,89 @@
 #include <cstring>
 using namespace Eigen;
 
+typedef Matrix < std::complex < double >, Dynamic, Dynamic > Mat;
+
+#if defined(__aarch64__) && defined(__linux__)
+/* 联合求解 sizing 探针(T9): 填充与 run() 的 fill_rand 同谱系(均匀随机
+ * [-1,1) 独立 re/im, 检视 #51)——splitmix 确定性哈希满足该契约, 且不
+ * 依赖 init aux 线程上未定义的 per-thread RNG 状态。GEMM 计时对数值
+ * 不敏感(无 SVD 式 deflation 路径), 谱系由分布一致性满足; 填充 O(n²)
+ * 相对乘法 O(n³) 已计入探针计时(保守方向)。同 T6 gemm_double_max_arm
+ * _body 的 solve_once(complex 四流: a.re/a.im/b.re/b.im)。 */
+static int gemm_solve_once(int n)
+{
+    Mat a(n, n), b(n, n), c;
+    for (int r = 0; r < n; ++r)
+        for (int col = 0; col < n; ++col) {
+            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
+                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
+            h ^= h >> 32;
+            h *= 0xD6E8FEB86659FD93ull;
+            h ^= h >> 32;
+            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h2 ^= h2 >> 32;
+            std::uint64_t h3 = h2 * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h3 ^= h3 >> 32;
+            std::uint64_t h4 = h3 * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h4 ^= h4 >> 32;
+            a(r, col) = std::complex<double>(
+                (double)(h % 2000u) / 1000.0 - 1.0,
+                (double)(h2 % 2000u) / 1000.0 - 1.0);
+            b(r, col) = std::complex<double>(
+                (double)(h3 % 2000u) / 1000.0 - 1.0,
+                (double)(h4 % 2000u) / 1000.0 - 1.0);
+        }
+    c = a * b;
+    return 0;
+}
+#endif
+
 /* 矩阵维度: 优先级链同 eigen_gemm_cdouble_dynamic_square
  * (-O eigen_gemm_cdouble_dynamic_square_dump.mdim=N / 配置文件 / 自适应)。
- * 历史硬编码 221 是刻意的"怪"维度, 显式配置时保留任意值语义。 */
+ * 历史硬编码 221 是刻意的"怪"维度, 显式配置时保留任意值语义。尺寸只
+ * 在 test_init 求解一次并缓存进 eigen_test_data.dim——worker 读缓存
+ * 不重算(T9, 旧 static 缓存因 run 期重入而存在, 该路径已删除)。 */
 static int gemm_mdim(struct test *test)
 {
-    static int dim = -1;
-    if (dim < 0) {
-        int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
-        if (v <= 0)
-            v = sdc_auto_square_dim(16, 4, 6.0, 850, thread_count(), 16, 4096, test->id, "mdim");
-        dim = (int)v;
+    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
+    if (v <= 0) {
+#if defined(__aarch64__) && defined(__linux__)
+        /* 联合求解(T9, 参数依据见 gemm_double_dynamic_square.cpp 同位
+         * 注释; 本文件差异仅 fam GEMM_C128, 16B/元素)。 */
+        struct sdc_joint_args ja = {
+            .lo = 16, .hi = 4096,
+            .fam = SDC_RSS_GEMM_C128,   /* 0.0631 KB/n²/线程, 实测表值 */
+            .bytes_per_elem = 16, .matrices_per_thread = 4, .rss_ratio = 6.0,
+            .shared_bytes_per_slice = 0,
+            .mem_fraction_permille = 850,
+            .ar_fam = SDC_FAM_COMPUTE_BOUND,
+            .run_budget_ms = 200000,    /* 全核单迭代(填充+一次乘法×AR)预算 */
+        };
+        try {
+            v = sdc_joint_dim_slice(test, "mdim", &ja, gemm_solve_once);
+        } catch (...) {
+            log_warning("[联合求解] %s.%s: 探针异常 → 退守下限 %d",
+                        test->id, "mdim", 16);
+            v = 16;
+        }
+#else
+        v = sdc_auto_square_dim(16, 4, 6.0, 850, thread_count(), 16, 4096, test->id, "mdim");
+#endif
     }
-    return dim;
+    return (int)v;
 }
-#define M_DIM gemm_mdim(test)
-
-typedef Matrix < std::complex < double >, Dynamic, Dynamic > Mat;
 
 namespace {
 struct eigen_test_data {
     Mat lhs;
     Mat rhs;
     Mat prod;
+    int dim;    /* init 求解的最终维度(T9): worker 读缓存不重算;
+                 * new(eigen_test_data) 默认初始化下未定值, init 在任何
+                 * 可抛路径前赋值 */
 };
 }
 
@@ -64,10 +124,13 @@ struct eigen_test_data {
 
 static int eigen_gemm_cdouble_dynamic_square_init(struct test *test) {
     test->data = new(eigen_test_data);
+    auto d = CAST(test->data);
     try {
-        CAST(test->data)->lhs = Mat::Random(M_DIM, M_DIM);
-        CAST(test->data)->rhs = Mat::Random(M_DIM, M_DIM);
-        CAST(test->data)->prod = CAST(test->data)->lhs * CAST(test->data)->rhs;
+        const int dim = gemm_mdim(test);   /* knob > 自适应, 只解一次 */
+        d->dim = dim;
+        d->lhs = Mat::Random(dim, dim);
+        d->rhs = Mat::Random(dim, dim);
+        d->prod = d->lhs * d->rhs;
     } catch (...) {
         report_fail_msg("Exception on Eigen code, most probably OOM");
     }
@@ -91,10 +154,11 @@ static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
                 m(r, c) = std::complex<double>(frandom_scale(2.0) - 1.0,
                                                frandom_scale(2.0) - 1.0);
     };
+    const int dim = d->dim;   /* init 缓存值——worker 不重算 */
     Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(M_DIM, M_DIM);
-    l_rhs.resize(M_DIM, M_DIM);
-    l_prod.resize(M_DIM, M_DIM);
+    l_lhs.resize(dim, dim);
+    l_rhs.resize(dim, dim);
+    l_prod.resize(dim, dim);
     fill_rand(l_lhs);
     fill_rand(l_rhs);
     l_prod = l_lhs * l_rhs;
@@ -125,17 +189,17 @@ static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
         x = lhs * rhs;                          // FMA hot path: unchanged
 
         // Original compared the raw double stream (real,imag interleaved).
-        // Keep that exact byte-level semantics: compare as 2*M_DIM*M_DIM
+        // Keep that exact byte-level semantics: compare as 2*dim*dim
         // doubles, and on first mismatch map back to a complex element +
         // real/imag component for the dump.
         const double *xd = reinterpret_cast<const double *>(x.data());
         const double *pd = reinterpret_cast<const double *>((frozen_replay ? d->prod : l_prod).data());
-        const int N = 2 * M_DIM * M_DIM;
+        const int N = 2 * dim * dim;
         for (int idx = 0; idx < N; ++idx) {
             if (xd[idx] != pd[idx]) {
                 // complex element index = idx/2; component = idx%2 (0=real,1=imag)
                 int cidx = idx / 2;
-                int row = cidx / M_DIM, col = cidx % M_DIM;
+                int row = cidx / dim, col = cidx % dim;
                 const char *comp = (idx % 2 == 0) ? "real" : "imag";
                 uint64_t golden_bits, actual_bits;
                 memcpy(&golden_bits, &pd[idx], sizeof(uint64_t));

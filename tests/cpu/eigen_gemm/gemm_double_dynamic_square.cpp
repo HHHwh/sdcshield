@@ -24,16 +24,49 @@
 #include "sdc_stress_config.h"
 
 #include <Eigen/Core>
+#include <cstdint>
 using namespace Eigen;
+
+typedef Matrix < double, Dynamic, Dynamic > Mat;
+
+#if defined(__aarch64__) && defined(__linux__)
+/* 联合求解 sizing 探针(T9): 填充与 run() 的 fill_rand 同谱系(均匀随机
+ * [-1,1), 检视 #51)——splitmix 确定性哈希满足该契约, 且不依赖 init aux
+ * 线程上未定义的 per-thread RNG 状态。GEMM 计时对数值不敏感(无 SVD 式
+ * deflation 路径), 谱系由分布一致性满足; 填充 O(n²) 相对乘法 O(n³) 已
+ * 计入探针计时(保守方向)。同 T6 gemm_double_max_arm_body 的 solve_once。 */
+static int gemm_solve_once(int n)
+{
+    Mat a(n, n), b(n, n), c;
+    for (int r = 0; r < n; ++r)
+        for (int col = 0; col < n; ++col) {
+            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
+                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
+            h ^= h >> 32;
+            h *= 0xD6E8FEB86659FD93ull;
+            h ^= h >> 32;
+            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h2 ^= h2 >> 32;
+            a(r, col) = (double)(h % 2000u) / 1000.0 - 1.0;
+            b(r, col) = (double)(h2 % 2000u) / 1000.0 - 1.0;
+        }
+    c = a * b;
+    return 0;
+}
+#endif
 
 /*
  * 矩阵维度 N: 运行时可配, 优先级链:
  *   1. -O eigen_gemm_double_dynamic_square.mdim=N / 配置文件同名条目
  *      (sdc_stress.conf 或 $SDC_STRESS_CONFIG)
  *   2. 环境变量 SDC_EIGEN_GEMM_DOUBLE_DYNAMIC_SQUARE_MDIM
- *   3. 缺省自适应: 按 (4 矩阵/线程 x 6x RSS 比率) 占物理内存 85% 计算
- *      GEMM 的内存安全 N, clamp [16, 4096]。
+ *   3. 缺省自适应(arm64: 联合求解; 其他架构: 旧内存自适应链),
+ *      clamp [16, 4096]。
  * 历史缺省 256 (= 未配置且小内存环境下的自适应下限附近)。
+ * 尺寸只在 test_init 求解一次并缓存进 eigen_test_data.dim——worker
+ * 读缓存, 不再重算(T9: 联合求解的探针与口径登记不能在 worker 上下文
+ * 重入, 旧链的 run 期重跑自适应路径已删除)。
  */
 static int gemm_mdim(struct test *test)
 {
@@ -45,17 +78,54 @@ static int gemm_mdim(struct test *test)
     }
     if (v > 0)
         return (int)v;
+#if defined(__aarch64__) && defined(__linux__)
+    /* 联合求解(T9, 同 T6 gemm_double_max_arm / T8 SVD 族模式): 一次
+     * sdc_joint_dim_slice 同时约束内存(per-NUMA-node 三源预算 vs RSS
+     * 表 GEMM_F64 实测系数)与时间(全核单迭代预算 × AR 幂律外推)。
+     *   - legacy 三元组 (8,4,6.0) 是 fam 失配时的防御性 fallback,
+     *     fam 命中 RSS 表后忽略;
+     *   - shared_bytes_per_slice=0: init 持有 3 个共享矩阵 lhs/rhs/
+     *     prod(3×8×n², n=4096 天花板时 403MB)——占节点预算 <1%,
+     *     一阶忽略(T4 同款近似);
+     *   - run_budget_ms=200000 保持契约值(GEMM 族, T6 同款无补偿)。
+     *     已知边界(T6 审查实测): compute 族 AR 表值(单节点 5.0)低估
+     *     天花板足迹的 GEMM——N=3364 全核单乘实测 ~55-60s vs 静默模型
+     *     ~4.0s, 有效 AR≈15(3× 表值); 本宿主类内存侧先绑定
+     *     (n_mem < n_run)故该边界不暴露, 时间侧绑定的主机会把 200s
+     *     迭代实际跑成 ~600s——AR 表足迹感知重标定的已知输入。
+     * x86-64(rule 5): #else 保留旧链原样——joint 的 x86 分支按契约
+     * 忽略 solve_once/run_budget_ms(时间校准是调用方链的职责)。 */
+    struct sdc_joint_args ja = {
+        .lo = 16, .hi = 4096,
+        .fam = SDC_RSS_GEMM_F64,    /* 0.0315 KB/n²/线程, T9 重标定后 */
+        .bytes_per_elem = 8, .matrices_per_thread = 4, .rss_ratio = 6.0,
+        .shared_bytes_per_slice = 0,
+        .mem_fraction_permille = 850,
+        .ar_fam = SDC_FAM_COMPUTE_BOUND,
+        .run_budget_ms = 200000,    /* 全核单迭代(填充+一次乘法×AR)预算 */
+    };
+    try {
+        return sdc_joint_dim_slice(test, "mdim", &ja, gemm_solve_once);
+    } catch (...) {
+        /* 探针分配异常(瞬时 OOM 等): 退守下限——「上限宁小勿大」
+         * (T6/T8 同 doctrine), 探针绝不能终止 child。 */
+        log_warning("[联合求解] %s.%s: 探针异常 → 退守下限 %d",
+                    test->id, "mdim", 16);
+        return 16;
+    }
+#else
     return sdc_auto_square_dim(8, 4, 6.0, 850, thread_count(), 16, 4096, test->id, "mdim");
+#endif
 }
-#define M_DIM gemm_mdim(test)
-
-typedef Matrix < double, Dynamic, Dynamic > Mat;
 
 namespace {
 struct eigen_test_data {
     Mat lhs;
     Mat rhs;
     Mat prod;
+    int dim;    /* init 求解的最终维度(T9): worker 读缓存不重算;
+                 * new(eigen_test_data) 默认初始化下未定值, init 在任何
+                 * 可抛路径前赋值 */
 };
 }
 
@@ -63,10 +133,13 @@ struct eigen_test_data {
 
 static int eigen_gemm_double_dynamic_square_init(struct test *test) {
     test->data = new(eigen_test_data);
+    auto d = CAST(test->data);
     try {
-        CAST(test->data)->lhs = Mat::Random(M_DIM, M_DIM);
-        CAST(test->data)->rhs = Mat::Random(M_DIM, M_DIM);
-        CAST(test->data)->prod = CAST(test->data)->lhs * CAST(test->data)->rhs;
+        const int dim = gemm_mdim(test);   /* knob > env > 自适应, 只解一次 */
+        d->dim = dim;
+        d->lhs = Mat::Random(dim, dim);
+        d->rhs = Mat::Random(dim, dim);
+        d->prod = d->lhs * d->rhs;
     } catch (...) {
         report_fail_msg("Exception on Eigen code, most probably OOM");
     }
@@ -84,7 +157,7 @@ static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {
                 for (int c = 0; c < m.cols(); ++c)
                     m(r, c) = frandom_scale(2.0) - 1.0;
         };
-    const int dim = gemm_mdim(test);
+    const int dim = CAST(test->data)->dim;   /* init 缓存值——worker 不重算 */
     Mat l_lhs, l_rhs, l_prod;
     l_lhs.resize(dim, dim);
     l_rhs.resize(dim, dim);
