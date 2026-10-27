@@ -150,6 +150,21 @@ END_DECLARE_TEST
   complex SVD payload has no 1024-bit variant because Eigen's SVE complex
   `ptranspose` reads past `buf[N][NC]` when NC > N (upstream defect).
   `scripts/check-arm64-requires.py` keeps the tag coverage honest.
+- **`PR_SVE_SET_VL` does not survive `execve()` on this kernel** (measured
+  2026-10-27: a launcher that pins to 128-bit and `execvp`s the target shows
+  `PR_SVE_GET_VL`=16 bytes in the launcher, but the exec'd program reads back
+  32). So an external "pin-then-exec" wrapper CANNOT produce a lower-tier run;
+  tier-specific runs must pin IN-PROCESS (the framework's worker pin, or the
+  test's own `arm64_sve_pin_vl`). `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` lowers
+  the spec and therefore the framework pin without needing exec.
+- **FMMLA (`svmmla_f32/f64`) semantics** (basis-probed 2026-10-27): each group
+  of FOUR lanes is a 2x2 matrix product with the SECOND operand transposed —
+  `out[g+2r+c] = Σ_k Zn[g+2r+k]·Zm[g+2c+k]` — and the two products are summed
+  FUSED (one rounding). A scalar `std::fma` chain is therefore off by up to
+  1 ULP on arbitrary operands; byte-exact goldens need exactly-representable
+  (integer) operands. `svmmla_f64` is UNDEFINED below VL=256 (SIGILL).
+  These were the first executions of the instructions on any available host,
+  because the test's old gate required HWCAP2_SVE2 — which FMMLA does not need.
 - **SME caveat**: "HWCAP2_SME=0 / `SMSTART` raises SIGILL" only proves SME is
   *not enabled by this kernel* — with `CONFIG_ARM64_SME=n` (check
   `/boot/config-$(uname -r)`; the SME sysctl
