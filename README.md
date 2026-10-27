@@ -71,7 +71,7 @@ bash scripts/run/sdc_detect.sh
 
 1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
 2. **停下且有 FAIL**：先看挂在哪个测试——
-   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**（per-thread 同源 golden——每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；分支会话验证【64 核机器，git 无法进一步判定身份，来源未定谳】：3×240s×3 seed + 10 分钟档×2 + 300s 换 seed 全绿，gem5-fi FS 双线程 `eigen_svd_double -n 2` pass；本机复跑锚点【鲲鹏 920 0xd01，128 CPUs = 2×64 核，32GB】：满核 `eigen_sparse` 300s×2 seed 全绿，校准 k=3.30~3.39 → 单解验证 369-825ms ≤ 2s 预算【单线程探针口径；满核带宽竞争同分布实测 ~24.9×（单解 ~14s、含 reroll 最坏迭代 ~29s，2026-10-25 实测），远低于框架 300s 硬宽限，`-t` TERM 由该宽限兜底】）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑仍可用作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。历史"已知 ULP 级良性抖动"记录见 CLAUDE.md 平台怪癖条目（修复前行为）。检出通道口径：eigen 族的同源重算比对（same-source repeat）检出**非确定性缺陷**（瞬态/间歇/边际——同输入不同位；打坏 golden 本身的错误也会在下一轮重算比对中 FAIL）；对**确定性核缺陷**存在结构性盲区（golden 与重算走同一错误路径、位级一致地错）。golden-value 测试族（固定 golden 数据）只覆盖**其自身**指令路径（FMA/SIMD/加密/压缩等）——全套件没有任何 Eigen 分解路径的固定 golden 测试（Eigen 全族 gemm/sparse/svd 均为同源重算），Eigen 路径的确定性缺陷是**已披露的覆盖空洞**（旧共享 golden 的概率性检出通道被主动换弃以消除满核假阳）。
+   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**——per-thread 同源 golden（每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；多机满核多 seed 长窗 + gem5-fi 双线程验证全绿，完整验证记录见 CLAUDE.md 平台怪癖条目）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑可作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。检出通道口径：eigen 族的同源重算比对检出**非确定性缺陷**（同输入不同位）；对**确定性核缺陷**存在结构性盲区（golden 与重算走同一错误路径、位级一致地错）——全套件没有 Eigen 分解路径的固定 golden 测试，这是**已披露的覆盖空洞**（旧共享 golden 的概率性检出通道被主动换弃以消除满核假阳）。
    - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / full_core_only / transient / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
@@ -124,14 +124,12 @@ sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断�
 
 预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（489 PROD 全量上界，选择期 spec 过滤前）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
 
-> **旧二进制判读警示**：2026-09-12 预构建二进制是 `eigen_svd_double`/`eigen_sparse` 满核假阳修复（2026-10-24，feat/eigen-svd-multithread）**之前**的构建——其上这两个用例的满核 FAIL 仍按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；下节"满核挂 = SDC 嫌疑"的判读规则仅适用于含 2026-10-24 修复的构建。**若用旧二进制跑 24h 战役脚本**（`scripts/run/run_sdc_campaign.sh`），须显式恢复旧白名单，否则这两个用例的满核假阳会被按新口径分类为 `full_core_only` 而非 `known_benign_ulp`（在仓库根目录）：
+> **旧二进制判读警示**：2026-09-12 预构建二进制是满核假阳修复（2026-10-24）**之前**的构建——其上 `eigen_svd_double`/`eigen_sparse` 的满核 FAIL 按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；"满核挂 = SDC 嫌疑"的判读规则仅适用于含修复的构建。用旧二进制跑 24h 战役脚本须显式恢复旧白名单（含修复的源码构建不需要、也不应设置）：
 >
 > ```bash
 > SDC=third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built/run-sdcshield.sh \
 > KNOWN_FLAKY="eigen_svd_double eigen_sparse" bash scripts/run/run_sdc_campaign.sh
 > ```
->
-> （`SDC`/`KNOWN_FLAKY` 两个环境变量仅用于旧二进制；含修复的源码构建不需要、也不应设置。）
 
 ```bash
 git clone --recurse-submodules <repo-url>   # 含子模块
@@ -269,9 +267,7 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir --buildt
 | `third-party/pocketfft/` | pocketfft C 版（BSD-3，头文件+源码直接入库，无需 build.sh） | 编入测试库 | `pocketfft_fft`（位反转抽取重排 + 旋转因子 FMA 蝶形链） |
 | `third-party/isa-l/` | Intel isa-l 2.32.1（BSD-3，Makefile.unx 路径，aarch64 无需 autoconf/nasm） | 静态 `libisal.a` | `isal_igzip`（igzip deflate/inflate 往返，aarch64 汇编内核）；10 个 `isal_crc*`（NEON pmull CRC16/32/64）。`install/` 缺失时**回退系统 `libisal`**（openssl 式两级 gate） |
 
-OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁后 128 核（本机全核）30s 压力零错配，2026-09-15 全核压测实证），锁只保护缓冲表元数据、不改计算结果。
-
-isa-l（`isal_igzip` + 10 个 `isal_crc*`）自 2026-09-16 起 vendor 到 `third-party/isa-l/`（v2.32.1，静态 `libisal.a`）；`install/` 缺失时回退系统 `libisal`，两者皆无才剔除 `isal_*` 测试。
+OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 让框架"每核一 worker"并发调 `cblas_*gemm` 时内部 packing 缓冲池不互踩（实测无锁 8 线程即出错配、加锁后 128 核 30s 压力零错配），锁只保护缓冲表元数据、不改计算结果。
 
 ```bash
 # 首次构建顺序（pocketfft 无需预构建）：
@@ -323,18 +319,12 @@ done
 # 模式 C：大矩阵深压（大内存主机；4096 档单迭代分钟级，需长窗口，必要时 -n 限并发控内存）
 ./builddir/sdcshield -O openblas_dgemm.mdim=4096 -e openblas_dgemm -t 2h        # 或 -n 64 限制并发
 
-# 模式 E：单命令 knob 全谱（一条命令同时挂多个 -O，每个 -O 只作用于它前缀的测试，
-#         无前缀匹配的测试按默认参数跑——多样性轮 + 参数扫谱二合一；9 个测试 12 个 knob）
+# 模式 E：单命令 knob 全谱（每个 -O 只作用于它前缀的测试，无前缀匹配的按默认参数跑
+#         ——多样性轮 + 参数扫谱二合一；一条命令可挂任意多个不同前缀的 -O）
 ./builddir/sdcshield \
     -e openblas_dgemm,openblas_sgemm,openblas_zgemm,openblas_lu,sleef_neon,pocketfft_fft,isal_igzip,eigen_svd_cdouble_sve,ipsec_aes128_cbc_hmac_sha1_sse \
-    -O ipsec_aes128_cbc_hmac_sha1_sse.datasize=4194304 \
-    -O openblas_dgemm.mdim=1024 -O openblas_sgemm.mdim=1024 -O openblas_zgemm.mdim=1024 \
-    -O openblas_dgemm.transab=1 -O openblas_sgemm.transab=2 -O openblas_zgemm.transab=3 \
-    -O openblas_dgemm.beta_permille=500 \
-    -O openblas_lu.n=1024 \
-    -O sleef_neon.nelems=16384 \
-    -O pocketfft_fft.n=6144 \
-    -O isal_igzip.level=2 \
+    -O openblas_dgemm.mdim=1024 -O openblas_dgemm.transab=1 -O openblas_dgemm.beta_permille=500 \
+    -O openblas_lu.n=1024 -O sleef_neon.nelems=16384 -O pocketfft_fft.n=6144 -O isal_igzip.level=2 \
     -t 30m
 ```
 
@@ -397,8 +387,8 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | OpenSSL SHA | `openssl_sha`、`openssl_sha3`、`openssl_sm3sm4` | SHA-256/384/512（SHA-2 加法链）、SHA-3-224/256/384/512 + SHAKE128 XOF（Keccak 置换 AND/旋转/χθ 步，与 SHA-2 正交的 FU 混合）、SM3 摘要 + SM4-CBC 加解密往返（国密整数通路）vs golden（默认构建，优先 vendored OpenSSL） |
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
-| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`、`sve512_stencil_axis_arm`、`sve512_xlswave_ctx_arm`、`sve512_f64_chain_svd`、`sve512_f64_special_svd`、`sve512_f32_chain_svd`、`sve512_gather_scatter_svd`、`libomp_ctx_arm`、`sme_za_tileview_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（svcntw() f32 数据通路，all-VL）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀）、XLSDFT 复合上下文触发器（同一 per-core 循环内交错 64× stencil 轴核、SVD 尺度 gather/scatter 与 7 槽指针表金丝雀 + 每轮 VA[63:48] 金丝雀，三阶段字节精确 memcmp，复现已知故障窗口配方而无 MPI/libomp 脚手架；无 SVE 诚实 SKIP，all-VL 128..1024-bit 自适应（all-VL Phase 2 P3））、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（svcntw() 通路，all-VL）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、libomp fork/join 上下文仿真（SVE FMLA 突发 × 时间同步集体停放窗口交替 + 函数指针表/计数器元数据金丝雀——指针比对、间接调用返回值、逐字节 memcmp 三层校验；只仿真访问模式、不复刻真实 libomp TLS/元数据布局（如实标注），无等待对端进度的设计天然无死锁；无 SVE 诚实 SKIP，all-VL 128..1024-bit 自适应（all-VL Phase 2 P3））、SME ZA tile 语义压力（h 装载 round-trip / v 列转置读出 / 向量选择 imm 旋转 / za1h 独立 round-trip + za0 隔离，逐字节 golden；全 SVL 128–1024-bit 运行时自适应，无 HWCAP2_SME 或超范围 SVL 诚实 SKIP；需 clang +sme 工具链，gcc 构建自动剔除） |
-| SDC 激发增强套件（2026-09-17 研究落地，2026-10-12 合并） | `sve512_nt_reload_arm`、`sve512_fmmla_arm`、`sve2_cross_precision_arm`、`sve512_fcmla_arm`、`sve512_pred_ops_arm`、`sve_fpcr_cartesian_arm`、`fpcr_rounding_cartesian_arm`、`power_virus_dit_sve_arm`、`mesh_upi_avx512_symm_f64`、`sme_fmopa_za_arm` + 既有测试增强 | 针对已知鲲鹏故障签名与 SEVI(ASPLOS'26)/ITHICA 研究结论定向编写：**nt_reload** = NUMA3 VA 通路触发指令窗口首覆盖（ld1rd/ldnt1d/stnt1d 非时间访存 + 栈重装载距离旋钮 1..4）；**FMMLA/跨精度/FCMLA/谓词** = SVE2 矩阵外积、FP16/BF16 加宽乘加、复数 FMA 全旋转（0/90/180/270）、谓词网络（whilelt 密度扫描/谓词翻转/FADDA 串行归约/LDFF1+FFR/FMAXV）——此前零指令级覆盖的数据通路；**FPCR 笛卡尔**（NEON + SVE 伴生）= 舍入模式 RNE/RTZ/RDN/RUP × FZ 8 配档全扫（FPCR 现场保存/恢复纪律，本机 920 真机验证）；**power_virus SVE** = 全宽 SVE di/dt 病毒（突发内嵌地址生成）；**mesh f64** = 首个 FP mesh 变体（跨核共享数据 FP 生产/消费，0.5 倍数精确块校验和使总和无序可判定）；**SME FMOPA** = 纯 inline asm 的 ZA 外积链（gcc 可建，内核未暴露 HWCAP2_SME 时干净 skip——`selftest_sme_sigill_probe` 一跑定论）。既有增强：sve512 链族值域旋钮 `-O <test>.bounded=0|1`（SEVI Obs.19 有界/无界域 SDC 频率差 245×，默认 1 不改行为）；gather_scatter 读偏移显式断言（源值携带自身索引，76% 内存类 SDC 为错偏移读）+ u64base/宽步距变体。框架诊断：memcmp 失败 lane 偏移直方图（单 lane/相邻 lane = 单物理单元指纹，SEVI Obs.13）、aarch64 崩溃消息 VA[55:48] 签名判读（只报不判）。SVE/SME 类在 920 上干净 skip（编译+指令生成已验证），byte-exact golden 真机首验在 cn23154（SVE512 故障机） |
+| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`、`sve512_stencil_axis_arm`、`sve512_xlswave_ctx_arm`、`sve512_f64_chain_svd`、`sve512_f64_special_svd`、`sve512_f32_chain_svd`、`sve512_gather_scatter_svd`、`libomp_ctx_arm`、`sme_za_tileview_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长 f64/f32 FMLA 串行链与特殊值链（NaN/Inf 类别比对）、SVE gather/scatter 间接索引数据通路、stencil 轴核与 XLSDFT 复合上下文触发配方复现器（复现已知鲲鹏故障窗口配方而无 MPI/libomp 脚手架，三阶段字节精确 memcmp + VA[63:48] 地址金丝雀）、SVD 尺度工作集变体（L2 溢出 + 块遍历）、libomp fork/join 上下文仿真（只仿真访问模式、不复刻真实 libomp TLS/元数据布局（如实标注），指针/间接调用返回值/逐字节 memcmp 三层校验）、SME ZA tile 语义压力（逐字节 golden；需 clang +sme 工具链，gcc 构建自动剔除）。SVE/SME 类按真实能力门控：无 SVE 诚实 SKIP，all-VL 128..1024-bit 自适应；无 HWCAP2_SME 或超范围 SVL 诚实 SKIP |
+| SDC 激发增强套件（2026-09-17 研究落地，2026-10-12 合并） | `sve512_nt_reload_arm`、`sve512_fmmla_arm`、`sve2_cross_precision_arm`、`sve512_fcmla_arm`、`sve512_pred_ops_arm`、`sve_fpcr_cartesian_arm`、`fpcr_rounding_cartesian_arm`、`power_virus_dit_sve_arm`、`mesh_upi_avx512_symm_f64`、`sme_fmopa_za_arm` + 既有测试增强 | 针对已知鲲鹏故障签名与 SEVI(ASPLOS'26)/ITHICA 研究结论定向编写：**nt_reload** = NUMA3 VA 通路非时间访存（ld1rd/ldnt1d/stnt1d）触发指令窗口首覆盖；**FMMLA/跨精度/FCMLA/谓词** = 此前零指令级覆盖的 SVE2 数据通路（矩阵外积、FP16/BF16 加宽乘加、复数 FMA 全旋转、谓词网络）；**FPCR 笛卡尔**（NEON + SVE 伴生）= 舍入模式 × FZ 8 配档全扫（FPCR 现场保存/恢复纪律）；**power_virus SVE** = 全宽 SVE di/dt 病毒；**mesh f64** = 首个 FP mesh 变体（0.5 倍数精确块校验和使总和无序可判定）；**SME FMOPA** = 纯 inline asm 的 ZA 外积链（无 HWCAP2_SME 时干净 skip）。既有增强：sve512 链族值域旋钮 `-O <test>.bounded=0\|1`（SEVI Obs.19 有界/无界域 SDC 频率差 245×）、gather_scatter 读偏移显式断言。框架诊断：memcmp 失败 lane 偏移直方图、崩溃消息 VA[55:48] 签名判读。SVE/SME 类在 920 上干净 skip，byte-exact golden 真机首验在 cn23154（SVE512 故障机） |
 | ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别（uint64x2 旋转 ALU + 向量 store/reload/store）、ldr_at_top 扫描顺序变体（升/降序交替，区分槽位局部 vs 前进位置特征）、core-179 字节交换往返触发探针组 |
 | SVE 版 avx53 套件（`tests/cpu/sve/` 中 53 个 avx 命名移植；该目录共 172 个 SVE 用例） | `fma_tail_sve{,_wide}`、`fmatail_sve{,_wide}`×4 对、`fma_patterns_sve_wide_{ps,pd}`、`mesh_upi_sve_*` 18 个、`eigen_svd_bidiag_sve`、`ipsec_*_sve{,_wide}` 24 个 | 53 个 avx 命名 NEON 测试的 SVE1 移植（负载环境不变：向量宽度/随机域/特殊值注入/块结构/原子协议/golden 模式全保留；命名 `_avx/_avx2→_sve`、`_avx512→_sve_wide`）。FMA 10 + Mesh 18 = 纯指令替换（SVE 谓词访存）；eigen 1 = 自写 Householder 双对角化 SVE 负载（替代崩溃的 Eigen-SVE 后端路径）；ipsec 17 = EVP 加密 + 多流 SVE HMAC（SHA 内核与 OpenSSL 全向量比对 5200+1360 全对，lane0=原 MAC 语义+变体填 lane），7 个 EVP-only（GCM/CMAC/XCBC）如实标注计算路径。构建于 `tests_sve_avx53`/`tests_sve_avx53_ipsec` 库（`-march=armv8.2-a+sve`，init 探 HWCAP_SVE 干净 skip） |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
@@ -428,7 +418,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 
 > `mce_check` 是真实 EDAC 后端测试（统计 `/proc/interrupts` 的 EDAC `ce/ue_count`），实测 `exit: pass`，非 placeholder。
 
-**能力门控的诚实跳过**（skip 不是只有"未实现"一种）：17 个多流 HMAC 的 ipsec SVE 用例（`*_hmac_sha*` / `*_sha2_*`）每条 HMAC 流占一个 SVE lane，**流数 = 运行时 lane 数（all-VL Phase 2 P4：sha1/224/256 为 `svcntw()` 4..32 流、384/512 为 `svcntd()` 2..16 流，128..1024-bit 全档自适应）**，经框架层 `arm64_require_sve_vl` 门控（HWCAP_SVE 能力 + 范围检查一行）；W 调度表按 1024-bit 上限定维（修掉了旧固定 8/4 维度在 VL≥512 硬件上的行越界隐患），`data_size` knob 上限钳制到 HMAC 组装缓冲容量。无 SVE 的硬件在框架级 `test compiled with sve` 守卫处跳过。内核流数参数化形态经 gem5-fi `sve_sha_dual` 四档 16-run 实证（128-bit 档 4/2 流全绿即"短 VL 可跑"的命题实证；K/IV 常量表同源复制，FIPS 标量参考逐流字节级比对）。
+**能力门控的诚实跳过**（skip 不是只有"未实现"一种）：17 个多流 HMAC 的 ipsec SVE 用例（`*_hmac_sha*` / `*_sha2_*`）每条 HMAC 流占一个 SVE lane，**流数 = 运行时 lane 数**（sha1/224/256 为 `svcntw()` 4..32 流、384/512 为 `svcntd()` 2..16 流，128..1024-bit 全档自适应），经框架层 `arm64_require_sve_vl` 门控；W 调度表按 1024-bit 上限定维，`data_size` knob 上限钳制到 HMAC 组装缓冲容量。无 SVE 的硬件在框架级 `test compiled with sve` 守卫处跳过；流数参数化形态经 gem5-fi `sve_sha_dual` 四档 16-run 实证（FIPS 标量参考逐流字节级比对）。
 
 ### `memcpy_rewr`：MPSC memcpy 一致性压测（使用选项与推荐参数）
 
@@ -452,11 +442,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 - `producer_count = max(1, CPU核数/12)`（48 核 → 4:44，对齐原版参考参数 p 0..3 / c 0..47）
 - 忽略 `SANDSTONE_STRATEGY_INDEX`；conf 存在但损坏/不可读仍然 loud skip（不静默吞错）
 
-**参考实测**（Kunpeng 920，128 核，MemAvailable ≈ 22.5 GB；`-vv` 日志）：
-
-- 默认模式全核：`strategy[0]=default_original block_size=2097152 threads=128 producer_count=10`（自适应封顶 2 MiB），峰值 RSS ≈ 1.52 GiB，无 OOM
-- conf 三策略全核（`-t 3000`）：`block_size=65536 threads=128 producer_count=4`，三档均 `result: pass`
-- 单跑推荐：`-t 5000` 全核（约 5 s/策略）；策略覆盖推荐 `for i in 0 1 2` 轮转各一轮
+**参考实测**（Kunpeng 920，128 核，MemAvailable ≈ 22.5 GB）：默认模式全核 block_size 自适应封顶 2 MiB、峰值 RSS ≈ 1.52 GiB 无 OOM；conf 三策略全核（`-t 3000`）三档均 `result: pass`。单跑推荐 `-t 5000` 全核（约 5 s/策略），策略覆盖 `for i in 0 1 2` 轮转各一轮。
 
 ## 运行测试
 
@@ -543,16 +529,7 @@ ARM64 能力：CPU 特性检测（FP/NEON/CRC32/Crypto/SVE/SVE2）、拓扑检�
 
 ## 运维入口
 
-SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite-reproduce/`，总入口为 excite.sh（用法与战役编排见上节「一键最大程度激发 SDC」）：
-
-```console
-sudo bash scripts/sdc-excite-reproduce/excite.sh    # 一键总入口：预检 → systemd 单元 → sdc-monitor → 冒烟门 → 上线
-bash  scripts/sdc-excite-reproduce/excite.sh --smoke / --status / --stop    # 只冒烟 / 只读巡检 / 停止（留断点）
-```
-
-细分脚本（excite.sh 即其首启序列的固化）：`status.sh` 只读状态一览——9 服务 / 战役进度 / M2 事件流+controller 状态+采集器丢样 / 电压频率 / SEL / 磁盘 / 告警（即 `--status`）；`start.sh` 直接启动战役（需 root，跳过预检与冒烟门）；`stop.sh` 停止战役（保留断点，即 `--stop`）。
-
-完整运维流程（9 服务、BLACK 恢复、演练排期、巡检模板）见 [docs/sdc-excite-reproduce/operations-runbook.md](docs/sdc-excite-reproduce/operations-runbook.md)。
+SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite-reproduce/`，总入口 excite.sh 的用法与战役编排见上节「一键最大程度激发 SDC」。细分脚本（excite.sh 即其首启序列的固化）：`status.sh` 只读状态一览——9 服务 / 战役进度 / M2 事件流 / 电压频率 / SEL / 磁盘 / 告警（即 `--status`）；`start.sh` 直接启动战役（需 root，跳过预检与冒烟门）；`stop.sh` 停止战役（保留断点，即 `--stop`）。完整运维流程（9 服务、BLACK 恢复、演练排期、巡检模板）见 [运维手册](docs/sdc-excite-reproduce/operations-runbook.md)。
 
 ## 延伸
 
