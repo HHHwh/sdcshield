@@ -225,9 +225,17 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
      * the measured GEMM RSS coefficient, and a full-core single-iteration
      * budget via the power-law fit and the compute-family AR factor.
      * quick mode collapses to MDIM_MIN. run_budget_ms keeps the contract
-     * value 200000 — unlike the memory-bound SVD pair (T5's 140000
-     * compensation), the GEMM family's AR is accurate on this host class
-     * (measured 4.4 vs table 5.0), so no per-test compensation is due. */
+     * value 200000: on this host class the memory side binds first
+     * (n_mem=3364 < n_run~4900-5300), so the time budget is not the
+     * sizing constraint. CAVEAT (fix round 1, 2026-10-28): the
+     * compute-family AR table entry (5.0; 4.4 measured at MEDIUM
+     * footprint) UNDERSTATES ceiling-footprint GEMM — the T6 verification
+     * run's full-core single multiply at N=3364 took ~55-60 s against a
+     * ~4.0 s quiet model, an effective AR of ~15 (3x the table). A host
+     * where the time side binds would size n_run for a 200 s iteration
+     * that really takes ~600 s — past the 300 s hard grace (T5's failure
+     * class). Flagged as T7/T9 input (footprint-aware AR entry or
+     * per-test compensation); no code change in this round. */
     int dim;
     int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
     if (knob == 0)

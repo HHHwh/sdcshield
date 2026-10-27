@@ -146,7 +146,7 @@ static int solve_once_cdouble_sve(int n)
  * only shrinks n_hi — desired_duration then sits further below the real
  * iteration time, which is the safe direction (the do-while expires after
  * iteration #1, and the child's own n_run bounds that iteration at
- * ~140 s (模型, run_budget_ms=140000) / ~225 s (实测最坏) regardless of
+ * ~140 s (模型, run_budget_ms=140000) / ~213 s (实测最坏) regardless of
  * this estimate; the derived timeout test_timeout() =
  * 5×duration+30s, 300 s floor, covers it).
  */
