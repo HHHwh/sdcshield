@@ -1273,8 +1273,18 @@ static void sdc_feedback_write(const struct test *test)
     PerThreadData::MemFeedback *fb = &sApp->main_thread_data()->mem_feedback;
     uint64_t hash = sdc_test_id_hash(test->id);
     if (fb->test_id_hash != hash) {         /* 槽被上一测试占用 → 重置 */
-        fb->test_id_hash = hash;
+        /* T9 撕裂窗口闭合(T7 deferred 两行修复): 先清 samples 再发布新
+         * hash。sibling 聚合器(sdc_feedback_eff_median, 跨进程经
+         * MAP_SHARED 读兄弟槽)的有效性判据是 hash 命中且 samples>0 ——
+         * 旧序(hash 先换)存在「hash 已换、samples 未清」中间态, 并发
+         * 读的 sibling 会把上一测试的 eff_ratio 采进本测试的 median。
+         * 新序下复位过程的任一中间态都因 samples==0 被判无效槽跳过。
+         * 已知边界(如实记录): 字段是普通非原子 store(与下方 EMA 更新
+         * 同口径), 源序修复关闭的是调度可见性窗口; 编译器理论上仍可
+         * 重排独立成员 store, 全序化需 atomic 共享字段 —— 超出本两行
+         * 修复的范围, 与 T7 既有 pragmatic 口径一致。 */
         fb->samples = 0;
+        fb->test_id_hash = hash;
         fb->eff_ratio = 0.0;
     }
     if (fb->samples == 0)

@@ -594,7 +594,14 @@ static const double s_rss_ratio_table[SDC_RSS_INVALID] = {
     0.0626,   /* SDC_RSS_JACOBI_F64  */
     0.1237,   /* SDC_RSS_JACOBI_C128 */
     0.0159,   /* SDC_RSS_GEMM_F32    */
-    0.0290,   /* SDC_RSS_GEMM_F64    */
+    /* GEMM_F64 0.0290 → 0.0315 (T9, T6 裁定的重标定): 差分口径曾漏计
+     * 第 4 个驻留矩阵(run 期 reroll 乘积 x)——解析值 4 矩阵×8B =
+     * 0.03125 KB/n²/线程; T6 实测隐含 0.0316(N=3364 峰值子进程 RSS
+     * 43.31 GiB vs 模型 39.8 GiB, +8.8%), T7 反馈 eff 4.104~4.116 →
+     * c_fb≈32.8 B(+10.5%, 含探针高水位 ~4.7% 口径)。取 0.0315。
+     * 同源核对(只动 F64): F32 0.0159 vs 4×4B=0.015625 偏大 1.8%、
+     * C128 0.0631 vs 4×16B=0.0625 偏大 1.0%, 均在 +2% 内不动。 */
+    0.0315,   /* SDC_RSS_GEMM_F64    */
     0.0631,   /* SDC_RSS_GEMM_C128   */
     0.0091,   /* SDC_RSS_SPARSE      */
     0.0313,   /* SDC_RSS_BIDIAG      */
