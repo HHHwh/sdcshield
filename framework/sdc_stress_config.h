@@ -52,6 +52,16 @@
 #include <string>
 #include <unistd.h>
 
+/* NUMA 探测/AR 与联合求解的 per-node 分支仅 ARM64-Linux(spec §5 rule 5)。
+ * x86 侧 sdc_mem_family 仅作 sdc_joint_args 的占位成员(无 AR 语义,
+ * 与 sdc_numa.h 的定义互斥不冲突)。 */
+#if defined(__aarch64__) && defined(__linux__)
+# include "sdc_numa.h"
+# include <sched.h>
+#else
+enum sdc_mem_family { SDC_FAM_MEM_BOUND, SDC_FAM_COMPUTE_BOUND };
+#endif
+
 #ifdef __cplusplus
 extern "C++" {
 
@@ -437,17 +447,28 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  *   初选落点在幂律/k_floor 失准时可超预算数倍(本文件 :434 段自引的实测
  *   落点 8.3s vs 2s 预算即此情形), 只有其后的收缩轮才按预算收敛。
  *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
+ * 拟合出参 fit(spec §4.3 M3): 成功路径填充 {a_ms, p} —— 单解模型
+ * t(n)=a_ms·n^p, a_ms 已按两点差分扣除固定开销 b(见函数尾); 早退
+ * 路径保持 {0,0}(无效, 消费方跳过 n_run)。默认 nullptr, 既有调用
+ * (7 实参)签名不变。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
  *   if (dim > lo)
  *       dim = sdc_calibrated_dim(lo, dim, max_single_ms,
  *                                test_id, knob, k_floor, solve_once);
  */
+struct sdc_fit {
+    double a_ms;    /* t(n)=a_ms·n^p 单解幂律系数(ms, 已扣固定开销) */
+    double p;       /* 幂指数(k_floor 修正后) */
+};
+
 template <typename F>
 static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                                      const char *test_id, const char *knob,
-                                     double k_floor, F solve_once)
+                                     double k_floor, F solve_once,
+                                     struct sdc_fit *fit = nullptr)
 {
+    if (fit) { fit->a_ms = 0.0; fit->p = 0.0; }  /* 早退路径保持无效 */
     if (hi <= lo)
         return lo;
     auto probe = [&](int n) -> double {
@@ -456,12 +477,14 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
         return std::chrono::duration<double, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
     };
-    /* probe 档自适应抬升: 小档求解太快(<1ms)时计时噪声淹没幂律拟合,
-     * 翻倍 probe 档直到可测量(>=1ms)或触及 hi——否则外推基数失真
-     * (实测稀疏 Cholesky 规则带状 probe 在 64 档仅 0.1ms, 外推失控)。 */
+    /* probe 档自适应抬升: 小档求解太快(<100ms)时固定开销(构造/预处理)
+     * 在计时中占比过高——幂律系数被抬高, 外推维度被压低(实测 sve 模型
+     * t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高 ~14×,
+     * 立方根收缩 2.4×)。翻倍 probe 档直到固定开销占比 <10%(>=100ms,
+     * spec §4.3 M3; 1ms→100ms)或触及 hi——否则外推基数失真。 */
     int p1 = lo;
     double t1 = probe(p1);
-    while (t1 < 1.0 && p1 * 2 <= hi) {
+    while (t1 < 100.0 && p1 * 2 <= hi) {
         p1 *= 2;
         t1 = probe(p1);
     }
@@ -522,7 +545,218 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                 td > (double)max_single_ms
                     ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
                     : "");
+    if (fit) {
+        /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
+         *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p
+         * b≈0 时严格退化为 a = t1/p1^p。差分在 b 为常数的模型下精确,
+         * 常规档(b 占比 <10%, 与 100ms 阈值配套)与 b 主导的对抗档都
+         * 成立; 代价是对差分 (t2−t1) 的测量噪声敏感(p1/mid 档位拉得
+         * 越开越稳)。退化保护(档位重合/计时持平/非有限/非正)回退
+         * b=0 口径 a = t1/p1^p —— 系数只高不低, 消费方 n_run 只小
+         * 不大(保守方向)。 */
+        double pn = std::pow((double)p1, k);
+        double mn = std::pow((double)mid, k);
+        double a = 0.0;
+        if (mid > p1 && t2 > t1 && mn > pn && std::isfinite(mn - pn))
+            a = (t2 - t1) / (mn - pn);
+        if (!(a > 0.0) && pn > 0.0)
+            a = t1 / pn;                 /* t1>0 由上方早退保证 */
+        if (a > 0.0 && std::isfinite(a)) {
+            fit->a_ms = a;
+            fit->p = k;
+        }
+    }
     return dim;
+}
+
+/* ------------------------------------------------------------------ */
+/* 联合求解: 时间×内存双上限维度(spec §4.3)                              */
+/* ------------------------------------------------------------------ */
+
+/* RSS_RATIO_TABLE 键: 算法族。 */
+enum sdc_rss_family {
+    SDC_RSS_BDCSVD_F32, SDC_RSS_BDCSVD_F64, SDC_RSS_BDCSVD_C128,
+    SDC_RSS_JACOBI_F32, SDC_RSS_JACOBI_F64, SDC_RSS_JACOBI_C128,
+    SDC_RSS_GEMM_F32, SDC_RSS_GEMM_F64, SDC_RSS_GEMM_C128,
+    SDC_RSS_SPARSE, SDC_RSS_BIDIAG, SDC_RSS_INVALID
+};
+
+/* 族 → 实测 c(KB/n²/线程)。Phase A 2026-10-27, (child@T4−child@T1)/3
+ * 差分增量口径——与 svd_cdouble_sve.cpp:92-95 的"单进程 9.7-10× 输入
+ * 体积"(含基线, ~155B/n²)口径不同, 差异 ~35% 属口径差非矛盾: 联合
+ * 求解的增量模型取差分口径。c 是算法内在属性(矩阵驻留数×元素大小),
+ * 跨机可移植; Eigen 版本升级需重标定本表。 */
+static const double s_rss_ratio_table[SDC_RSS_INVALID] = {
+    0.0669,   /* SDC_RSS_BDCSVD_F32  */
+    0.1352,   /* SDC_RSS_BDCSVD_F64  */
+    0.2055,   /* SDC_RSS_BDCSVD_C128 */
+    0.0313,   /* SDC_RSS_JACOBI_F32  */
+    0.0626,   /* SDC_RSS_JACOBI_F64  */
+    0.1237,   /* SDC_RSS_JACOBI_C128 */
+    0.0159,   /* SDC_RSS_GEMM_F32    */
+    0.0290,   /* SDC_RSS_GEMM_F64    */
+    0.0631,   /* SDC_RSS_GEMM_C128   */
+    0.0091,   /* SDC_RSS_SPARSE      */
+    0.0313,   /* SDC_RSS_BIDIAG      */
+};
+
+static inline double sdc_rss_table_c(enum sdc_rss_family f)
+{
+    if ((int)f < 0 || (int)f >= (int)SDC_RSS_INVALID)
+        return 0.0;
+    return s_rss_ratio_table[f];
+}
+
+struct sdc_joint_args {
+    int lo, hi;                     /* knob clamp */
+    enum sdc_rss_family fam;        /* SDC_RSS_INVALID=用传统三元组 */
+    int bytes_per_elem, matrices_per_thread; double rss_ratio; /* 传统路径 */
+    double shared_bytes_per_slice;  /* init 共享矩阵, 0 无 */
+    int mem_fraction_permille;
+    enum sdc_mem_family ar_fam;
+    long run_budget_ms;             /* 200000; 0=不限时间 */
+};
+
+/*
+ * 联合求解 n_opt = min(n_mem, n_run, hi), lo 兜底:
+ *   n_mem = sqrt((node_budget − node_slices·shared) / (node_threads · c))
+ *   n_run = (run_budget_ms×0.67 / (AR(ar_fam) × 2 × fit.a_ms))^(1/fit.p)
+ * 时间侧: 300s 硬宽限下的 200s 预算(spec M1)×0.67; ×2 = init 填充+一次
+ * 求解; AR = 全核争抢慢化(族×拓扑, spec M2); fit 来自
+ * sdc_calibrated_dim 的两点差分(已扣固定开销, M3), 无效时跳过 n_run。
+ * 内存侧 c 优先 RSS_RATIO_TABLE(族), 否则调用方传统三元组
+ * (bytes_per_elem×matrices_per_thread×rss_ratio)。
+ * knob 三层 fallback(knob > env > auto)由调用方先做——本函数只管
+ * auto 路径; quick 模式直接返回 lo(m3, 与 sdc_auto_square_dim 同捷径)。
+ * solve_once 可为 NULL(不校时间, 只算 n_mem); run_budget_ms=0 同理。
+ * x86-64(rule 5: byte-identical): 仅 n_mem 全局口径(等价旧行为),
+ * 见函数内 #else 分支。
+ */
+static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
+                                      const struct sdc_joint_args *a,
+                                      int solve_once(int))
+{
+    if (!a)
+        return 0;
+    if (a->hi <= a->lo)
+        return a->lo;                      /* 退化 clamp 区间 */
+    if (sdc_quick_run()) {                 /* CI 冒烟: 与 auto_* 同捷径 */
+        log_warning("[联合求解] %s.%s = %ld (来源: quick 模式收缩, 取 lo 下限)",
+                    test ? test->id : "(global)", knob ? knob : "?",
+                    (long)a->lo);
+        return a->lo;
+    }
+    int permille = a->mem_fraction_permille;
+    if (permille < 1) permille = 500;
+    if (permille > 1000) permille = 1000;
+    /* c(KB/n²/线程 → 字节): 表优先, 未迁移用例走传统三元组 */
+    double c_bytes = (a->fam != SDC_RSS_INVALID)
+            ? sdc_rss_table_c(a->fam) * 1024.0
+            : (double)a->bytes_per_elem * (double)a->matrices_per_thread
+              * a->rss_ratio;
+
+#if defined(__aarch64__) && defined(__linux__)
+    /* 本 slice 归属 cpu: 亲和集最小 cpu(spec m4 近似——slice 跨节点时
+     * 取首 cpu 的节点); 亲和不可读退当前 cpu。 */
+    int cpu = -1;
+    {
+        cpu_set_t set;
+        if (sched_getaffinity(0, sizeof set, &set) == 0)
+            for (int i = 0; i < CPU_SETSIZE; ++i)
+                if (CPU_ISSET(i, &set)) { cpu = i; break; }
+        if (cpu < 0)
+            cpu = sched_getcpu();
+    }
+    uint64_t node_budget = sdc_node_budget_bytes(permille, cpu);
+    int node_cpus = sdc_numa_effective_threads(cpu);
+    if (node_cpus < 1)
+        node_cpus = 1;                     /* T2 保证 ≥1, 双保险 */
+    /* node_threads 用 worker 口径(spec §4.3 "该节点全部 worker 数"):
+     * -n/--cpuset 下 worker 少于 CPU, 按 全机worker/全机CPU 折算(全核
+     * 时恰等)——不折算则 -n 1 把节点预算按 127 线程分摊, mdim 欠压
+     * ~11×(旧全局模型 total_thread_count 补偿的同型问题)。 */
+    {
+        int workers = sdc_total_threads();
+        int cpus_all = sdc_numa_probe()->total_cpus;
+        if (workers > 0 && cpus_all > 0 && workers < cpus_all)
+            node_cpus = node_cpus * workers / cpus_all;   /* 向下取整 */
+        if (node_cpus < 1)
+            node_cpus = 1;
+    }
+    int node_threads = node_cpus;
+    int slice_thr = thread_count();
+    if (slice_thr < 1)
+        slice_thr = 1;
+    int node_slices = (node_threads + slice_thr - 1) / slice_thr;
+    double avail = (double)node_budget
+                 - a->shared_bytes_per_slice * (double)node_slices;
+    int n_mem = (c_bytes > 0.0 && avail > 0.0)
+            ? (int)std::sqrt(avail / ((double)node_threads * c_bytes)) : 0;
+
+    double ar = sdc_ar_factor(a->ar_fam, sdc_numa_probe());
+    int n_run = 0;
+    if (solve_once && a->run_budget_ms > 0 && n_mem > a->lo) {
+        /* k_floor=3.0: 现役/规划消费方(稠密 SVD/GEMM/稀疏 Cholesky/
+         * bidiag)的复杂度下限同为 ~3.0(各自旧调用方同值);
+         * sdc_joint_args 不带此参(签名契约)。 */
+        double per_solve_ms = (double)a->run_budget_ms * 0.67 / (ar * 2.0);
+        long per_solve = (long)per_solve_ms;
+        if (per_solve < 1)
+            per_solve = 1;
+        /* 探针上限 = knob hi(不用 n_mem 截断): 差分基线 (p1, mid) 拉得
+         * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 阈值
+         * 机制约束(终点档起每档 ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem
+         * 无关。返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit。 */
+        struct sdc_fit fit;
+        sdc_calibrated_dim(a->lo, a->hi, per_solve,
+                           test ? test->id : "(global)", knob, 3.0,
+                           solve_once, &fit);
+        if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
+            double nr = std::pow((double)a->run_budget_ms * 0.67
+                                 / (ar * 2.0 * fit.a_ms), 1.0 / fit.p);
+            if (nr >= 2147483647.0)
+                n_run = 2147483647;        /* 防溢出截断 */
+            else if (nr > 0.0)
+                n_run = (int)nr;
+        }
+    }
+    int n = n_mem;
+    if (n_run > 0 && n_run < n)
+        n = n_run;
+    if (a->hi < n)
+        n = a->hi;
+    if (n < a->lo)
+        n = a->lo;
+    log_warning("[联合求解] %s.%s: n_mem=%d n_run=%d AR=%.1f → %d (预算 %.1fGiB)",
+                test ? test->id : "(global)", knob ? knob : "?",
+                n_mem, n_run, ar, n, (double)node_budget / 1073741824.0);
+    return n;
+#else
+    /* x86-64 fallback(rule 5: 行为不变): 仅 n_mem 全局口径——物理×‰ 按
+     * 全机线程×c 分摊(等价 sdc_auto_square_dim 的内存模型, 含 slice
+     * 数×shared), 无 per-node/AR/时间外推; solve_once/run_budget_ms
+     * 在 x86 被忽略, 时间校准维持调用方既有的 sdc_calibrated_dim 链。 */
+    (void)solve_once;
+    int total = sdc_total_threads();
+    if (total < 1)
+        total = 1;
+    int cur = thread_count();
+    int slices = (cur > 0 && total > cur) ? (total + cur - 1) / cur : 1;
+    double budget = (double)sdc_phys_mem_bytes() * (double)permille / 1000.0;
+    double avail = budget - a->shared_bytes_per_slice * (double)slices;
+    int n_mem = (c_bytes > 0.0 && avail > 0.0)
+            ? (int)std::sqrt(avail / ((double)total * c_bytes)) : 0;
+    int n = n_mem;
+    if (a->hi < n)
+        n = a->hi;
+    if (n < a->lo)
+        n = a->lo;
+    log_warning("[联合求解] %s.%s: n_mem=%d → %d (全局口径 %.1fGiB; rule 5: "
+                "x86 原路径, 无 per-node/AR/时间外推)",
+                test ? test->id : "(global)", knob ? knob : "?", n_mem, n,
+                budget / 1073741824.0);
+    return n;
+#endif
 }
 
 /*
