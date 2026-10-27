@@ -607,6 +607,42 @@ static inline double sdc_rss_table_c(enum sdc_rss_family f)
     return s_rss_ratio_table[f];
 }
 
+/* ------------------------------------------------------------------ */
+/* VmHWM 反馈闭环的记账缓存 (T7, spec §4.4)                              */
+/* ------------------------------------------------------------------ */
+
+/* sdc_joint_dim_slice 求解成功后把本次口径登记于此(键 = test->id), 供
+ * run_one_test_inner 尾部的反馈写入点折算 eff_ratio =
+ * VmHWM/(n²·elem·threads)。进程内静态 map: 联合求解与写入点同在 child
+ * 进程内(test_init 的 aux 线程 → run 结束), 同一份数据; 跨 fracture 的
+ * 持久化靠 shmem 的 MemFeedback 槽, 不靠本 map(每 fracture 的 child 都是
+ * 从 parent 重新 fork/exec 的, map 不继承 —— preinit(parent)侧求解不会
+ * 把口径带给 exec child, 已知边界)。未走联合求解(显式 knob / 未迁移
+ * 用例)无条目 ⇒ 无反馈写入。 */
+struct sdc_joint_ctx {
+    int n;              /* 求解出的最终维度 */
+    int threads;        /* 本 slice worker 数 */
+    int elem_bytes;     /* a->bytes_per_elem 记账口径(写读同源, 相消) */
+    double c;           /* 最终生效 c(字节/n²/线程, 含反馈修正) */
+};
+
+/* 注意链接: 这里必须用【外部链接的 inline】(不能学 sdc_knob_cache 的
+ * static inline) —— 写入方是测试 TU(test_init 里调 sdc_joint_dim_slice),
+ * 读取方是框架 TU(sandstone_run.cpp 的写入点), static inline 的内部链接
+ * 会让两个 TU 各持一份 map, 闭环静默断裂(实测首版即栽在此)。 */
+inline std::map<std::string, struct sdc_joint_ctx> &sdc_joint_cache()
+{
+    static std::map<std::string, struct sdc_joint_ctx> cache;
+    return cache;
+}
+
+/* framework/sandstone_run.cpp 提供(arm64+linux 编译): 遍历全部 slice 的
+ * PerThreadData::Main.mem_feedback 槽(MAP_SHARED shmem, 子进程经
+ * raw_main_thread_data 读兄弟槽), 取同 test_id 哈希槽 eff_ratio 的
+ * median(q4: max 取最噪样本, median 防抖)。无有效槽(首 fracture/无写入
+ * 者)返回 <0。仅 arm64 联合求解分支调用 —— x86 无定义亦无调用者。 */
+double sdc_feedback_eff_median(const char *test_id);
+
 struct sdc_joint_args {
     int lo, hi;                     /* knob clamp */
     enum sdc_rss_family fam;        /* SDC_RSS_INVALID=用传统三元组 */
@@ -627,7 +663,9 @@ struct sdc_joint_args {
  * ×AR = 全核争抢慢化(族×拓扑, spec M2); 调用方传 200000 = 300s 硬宽限
  * ×0.67(spec M1), 本函数不再二次折算——200s 已是折算后的值); fit 来自
  * sdc_calibrated_dim 的两点差分(已扣固定开销, M3), 无效时跳过 n_run。
- * 内存侧 c 优先 RSS_RATIO_TABLE(族), 否则调用方传统三元组
+ * 内存侧 c 优先级链(T7 起): VmHWM 反馈 median(跨 fracture 的 Main 槽
+ * EMA, 详见 sdc_feedback_eff_median; 向上无钳、向下 15% 死区 + 0.7×静态
+ * 锚下限) → RSS_RATIO_TABLE(族) → 调用方传统三元组
  * (bytes_per_elem×matrices_per_thread×rss_ratio)。
  * knob 三层 fallback(knob > env > auto)由调用方先做——本函数只管
  * auto 路径; quick 模式直接返回 lo(m3, 与 sdc_auto_square_dim 同捷径)。
@@ -653,12 +691,49 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     if (permille < 1) permille = 500;
     if (permille > 1000) permille = 1000;
     /* c(KB/n²/线程 → 字节): 表优先, 未迁移用例走传统三元组 */
+    double c_table = sdc_rss_table_c(a->fam) * 1024.0;   /* 0 = 无表 */
     double c_bytes = (a->fam != SDC_RSS_INVALID)
-            ? sdc_rss_table_c(a->fam) * 1024.0
+            ? c_table
             : (double)a->bytes_per_elem * (double)a->matrices_per_thread
               * a->rss_ratio;
 
 #if defined(__aarch64__) && defined(__linux__)
+    /* ---- VmHWM 反馈读侧 (T7, spec §4.4): c 优先级 反馈median → RSS 表
+     * → 传统三元组。槽内 eff_ratio = VmHWM/(n²·elem·slice线程)(EMA α=0.5,
+     * 写入点在 run_one_test_inner 尾部), ×elem 还原字节口径; 写/读用同一
+     * a->bytes_per_elem, 记账口径相消(调用方 elem 前后不一致也不失真)。
+     * 采纳规则:
+     *   - 向上修正(c_fb ≥ 模型): 无死区无上钳 —— 表系统性偏小时靠它收敛
+     *     (T6 实测 GEMM_F64 表偏小 ~8%, progress 裁定"反馈无上钳可收敛"),
+     *     压 n 是安全方向;
+     *   - 向下修正: 需越出 15% 死区才采用(反馈噪声/m1 选择偏差——超时
+     *     child 到不了写入点, 样本偏乐观——都朝压小 c 的方向, 小幅下压
+     *     一律不信), 且下限 = 静态锚 × 0.7(锚 = 表值, 无表用三元组),
+     *     防反馈把 c 压小导致 n 膨胀(OOM 方向)。 */
+    {
+        double eff_med = sdc_feedback_eff_median(test ? test->id : nullptr);
+        if (eff_med > 0.0 && a->bytes_per_elem > 0) {
+            double c_fb = eff_med * (double)a->bytes_per_elem;
+            double anchor = c_table > 0.0 ? c_table : c_bytes;  /* 静态锚 */
+            double cand = std::max(c_fb, 0.7 * anchor);
+            bool upward = cand >= c_bytes;
+            bool outside_deadzone = cand < 0.85 * c_bytes;
+            if (upward || outside_deadzone) {
+                log_warning("[联合求解] %s.%s: VmHWM 反馈生效 c=%.1f→%.1f B/n²/线程 "
+                            "(eff=%.3f, %s, 下限 %.1f)",
+                            test ? test->id : "(global)", knob ? knob : "?",
+                            c_bytes, cand, eff_med,
+                            upward ? "向上修正, 无上钳" : "越出15%死区",
+                            0.7 * anchor);
+                c_bytes = cand;
+            } else {
+                log_warning("[联合求解] %s.%s: VmHWM 反馈 c=%.1f 落入 ±15%% 死区, "
+                            "维持静态值 %.1f",
+                            test ? test->id : "(global)", knob ? knob : "?",
+                            c_fb, c_bytes);
+            }
+        }
+    }
     /* 本 slice 归属 cpu: 亲和集最小 cpu(spec m4 近似——slice 跨节点时
      * 取首 cpu 的节点); 亲和不可读退当前 cpu。 */
     int cpu = -1;
@@ -730,9 +805,16 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         n = a->hi;
     if (n < a->lo)
         n = a->lo;
-    log_warning("[联合求解] %s.%s: n_mem=%d n_run=%d AR=%.1f → %d (预算 %.1fGiB)",
+    log_warning("[联合求解] %s.%s: n_mem=%d n_run=%d AR=%.1f c=%.1f → %d (预算 %.1fGiB)",
                 test ? test->id : "(global)", knob ? knob : "?",
-                n_mem, n_run, ar, n, (double)node_budget / 1073741824.0);
+                n_mem, n_run, ar, c_bytes, n, (double)node_budget / 1073741824.0);
+    /* 口径登记(T7): run_one_test_inner 尾部的反馈写入点据此折算
+     * eff_ratio = VmHWM/(n²·elem·threads)。threads 用本 slice 的
+     * thread_count()(child_run 已改写为 slice 口径)。 */
+    if (test && test->id) {
+        struct sdc_joint_ctx ctx = { n, slice_thr, a->bytes_per_elem, c_bytes };
+        sdc_joint_cache()[test->id] = ctx;
+    }
     return n;
 #else
     /* x86-64 fallback(rule 5: 行为不变): 仅 n_mem 全局口径——物理×‰ 按

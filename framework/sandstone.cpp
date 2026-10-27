@@ -319,7 +319,7 @@ static void attach_shmem_internal(int fd, size_t size)
 static void init_shmem()
 {
     using namespace PerThreadData;
-    static_assert(sizeof(PerThreadData::Main) == 64,
+    static_assert(sizeof(PerThreadData::Main) == 128,
             "PerThreadData::Main size grew, please check if it was intended");
     static_assert(sizeof(PerThreadData::Test) == 64,
             "PerThreadData::Test size grew, please check if it was intended");
@@ -382,6 +382,14 @@ static void commit_shmem()
         exit(EX_CANTCREAT);
     }
     attach_shmem_internal(sApp->shmemfd, offset + size);
+
+    /* T7 (spec §4.4 M5): MemFeedback 槽仅在 parent 首次扩容映射后清零一次
+     * —— 语义"跨 test/fracture 持久"。不能放进 Main::init()(每 fracture
+     * 的 init_per_thread_data 都会清), 也不能放进 attach_shmem(exec child
+     * 每 fracture 重映射, 会把上代 child 写的反馈抹掉)。fresh memfd 页本
+     * 已为零, 这里显式清零是把生命周期契约钉在代码里。 */
+    for (size_t i = 0; i < main_thread_count; ++i)
+        sApp->main_thread_data(i)->mem_feedback = PerThreadData::MemFeedback{};
 
     if (sApp->current_fork_mode() != SandstoneApplication::ForkMode::exec_each_test) {
         close(sApp->shmemfd);

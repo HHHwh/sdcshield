@@ -245,4 +245,19 @@ int sdc_numa_effective_threads(int cpu)
                                           : sdc_online_cpus_fallback());
 }
 
+/* T7 (spec §4.4): VmHWM(kB→字节), 读不到 0。行形如 "VmHWM:  123456 kB"。 */
+uint64_t sdc_read_vm_hwm(void)
+{
+    FILE *f = fopen("/proc/self/status", "r");
+    if (!f)
+        return 0;
+    char line[256];
+    unsigned long long kb = 0;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, "VmHWM: %llu kB", &kb) == 1)
+            break;
+    fclose(f);
+    return kb * 1024ull;
+}
+
 #endif /* __aarch64__ && __linux__ */

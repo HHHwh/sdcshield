@@ -57,6 +57,15 @@
 
 #include <device/cpu/arm64/arm64_spec_prepare.h>
 
+#if defined(__aarch64__) && defined(__linux__)
+/* T7 VmHWM 反馈闭环(spec §4.4): sdc_joint_cache(联合求解口径登记) +
+ * sdc_read_vm_hwm。仅 arm64 门控 —— x86 的 Main::mem_feedback 字段编译
+ * 存在但无写入/读取者(rule 5, 见 test_data.h)。 */
+# include "sdc_stress_config.h"
+# include "sdc_numa.h"
+# include <algorithm>
+#endif
+
 #ifdef _WIN32
 #  include <ntstatus.h>
 #  include <shlwapi.h>
@@ -1192,6 +1201,94 @@ static void finish_test_common(struct test *test)
     logging_in_test = false;
 }
 
+#if defined(__aarch64__) && defined(__linux__)
+/* ---- VmHWM 反馈闭环 (T7, spec §4.4) ---------------------------------- */
+
+/* test->id 的 FNV-1a 64 位哈希。写入点与读侧聚合共用同一实现; 0 保留为
+ * "空槽"哨兵(fresh memfd 零页)。 */
+static uint64_t sdc_test_id_hash(const char *s)
+{
+    if (!s)
+        return 0;
+    uint64_t h = 1469598103934665603ull;
+    while (*s) {
+        h ^= (uint8_t)*s++;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+/* 读侧聚合(sdc_stress_config.h 声明, 仅 arm64 联合求解分支调用): 遍历
+ * 全部 slice 的 Main::mem_feedback 槽(MAP_SHARED shmem; 子进程经
+ * raw_main_thread_data 从 shmem 头重算数组基址读兄弟槽), 同 test 哈希的
+ * 槽取 eff_ratio 的 median —— q4: max 会取到最噪样本, median 防抖。
+ * 返回 <0 = 无有效反馈(首 fracture / no_fork / 未迁移用例)。 */
+double sdc_feedback_eff_median(const char *test_id)
+{
+    if (!test_id || !sApp->shmem || sApp->shmem->main_thread_count <= 0)
+        return -1.0;
+    uint64_t hash = sdc_test_id_hash(test_id);
+    if (hash == 0)
+        return -1.0;
+    std::vector<double> vals;
+    for (int i = 0; i < sApp->shmem->main_thread_count; ++i) {
+        const PerThreadData::MemFeedback *fb =
+                &sApp->raw_main_thread_data(i)->mem_feedback;
+        if (fb->test_id_hash == hash && fb->samples > 0 && fb->eff_ratio > 0.0)
+            vals.push_back(fb->eff_ratio);
+    }
+    if (vals.empty())
+        return -1.0;
+    std::sort(vals.begin(), vals.end());
+    size_t m = vals.size();
+    return (m & 1) ? vals[m / 2] : 0.5 * (vals[m / 2 - 1] + vals[m / 2]);
+}
+
+/* 写入点(run_one_test_inner 尾部调用): eff_ratio = VmHWM/(n²·elem·本
+ * slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/threads 取自本
+ * child test_init 里联合求解登记的 sdc_joint_cache —— 显式 knob/未迁移
+ * 用例无口径则不写。写侧始终记录(±15% 死区与 0.7×静态锚下限都在读侧
+ * 判断, 见 sdc_joint_dim_slice)。基线污染口径: fork child 的 VmHWM 起点
+ * = 父进程当时 RSS(实测 ~8.3MB, eigen 家族 <1%); 联合求解探针的高水位
+ * 同样计入(探针远小于正式工作集)—— 记录为已知口径。 */
+static void sdc_feedback_write(const struct test *test)
+{
+    if (!test || !test->id)
+        return;
+    auto it = sdc_joint_cache().find(test->id);
+    if (it == sdc_joint_cache().end())
+        return;
+    const struct sdc_joint_ctx &ctx = it->second;
+    if (ctx.n <= 0 || ctx.threads <= 0 || ctx.elem_bytes <= 0)
+        return;
+    uint64_t hwm = sdc_read_vm_hwm();
+    if (hwm == 0)
+        return;
+    double denom = (double)ctx.n * (double)ctx.n
+                 * (double)ctx.elem_bytes * (double)ctx.threads;
+    if (!(denom > 0.0))
+        return;
+    double eff = (double)hwm / denom;
+
+    PerThreadData::MemFeedback *fb = &sApp->main_thread_data()->mem_feedback;
+    uint64_t hash = sdc_test_id_hash(test->id);
+    if (fb->test_id_hash != hash) {         /* 槽被上一测试占用 → 重置 */
+        fb->test_id_hash = hash;
+        fb->samples = 0;
+        fb->eff_ratio = 0.0;
+    }
+    if (fb->samples == 0)
+        fb->eff_ratio = eff;                /* 首样本直写 */
+    else
+        fb->eff_ratio = 0.5 * fb->eff_ratio + 0.5 * eff;   /* EMA α=0.5 */
+    ++fb->samples;
+    log_warning("[反馈] %s: VmHWM=%.1f MiB / (n=%d²×%dB×%d线程) → "
+                "eff_ratio=%.3f (EMA α=0.5, 样本=%u)",
+                test->id, (double)hwm / 1048576.0, ctx.n, ctx.elem_bytes,
+                ctx.threads, fb->eff_ratio, (unsigned)fb->samples);
+}
+#endif /* __aarch64__ && __linux__ */
+
 static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread = false)
 {
     s_current_test = test;
@@ -1281,6 +1378,16 @@ static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread 
         }
 
         sApp->test_tests_finish(test);
+#if defined(__aarch64__) && defined(__linux__)
+        /* T7 (spec §4.4): VmHWM 反馈写入 —— test_cleanup 之后、返回之前。
+         * 门控(M6): no_fork 下测试在主进程跑, VmHWM 跨测试累计只会虚高,
+         * 不写; test_in_parent(父进程内跑)由 is_main_process() 同理排除。
+         * 选择偏差(m1, 如实记录): 超时/被杀 child 到不了这里 —— 反馈只
+         * 收成功样本, c 偏乐观方向, 读侧 15% 死区 + 0.7×静态锚下限兜底。 */
+        if (sApp->current_fork_mode() != SandstoneApplication::ForkMode::no_fork
+                && !sApp->is_main_process())
+            sdc_feedback_write(test);
+#endif
         return state;
     }();
 

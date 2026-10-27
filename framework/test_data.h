@@ -87,10 +87,34 @@ struct Common
     }
 };
 
+/* VmHWM 反馈槽 (T7, spec §4.4): 每 slice 一个实例, 随 PerThreadData::Main
+ * 驻留在 MAP_SHARED shmem 的可写区(protect_shmem 只读保护的是 shmem 头,
+ * 不含本区), 上代 child 的写下代 child/parent 可见 —— 闭环的跨 fracture
+ * 载体。字段语义:
+ *   - test_id_hash: test->id 的 FNV-1a 64 位哈希; 0 = 空槽(fresh memfd
+ *     零页)。槽被不同测试复用时按哈希失配重置(防读到陈旧值, spec §8)。
+ *   - eff_ratio:   VmHWM/(n²·elem·本slice线程数) 的 EMA(α=0.5)。记账
+ *     口径由联合求解侧缓存(sdc_joint_cache), 未走联合求解的测试无写入。
+ *   - samples:     EMA 样本数(该槽该测试的写入次数), 0 = 无有效反馈。
+ * 生命周期 (M5, 防"闭环静默死亡"): 本结构【不进 Main::init()】——
+ * init_per_thread_data() 在每 fracture/test 前清全部槽的 init() 字段,
+ * 反馈挂进去会被逐 fracture 抹掉; 只在 parent 侧 commit_shmem() 首次
+ * 映射后清零一次, 语义 = 跨 test/fracture 持久(per-invocation shmem,
+ * memfd 每次运行新建 ⇒ 无跨运行记忆)。
+ * x86-64 (rule 5): 本字段在 x86 同样编译(避免 Main 布局分叉), 但写入/
+ * 读取调用点全部 arm64 门控 ⇒ x86 无写入者, 恒为零值, 行为不变。 */
+struct MemFeedback
+{
+    uint64_t test_id_hash;
+    double eff_ratio;
+    uint32_t samples;
+};
+
 struct alignas(64) Main : Common
 {
     DeviceRange device_range;
     ThreadRange thread_range;
+    MemFeedback mem_feedback;       /* 48B body + 24B = 72B → sizeof 128 */
 };
 
 struct alignas(64) TestCommon : Common

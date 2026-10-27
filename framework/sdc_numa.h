@@ -44,5 +44,13 @@ uint64_t sdc_node_budget_bytes(int permille, int cpu);
  * 探测失败(无节点内存信息)退化为全局在线 CPU 数。 */
 int sdc_numa_effective_threads(int cpu);
 
+/* /proc/self/status 的 VmHWM(峰值 RSS, kB→字节); 读不到返回 0。
+ * T7 反馈闭环专用 —— 刻意不用 memfpt_current_high_water_mark(): 它在
+ * release 构建返回 0, 且把它转正会激活 x86 诊断路径(spec §4.4 修正 #2)。
+ * 口径注意: fork child 的 VmHWM 起点 = 父进程当时 RSS(实测 8.3MB,
+ * eigen 家族 <1%, 记录为已知口径); 联合求解探针的高水位同样计入
+ * (探针远小于正式工作集)。 */
+uint64_t sdc_read_vm_hwm(void);
+
 #endif /* __aarch64__ && __linux__ */
 #endif
