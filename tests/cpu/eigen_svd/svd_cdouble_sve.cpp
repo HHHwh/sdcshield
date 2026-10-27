@@ -59,13 +59,20 @@
 #include <unistd.h>
 #include <cmath>
 
-using namespace Eigen;        /* renamed to EigenSVE via -DEigen=EigenSVE */
-typedef Matrix<std::complex<double>, Dynamic, Dynamic> Mat;
-typedef Eigen::BDCSVD<Mat> SVD;
+/* Per-tier payload namespaces (svd_cdouble_sve_body.cpp). The EigenSVDTest
+ * data type is itself Eigen-parameterised, so allocation/cleanup/run all live
+ * in the variant TU; this dispatcher only sees void* — design §4.7. */
+namespace svd_vl128  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); }
+namespace svd_vl256  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); }
+namespace svd_vl512  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); }
+
+/* Tier chosen at init (from the chip maximum) and re-checked at run (from the
+ * worker's pinned VL). They must agree: switching variants mid-test would
+ * reinterpret the Eigen objects allocated by a different instantiation. */
+static long eigen_svd_cdouble_sve_tier_bits;
 
 /* Runtime dimension mode: the template allocates and compares against
  * d->dim, which size_matrix() derives from available memory. */
-using eigen_svd_cdouble_sve_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
 /* Dimension bounds, all measured on cortex x3b (VL=128 pinned, same
  * compile flags as this TU, 2026-09-19 — see the plan file
@@ -202,9 +209,30 @@ static int sve_probe_and_init(struct test *test)
      * matrices — removed. Timing note: desired_duration now covers exactly
      * the two run-side decompositions (prime + DUT); init no longer
      * contributes a third. */
-    auto d = new eigen_svd_cdouble_sve_test::eigen_test_data;
-    d->dim = g_dim;
-    test->data = d;
+    const long tier = arm64_spec_get()->max_sve_vl_bits;
+    void *data = nullptr;
+    switch (tier) {
+    case 128:  data = svd_vl128::make_data(g_dim);  break;
+    case 256:  data = svd_vl256::make_data(g_dim);  break;
+    case 512:  data = svd_vl512::make_data(g_dim);  break;
+    case 1024:
+        /* Eigen's SVE complex ptranspose indexes buf[N][NC] with i < NC,
+           which is only in bounds when NC <= N (=4 here). At 1024-bit
+           NC = 8, so the complex payload has a genuine out-of-bounds read
+           upstream; we deliberately do not build that variant. */
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: 1024-bit Eigen complex packets are unsound upstream "
+                 "(SVE ptranspose reads past buf[N][NC] when NC > N); "
+                 "no variant built for this tier", test->id);
+        return EXIT_SKIP;
+    default:
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: no Eigen SVE variant compiled for the %ld-bit tier",
+                 test->id, tier);
+        return EXIT_SKIP;
+    }
+    eigen_svd_cdouble_sve_tier_bits = tier;
+    test->data = data;
     return EXIT_SUCCESS;
 }
 
@@ -223,22 +251,59 @@ static int sve_probe_and_init(struct test *test)
  */
 static int eigen_svd_cdouble_sve_run(struct test *test, int cpu)
 {
-    const long pinned = arm64_sve_pin_vl(16);
-    if (pinned != 16) {
+    const long want_bytes = arm64_sve_vl_bytes();
+    if (want_bytes <= 0) {
         log_skip(CpuNotSupportedSkipCategory,
-                 "%s: cannot pin the thread to the compile-time 128-bit "
-                 "VL (prctl returned %ld; kernel restriction?) — Eigen "
-                 "size-specific packets are undefined at other VLs",
-                 test->id, pinned);
+                 "%s: SVE disappeared between pin and run", test->id);
         return EXIT_SKIP;
     }
-    if (arm64_sve_vl_bytes() != 16) {
-        log_error("%s: SVE VL is %ld bytes after pinning (expected 16)",
-                  test->id, arm64_sve_vl_bytes());
-        report_fail_msg("%s: SVE VL drift after pin — Eigen packets are "
-                        "compiled for 128-bit", test->id);
+    const long pinned = arm64_sve_pin_vl(want_bytes);
+    if (pinned != want_bytes) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: cannot pin the worker to the %ld-bit VL (prctl rc=%ld)",
+                 test->id, want_bytes * 8, pinned);
+        return EXIT_SKIP;
     }
-    return eigen_svd_cdouble_sve_test::run(test, cpu);
+    if (arm64_sve_vl_bytes() != want_bytes) {
+        log_error("%s: pinned %ld bytes but read back %ld",
+                  test->id, want_bytes, arm64_sve_vl_bytes());
+        report_fail_msg("%s: SVE VL readback mismatch after pin", test->id);
+    }
+    if (want_bytes * 8 != eigen_svd_cdouble_sve_tier_bits) {
+        log_error("%s: run tier %ld-bit differs from the %ld-bit variant the "
+                  "data was allocated for", test->id, want_bytes * 8,
+                  eigen_svd_cdouble_sve_tier_bits);
+        report_fail_msg("%s: Eigen SVE variant/tier mismatch", test->id);
+    }
+    /* Design §4.9: record which instantiation actually ran. */
+    log_info("%s: Eigen SVE svd variant = %ld-bit", test->id, want_bytes * 8);
+    switch (want_bytes * 8) {
+    case 128:  return svd_vl128::run_body(test, cpu);
+    case 256:  return svd_vl256::run_body(test, cpu);
+    case 512:  return svd_vl512::run_body(test, cpu);
+    case 1024:
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: 1024-bit Eigen complex packets are unsound upstream "
+                 "(SVE ptranspose reads past buf[N][NC] when NC > N); "
+                 "no variant built for this tier", test->id);
+        return EXIT_SKIP;
+    default:
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: no Eigen SVE variant compiled for the %ld-bit tier",
+                 test->id, want_bytes * 8);
+        return EXIT_SKIP;
+    }
+}
+
+static int eigen_svd_cdouble_sve_cleanup(struct test *test)
+{
+    switch (eigen_svd_cdouble_sve_tier_bits) {
+    case 128:  svd_vl128::cleanup(test);  break;
+    case 256:  svd_vl256::cleanup(test);  break;
+    case 512:  svd_vl512::cleanup(test);  break;
+    default: break;
+    }
+    return EXIT_SUCCESS;
 }
 
 DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend self-pinned to the compile-time 128-bit VL, dimension sized from available memory); counterpart of eigen_svd_cdouble")
@@ -246,7 +311,7 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
   .test_preinit = size_matrix_preinit,
   .test_init = sve_probe_and_init,
   .test_run = eigen_svd_cdouble_sve_run,
-  .test_cleanup = eigen_svd_cdouble_sve_test::cleanup,
+  .test_cleanup = eigen_svd_cdouble_sve_cleanup,
   .minimum_cpu = 0,
   /* desired_duration is written by test_preinit (parent, before the
    * framework computes test_duration for the first run): expected single-
@@ -257,6 +322,7 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
   .desired_duration = 0,
   .fracture_loop_count = 5,
   .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
 
 #endif // __aarch64__

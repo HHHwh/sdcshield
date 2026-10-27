@@ -45,6 +45,7 @@
 #if defined(__aarch64__) && defined(__linux__)
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
 #include <sys/prctl.h>
@@ -272,6 +273,25 @@ static inline const struct arm64_spec *arm64_spec_get(void)
         long bytes = granted > 0 ? granted : arm64_sve_vl_bytes();
         spec.max_sve_vl_bits = bytes > 0 ? bytes * 8 : 0;
         spec.max_vl_known = granted > 0;
+
+        /* Explicit override, honoured everywhere the spec is consumed
+           (selection, worker pin, per-tier dispatch) so all three stay
+           consistent. Purpose: exercise a lower tier on a host whose
+           maximum is higher (otherwise the highest-tier default makes
+           those code paths untestable), and let an operator pin a tier for
+           a targeted campaign. Rounded DOWN to a supported tier; values
+           above the hardware maximum are clamped by the hardware when
+           pinned. */
+        const char *want = getenv("SDCSHIELD_ARM64_SPEC_MAX_VL");
+        if (want && *want) {
+            char *end = NULL;
+            long bits = strtol(want, &end, 10);
+            if (end != want && bits >= 128 && bits <= ARM64_SPEC_MAX_TIER_BITS
+                    && (bits % 128) == 0) {
+                if (bits < spec.max_sve_vl_bits || !spec.max_vl_known)
+                    spec.max_sve_vl_bits = bits;
+            }
+        }
     }
     if (spec.has_sme) {
         long granted = arm64_vl_probe_max(PR_SME_SET_VL, PR_SME_GET_VL,

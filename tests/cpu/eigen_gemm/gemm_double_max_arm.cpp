@@ -69,9 +69,9 @@
 #include <arm_sve.h>
 #include <device/cpu/arm64/arm64_vl.h>
 
-using namespace Eigen;
-
-typedef Matrix<double, Dynamic, Dynamic> Mat;
+/* No Eigen types in this TU: the payload lives in the per-tier body TUs
+ * (gemm_double_max_arm_body.cpp), compiled once per vector length under
+ * their own Eigen namespaces — design §4.7. */
 
 /* Memory-safe dimension bounds. N=4096 -> 4 matrices x 128 MB per thread.
  * 全部可通过统一配置层覆盖: -O eigen_gemm_double_max_arm.mdim=N /
@@ -80,10 +80,10 @@ typedef Matrix<double, Dynamic, Dynamic> Mat;
 #define MDIM_MAX 4096
 #define RSS_MATRIX_RATIO 6.0
 
-namespace {
-constexpr int kRerollEvery = 16;
+/* Read by every per-tier body TU (gemm_double_max_arm_body.cpp). */
+int eigen_gemm_double_max_arm_dim = MDIM_MIN;
 
-int g_dim = MDIM_MIN;
+namespace {
 
 static int choose_dim(struct test *test)
 {
@@ -123,12 +123,6 @@ static int choose_dim(struct test *test)
     return (n_mem < MDIM_MIN) ? MDIM_MIN : (n_mem > MDIM_MAX) ? MDIM_MAX : n_mem;
 }
 
-void fill_rand(Mat &m)
-{
-    for (int r = 0; r < m.rows(); ++r)
-        for (int c = 0; c < m.cols(); ++c)
-            m(r, c) = frandom_scale(2.0) - 1.0;
-}
 }
 
 /* Runs as .test_preinit in the parent process: thread_count() there is the
@@ -137,10 +131,10 @@ void fill_rand(Mat &m)
  * size N for the wrong worker count (-n 64 logged "38 threads", N=2436). */
 static int eigen_gemm_double_max_arm_preinit(struct test *test)
 {
-    g_dim = choose_dim(test);
-    double gb = (double)g_dim * g_dim * 8.0 * 4.0 / (1 << 30);
+    eigen_gemm_double_max_arm_dim = choose_dim(test);
+    double gb = (double)eigen_gemm_double_max_arm_dim * eigen_gemm_double_max_arm_dim * 8.0 * 4.0 / (1 << 30);
     log_info("eigen_gemm_double_max_arm: N=%d (~%.2f GB per thread, %d threads)",
-             g_dim, gb, thread_count());
+             eigen_gemm_double_max_arm_dim, gb, thread_count());
     return EXIT_SUCCESS;
 }
 
@@ -160,62 +154,52 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
     return EXIT_SUCCESS;
 }
 
+/* One namespace per compiled tier (see gemm_double_max_arm_body.cpp). */
+namespace gemm_vl128  { int run_body(struct test *, int); }
+namespace gemm_vl256  { int run_body(struct test *, int); }
+namespace gemm_vl512  { int run_body(struct test *, int); }
+namespace gemm_vl1024 { int run_body(struct test *, int); }
+
+/* Design §4.7 dispatch. The framework already pinned this worker to the
+ * chip's highest supported tier (arm64_spec_prepare.h); we read the ACTUAL
+ * value back — never the requested one — and pick the variant compiled for
+ * it. Re-pinning here is a deliberate idempotent second check: the body's
+ * Eigen packets are only correct at their own width, so a silent downgrade
+ * of the framework's pin must be caught, not papered over. */
 static int eigen_gemm_double_max_arm_run(struct test *test, int cpu)
 {
-    /* All-VL Phase 2 P5 (spike verdict): pin THIS worker thread to the
-     * compile-time 128-bit VL before any Eigen packet code runs —
-     * replacing the lost external VL-pinning launcher. In test_run, not
-     * test_init: init runs on a throwaway aux thread whose prctl never
-     * reaches the per-CPU workers (arm64_vl.h hard boundary — the
-     * kernel only propagates a pin to threads the pinning thread itself
-     * creates). */
-    const long pinned = arm64_sve_pin_vl(16);
-    if (pinned != 16) {
+    const long want_bytes = arm64_sve_vl_bytes();
+    if (want_bytes <= 0) {
         log_skip(CpuNotSupportedSkipCategory,
-                 "%s: cannot pin the thread to the compile-time 128-bit "
-                 "VL (prctl returned %ld; kernel restriction?) — Eigen "
-                 "size-specific packets are undefined at other VLs",
-                 test->id, pinned);
+                 "%s: SVE disappeared between pin and run", test->id);
         return EXIT_SKIP;
     }
-    /* fail-closed drift guard: prctl says 128-bit but the thread still
-     * disagrees — never run fixed-width packets in that state. Uses
-     * arm64_sve_vl_bytes() (.inst-encoded rdvl), NOT svcntb(): under
-     * -msve-vector-bits=128 GCC constant-folds svcntb() to 16, which
-     * would silently compile this guard away (verified: -O2 emits
-     * `mov w0, 0` for `svcntb() != 16`), while the raw rdvl reads the
-     * actual per-thread runtime VL. */
-    if (arm64_sve_vl_bytes() != 16) {
-        log_error("%s: SVE VL is %ld bytes after pinning (expected 16)",
-                  test->id, arm64_sve_vl_bytes());
-        report_fail_msg("%s: SVE VL drift after pin — Eigen packets are "
-                        "compiled for 128-bit", test->id);
+    const long pinned = arm64_sve_pin_vl(want_bytes);
+    if (pinned != want_bytes) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: cannot pin the worker to the %ld-bit VL (prctl rc=%ld)",
+                 test->id, want_bytes * 8, pinned);
+        return EXIT_SKIP;
+    }
+    if (arm64_sve_vl_bytes() != want_bytes) {
+        log_error("%s: pinned %ld bytes but read back %ld",
+                  test->id, want_bytes, arm64_sve_vl_bytes());
+        report_fail_msg("%s: SVE VL readback mismatch after pin", test->id);
     }
 
-    const int dim = g_dim;
-    Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(dim, dim);
-    l_rhs.resize(dim, dim);
-    l_prod.resize(dim, dim);
-    fill_rand(l_lhs);
-    fill_rand(l_rhs);
-    l_prod = l_lhs * l_rhs;
-    int since_reroll = 0;
-
-    do {
-        Mat x;
-        x = l_lhs * l_rhs;
-
-        memcmp_or_fail(x.data(), l_prod.data(), dim * dim);
-
-        if (++since_reroll >= kRerollEvery) {
-            since_reroll = 0;
-            fill_rand(l_lhs);
-            fill_rand(l_rhs);
-            l_prod = l_lhs * l_rhs;
-        }
-    } while (test_time_condition(test));
-    return EXIT_SUCCESS;
+    /* Design §4.9: record which instantiation actually ran. */
+    log_info("%s: Eigen SVE gemm variant = %ld-bit", test->id, want_bytes * 8);
+    switch (want_bytes * 8) {
+    case 128:  return gemm_vl128::run_body(test, cpu);
+    case 256:  return gemm_vl256::run_body(test, cpu);
+    case 512:  return gemm_vl512::run_body(test, cpu);
+    case 1024: return gemm_vl1024::run_body(test, cpu);
+    default:
+        log_skip(CpuNotSupportedSkipCategory,
+                 "%s: no Eigen SVE variant compiled for the %ld-bit tier",
+                 test->id, want_bytes * 8);
+        return EXIT_SKIP;
+    }
 }
 
 DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, dynamic, memory-safe max square, ARM64+SVE packet backend self-pinned to the compile-time 128-bit VL)")
@@ -224,4 +208,5 @@ DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, 
   .test_init = eigen_gemm_double_max_arm_init,
   .test_run = eigen_gemm_double_max_arm_run,
   .quality_level = TEST_QUALITY_PROD,
+    .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

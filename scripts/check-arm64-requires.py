@@ -19,13 +19,23 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SCAN_DIRS = (ROOT / "tests/cpu/sve", ROOT / "tests/cpu/arm64")
+SCAN_DIRS = (
+    ROOT / "tests/cpu/sve",
+    ROOT / "tests/cpu/arm64",
+    ROOT / "tests/cpu/eigen_gemm",   # Eigen SVE packets are generated in the
+    ROOT / "tests/cpu/eigen_svd",    # vendored library, not by our own body
+)
 
 # Raw vector instructions this suite uses, plus the intrinsic prefixes.
 INTRINSIC = re.compile(
     r"\b(sv[a-z][a-z0-9_]*\(|svcnt[bdhw]\(|"
     r"smstart\b|smstop\b|fmopa\b|mova\b|rdsvl\b|rdvl\b)"
 )
+
+# A TU that includes arm_sve.h (or the framework VL layer) has a vector
+# datapath even when its own body contains no intrinsic call — e.g. the Eigen
+# payload TUs, whose SVE code is generated inside the vendored library.
+SVE_HEADER = re.compile(r"#\s*include\s*[<\"](?:arm_sve\.h|device/cpu/arm64/arm64_vl\.h)[>\"]")
 DECLARE = re.compile(r"^\s*DECLARE_(?:MANUAL_)?TEST\(", re.M)
 END = re.compile(r"^\s*END_DECLARE_TEST\b", re.M)
 HAS_TAG = re.compile(r"^\s*\.arm64_requires\s*=", re.M)
@@ -79,7 +89,7 @@ def main() -> int:
     for d in SCAN_DIRS:
         for path in sorted(d.rglob("*.cpp")):
             src = path.read_text(encoding="utf-8", errors="replace")
-            if not INTRINSIC.search(src):
+            if not (INTRINSIC.search(src) or SVE_HEADER.search(src)):
                 continue                       # no vector datapath: tag not required
             if not list(blocks(src)):
                 continue                       # no DECLARE_TEST (helper/support file)

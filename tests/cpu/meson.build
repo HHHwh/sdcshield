@@ -1022,14 +1022,76 @@ endif
 # symbol clashes. All-VL Phase 2 P5: these two are the library's ONLY
 # members — the fixed 128-bit lock stays because Eigen's SVE packets are
 # compile-time fixed-width (VLA is un-compilable at the C++ language level,
-# twice-confirmed spike); the tests self-pin their worker threads to the
-# compile-time VL inside test_run (arm64_sve_pin_vl), replacing the
-# external VL-pinning launcher.
+# twice-confirmed spike). All-VL Phase 2 (design 2026-10-27 §4.7) turned that
+# limitation into a per-tier instantiation: the payload is built once per
+# width (128/256/512/1024) and a vector-length-agnostic dispatcher picks the
+# variant that matches the worker's pinned tier at run time.
 if host_machine.cpu_family() == 'aarch64'
-    march_sve = [
-        '-march=armv8.2-a+sve',
-        '-msve-vector-bits=128',
-    ]
+    # --- Eigen payload: one instantiation per VL tier (design §4.7) --------
+    # Eigen's SVE packet types are compile-time fixed-width and appear as
+    # struct members, so a single VLA TU is impossible at the C++ language
+    # level (twice-confirmed spike). Build the payload sources once per tier,
+    # each under its own Eigen namespace and its own symbol namespace; the
+    # dispatch TUs below pick the matching one at run time.
+    # Real-packet payloads are valid at every tier we build.
+    eigen_gemm_body_sources = files('eigen_gemm/gemm_double_max_arm_body.cpp')
+    # Complex-packet payloads are NOT: Eigen's SVE complex ptranspose
+    # (third-party/eigen5/Eigen/src/Core/arch/SVE/Complex.h:293-300) indexes
+    # buf[N][NC] with i < NC, which is only in bounds when NC <= N. With the
+    # GEBP nr=4 instantiation that holds for NC = 1/2/4 (128/256/512-bit) and
+    # FAILS at 1024-bit (NC = 8): GCC's -Warray-bounds flags it, and it is a
+    # genuine out-of-bounds read. So the complex SVD payload is built for the
+    # three tiers where it is sound; the dispatcher skips 1024-bit with that
+    # reason instead of shipping a variant that reads past its buffer.
+    eigen_svd_body_sources = files('eigen_svd/svd_cdouble_sve_body.cpp')
+
+    foreach spec : [['gemm', '128'], ['gemm', '256'], ['gemm', '512'], ['gemm', '1024'],
+                    ['svd', '128'], ['svd', '256'], ['svd', '512']]
+        kind = spec[0]
+        tier = spec[1]
+        eigen_tier_args = [
+            '-march=armv8.2-a+sve',
+            '-msve-vector-bits=' + tier,
+            '-DEIGEN_ARM64_SVE_VL=' + tier,
+            '-DEigen=EigenSVE' + tier,
+        ]
+        if kind == 'gemm'
+            eigen_tier_args += '-DGEMM_TEST_NAMESPACE=gemm_vl' + tier
+            eigen_srcs = eigen_gemm_body_sources
+        else
+            eigen_tier_args += '-DSVD_TEST_NAMESPACE=svd_vl' + tier
+            eigen_srcs = eigen_svd_body_sources
+        endif
+        eigen_vl_a = static_library(
+            'tests_eigen_' + kind + '_vl' + tier,
+            sources : eigen_srcs,
+            dependencies: [
+                eigen3_dep,
+                boost_dep,
+            ],
+            build_by_default: false,
+            include_directories: [
+                tests_common_incdirs,
+            ],
+            c_args : [
+                tests_common_c_args,
+                eigen_tier_args,
+            ],
+            cpp_args : [
+                tests_common_cpp_args,
+                eigen_tier_args,
+                '-DEIGEN_ARM64_USE_SVE',
+                sve_bitpattern_exempt,
+            ],
+        )
+        sandstone_tests += [eigen_vl_a]
+    endforeach
+
+    # --- Dispatch TUs: deliberately vector-length agnostic ---------------
+    # No -msve-vector-bits: their arm64_sve_vl_bytes() readback and the switch
+    # on the actual tier must not be constant-folded, and they hold no Eigen
+    # types any more.
+    march_sve_dispatch = ['-march=armv8.2-a+sve']
 
     tests_config_sve = tests_set_sve.apply(tests_config)
     tests_sve_sources = tests_config_sve.sources()
@@ -1048,13 +1110,12 @@ if host_machine.cpu_family() == 'aarch64'
             ],
             c_args : [
                 tests_common_c_args,
-                march_sve,
+                march_sve_dispatch,
             ],
             cpp_args : [
                 tests_common_cpp_args,
-                march_sve,
-                '-DEIGEN_ARM64_USE_SVE',
-                '-DEigen=EigenSVE',
+                march_sve_dispatch,
+                sve_bitpattern_exempt,
             ],
         )
         sandstone_tests += [tests_sve_a]
