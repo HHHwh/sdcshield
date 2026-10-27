@@ -371,8 +371,13 @@ static void bidiag_compare_or_fail(const double *got, const double *golden,
  * 计时 —— 与 run 期迭代同内核 (bidiagonalize_sve) 同填充分布。
  * 禁止用标量参考 bidiagonalize_ref 替代: 两者速度差 4-8×, 会系统性
  * 错标时间模型。gofs/v/w 就地分配 (探针 n 逐档变化, 不能复用 run 期
- * 按 d->n 定尺寸的 TLS 表); 分配失败返回 -1 且不求解, 计时≈0 交由
- * 校准层按"计时不可测"路径处置。 */
+ * 按 d->n 定尺寸的 TLS 表)。分配失败返回 -1 且不求解: 此时的计时是
+ * μs 级**非零**值, 校准层 (sdc_calibrated_dim 的 probe 丢弃本函数
+ * 返回值, "计时不可测"分支要求 t<=0.0 精确成立, 此处进不去) 会把它
+ * 当作超快求解外推——k 钳制后 dim=hi=2048, 是 P0-2 超时模式的复发
+ * 路径而非安全退守; 可达性与 init 自身 2n²×8B 分配失败同源(探针缓冲
+ * ≤33MB 更小, 它失败则 init 的更大分配也失败), 由 init 随后的
+ * EXIT_FAILURE 兜底覆盖——失败分支的 log_warning 只为可观测性留痕。 */
 static int run_bidiag_once(int n)
 {
     size_t bytes = (size_t)n * n * sizeof(double);
@@ -382,6 +387,7 @@ static int run_bidiag_once(int n)
     uint64_t *gofs = (uint64_t *)aligned_alloc(64,
             svcntd() * sizeof(uint64_t));
     if (!a || !v || !w || !gofs) {
+        log_warning("[联合求解] bidiag 探针分配失败 n=%d —— 计时将失真", n);
         free(a); free(v); free(w); free(gofs);
         return -1;
     }
