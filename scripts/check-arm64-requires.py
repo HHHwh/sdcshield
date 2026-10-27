@@ -13,6 +13,8 @@ Usage:
 
 Design: docs/superpowers/specs/2026-10-27-arm64-spec-policy-and-vl-tier-cases-design.md §4.5
 """
+from __future__ import annotations   # tuple[str, int] on Python 3.7/3.8 (openEuler 20.03)
+
 import argparse
 import pathlib
 import re
@@ -24,6 +26,8 @@ SCAN_DIRS = (
     ROOT / "tests/cpu/arm64",
     ROOT / "tests/cpu/eigen_gemm",   # Eigen SVE packets are generated in the
     ROOT / "tests/cpu/eigen_svd",    # vendored library, not by our own body
+    ROOT / "tests/cpu/sleef",        # sleef_sve: true-VLA SVE, lives outside
+                                     # the sve/ tree (tests_sve_vla library)
 )
 
 # Raw vector instructions this suite uses, plus the intrinsic prefixes.

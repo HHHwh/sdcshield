@@ -613,4 +613,5 @@ DECLARE_TEST(sleef_sve, "SLEEF vectorized transcendentals (SVE polynomial FMA ch
   .minimum_cpu = 0,
   .fracture_loop_count = 4,
   .quality_level = TEST_QUALITY_PROD,
+  .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST
