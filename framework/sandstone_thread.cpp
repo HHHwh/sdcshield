@@ -17,7 +17,18 @@
 namespace {
 struct SandstoneTestThreadAttributes
 {
-    static constexpr size_t GuardSize = 8192;
+    /*
+     * Guard region between per-thread stacks.  MUST be at least as large as
+     * the kernel page size, otherwise mprotect() on kernels with >8 KB pages
+     * (e.g. ARM64 16 KB / 64 KB) will round the writable region start address
+     * DOWN past the guard, leaving the bottom of one thread's stack in a
+     * PROT_NONE page and causing SIGSEGV inside pthread_create's explicit_bzero.
+     */
+    static size_t GuardSize()
+    {
+        size_t pg = sandstone_page_size();
+        return (8192 < pg) ? pg : 8192;
+    }
     pthread_attr_t thread_attr;
     unsigned char *stacks_block;
     SandstoneTestThreadAttributes()
@@ -42,7 +53,8 @@ struct SandstoneTestThreadAttributes
 #ifndef _WIN32
 unsigned char *SandstoneTestThreadAttributes::allocate_stack_block()
 {
-    size_t size = thread_count() * (THREAD_STACK_SIZE + GuardSize) + GuardSize;
+    size_t guard = GuardSize();
+    size_t size = thread_count() * (THREAD_STACK_SIZE + guard) + guard;
     void *map = mmap(nullptr, size, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     if (map == MAP_FAILED)
         return nullptr;
@@ -51,16 +63,16 @@ unsigned char *SandstoneTestThreadAttributes::allocate_stack_block()
 
 #ifdef MADV_GUARD_INSTALL
     // check if MADV_GUARD_INSTALL works
-    if (madvise(map, GuardSize, MADV_GUARD_INSTALL) == 0) {
+    if (madvise(map, guard, MADV_GUARD_INSTALL) == 0) {
         // yes, let's use it
         // we mark the entire region we've allocated as read-writable, then
         // mark specific regions as guards
         IGNORE_RETVAL(mprotect(map, size, PROT_READ | PROT_WRITE));
 
         for (int i = 0; i < thread_count(); ++i) {
-            ptr += GuardSize + THREAD_STACK_SIZE;
+            ptr += guard + THREAD_STACK_SIZE;
             // and mark the above this thread's stack (below the next's) as a guard
-            IGNORE_RETVAL(madvise(ptr, GuardSize, MADV_GUARD_INSTALL));
+            IGNORE_RETVAL(madvise(ptr, guard, MADV_GUARD_INSTALL));
         }
 
         return ptr;
@@ -68,7 +80,7 @@ unsigned char *SandstoneTestThreadAttributes::allocate_stack_block()
 #endif
 
     for (int i = 0; i < thread_count(); ++i) {
-        ptr += GuardSize;
+        ptr += guard;
         IGNORE_RETVAL(mprotect(ptr, THREAD_STACK_SIZE, PROT_READ | PROT_WRITE));
         ptr += THREAD_STACK_SIZE;
     }
@@ -80,7 +92,7 @@ void SandstoneTestThreadAttributes::update_with_stack_for(int thread)
     if (!stacks_block)
         return;
     unsigned char *stacktop = stacks_block;
-    stacktop -= (THREAD_STACK_SIZE + GuardSize) * unsigned(thread);
+    stacktop -= (THREAD_STACK_SIZE + GuardSize()) * unsigned(thread);
     pthread_attr_setstack(&thread_attr, stacktop - THREAD_STACK_SIZE, THREAD_STACK_SIZE);
 }
 #else

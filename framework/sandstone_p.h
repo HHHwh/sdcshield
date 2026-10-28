@@ -70,7 +70,30 @@ extern "C" {
 
 /* align to a power of 2 */
 #define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
-#define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, 4096U)
+#include <unistd.h>
+
+/*
+ * Page size used for mmap/mprotect alignment.  MUST match the kernel's actual
+ * page size, otherwise mprotect() will round to the kernel's page boundary and
+ * may make adjacent data read-only (causing SIGSEGV on kernels with >4 KB
+ * pages, e.g. ARM64 16 KB / 64 KB configurations).  Resolve once via
+ * sysconf(_SC_PAGESIZE) and cache it.
+ */
+#ifdef __cplusplus
+extern "C++"
+{
+#endif
+static inline unsigned sandstone_page_size(void)
+{
+    static long cached = 0;
+    if (!cached)
+        cached = sysconf(_SC_PAGESIZE);
+    return (unsigned)cached;
+}
+#ifdef __cplusplus
+}
+#endif
+#define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, sandstone_page_size())
 
 extern char *program_invocation_name;       // also in glibc's <errno.h>
 
