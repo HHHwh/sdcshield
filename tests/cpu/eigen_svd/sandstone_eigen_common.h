@@ -108,9 +108,11 @@ template <typename SVD, int Dim> struct EigenSVDTest
      *            entirely out of the model, so it over-shrunk n on
      *            many-core hosts;
      *   lo/hi  — the call-site clamp pair, unchanged;
-     *   probe  — the splitmix lambda below, passed verbatim (谱系契约
-     *            检视 #51): the joint solver re-uses it for its
-     *            power-law fit (k floor 3.0 = dense-SVD complexity).
+     *   probe  — sizing_probe() below, passed verbatim (谱系契约
+     *            检视 #51; PR#302 检视 #14 起为单一实现, SVE tier 派发
+     *            体的 solve_once 亦委托此): the joint solver re-uses
+     *            it for its power-law fit (k floor 3.0 = dense-SVD
+     *            complexity).
      * quick mode / a degenerate [lo,hi] collapse to lo inside the joint
      * solver — the same shortcut the old chain took. Explicit -O mdim /
      * env bypasses this function entirely (user-owned).
@@ -144,49 +146,54 @@ template <typename SVD, int Dim> struct EigenSVDTest
         return svd_rss_family_of(static_cast<const SVD *>(nullptr));
     }
 
+    /* Sizing probe (PR#302 检视 #14 收口: 单一实现, 供下方两个 arch 分支
+     * 与 SVE tier 派发体的 solve_once 共用——两份拷贝一旦漂移, 其中一份
+     * 探针就会低估求解时间, 联合求解选出过大的 n, 全核单次迭代超出 300s
+     * 宽限——正是本 PR 修复的超时模式)。
+     * 谱系契约(检视 #51, verbatim from the pre-T8 chain): deterministic
+     * hash fill — timing probe only, no RNG dependency. probe 填充必须与
+     * run() 的 fill_matrix_random 同谱系(满秩随机 [-1,1))——旧
+     * (r*31+c*17)%13 条纹阵是 13×13 模式的周期平铺, 秩 ≤13
+     * (实测 512² rank=12), BDCSVD/JacobiSVD 对零尾奇异值走
+     * deflation/快收敛路径, probe 系统性低估真实求解
+     * (2026-10-26 鲲鹏 920 -O3 实测 probe/random 比值:
+     * BDCSVD<double> 0.25~0.54×、Jacobi<double> 0.15~0.46×
+     * 且随维度恶化、BDCSVD<complex> 0.47~0.70×; 对照
+     * eigen_sparse 侧同谱系 probe 实测 0.95×)。splitmix 散列
+     * [-1,1)(complex 独立 re/im)与随机阵同谱系, 校准计时
+     * 口径与 run 期单解一致。改这里的值域/结构必须与
+     * fill_matrix_random 同步演化。 */
+    static int sizing_probe(int n)
+    {
+        Mat m(n, n);
+        using Scalar = typename Mat::Scalar;
+        for (int r = 0; r < n; ++r)
+            for (int c = 0; c < n; ++c) {
+                std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
+                                ^ (std::uint64_t)c * 0xC2B2AE3D27D4EB4Full;
+                h ^= h >> 32;
+                h *= 0xD6E8FEB86659FD93ull;
+                h ^= h >> 32;
+                if constexpr (boost::is_complex<Scalar>::value) {
+                    std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
+                                     + 0x9E3779B97F4A7C15ull;
+                    h2 ^= h2 >> 32;
+                    m(r, c) = Scalar(
+                        (typename Scalar::value_type)((double)(h % 2000u) / 1000.0 - 1.0),
+                        (typename Scalar::value_type)((double)(h2 % 2000u) / 1000.0 - 1.0));
+                } else {
+                    m(r, c) = (Scalar)((double)(h % 2000u) / 1000.0 - 1.0);
+                }
+            }
+        Mat u, v;
+        calculate_once(m, u, v);
+        return 0;
+    }
+
     static int calibrated_auto_dim(struct test *test, int bytes_per_elem,
                                    int matrices_per_thread, double rss_ratio,
                                    int mem_fraction_permille, int lo, int hi)
     {
-        /* Sizing probe, shared by both arch branches below (谱系契约
-         * 检视 #51, verbatim from the pre-T8 chain): deterministic hash
-         * fill — timing probe only, no RNG dependency. probe 填充必须与
-         * run() 的 fill_matrix_random 同谱系(满秩随机 [-1,1))——旧
-         * (r*31+c*17)%13 条纹阵是 13×13 模式的周期平铺, 秩 ≤13
-         * (实测 512² rank=12), BDCSVD/JacobiSVD 对零尾奇异值走
-         * deflation/快收敛路径, probe 系统性低估真实求解
-         * (2026-10-26 鲲鹏 920 -O3 实测 probe/random 比值:
-         * BDCSVD<double> 0.25~0.54×、Jacobi<double> 0.15~0.46×
-         * 且随维度恶化、BDCSVD<complex> 0.47~0.70×; 对照
-         * eigen_sparse 侧同谱系 probe 实测 0.95×)。splitmix 散列
-         * [-1,1)(complex 独立 re/im)与随机阵同谱系, 校准计时
-         * 口径与 run 期单解一致。改这里的值域/结构必须与
-         * fill_matrix_random 同步演化。 */
-        auto probe = [](int n) {
-            Mat m(n, n);
-            using Scalar = typename Mat::Scalar;
-            for (int r = 0; r < n; ++r)
-                for (int c = 0; c < n; ++c) {
-                    std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                                    ^ (std::uint64_t)c * 0xC2B2AE3D27D4EB4Full;
-                    h ^= h >> 32;
-                    h *= 0xD6E8FEB86659FD93ull;
-                    h ^= h >> 32;
-                    if constexpr (boost::is_complex<Scalar>::value) {
-                        std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                                         + 0x9E3779B97F4A7C15ull;
-                        h2 ^= h2 >> 32;
-                        m(r, c) = Scalar(
-                            (typename Scalar::value_type)((double)(h % 2000u) / 1000.0 - 1.0),
-                            (typename Scalar::value_type)((double)(h2 % 2000u) / 1000.0 - 1.0));
-                    } else {
-                        m(r, c) = (Scalar)((double)(h % 2000u) / 1000.0 - 1.0);
-                    }
-                }
-            Mat u, v;
-            calculate_once(m, u, v);
-            return 0;
-        };
 #if defined(__aarch64__) && defined(__linux__)
         /* T11 (P2b): -O/env 查询从各 svd_*.cpp 的 init 收进联合层——
          * calibrated_auto_dim 现被无条件调用(含显式 knob 命中时), 显式值
@@ -209,7 +216,7 @@ template <typename SVD, int Dim> struct EigenSVDTest
             .run_budget_ms = 140000,      /* 全核单迭代(2解×AR)预算; 见上方块注释 */
         };
         try {
-            return sdc_joint_dim_slice(test, "mdim", &ja, probe);
+            return sdc_joint_dim_slice(test, "mdim", &ja, sizing_probe);
         } catch (...) {
             /* probe 期分配异常(如 ASAN 构建的 OOM): init 不 crash,
              * 退守下限并诚实记录(检视 #40; 计划文档 P2 原则
@@ -252,7 +259,7 @@ template <typename SVD, int Dim> struct EigenSVDTest
          * low (preprocessing-dominated at 64..128), so floor it at 3.0 */
         try {
             return sdc_calibrated_dim(lo, mem_dim, kMaxSingleSolveMs,
-                                      test->id, "mdim", 3.0, probe);
+                                      test->id, "mdim", 3.0, sizing_probe);
         } catch (...) {
             /* probe 期分配异常(如 ASAN 构建的 OOM): init 不 crash,
              * 退守校准下限并诚实记录(检视 #40; 计划文档 P2 原则
