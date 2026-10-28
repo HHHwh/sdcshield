@@ -22,7 +22,7 @@ routes you; consult it before guessing.
    capability (missing HWCAP/HWCAP2 bit such as SME, an unsupported VL/SVL
    tier, a newer ISA generation), then verifying only the SKIP path is NOT
    sufficient — the change MUST be validated in gem5-fi
-   (`/home/sdc/wangxu/operator/gem5-fi`, CHAOS/SE, same-source dual kernel under
+   (`/home/sdc/wangxu/gem5-fi`, CHAOS/SE, same-source dual kernel under
    `workloads/sdcshield/`) at the affected VL/SVL tiers, quoting real run
    output (tier, checksum, `SDCSHIELD_FAILS=0`); if gem5 validation is
    genuinely impossible, state that verification boundary honestly instead.
@@ -120,22 +120,24 @@ END_DECLARE_TEST
   no longer produce false mismatches. Verified on a 64-core host: full-run
   green (3x240s x 3 seeds, 10-min x 2 tiers, 300s rerolls) plus gem5-fi FS
   2-core `eigen_svd_double -n 2` pass. Run full-core; `-n 1` is no longer
-  required. Adaptive dims are time-calibrated (`sdc_calibrated_dim`:
-  two-probe power-law + k_floor, one solve <= ~2s so the `-t` TERM is
-  honoured); explicit `-O <test>.mdim/n` skips calibration. The pre-fix
-  "ULP-level sporadic failure under full-core multithreading" advice is
+  required. Adaptive dims are jointly sized (2026-10-27,
+  feat/eigen-p0-p3-fix — also cured the full-core auto timeouts
+  `eigen_svd_cdouble_sve` 321s / `eigen_svd_bidiag_sve` 343s):
+  `sdc_joint_dim_slice` = min(n_mem, n_run, clamp) — n_mem from a
+  per-NUMA-node three-source budget (phys×‰ / MemAvailable×0.9 / cgroup
+  v1+v2) against measured per-family RSS coefficients (RSS_RATIO_TABLE),
+  n_run from a probe power-law fit × the AR all-core-slowdown table
+  (family×topology), refined by a VmHWM feedback loop (per-slice EMA,
+  median aggregation, 0.7× table floor). Explicit `-O <test>.mdim/n`
+  bypasses sizing with an expected-memory warning. The pre-fix "ULP-level
+  sporadic failure under full-core multithreading" advice is
   obsolete.
 - **Vector capability (SVE/SVE2/SME, VL/SVL tiers) is per-host — probe it,
   never assume it.** Measured lab hosts differ widely: some expose SVE with a
   pinnable VL and no SVE2/SME, some expose the full SVE2 set + SME/SME2 at a
   wider VL. Verification path follows rule 2: tiers the host supports are
   verified natively here; tiers it lacks go to gem5-fi
-  (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). `tests_sve`
-  compiles at fixed 128-bit; `sleef_sve` stays there by design. The two Eigen
-  SVE tests no longer need a VL-pinning launcher: each payload is built once
-  per tier (GEMM 128/256/512/1024, complex SVD 128/256/512) under its own
-  Eigen namespace and a vector-length-agnostic dispatcher picks the variant
-  matching the framework-pinned worker VL.
+  (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit).
 - **ARM64 spec policy (2026-10-27)**: sdcshield probes the chip's spec once
   (`arm64_spec_get()`: extension bits + the MAXIMUM tier, measured by asking
   the kernel for the architectural ceiling and reading back what it granted —

@@ -71,7 +71,7 @@ bash scripts/run/sdc_detect.sh
 
 1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
 2. **停下且有 FAIL**：先看挂在哪个测试——
-   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**（per-thread 同源 golden——每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；分支会话验证【64 核机器，git 无法进一步判定身份，来源未定谳】：3×240s×3 seed + 10 分钟档×2 + 300s 换 seed 全绿，gem5-fi FS 双线程 `eigen_svd_double -n 2` pass；本机复跑锚点【鲲鹏 920 0xd01，128 CPUs = 2×64 核，32GB】：满核 `eigen_sparse` 300s×2 seed 全绿，校准 k=3.30~3.39 → 单解验证 369-825ms ≤ 2s 预算【单线程探针口径；满核带宽竞争同分布实测 ~24.9×（单解 ~14s、含 reroll 最坏迭代 ~29s，2026-10-25 实测），远低于框架 300s 硬宽限，`-t` TERM 由该宽限兜底】）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑仍可用作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。历史"已知 ULP 级良性抖动"记录见 CLAUDE.md 平台怪癖条目（修复前行为）。检出通道口径：eigen 族的同源重算比对（same-source repeat）检出**非确定性缺陷**（瞬态/间歇/边际——同输入不同位；打坏 golden 本身的错误也会在下一轮重算比对中 FAIL）；对**确定性核缺陷**存在结构性盲区（golden 与重算走同一错误路径、位级一致地错）。golden-value 测试族（固定 golden 数据）只覆盖**其自身**指令路径（FMA/SIMD/加密/压缩等）——全套件没有任何 Eigen 分解路径的固定 golden 测试（Eigen 全族 gemm/sparse/svd 均为同源重算），Eigen 路径的确定性缺陷是**已披露的覆盖空洞**（旧共享 golden 的概率性检出通道被主动换弃以消除满核假阳）。
+   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**（per-thread 同源 golden——每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；分支会话验证【64 核机器，git 无法进一步判定身份，来源未定谳】：3×240s×3 seed + 10 分钟档×2 + 300s 换 seed 全绿，gem5-fi FS 双线程 `eigen_svd_double -n 2` pass；本机复跑锚点【鲲鹏 920 0xd01，128 CPUs = 2×64 核，32GB】：满核 `eigen_sparse` 300s×2 seed 全绿，校准 k=3.30~3.39 → 单解验证 369-825ms ≤ 2s 预算【单线程探针口径；满核带宽竞争同分布实测 ~24.9×（单解 ~14s、含 reroll 最坏迭代 ~29s，2026-10-25 实测），远低于框架 300s 硬宽限，`-t` TERM 由该宽限兜底】；2026-10-27 起（feat/eigen-p0-p3-fix）全族 sizing 改走 `sdc_joint_dim_slice` 联合求解——内存×时间双上限 + AR 全核慢化表（族×拓扑），该余量论证升级为结构约束）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑仍可用作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。历史"已知 ULP 级良性抖动"记录见 CLAUDE.md 平台怪癖条目（修复前行为）。检出通道口径：eigen 族的同源重算比对（same-source repeat）检出**非确定性缺陷**（瞬态/间歇/边际——同输入不同位；打坏 golden 本身的错误也会在下一轮重算比对中 FAIL）；对**确定性核缺陷**存在结构性盲区（golden 与重算走同一错误路径、位级一致地错）。golden-value 测试族（固定 golden 数据）只覆盖**其自身**指令路径（FMA/SIMD/加密/压缩等）——全套件没有任何 Eigen 分解路径的固定 golden 测试（Eigen 全族 gemm/sparse/svd 均为同源重算），Eigen 路径的确定性缺陷是**已披露的覆盖空洞**（旧共享 golden 的概率性检出通道被主动换弃以消除满核假阳）。
    - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
@@ -499,7 +499,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `pocketfft_fft` | `.n` | 512..16384（pow2）/ 4099 / 6144 / 10000 | 4096 | FFT 点数与因数结构（pow2=radix-4/2，4099=Bluestein 质数） |
 | `isal_igzip` | `.level` | 0..3 | 1 | deflate 级别（不同匹配查找器；2/3 有独立 level_buf） |
 | `zstd` / `zstd1` / `zstd19` / `zfuzz` | `.level` / `.maxbuffersize` | 1..22 / 4096.. | 按变体 | 压缩级别 / 每迭代缓冲上限 |
-| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000 | **按内存自适应** | 强制矩阵维度（覆盖自适应选择） |
+| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000 | **按内存×时间联合自适应** | 强制矩阵维度（覆盖自适应选择；超预算时打 `[内存越界]` 警告） |
 | `ipsec_*`（46 个 NEON 变体；24 个 SVE 变体无此 knob） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM——AES/3DES/SHA 数据路径全谱扫（2026-09-19；默认 1024 与历史逐字节一致） |
 | `memcpy_rewr` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
 
