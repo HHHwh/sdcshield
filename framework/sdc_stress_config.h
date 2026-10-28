@@ -703,6 +703,31 @@ inline std::map<std::string, struct sdc_joint_ctx> &sdc_joint_cache()
     return cache;
 }
 
+/* T10 降档路径的口径同步(PR#302 检视 #25): init 期 bad_alloc/分配失败
+ * 降档到 kInitRetryLo 重试成功后, 联合求解登记的 sdc_joint_ctx.n 仍是
+ * 求解值——run_one_test_inner 尾部的反馈写入点按 ctx.n 折算 eff_ratio
+ * = VmHWM/(n²·elem·threads), 实际工作集只有 retry 值会使 eff 被低估
+ * (n/retry)² 倍, 反馈通道被污染、c 被压向 0.7× 静态锚下限, 后续
+ * fracture 的 n 向 OOM 方向膨胀。降档处调用本函数把登记口径同步为
+ * 实际值; 显式 knob/未迁移用例无登记条目时为 no-op。init 双重失败
+ * (EXIT_SKIP)不需要: run_one_test_inner 对 init SKIP 提前返回, 到不了
+ * 反馈写入点。已知残差(如实记录): worker 期 bad_alloc 的线程级 SKIP
+ * 仍按求解 n 记账(VmHWM 是不完整分配的峰值)——低估方向受读侧 0.7×
+ * 锚下限钳制(n 至多膨胀 1/√0.7≈1.2×), 且生产构建 malloc 插桩拦截空
+ * 分配(仅 ASAN 可达), 不单独设通道。 */
+static inline void sdc_joint_cache_note_dim(struct test *test, int actual_n)
+{
+    if (!test || !test->id)
+        return;
+    auto it = sdc_joint_cache().find(test->id);
+    if (it == sdc_joint_cache().end())
+        return;
+    if (actual_n > 0)
+        it->second.n = actual_n;
+    else
+        sdc_joint_cache().erase(it);   /* 0 = 口径无效 → 本 child 不写反馈 */
+}
+
 /* framework/sandstone_run.cpp 提供(arm64+linux 编译): 遍历全部 slice 的
  * PerThreadData::Main.mem_feedback 槽(MAP_SHARED shmem, 子进程经
  * raw_main_thread_data 读兄弟槽), 取同 test_id 哈希槽 eff_ratio 的

@@ -489,6 +489,10 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
                      test->id, kInitRetryLo);
             return EXIT_SKIP;
         }
+        /* 降档成功 → 同步反馈记账口径(PR#302 检视 #25, 同 GEMM cohort):
+         * 否则 [反馈] 按求解 n 折算 eff, c 被压向 0.7× 下限, 后续 n 向
+         * OOM 方向膨胀。 */
+        sdc_joint_cache_note_dim(test, kInitRetryLo);
     }
 
     /* init 时有限性金丝雀 + 冻结回放基准 (B6 + PR #244 review): init
