@@ -11,7 +11,7 @@
  * 2026-10-28): an explicit knob/env override wins, else the joint solver
  * sdc_joint_dim_slice returns min(n_mem, n_run) — n_mem sizes the
  * per-NUMA-node memory budget against the measured GEMM RSS coefficient
- * (RSS_RATIO_TABLE SDC_RSS_GEMM_F64, 0.0290 KB/n²/thread differential,
+ * (RSS_RATIO_TABLE SDC_RSS_GEMM_F64, 0.0315 KB/n²/thread differential,
  * which covers the per-thread matrices l_lhs/l_rhs/l_prod and the reroll
  * product x as measured, not modelled), n_run caps the full-core single
  * iteration (same-lineage fill + one multiply, probed per tier in the body
@@ -175,7 +175,11 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
     /* 静态表 c + 参考机 127 有效线程推 n 上界, 再按 AR×2×t(N) 推 duration
      * 上界: child 精算 n 恒 <= 此上界(spec §4.5)。 */
     double budget_kb = (double)sdc_budget_bytes(650) / 1024.0;
-    int n_hi = (int)std::sqrt(budget_kb / (127.0 * 0.0290));   /* GEMM_F64 表值 */
+    /* GEMM_F64 表值引用表函数而非字面量(09c94fc6 遗留项收口): T9 重标定
+     * 0.0290→0.0315 后字面量静默陈旧; 引用后 n_hi 随 1/sqrt(c) 收缩 ~4%,
+     * 上界性质不变且更紧(child 同表同预算精算, node0-only 时恰等)。 */
+    double c_kb = sdc_rss_table_c(SDC_RSS_GEMM_F64);
+    int n_hi = (int)std::sqrt(budget_kb / (127.0 * c_kb));
     if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
     if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;
     double ar = sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe());
