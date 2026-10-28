@@ -109,36 +109,138 @@ static inline uint64_t sdc_memavailable_bytes(void)
     return kb * 1024;
 }
 
+/* 解析 /proc/self/cgroup(PR#302 检视 #8): 定位本进程所在的 cgroup 层级,
+ * 而非固定读根路径——嵌套 cgroup(systemd slice/scope, 容器)里根的
+ * "无限/更宽"限制不代表本进程的约束, 旧口径会跳过该来源或用过宽预算,
+ * 削弱 OOM 防护("job oom" 前科场景之一)。
+ *   v2: 单行 "0::/rel/path"   → base=/sys/fs/cgroup;
+ *   v1: 多行 "ID:ctrls:/rel"  → controllers 含 memory 的行,
+ *                              base=/sys/fs/cgroup/memory(沿用旧挂载点
+ *                              假设; 控制器重挂非标准位置属边界外)。
+ * 两种行都记录(memory 控制器同一时刻只在 v1/v2 之一挂载——另一侧的
+ * 层级文件不存在, walk 自然得 0); 无匹配行/不可读 → rel="/" 即旧根
+ * 路径行为。写回 base/rel(含结尾 '\0')。 */
+static inline void sdc_cgroup_self(char *v1base, size_t v1bsz, char *v1rel, size_t v1rsz,
+                                   char *v2base, size_t v2bsz, char *v2rel, size_t v2rsz)
+{
+    snprintf(v1base, v1bsz, "/sys/fs/cgroup/memory");
+    snprintf(v1rel, v1rsz, "/");
+    snprintf(v2base, v2bsz, "/sys/fs/cgroup");
+    snprintf(v2rel, v2rsz, "/");
+    FILE *f = fopen("/proc/self/cgroup", "r");
+    if (!f)
+        return;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\n")] = '\0';
+        if (strncmp(line, "0::", 3) == 0) {                 /* v2 */
+            /* rel 超长装不下 → 保持 "/"(根路径=旧口径): 静默截断会
+             * 产生一个"合法前缀目录"的错位 walk, 比退根更糟。 */
+            if (strlen(line + 3) < v2rsz)
+                snprintf(v2rel, v2rsz, "%s", line + 3);
+            continue;
+        }
+        const char *c1 = strchr(line, ':');
+        const char *c2 = c1 ? strchr(c1 + 1, ':') : nullptr;
+        if (!c1 || !c2 || c2 <= c1 + 1)
+            continue;
+        size_t clen = (size_t)(c2 - c1 - 1);
+        char ctrls[128];
+        if (clen >= sizeof ctrls)
+            continue;
+        memcpy(ctrls, c1 + 1, clen);
+        ctrls[clen] = '\0';
+        /* 逗号边界的 token 精确匹配 "memory"(非子串; 手写遍历避免
+         * strtok 的静态状态)。 */
+        const char *p = ctrls;
+        while (*p) {
+            const char *q = strchr(p, ',');
+            size_t tl = q ? (size_t)(q - p) : strlen(p);
+            if (tl == 6 && strncmp(p, "memory", 6) == 0) {
+                if (strlen(c2 + 1) < v1rsz)   /* 同 v2: 超长退根 */
+                    snprintf(v1rel, v1rsz, "%s", c2 + 1);
+                break;
+            }
+            if (!q)
+                break;
+            p = q + 1;
+        }
+    }
+    fclose(f);
+}
+
+/* 单级可用量: v2 读 memory.max("max"=无限→该级不约束)/memory.current;
+ * v1 读 memory.limit_in_bytes(≥物理内存=无限)/memory.usage_in_bytes。
+ * 文件缺失/不可读/limit≤usage → 0(该级不约束)。 */
+static inline uint64_t sdc_cgroup_level_avail(const char *dir, bool v2)
+{
+    /* 320: dir 最长 255(walk 的 256 缓冲) + 最长文件名 23, 防截断告警 */
+    char path[320];
+    uint64_t lim, cur;
+    FILE *f;
+    if (v2) {
+        snprintf(path, sizeof path, "%s/memory.max", dir);
+        f = fopen(path, "r");
+        if (!f) return 0;
+        char buf[64];
+        bool ok = fgets(buf, sizeof buf, f) != nullptr;
+        fclose(f);
+        if (!ok || strncmp(buf, "max", 3) == 0) return 0;
+        lim = strtoull(buf, nullptr, 10);
+        snprintf(path, sizeof path, "%s/memory.current", dir);
+        f = fopen(path, "r");
+    } else {
+        snprintf(path, sizeof path, "%s/memory.limit_in_bytes", dir);
+        f = fopen(path, "r");
+        if (!f) return 0;
+        bool ok = fscanf(f, "%lu", &lim) == 1;
+        fclose(f);
+        if (!ok || lim >= sdc_phys_mem_bytes()) return 0;   /* 无限 */
+        snprintf(path, sizeof path, "%s/memory.usage_in_bytes", dir);
+        f = fopen(path, "r");
+    }
+    if (!f) return 0;
+    bool ok2 = fscanf(f, "%lu", &cur) == 1 && lim > cur;
+    fclose(f);
+    return ok2 ? lim - cur : 0;
+}
+
+/* 自叶子(dir=base+rel)向根(base)逐级取 avail 的最小值——祖先与子孙
+ * 的限制都约束本进程, 各级 usage 含下级, limit−usage 是该级对本进程
+ * 的可用上界, 取 min 即保守合成。 */
+static inline uint64_t sdc_cgroup_walk(const char *base, const char *rel, bool v2)
+{
+    char dir[256];
+    if (snprintf(dir, sizeof dir, "%s%s", base, rel) >= (int)sizeof dir)
+        return 0;
+    size_t blen = strlen(base);
+    uint64_t best = 0;
+    for (;;) {
+        uint64_t av = sdc_cgroup_level_avail(dir, v2);
+        if (av > 0 && (best == 0 || av < best))
+            best = av;
+        char *slash = strrchr(dir, '/');
+        if (!slash || (size_t)(slash - dir) + 1 <= blen)
+            break;                     /* 已处理到 base 本级 */
+        *slash = '\0';
+    }
+    return best;
+}
+
 static inline uint64_t sdc_cgroup_limit_bytes(void)
 {
     /* v2: memory.max - memory.current ("max" = 无限 → 0)
      * v1: memory/memory.limit_in_bytes - memory.usage_in_bytes
-     *      (limit >= 物理内存视为无限 → 0)。本机(openEuler)实测为 v1。 */
-    uint64_t lim, cur;
-    FILE *f = fopen("/sys/fs/cgroup/memory.max", "r");           /* v2 */
-    if (f) {
-        char buf[64];
-        bool ok = fgets(buf, sizeof buf, f) != nullptr;
-        fclose(f);
-        if (ok && strcmp(buf, "max\n") != 0) {
-            lim = strtoull(buf, nullptr, 10);
-            f = fopen("/sys/fs/cgroup/memory.current", "r");
-            if (!f) return 0;
-            ok = fscanf(f, "%lu", &cur) == 1 && lim > cur;
-            fclose(f);
-            return ok ? lim - cur : 0;
-        }
-    }
-    f = fopen("/sys/fs/cgroup/memory/memory.limit_in_bytes", "r"); /* v1 */
-    if (!f) return 0;
-    bool ok = fscanf(f, "%lu", &lim) == 1;
-    fclose(f);
-    if (!ok || lim >= sdc_phys_mem_bytes()) return 0;   /* 无限 */
-    f = fopen("/sys/fs/cgroup/memory/memory.usage_in_bytes", "r");
-    if (!f) return 0;
-    ok = fscanf(f, "%lu", &cur) == 1 && lim > cur;
-    fclose(f);
-    return ok ? lim - cur : 0;
+     *      (limit >= 物理内存视为无限 → 0)。本机(openEuler)实测为 v1、
+     *      且位于嵌套 /system.slice/sshd.service(根无限制≠本进程无限)。 */
+    char v1base[64], v1rel[192], v2base[48], v2rel[192];
+    sdc_cgroup_self(v1base, sizeof v1base, v1rel, sizeof v1rel,
+                    v2base, sizeof v2base, v2rel, sizeof v2rel);
+    uint64_t a1 = sdc_cgroup_walk(v1base, v1rel, false);
+    uint64_t a2 = sdc_cgroup_walk(v2base, v2rel, true);
+    if (a1 == 0 || a2 == 0)
+        return a1 > 0 ? a1 : a2;      /* memory 控制器只在一侧挂载 */
+    return a1 < a2 ? a1 : a2;
 }
 
 static inline uint64_t sdc_budget_bytes(int permille)
