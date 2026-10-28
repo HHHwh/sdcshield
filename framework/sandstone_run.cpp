@@ -1234,8 +1234,21 @@ double sdc_feedback_eff_median(const char *test_id)
     for (int i = 0; i < sApp->shmem->main_thread_count; ++i) {
         const PerThreadData::MemFeedback *fb =
                 &sApp->raw_main_thread_data(i)->mem_feedback;
-        if (fb->test_id_hash == hash && fb->samples > 0 && fb->eff_ratio > 0.0)
-            vals.push_back(fb->eff_ratio);
+        /* seqlock 读侧(PR#302 检视 #13/#26): 前后 acquire 各读一次 seq,
+         * 序号一致且为偶才采纳快照; 奇数(兄弟 child 正在写)/序号变动
+         * (读取期间发生过写)的槽丢弃——共享字段的重排混合态不再可能
+         * 进入 median。空槽 seq=0 恒为偶, 走既有 samples==0 无效判据。 */
+        uint32_t s1 = __atomic_load_n(&fb->seq, __ATOMIC_ACQUIRE);
+        if (s1 & 1)
+            continue;
+        uint64_t h = fb->test_id_hash;
+        uint32_t samples = fb->samples;
+        double eff = fb->eff_ratio;
+        uint32_t s2 = __atomic_load_n(&fb->seq, __ATOMIC_ACQUIRE);
+        if (s1 != s2)
+            continue;
+        if (h == hash && samples > 0 && eff > 0.0)
+            vals.push_back(eff);
     }
     if (vals.empty())
         return -1.0;
@@ -1272,17 +1285,32 @@ static void sdc_feedback_write(const struct test *test)
 
     PerThreadData::MemFeedback *fb = &sApp->main_thread_data()->mem_feedback;
     uint64_t hash = sdc_test_id_hash(test->id);
+    /* seqlock 发布(PR#302 检视 #13/#26, 收口 T9 注释自认的已知边界):
+     * 本槽是 MAP_SHARED 上的单写者(本 slice 的当前 child)/多读者(兄弟
+     * slice child 的 test_init 读侧)共享字段, 普通非原子 store/RMW 的
+     * 编译器/架构重排可使读者见到混合态(新 hash 配旧 eff_ratio——异常
+     * 偏大的旧 eff 经读侧无上钳的向上修正直接放大 n_mem)。写序:
+     *   [seq→奇(relaxed)] → 复位+EMA 字段更新 → [seq+1→偶(release)]
+     * release 保证字段 store 不下沉到偶数发布之后; 首次置奇用 relaxed
+     * 即可——字段 store 被提前到置奇之前时, 读者见到的仍是完整
+     * (新或旧)快照, 语义无损。T9 的『先清 samples 再发布 hash』源序
+     * 保留(双保险: 复位期间读者见奇数丢弃或见稳定偶数且 samples==0
+     * 判无效)。
+     * 被杀写者恢复(置奇用 s1 = seq0|1 而非 seq0+1 的原因): 上代 child
+     * 可在两次 seq store 之间被杀(超时 SIGQUIT/OOM), seq 停在奇数。
+     * 若用 seq0+1: 奇数+1=偶——半写字段被当"稳定态"发布一次, 且
+     * seq0+2 又落回奇数, 此后每次写入的 锁定=偶/发布=奇 相位永久
+     * 倒置, 保护彻底失效。用 |1: 奇数保持奇(无虚假稳定窗口),
+     * 完整重写字段后发布 s1+1=偶, 不变式单次写入即恢复; 正常路径
+     * (seq0 偶)与 +1 完全同值。序号单调不减, 2^32 回绕需 40 亿次
+     * 写入(每 test 每 fracture 一次)——不可达。
+     * 上一测试的 eff_ratio 被采进本测试 median 的窗口由 seq 一致性
+     * 判据关闭: 复位期间读者要么见奇数丢弃, 要么见稳定偶数且
+     * samples==0 判无效。 */
+    uint32_t seq0 = __atomic_load_n(&fb->seq, __ATOMIC_RELAXED);
+    uint32_t s1 = seq0 | 1;                 /* 奇数=写入中(被杀写者恢复) */
+    __atomic_store_n(&fb->seq, s1, __ATOMIC_RELAXED);
     if (fb->test_id_hash != hash) {         /* 槽被上一测试占用 → 重置 */
-        /* T9 撕裂窗口闭合(T7 deferred 两行修复): 先清 samples 再发布新
-         * hash。sibling 聚合器(sdc_feedback_eff_median, 跨进程经
-         * MAP_SHARED 读兄弟槽)的有效性判据是 hash 命中且 samples>0 ——
-         * 旧序(hash 先换)存在「hash 已换、samples 未清」中间态, 并发
-         * 读的 sibling 会把上一测试的 eff_ratio 采进本测试的 median。
-         * 新序下复位过程的任一中间态都因 samples==0 被判无效槽跳过。
-         * 已知边界(如实记录): 字段是普通非原子 store(与下方 EMA 更新
-         * 同口径), 源序修复关闭的是调度可见性窗口; 编译器理论上仍可
-         * 重排独立成员 store, 全序化需 atomic 共享字段 —— 超出本两行
-         * 修复的范围, 与 T7 既有 pragmatic 口径一致。 */
         fb->samples = 0;
         fb->test_id_hash = hash;
         fb->eff_ratio = 0.0;
@@ -1292,6 +1320,7 @@ static void sdc_feedback_write(const struct test *test)
     else
         fb->eff_ratio = 0.5 * fb->eff_ratio + 0.5 * eff;   /* EMA α=0.5 */
     ++fb->samples;
+    __atomic_store_n(&fb->seq, s1 + 1, __ATOMIC_RELEASE);   /* 偶数=稳定 */
     log_warning("[反馈] %s: VmHWM=%.1f MiB / (n=%d²×%dB×%d线程) → "
                 "eff_ratio=%.3f (EMA α=0.5, 样本=%u)",
                 test->id, (double)hwm / 1048576.0, ctx.n, ctx.elem_bytes,
