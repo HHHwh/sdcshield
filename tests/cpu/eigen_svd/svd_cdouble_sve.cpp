@@ -233,7 +233,9 @@ static int sve_probe_and_init(struct test *test)
      * [750, 1100]. The principled fix is the AR table entry itself
      * (framework/sdc_numa.cpp — Task 1 scope, flagged to the
      * coordinator); this per-test budget is the in-scope compensation
-     * and should be revisited when the table is re-calibrated. */
+     * and should be revisited when the table is re-calibrated.
+     * (注: n=1100 是定点实验档; auto 档在同一 run_budget_ms 下实测最坏
+     * ~213 s, 见上方 size_matrix_preinit 注释, 两个口径不矛盾.) */
     int dim;
     int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
     if (knob == 0)

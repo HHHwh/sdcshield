@@ -86,8 +86,8 @@ static int gemm_mdim(struct test *test)
      *   - legacy 三元组 (8,4,6.0) 是 fam 失配时的防御性 fallback,
      *     fam 命中 RSS 表后忽略;
      *   - shared_bytes_per_slice=0: init 持有 3 个共享矩阵 lhs/rhs/
-     *     prod(3×8×n², n=4096 天花板时 403MB)——占节点预算 <1%,
-     *     一阶忽略(T4 同款近似);
+     *     prod(3×8×n², n=4096 天花板时 403MB)——占单 slice 预算 <1%
+     *     (聚合全节点约 3%, 在反馈收敛半径内), 一阶忽略(T4 同款近似);
      *   - run_budget_ms=200000 保持契约值(GEMM 族, T6 同款无补偿)。
      *     已知边界(T6 审查实测): compute 族 AR 表值(单节点 5.0)低估
      *     天花板足迹的 GEMM——N=3364 全核单乘实测 ~55-60s vs 静默模型

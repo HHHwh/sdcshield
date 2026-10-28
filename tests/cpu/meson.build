@@ -447,17 +447,22 @@ tests_set_skx.add(
 )
 
 # ARM64 SVE-backed Eigen pair (gemm + the SVD counterpart of
-# eigen_svd_cdouble). Compiled against Eigen's SVE packet backend and
-# renamed Eigen namespace; only built on aarch64 (see the SVE build block
-# below). All-VL Phase 2 P5 verdict: these two are the ONLY members left
-# in tests_sve compiling at fixed 128-bit — Eigen's SVE packet backend is
-# compile-time fixed-width (arm_sve_vector_bits(EIGEN_ARM64_SVE_VL)) and
-# VLA is un-compilable at the C++ language level (sizeless struct members
-# / NumTraits sizeof, twice-confirmed spike), so the tests stay at the
-# 128-bit lock and self-pin their worker threads to the compile-time VL
-# inside test_run (arm64_sve_pin_vl, replacing the external VL-pinning
-# launcher — see the TUs and
-# framework/device/cpu/arm64/arm64_vl.h).
+# eigen_svd_cdouble); only built on aarch64 (see the SVE build block
+# below). These two files are the DISPATCH TUs — the only members of
+# tests_sve — and are deliberately vector-length agnostic: they hold no
+# Eigen SVE types, so tests_sve compiles them with march_sve_dispatch
+# (-march=armv8.2-a+sve, NO -msve-vector-bits). Eigen's SVE packet
+# backend is compile-time fixed-width (arm_sve_vector_bits(
+# EIGEN_ARM64_SVE_VL)) and VLA is un-compilable at the C++ language level
+# (sizeless struct members / NumTraits sizeof, twice-confirmed spike), so
+# the PAYLOAD is not built here: the `foreach spec : [['gemm','128'], ...]`
+# loop in the ARM64 SVE build block below instantiates it once per tier as
+# tests_eigen_{gemm,svd}_vl<N> static libraries (Eigen namespace and test
+# symbol namespace renamed per tier). The dispatcher reads the worker's
+# pinned VL and calls into the matching tier variant at run time; the
+# complex SVD payload has no 1024-bit variant (upstream Eigen ptranspose
+# out-of-bounds read — see the loop's comment). VL plumbing:
+# framework/device/cpu/arm64/arm64_vl.h.
 tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
