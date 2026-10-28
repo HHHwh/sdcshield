@@ -18,6 +18,7 @@
 #ifndef SANDSTONE_TEST_UTILS_H
 #define SANDSTONE_TEST_UTILS_H
 #include <sys/mman.h>
+#include <unistd.h>
 #include <cstdint>
 #include <map>
 
@@ -25,7 +26,14 @@
 // too many dependencies to get under unit-test.  Eventually we should refactor
 // simple macros like this out of sandstone_p.h to  break these dependencies
 #define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
-#define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, 4096U)
+static inline unsigned sandstone_page_size()
+{
+    static long cached = 0;
+    if (!cached)
+        cached = sysconf(_SC_PAGESIZE);
+    return unsigned(cached);
+}
+#define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, sandstone_page_size())
 
 
 /* ManagedCodeBuffer
