@@ -119,7 +119,7 @@ memory.current`（值为 "max" 跳过），v1 `/sys/fs/cgroup/memory/
 memory.limit_in_bytes − memory.usage_in_bytes`（limit ≥ 物理内存视为无限制）。
 本机实测为 v1——"job oom" 前科场景恰在 v1。
 
-**per-node 版 `sdc_node_budget_bytes(permille, node)`【v2/M4+ C1】**：
+**per-node 版 `sdc_node_budget_bytes(permille, cpu)`【v2/M4+ C1】**（PR#302 检视 #7 勘误: 第二参数是 **CPU ID** 而非节点号——与实现/声明/调用方一致, 函数内部经 sdc_numa_node_of_cpu 映射到该 CPU 所在节点; 原稿写 node 会让照抄者把节点号当 CPU 号传入、预算记到错节点）：
 节点 meminfo **没有 MemAvailable 字段**（实测仅 MemTotal/MemFree/…），合成：
 `node_avail ≈ global_MemAvailable × (node_MemFree / Σ_nodes node_MemFree)`；
 MemFree=0 的节点分摊为 0。
@@ -271,7 +271,7 @@ x86 走原 sdc_auto_square_dim 路径不变。CI x86 构建 + 代码检视验证
 | per-node 退化 | 本机 node0-only | 行为与全局模型对照一致（数值 diff） |
 | 显式 -O | 16/32/48GiB 档抽测 4 点 | pass + 警告出现 |
 | quick 模式 | `--quick -e eigen_svd_double` 等 | mdim=lo，单迭代秒级 |
-| no_fork | `-f none -e eigen_gemm_double_dynamic_square -t 5000` | pass，且无反馈写入（VmHWM 不污染） |
+| no_fork | `-f no -e eigen_gemm_double_dynamic_square -t 5000`（PR#302 检视 #8 勘误: `-f none` 是无效值→EX_USAGE；执行用 `-f no`，日志确认 no_fork 模式） | pass，且无反馈写入（VmHWM 不污染） |
 | 回归 | `-e zstd19 -t 2000 -n 1` | `exit: pass` |
 | SVE 512/1024 档 | gem5-fi（CHAOS/SE，same-source）。**【v2/q3 收窄】SE 无 sysfs NUMA/meminfo → 实际验证面 = fallback 档（探测失败→最差 AR）+ 联合求解正确性**，NUMA 感知逻辑本身不在 gem5 覆盖内 | 各 tier checksum + `SDCSHIELD_FAILS=0` |
 | x86 非回归 | CI x86 构建 + 检视 | 零新警告，行为不变 |
@@ -300,7 +300,7 @@ commit 4-6 阶段 VmHWM 反馈未实现 → c 走静态表（优先级链退化�
 
 ## 8. 风险与缓解
 
-- MemAvailable 波动（他进程）→ 每次 fracture 重读 + 0.9 系数。
+- MemAvailable 波动（他进程）→ 每次 fracture 重读 + 0.9 系数（PR#302 检视 #21 口径澄清: 重读的是**全局** MemAvailable/cgroup——sdc_budget_bytes 每次调用现读；节点分摊比例 MemFree/ΣMemFree 是探测期快照(magic static)，聚合预算仍逐次新鲜、仅多节点机上的节点间分摊为慢漂移近似——单内存节点精确还原全局，多节点漂移已记录为边界（fallback 节点选择也依赖快照，中途漂移会破坏 C1 归属一致性，故不逐次重探））。
 - eff_ratio 震荡 → EMA α=0.5 + ±15% 死区 + c 下限（静态表 70%）。
 - 反馈槽读到陈旧值（同 test 重跑不同配置）→ test_id_hash + samples 计数。
 - AR 表未标定档（2/4/≥8 节点）→ 宁高估（保 P0 牺牲 P1），TODO(实测)。

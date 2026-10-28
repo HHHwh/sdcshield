@@ -236,13 +236,29 @@ VmHWM feedback     per-slice MemFeedback slots in shmem (written at
 preinit into the child `test_init` (also fixing an exec-mode divergence
 where the exec'd image never saw the preinit-computed dim);
 `eigen_svd_bidiag_sve` already sized in child init. Explicit
-`-O <test>.mdim` bypasses sizing with an `[内存越界]`/`[欠压力]`
-expected-memory warning. x86-64 keeps the old global memory-only path
-(`#else` branch, rule 5: byte-identical).
+`-O <test>.mdim` bypasses sizing; an `[内存越界]`/`[欠压力]`
+expected-memory warning fires only for callers whose knob query routes
+through the joint layer's early-exit (the ten SVD template-family users
+via `calibrated_auto_dim`). The GEMM/sparse/SVE/bidiag callers still
+short-circuit the knob in their own init (`if (v > 0) return v;` before
+the arch guard) — their explicit paths carry no warning yet (T11b
+follow-up; 10/21 eigen cases covered).
+
+x86-64 keeps the old sizing behavior via the **callers'** `#else` chains
+(e.g. `calibrated_auto_dim`'s legacy two-step memory+2 s-calibration
+chain, `gemm_mdim`'s `sdc_auto_square_dim` path) — rule 5. The `#else`
+branch inside `sdc_joint_dim_slice` itself is the defensive definition
+of the same legacy semantics; no live x86 caller reaches it today (all
+call sites are `#if defined(__aarch64__) && defined(__linux__)`-gated),
+it exists so a future cross-arch caller gets defined, loudly-logged
+behavior instead of a compile error.
 
 One rule-5 exception is disclosed here (approved): the `sdc_calibrated_dim`
 probe threshold was raised 1 ms → 100 ms (M3 — a 1 ms probe is dominated by
 fixed setup overhead and pollutes the power-law fit). That helper is
 deliberately global shared code, so the x86-64 eigen family's calibrated
 dims shift with it; the direction is the intended fix (fit de-distortion),
-not behavior drift.
+not behavior drift. The constructive one-solve ≤ max_single_ms guarantee
+(verification probe + shrink loop) holds on x86-64 unchanged; what shifts
+is the calibrated operating point (larger, less fit-distorted dims) and
+init-time probe cost, both bounded.
