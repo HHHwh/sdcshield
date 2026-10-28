@@ -20,6 +20,7 @@
 #include <Eigen/Eigenvalues>
 
 #include <cstdint>
+#include <new>
 
 namespace {
 /* RSS_RATIO_TABLE family key for an SVD instantiation (T8 联合求解): 算法
@@ -332,27 +333,55 @@ template <typename SVD, int Dim> struct EigenSVDTest
          * Allocated once; refilled in place. Dynamic-storage matrices
          * (MatrixXd-family with a compile-time Dim, and the kRuntimeDim
          * mode) must be sized here — fixed-size matrices resize to
-         * themselves harmlessly. */
+         * themselves harmlessly.
+         *
+         * T10 bad_alloc 降级 (m2, 对齐 eigen_sparse 先例): 分配/求解段包
+         * 窄 catch —— 仅 std::bad_alloc。资源性失败不是 SDC, 线程级
+         * SKIP 不打红; 其他异常不被吞(NDEBUG 生产构建下 Eigen
+         * compute/solve 实际可抛的异常只有 bad_alloc, sparse 检视 #49
+         * 同论证)。比对段(compare_or_fail → memcmp_or_fail →
+         * report_fail)恒在 catch 之外——SDC 误配必须打红, 绝不能被资源
+         * 性 SKIP 吞掉。worker 期不做降档重试(m2: 改共享 d->dim 有跨
+         * 线程竞态, 且 v1 的重试+FAIL 语义与先例相反, 已撤销)。 */
         Mat orig, u_gold, v_gold, u, v;
-        orig.resize(d->dim, d->dim);
-        u_gold.resize(d->dim, d->dim);
-        v_gold.resize(d->dim, d->dim);
-        u.resize(d->dim, d->dim);
-        v.resize(d->dim, d->dim);
-        fill_matrix_random(orig, d->dim);
-        calculate_once(orig, u_gold, v_gold);
+        try {
+            orig.resize(d->dim, d->dim);
+            u_gold.resize(d->dim, d->dim);
+            v_gold.resize(d->dim, d->dim);
+            u.resize(d->dim, d->dim);
+            v.resize(d->dim, d->dim);
+            fill_matrix_random(orig, d->dim);
+            calculate_once(orig, u_gold, v_gold);   /* golden 同源首算 */
+        } catch (const std::bad_alloc &) {
+            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
+                     test->id, d->dim);
+            return EXIT_SKIP;
+        }
 
         int since_reroll = 0;
         do {
-            calculate_once(orig, u, v);
+            try {
+                calculate_once(orig, u, v);         /* DUT 求解 */
+            } catch (const std::bad_alloc &) {
+                log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
+                         test->id, d->dim);
+                return EXIT_SKIP;
+            }
 
+            /* 比对段在 catch 之外(T10 边界契约, 见 run 头注释)。 */
             compare_or_fail<typename Mat::Scalar>(u.data(), u_gold.data(), d->dim, "Matrix U");
             compare_or_fail<typename Mat::Scalar>(v.data(), v_gold.data(), d->dim, "Matrix V");
 
             if (++since_reroll >= kRerollEvery) {
                 since_reroll = 0;
-                fill_matrix_random(orig, d->dim);
-                calculate_once(orig, u_gold, v_gold);
+                try {
+                    fill_matrix_random(orig, d->dim);
+                    calculate_once(orig, u_gold, v_gold);   /* golden 重算 */
+                } catch (const std::bad_alloc &) {
+                    log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
+                             test->id, d->dim);
+                    return EXIT_SKIP;
+                }
             }
         } while (test_time_condition(test));
         return EXIT_SUCCESS;

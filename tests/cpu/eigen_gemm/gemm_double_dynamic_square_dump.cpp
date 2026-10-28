@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <new>
 using namespace Eigen;
 
 typedef Matrix < double, Dynamic, Dynamic > Mat;
@@ -127,12 +128,32 @@ struct eigen_test_data {
 static int eigen_gemm_double_dynamic_square_init(struct test *test) {
     test->data = new(eigen_test_data);
     auto d = CAST(test->data);
+    int dim = 0;
     try {
-        const int dim = gemm_k_dim(test);   /* knob > env > 自适应, 只解一次 */
+        dim = gemm_k_dim(test);   /* knob > env > 自适应, 只解一次 */
         d->dim = dim;
         d->lhs = Mat::Random(dim, dim);
         d->rhs = Mat::Random(dim, dim);
         d->prod = d->lhs * d->rhs;
+    } catch (const std::bad_alloc &) {
+        /* T10 init 降级(m2, 对齐 eigen_sparse 先例): init 期分配失败是
+         * 资源性而非 SDC——降 mdim 到 lo(=16, 与 gemm_k_dim 的联合求解
+         * lo/clamp 下限同值)重分配一次, 仍失败才资源性 SKIP。原
+         * catch(...)->report_fail 对 bad_alloc 打红撤销(其余异常保留)。
+         * 冻结回放轮读 d->lhs/rhs/prod, 降档后三者与 d->dim 同档一致。 */
+        constexpr int kInitRetryLo = 16;
+        log_warning("[init 降级] %s: 共享矩阵分配失败 mdim=%d → 降档 mdim=%d 重试一次",
+                    test->id, dim, kInitRetryLo);
+        try {
+            d->dim = kInitRetryLo;
+            d->lhs = Mat::Random(kInitRetryLo, kInitRetryLo);
+            d->rhs = Mat::Random(kInitRetryLo, kInitRetryLo);
+            d->prod = d->lhs * d->rhs;
+        } catch (const std::bad_alloc &) {
+            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
+                     test->id, kInitRetryLo);
+            return EXIT_SKIP;
+        }
     } catch (...) {
         report_fail_msg("Exception on Eigen code, most probably OOM");
     }
@@ -156,13 +177,23 @@ static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {
                 m(r, c) = frandom_scale(2.0) - 1.0;
     };
     const int dim = d->dim;   /* init 缓存值——worker 不重算 */
+    /* T10 bad_alloc 降级(m2, 对齐 eigen_sparse 先例): 分配/求解段包窄
+     * catch(仅 std::bad_alloc)→ 线程级 SKIP——资源性失败不是 SDC 不打红;
+     * 逐元素比对循环(report_fail_msg)恒在 catch 之外, SDC 误配必须打红。
+     * worker 期不做降档重试(m2: 改共享 d->dim 有跨线程竞态,
+     * v1 的重试+FAIL 语义与先例相反, 已撤销)。 */
     Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(dim, dim);
-    l_rhs.resize(dim, dim);
-    l_prod.resize(dim, dim);
-    fill_rand(l_lhs);
-    fill_rand(l_rhs);
-    l_prod = l_lhs * l_rhs;
+    try {
+        l_lhs.resize(dim, dim);
+        l_rhs.resize(dim, dim);
+        l_prod.resize(dim, dim);
+        fill_rand(l_lhs);
+        fill_rand(l_rhs);
+        l_prod = l_lhs * l_rhs;             /* golden 同源首算 */
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s mdim=%d", test->id, dim);
+        return EXIT_SKIP;
+    }
     int since_reroll = 0;
     long iter = 0;
 
@@ -188,8 +219,14 @@ static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {
         const Mat &lhs = frozen_replay ? d->lhs : l_lhs;
         const Mat &rhs = frozen_replay ? d->rhs : l_rhs;
         Mat x;
-        x = lhs * rhs;                          // FMA hot path: unchanged
+        try {
+            x = lhs * rhs;                      // FMA hot path: unchanged
+        } catch (const std::bad_alloc &) {
+            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d", test->id, dim);
+            return EXIT_SKIP;
+        }
 
+        /* 比对段在 catch 之外(T10 边界契约, 见 run 内头注)。 */
         const double *xd = x.data();
         const double *pd = (frozen_replay ? d->prod : l_prod).data();
         // Element-wise byte-exact compare (same semantics as the original
@@ -239,9 +276,14 @@ static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {
          * state stays valid across the replay). */
         if (!frozen_replay && ++since_reroll >= kRerollEvery) {
             since_reroll = 0;
-            fill_rand(l_lhs);
-            fill_rand(l_rhs);
-            l_prod = l_lhs * l_rhs;
+            try {
+                fill_rand(l_lhs);
+                fill_rand(l_rhs);
+                l_prod = l_lhs * l_rhs;     /* golden 重算 */
+            } catch (const std::bad_alloc &) {
+                log_skip(RuntimeSkipCategory, "memory: %s mdim=%d", test->id, dim);
+                return EXIT_SKIP;
+            }
         }
         ++iter;
     } while (test_time_condition(test));

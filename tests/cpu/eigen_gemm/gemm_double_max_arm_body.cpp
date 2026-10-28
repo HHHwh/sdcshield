@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <new>
 #include <unistd.h>
 
 #include <arm_sve.h>
@@ -55,26 +56,49 @@ static void fill_rand(Mat &m)
 int run_body(struct test *test, int cpu, int dim)
 {
     (void)cpu;
+    /* T10 bad_alloc 降级(m2, 对齐 eigen_sparse 先例): 分配/求解段包窄
+     * catch(仅 std::bad_alloc)→ 线程级 SKIP——资源性失败不是 SDC 不打红;
+     * 比对段(memcmp_or_fail → report_fail)恒在 catch 之外, SDC 误配必须
+     * 打红。worker 期不做降档重试(m2: 改共享尺寸有跨线程竞态,
+     * v1 的重试+FAIL 语义与先例相反, 已撤销)。本 TU 的 init(dispatcher
+     * 侧)不持有矩阵, 无 init 降级点; solve_once 探针由 dispatcher 的
+     * catch(...)->MDIM_MIN 兜底。 */
     Mat l_lhs, l_rhs, l_prod;
-    l_lhs.resize(dim, dim);
-    l_rhs.resize(dim, dim);
-    l_prod.resize(dim, dim);
-    fill_rand(l_lhs);
-    fill_rand(l_rhs);
-    l_prod = l_lhs * l_rhs;
+    try {
+        l_lhs.resize(dim, dim);
+        l_rhs.resize(dim, dim);
+        l_prod.resize(dim, dim);
+        fill_rand(l_lhs);
+        fill_rand(l_rhs);
+        l_prod = l_lhs * l_rhs;             /* golden 同源首算 */
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s mdim=%d", test->id, dim);
+        return EXIT_SKIP;
+    }
     int since_reroll = 0;
 
     do {
         Mat x;
-        x = l_lhs * l_rhs;
+        try {
+            x = l_lhs * l_rhs;              /* DUT 求解 */
+        } catch (const std::bad_alloc &) {
+            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d", test->id, dim);
+            return EXIT_SKIP;
+        }
 
+        /* 比对段在 catch 之外(T10 边界契约, 见 run_body 头注)。 */
         memcmp_or_fail(x.data(), l_prod.data(), dim * dim);
 
         if (++since_reroll >= kRerollEvery) {
             since_reroll = 0;
-            fill_rand(l_lhs);
-            fill_rand(l_rhs);
-            l_prod = l_lhs * l_rhs;
+            try {
+                fill_rand(l_lhs);
+                fill_rand(l_rhs);
+                l_prod = l_lhs * l_rhs;     /* golden 重算 */
+            } catch (const std::bad_alloc &) {
+                log_skip(RuntimeSkipCategory, "memory: %s mdim=%d", test->id, dim);
+                return EXIT_SKIP;
+            }
         }
     } while (test_time_condition(test));
     return EXIT_SUCCESS;

@@ -132,6 +132,17 @@ static thread_local uint64_t *l_gofs = nullptr; /* 列 gather/scatter 偏移表 
 static thread_local double *l_hv = nullptr;     /* Householder 向量 v */
 static thread_local double *l_hw = nullptr;     /* Householder 向量 w */
 
+/* C11 aligned_alloc 契约: size 必须是 alignment 的整数倍。glibc 宽容
+ * 接受任意 size(既有模式, CLAUDE.md Task-4 deferred 记录过), 但 ASAN
+ * 拦截器严格执行契约并返回 NULL——T10 实测(2026-10-28): ASAN 下
+ * gofs 的 32B 请求恒 NULL, 被 bad_alloc/NULL 检查吞成资源性 SKIP,
+ * 把代码缺陷与真 OOM 混为一谈。所有 aligned_alloc(64, ...) 的 size
+ * 统一向上取整到 64 的倍数, glibc/ASAN 两端行为一致。 */
+static inline size_t round_up_64(size_t n)
+{
+    return (n + 63) & ~(size_t)63;
+}
+
 /* 独立标量参考 (B1-015 修复核心): 逐元素标量 Golub-Kahan 双对角化,
  * 与 SVE 内核同算法不同实现 (fixed +sqrt 定号 + 显式消元写回),
  * 是 golden 的唯一来源 —— 不再与 DUT 共享任何代码路径。
@@ -140,9 +151,11 @@ static thread_local double *l_hw = nullptr;     /* Householder 向量 w */
 static void bidiagonalize_ref(double *A, int n)
 {
     /* Householder 缓冲由调用方提供 (n 可达 2048, 栈放不下);
-     * 独立标量参考是 golden 的唯一来源 (见上方注释)。 */
-    double *v = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
-    double *w = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
+     * 独立标量参考是 golden 的唯一来源 (见上方注释)。
+     * size 经 round_up_64 对齐到 alignment 倍数(C11 契约, 见其定义处
+     * 注释——n%8!=0 的用户档位下 n*8 非 64 倍数, ASAN 会拒配)。 */
+    double *v = (double *)aligned_alloc(64, round_up_64((size_t)n * sizeof(double)));
+    double *w = (double *)aligned_alloc(64, round_up_64((size_t)n * sizeof(double)));
     for (int k = 0; k + 1 < n; ++k) {
         /* 左 Householder: 消去列 k 对角线下元素 */
         double norm2 = 0.0;
@@ -380,12 +393,15 @@ static void bidiag_compare_or_fail(const double *got, const double *golden,
  * EXIT_FAILURE 兜底覆盖——失败分支的 log_warning 只为可观测性留痕。 */
 static int run_bidiag_once(int n)
 {
-    size_t bytes = (size_t)n * n * sizeof(double);
+    /* size 全部 round_up_64 对齐到 alignment 倍数(C11 契约, 见其定义
+     * 处注释; n 非 4 的倍数的档位下 n²*8/n*8 与 svcntd()*8 均可能非
+     * 64 倍数, ASAN 拒配)。 */
+    size_t bytes = round_up_64((size_t)n * n * sizeof(double));
     double *a = (double *)aligned_alloc(64, bytes);
-    double *v = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
-    double *w = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
+    double *v = (double *)aligned_alloc(64, round_up_64((size_t)n * sizeof(double)));
+    double *w = (double *)aligned_alloc(64, round_up_64((size_t)n * sizeof(double)));
     uint64_t *gofs = (uint64_t *)aligned_alloc(64,
-            svcntd() * sizeof(uint64_t));
+            round_up_64(svcntd() * sizeof(uint64_t)));
     if (!a || !v || !w || !gofs) {
         log_warning("[联合求解] bidiag 探针分配失败 n=%d —— 计时将失真", n);
         free(a); free(v); free(w); free(gofs);
@@ -445,14 +461,33 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
     }
     d->work = nullptr;   /* 保留字段, run 用 per-thread TLS 缓冲 */
 
-    size_t bytes = (size_t)d->n * d->n * sizeof(double);
+    /* bytes 经 round_up_64 对齐(C11 契约, 见其定义处注释); run() 的
+     * bytes 用同公式同 n 取整, memcpy 回放轮两侧尺寸恒一致。 */
+    size_t bytes = round_up_64((size_t)d->n * d->n * sizeof(double));
     d->orig   = (double *)aligned_alloc(64, bytes);
     d->golden = (double *)aligned_alloc(64, bytes);
     if (!d->orig || !d->golden) {
+        /* T10 init 降级(m2, 对齐 eigen_sparse 先例): init 期分配失败是
+         * 资源性而非 SDC——降 n 到 lo(=64, 与上方联合求解 lo/clamp 下限
+         * 同值)重分配一次, 仍失败才资源性 SKIP; 原 EXIT_FAILURE 打红
+         * 撤销。降档后冻结回放对(orig/golden)与 run 的 d->n 同档一致。 */
+        constexpr int kInitRetryLo = 64;
+        log_warning("[init 降级] %s: 共享 orig/golden 分配失败 n=%d → 降档 n=%d 重试一次",
+                    test->id, d->n, kInitRetryLo);
         free(d->orig);
         free(d->golden);
-        delete d;
-        return EXIT_FAILURE;
+        d->n = kInitRetryLo;
+        bytes = round_up_64((size_t)d->n * d->n * sizeof(double));
+        d->orig   = (double *)aligned_alloc(64, bytes);
+        d->golden = (double *)aligned_alloc(64, bytes);
+        if (!d->orig || !d->golden) {
+            free(d->orig);
+            free(d->golden);
+            delete d;
+            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
+                     test->id, kInitRetryLo);
+            return EXIT_SKIP;
+        }
     }
 
     /* init 时有限性金丝雀 + 冻结回放基准 (B6 + PR #244 review): init
@@ -482,7 +517,7 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
     (void)cpu;
     auto *d = static_cast<bidiag_data *>(test->data);
     const int n = d->n;
-    size_t bytes = (size_t)n * n * sizeof(double);
+    size_t bytes = round_up_64((size_t)n * n * sizeof(double));   /* 同 init 公式, 回放 memcpy 两侧一致 */
     long iter = 0;
 
     /* B6 (R2b 冻结盲区): 本线程的输入每 kRerollEvery 轮从框架 RNG
@@ -508,14 +543,29 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
             l_golden = (double *)aligned_alloc(64, bytes);
             work     = (double *)aligned_alloc(64, bytes);
             work2    = (double *)aligned_alloc(64, bytes);
-            l_gofs   = (uint64_t *)aligned_alloc(64, svcntd() * sizeof(uint64_t));
+            l_gofs   = (uint64_t *)aligned_alloc(64, round_up_64(svcntd() * sizeof(uint64_t)));
             /* Householder 向量缓冲 hv/hw: 线程私有, 各 n 个 double
              * (大维度栈放不下, 由本 TLS 分配; 见 bidiagonalize_sve 签名)。 */
-            l_hv     = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
-            l_hw     = (double *)aligned_alloc(64, (size_t)n * sizeof(double));
-            if (!l_orig || !l_golden || !work || !work2 || !l_gofs || !l_hv || !l_hw)
-                report_fail_msg("eigen_svd_bidiag_sve: per-thread scratch "
-                                "alloc failed (%zu bytes)", bytes * 4);
+            l_hv     = (double *)aligned_alloc(64, round_up_64((size_t)n * sizeof(double)));
+            l_hw     = (double *)aligned_alloc(64, round_up_64((size_t)n * sizeof(double)));
+            if (!l_orig || !l_golden || !work || !work2 || !l_gofs || !l_hv || !l_hw) {
+                /* T10(m2, 对齐 eigen_sparse 先例): worker 期资源性失败
+                 * 不是 SDC——线程级 SKIP 不打红(原 report_fail 打红撤销,
+                 * 检视口径同 eigen_sparse 检视 #49: 资源失败≠SDC)。部分
+                 * 成功的缓冲释放并清指针, 防止任何后续误用。比对段
+                 * (bidiag_compare_or_fail/memcmp)本就在本分配段之后,
+                 * 不受影响。 */
+                free(l_orig);   l_orig   = nullptr;
+                free(l_golden); l_golden = nullptr;
+                free(work);     work     = nullptr;
+                free(work2);    work2    = nullptr;
+                free(l_gofs);   l_gofs   = nullptr;
+                free(l_hv);     l_hv     = nullptr;
+                free(l_hw);     l_hw     = nullptr;
+                log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
+                         test->id, n);
+                return EXIT_SKIP;
+            }
             /* 列 gather/scatter 偏移表: lane l -> 字节偏移 l*n*8。
              * ACLE svld1_gather_u64offset_f64 的偏移单位是字节 (生成的
              * ld1d 无 lsl 缩放 —— gem5 VL=512 仿真实证: 元素单位表在
