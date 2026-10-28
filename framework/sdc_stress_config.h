@@ -337,6 +337,62 @@ static inline int64_t sdc_knob_int_clamped(struct test *test, const char *key,
     return result;
 }
 
+/* 环境变量兜底: SDC_<TESTID>_<KNOB> —— 配置文件未提供时的轻量通道。
+ * 返回值: 找到并解析成功返回 1 且 *out 填充; 否则返回 0。
+ * (位于联合求解段之前——T11 的 knob 早退块补查 env 通道要用。) */
+static inline int sdc_env_knob_int(const char *test_id, const char *key,
+                                   int64_t *out)
+{
+    if (!test_id || !key)
+        return 0;
+    char name[256];
+    int n = snprintf(name, sizeof(name), "SDC_%s_%s", test_id, key);
+    if (n <= 0 || (size_t)n >= sizeof(name))
+        return 0;
+    for (char *p = name; *p; ++p) {
+        if (*p == '.')
+            *p = '_';                     /* testid 里可能带点 */
+        else if (*p >= 'a' && *p <= 'z')
+            *p = (char)(*p - 'a' + 'A');  /* 转大写 */
+    }
+    const char *v = getenv(name);
+    if (!v || !*v)
+        return 0;
+    char *end = nullptr;
+    errno = 0;
+    long long parsed = strtoll(v, &end, 0);
+    if (end == v || (end && *end != '\0'))
+        return 0;
+    if (out)
+        *out = (int64_t)parsed;
+    return 1;
+}
+
+/* 环境变量兜底(clamped 版): 与 sdc_env_knob_int 相同通道, 但配置越界时
+ * log_warning 并 clamp 到 [lo, hi] —— 与 -O/配置文件通道的校验语义一致,
+ * 杜绝 SDC_<TESTID>_<KNOB> 直通道的无效参数(防 OOM/防欠压力)。
+ * 返回值: 环境变量存在且被采用(含 clamp)返回 1; 未设置返回 0。 */
+static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
+                                           int64_t *out, int64_t lo, int64_t hi)
+{
+    int64_t v;
+    if (!sdc_env_knob_int(test_id, key, &v))
+        return 0;
+    if (v < lo || v > hi) {
+        int64_t c = (v < lo) ? lo : hi;
+        log_warning("%s: %s=%ld 越界 (有效 %ld..%ld), 已 clamp 为 %ld",
+                    test_id ? test_id : "(global)", key, (long)v,
+                    (long)lo, (long)hi, (long)c);
+        v = c;
+    }
+    log_warning("[压力映射] %s.%s = %ld (来源: 环境变量, 有效 %ld..%ld)",
+                test_id ? test_id : "(global)", key, (long)v,
+                (long)lo, (long)hi);
+    if (out)
+        *out = v;
+    return 1;
+}
+
 /* ------------------------------------------------------------------ */
 /* 内存自适应默认值                                                    */
 /* ------------------------------------------------------------------ */
@@ -663,6 +719,24 @@ struct sdc_joint_args {
 };
 
 /*
+ * 联合层的 knob 读取(T11, P2b): cache 优先——常规调用方在自身 init 里已
+ * 用 sdc_knob_int_clamped 查询过同一 (test, knob), 值已在 cache 且
+ * [压力映射] 日志已打过, 重查会重复打日志; cache 未命中(调用方没经
+ * sdc_knob_int_clamped 的非常规路径)才完整查询+缓存。返回语义与
+ * sdc_knob_int_clamped(def=0) 一致: 0 = 未显式配置(-O/配置文件通道)。
+ * env 兜底通道不经过本函数(sdc_env_knob_int_clamped 不写 cache), 由
+ * sdc_joint_dim_slice 的 knob 早退块自行补查。
+ */
+static inline int64_t sdc_joint_knob_value(struct test *test, const char *key,
+                                           int64_t lo, int64_t hi)
+{
+    auto it = sdc_knob_cache().find(sdc_knob_cache_key(test, key));
+    if (it != sdc_knob_cache().end())
+        return it->second;
+    return sdc_knob_int_clamped(test, key, 0, lo, hi);
+}
+
+/*
  * 联合求解 n_opt = min(n_mem, n_run, hi), lo 兜底:
  *   n_mem = sqrt((node_budget − node_slices·shared) / (node_threads · c))
  *   n_run = (run_budget_ms / (AR(ar_fam) × 2 × fit.a_ms))^(1/fit.p)
@@ -674,8 +748,12 @@ struct sdc_joint_args {
  * EMA, 详见 sdc_feedback_eff_median; 向上无钳、向下 15% 死区 + 0.7×静态
  * 锚下限) → RSS_RATIO_TABLE(族) → 调用方传统三元组
  * (bytes_per_elem×matrices_per_thread×rss_ratio)。
- * knob 三层 fallback(knob > env > auto)由调用方先做——本函数只管
- * auto 路径; quick 模式直接返回 lo(m3, 与 sdc_auto_square_dim 同捷径)。
+ * knob 三层 fallback(T11 起): arm64 分支持有 knob 早退——显式 -O/env 值
+ * 在此早退并打预期内存档位警告(见函数内 T11 块); 调用方迁移后
+ * (calibrated_auto_dim 模式)显式值也路由进本函数。未迁移调用方仍在
+ * 自身 init 里短路(无警告, 见 T11 块尾注)。quick 模式直接返回 lo
+ * (m3, 与 sdc_auto_square_dim 同捷径; 但位于 knob 早退之后——显式值
+ * 优先, 与迁移前调用方短路语义一致)。
  * solve_once 可为 NULL(不校时间, 只算 n_mem); run_budget_ms=0 同理。
  * x86-64(rule 5: byte-identical): 仅 n_mem 全局口径(等价旧行为),
  * 见函数内 #else 分支。
@@ -686,14 +764,9 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
 {
     if (!a)
         return 0;
-    if (a->hi <= a->lo)
-        return a->lo;                      /* 退化 clamp 区间 */
-    if (sdc_quick_run()) {                 /* CI 冒烟: 与 auto_* 同捷径 */
-        log_warning("[联合求解] %s.%s = %ld (来源: quick 模式收缩, 取 lo 下限)",
-                    test ? test->id : "(global)", knob ? knob : "?",
-                    (long)a->lo);
-        return a->lo;
-    }
+    /* permille/c 提前到 knob/quick 早退之前(T11): knob 早退的预期内存
+     * 警告需要 c; 纯计算无副作用, 相对退化区间/quick 检查的顺序提升
+     * 零行为差(两条早退路径原本就不读这两个值)。 */
     int permille = a->mem_fraction_permille;
     if (permille < 1) permille = 500;
     if (permille > 1000) permille = 1000;
@@ -703,6 +776,68 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
             ? c_table
             : (double)a->bytes_per_elem * (double)a->matrices_per_thread
               * a->rss_ratio;
+
+#if defined(__aarch64__) && defined(__linux__)
+    /* ---- T11 (P2b): 显式 knob 早退——预期合计内存档位警告 ----
+     * 显式 -O/配置文件/env 值完全旁路联合求解(时间校准/自适应都不跑,
+     * 用户自担), 此前无任何内存预期提示。早退前按本函数的模型口径算
+     *   预期合计 = 全机线程 × c × n² + slices × shared
+     * 与全局三源预算 sdc_budget_bytes(permille) 比对: 超出 → [内存越界],
+     * 不足一半 → [欠压力], 中间档安静。口径:
+     *   - threads 用 sdc_total_threads()(全局): 显式 knob 在 init 查询
+     *     时 thread_count() 是 slice 口径, 预算按全机分摊(与
+     *     sdc_auto_square_dim 同基准);
+     *   - c 即上方 c_bytes(表优先, fam 无效时调用方三元组换算——统一算);
+     *   - budget 用全局口径而非节点预算: 显式值不参与节点分摊, 全机
+     *     合计对全机预算才是用户该看到的数;
+     *   - knob 读取走 sdc_joint_knob_value(cache 优先, 不重复查询/打
+     *     日志), env 兜底在此补查(-O 优先, 与调用方原 fallback 序一致)。
+     * 位于退化区间/quick 早退**之前**: 显式值优先于 quick 收缩, 与迁移
+     * 前调用方短路语义一致(用户显式指定 > 一切自动收缩)。警告不打断
+     * 执行——显式值仍按用户指定跑。
+     * 边界: 未迁移调用方(gemm/sparse/sve 族的调用方短路)不经此处,
+     * 显式路径仍无警告; 采纳本机制只需删掉调用方短路、显式值照常
+     * 路由进本函数(SVD 模板族 calibrated_auto_dim 即此模式)。 */
+    {
+        int64_t kv = sdc_joint_knob_value(test, knob, a->lo, a->hi);
+        if (kv == 0 && test && test->id)
+            sdc_env_knob_int_clamped(test->id, knob, &kv, a->lo, a->hi);
+        if (kv > 0) {
+            int total = sdc_total_threads();
+            if (total < 1)
+                total = 1;
+            int cur = thread_count();
+            int slices = (cur > 0 && total > cur) ? (total + cur - 1) / cur : 1;
+            double expect = (double)total * c_bytes * (double)kv * (double)kv
+                          + (double)slices * (double)a->shared_bytes_per_slice;
+            double budget = (double)sdc_budget_bytes(permille);
+            const double gib = 1073741824.0;
+            if (c_bytes > 0.0 && budget > 0.0 && std::isfinite(expect)) {
+                if (expect > budget)
+                    log_warning("[内存越界] %s.%s: 显式 %ld 预期合计 %.1f GiB 超出 "
+                                "%d‰ 预算 %.1f GiB — 时间校准/自适应均已旁路(用户自担)",
+                                test ? test->id : "(global)", knob ? knob : "?",
+                                (long)kv, expect / gib, permille, budget / gib);
+                else if (expect < budget * 0.5)
+                    log_warning("[欠压力] %s.%s: 显式 %ld 预期合计仅 %.1f GiB "
+                                "(%d‰ 预算的 %.0f%%) — 可上调或走自适应",
+                                test ? test->id : "(global)", knob ? knob : "?",
+                                (long)kv, expect / gib, permille,
+                                100.0 * expect / budget);
+            }
+            return (int)kv;
+        }
+    }
+#endif
+
+    if (a->hi <= a->lo)
+        return a->lo;                      /* 退化 clamp 区间 */
+    if (sdc_quick_run()) {                 /* CI 冒烟: 与 auto_* 同捷径 */
+        log_warning("[联合求解] %s.%s = %ld (来源: quick 模式收缩, 取 lo 下限)",
+                    test ? test->id : "(global)", knob ? knob : "?",
+                    (long)a->lo);
+        return a->lo;
+    }
 
 #if defined(__aarch64__) && defined(__linux__)
     /* ---- VmHWM 反馈读侧 (T7, spec §4.4): c 优先级 反馈median → RSS 表
@@ -1027,61 +1162,6 @@ static inline int64_t sdc_linear_hi(int64_t per_elem_bytes,
     int64_t scaled = (int64_t)((double)sdc_phys_mem_bytes()
                     * (double)mem_fraction_permille / 1000.0 / per_elem);
     return scaled > floor_hi ? scaled : floor_hi;
-}
-
-/* 环境变量兜底: SDC_<TESTID>_<KNOB> —— 配置文件未提供时的轻量通道。
- * 返回值: 找到并解析成功返回 1 且 *out 填充; 否则返回 0。 */
-static inline int sdc_env_knob_int(const char *test_id, const char *key,
-                                   int64_t *out)
-{
-    if (!test_id || !key)
-        return 0;
-    char name[256];
-    int n = snprintf(name, sizeof(name), "SDC_%s_%s", test_id, key);
-    if (n <= 0 || (size_t)n >= sizeof(name))
-        return 0;
-    for (char *p = name; *p; ++p) {
-        if (*p == '.')
-            *p = '_';                     /* testid 里可能带点 */
-        else if (*p >= 'a' && *p <= 'z')
-            *p = (char)(*p - 'a' + 'A');  /* 转大写 */
-    }
-    const char *v = getenv(name);
-    if (!v || !*v)
-        return 0;
-    char *end = nullptr;
-    errno = 0;
-    long long parsed = strtoll(v, &end, 0);
-    if (end == v || (end && *end != '\0'))
-        return 0;
-    if (out)
-        *out = (int64_t)parsed;
-    return 1;
-}
-
-/* 环境变量兜底(clamped 版): 与 sdc_env_knob_int 相同通道, 但配置越界时
- * log_warning 并 clamp 到 [lo, hi] —— 与 -O/配置文件通道的校验语义一致,
- * 杜绝 SDC_<TESTID>_<KNOB> 直通道的无效参数(防 OOM/防欠压力)。
- * 返回值: 环境变量存在且被采用(含 clamp)返回 1; 未设置返回 0。 */
-static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
-                                           int64_t *out, int64_t lo, int64_t hi)
-{
-    int64_t v;
-    if (!sdc_env_knob_int(test_id, key, &v))
-        return 0;
-    if (v < lo || v > hi) {
-        int64_t c = (v < lo) ? lo : hi;
-        log_warning("%s: %s=%ld 越界 (有效 %ld..%ld), 已 clamp 为 %ld",
-                    test_id ? test_id : "(global)", key, (long)v,
-                    (long)lo, (long)hi, (long)c);
-        v = c;
-    }
-    log_warning("[压力映射] %s.%s = %ld (来源: 环境变量, 有效 %ld..%ld)",
-                test_id ? test_id : "(global)", key, (long)v,
-                (long)lo, (long)hi);
-    if (out)
-        *out = v;
-    return 1;
 }
 
 } // extern "C++"

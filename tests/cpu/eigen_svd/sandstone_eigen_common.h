@@ -188,6 +188,14 @@ template <typename SVD, int Dim> struct EigenSVDTest
             return 0;
         };
 #if defined(__aarch64__) && defined(__linux__)
+        /* T11 (P2b): -O/env 查询从各 svd_*.cpp 的 init 收进联合层——
+         * calibrated_auto_dim 现被无条件调用(含显式 knob 命中时), 显式值
+         * 由 sdc_joint_dim_slice 的 knob 早退处理: 读 cache/补查 env 后按
+         * 模型口径打预期内存档位警告([内存越界]/[欠压力], 仅提示不阻断)
+         * 并原值返回, 优先于 quick 收缩(与原调用方短路语义一致)。
+         * [压力映射] 日志仍只打一次: -O 通道由 knob 早退的 cache-miss
+         * 兜底查询发出, env 通道由早退块补查发出, 与迁移前调用方的
+         * 查询序列逐字等价。 */
         struct sdc_joint_args ja = {
             .lo = lo, .hi = hi,
             .fam = rss_family(),
@@ -221,7 +229,19 @@ template <typename SVD, int Dim> struct EigenSVDTest
          * the legacy memory triple for the ARM-measured RSS table. The
          * ten template users are the first CROSS-ARCH joint consumers
          * (T4/T5/T6's were ARM-only TUs); this guard is the additive
-         * porting pattern. */
+         * porting pattern.
+         * T11: the caller-side -O/env query + explicit short-circuit
+         * moved HERE verbatim (same helpers, same clamp, same logs, same
+         * order — only relocated from each svd_*.cpp init so the arm64
+         * side can route through the joint layer); env name = test->id,
+         * identical to the test_id literal every init passed. Behavior
+         * on x86-64 is unchanged. */
+        int64_t v = sdc_knob_int_clamped(test, "mdim", 0, lo, hi);
+        if (v == 0)
+            sdc_env_knob_int_clamped(test ? test->id : nullptr, "mdim",
+                                     &v, lo, hi);
+        if (v > 0)
+            return (int)v;
         constexpr long kMaxSingleSolveMs = 2000;
         int mem_dim = sdc_auto_square_dim(bytes_per_elem, matrices_per_thread,
                                           rss_ratio, mem_fraction_permille,
