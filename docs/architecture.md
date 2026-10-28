@@ -239,3 +239,10 @@ where the exec'd image never saw the preinit-computed dim);
 `-O <test>.mdim` bypasses sizing with an `[内存越界]`/`[欠压力]`
 expected-memory warning. x86-64 keeps the old global memory-only path
 (`#else` branch, rule 5: byte-identical).
+
+One rule-5 exception is disclosed here (approved): the `sdc_calibrated_dim`
+probe threshold was raised 1 ms → 100 ms (M3 — a 1 ms probe is dominated by
+fixed setup overhead and pollutes the power-law fit). That helper is
+deliberately global shared code, so the x86-64 eigen family's calibrated
+dims shift with it; the direction is the intended fix (fit de-distortion),
+not behavior drift.

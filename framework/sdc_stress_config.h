@@ -403,6 +403,10 @@ static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
  *     <= phys_mem * mem_fraction
  * 再 clamp 到 [lo, hi]。
  *
+ * Deprecated(spec §4.3): arm64 新代码请用 sdc_joint_dim_slice()——
+ * 后者按内存×时间×NUMA 联合求解; 本函数是纯内存全局模型(无时间轴、
+ * 无 per-node 预算), x86 既有调用方保留(rule 5 原样)。
+ *
  * 参数语义:
  *   bytes_per_elem          — 单个矩阵元素字节数 (double=8, float=4,
  *                             complex<double>=16 ...)

@@ -250,7 +250,7 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
     } else {
         struct sdc_joint_args ja = {
             .lo = MDIM_MIN, .hi = MDIM_MAX,
-            .fam = SDC_RSS_GEMM_F64,    /* 0.0290 KB/n²/thread, measured */
+            .fam = SDC_RSS_GEMM_F64,    /* 0.0315 KB/n²/thread, measured */
             .bytes_per_elem = 8, .matrices_per_thread = 4, .rss_ratio = 6.0,
                     /* legacy triple (pre-table model), ignored while fam
                      * selects the RSS table */

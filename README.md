@@ -499,7 +499,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `pocketfft_fft` | `.n` | 512..16384（pow2）/ 4099 / 6144 / 10000 | 4096 | FFT 点数与因数结构（pow2=radix-4/2，4099=Bluestein 质数） |
 | `isal_igzip` | `.level` | 0..3 | 1 | deflate 级别（不同匹配查找器；2/3 有独立 level_buf） |
 | `zstd` / `zstd1` / `zstd19` / `zfuzz` | `.level` / `.maxbuffersize` | 1..22 / 4096.. | 按变体 | 压缩级别 / 每迭代缓冲上限 |
-| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000 | **按内存×时间联合自适应** | 强制矩阵维度（覆盖自适应选择；超预算时打 `[内存越界]` 警告） |
+| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000 | **按内存×时间联合自适应** | 强制矩阵维度（覆盖自适应选择；预期内存警告 `[内存越界]` 目前覆盖 SVD 模板族，本用例显式路径在调用方短路、暂无警告——T11b 将统一路由） |
 | `ipsec_*`（46 个 NEON 变体；24 个 SVE 变体无此 knob） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM——AES/3DES/SHA 数据路径全谱扫（2026-09-19；默认 1024 与历史逐字节一致） |
 | `memcpy_rewr` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
 

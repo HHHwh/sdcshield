@@ -389,8 +389,9 @@ static void bidiag_compare_or_fail(const double *got, const double *golden,
  * 返回值, "计时不可测"分支要求 t<=0.0 精确成立, 此处进不去) 会把它
  * 当作超快求解外推——k 钳制后 dim=hi=2048, 是 P0-2 超时模式的复发
  * 路径而非安全退守; 可达性与 init 自身 2n²×8B 分配失败同源(探针缓冲
- * ≤33MB 更小, 它失败则 init 的更大分配也失败), 由 init 随后的
- * EXIT_FAILURE 兜底覆盖——失败分支的 log_warning 只为可观测性留痕。 */
+ * ≤33MB 更小, 它失败则 init 的更大分配也失败), 由 init 的降档重试/
+ * 资源性 SKIP 兜底覆盖(T10 后行为)——失败分支的 log_warning 只为
+ * 可观测性留痕。 */
 static int run_bidiag_once(int n)
 {
     /* size 全部 round_up_64 对齐到 alignment 倍数(C11 契约, 见其定义
