@@ -139,11 +139,17 @@ static int solve_once_gemm(int n)
  * old parent-sized static arrived un-initialised at 1024). The preinit
  * only writes an UPPER bound:
  *
- *   n_hi = sqrt(budget650_kb / (127 × c_GEMM_F64)), clamped to
+ *   n_hi = sqrt(budget650_kb / (workers × c_GEMM_F64)), clamped to
  *          [MDIM_MIN, MDIM_MAX] — the same three-source memory budget
- *          and RSS-table coefficient the child's n_mem uses, with 127
- *          the effective thread count of the reference host class
- *          (single memory node: every online CPU folds into it).
+ *          and RSS-table coefficient the child's n_mem uses, with
+ *          workers = the run's actual whole-machine worker count
+ *          (sdc_total_threads(), available in preinit: commit_shmem()
+ *          runs before test_preinit). The child's n_mem denominator is
+ *          the same worker count scaled to its node
+ *          (sdc_joint_dim_slice folds workers/total_cpus into
+ *          node_cpus), so n_hi tracks it on every host class — not
+ *          just the 127-worker reference the value was historically
+ *          hard-coded to.
  *   dur  = AR(compute) × 2 × t(n_hi) × 0.95,  t(N) = T1024·(N/1024)³ s
  *          (quiet single-probe power law, two-point differential fit —
  *          see the measurement record below).
@@ -153,10 +159,15 @@ static int solve_once_gemm(int n)
  * FULL-CORE single-iteration time at the memory ceiling: child n <= n_hi
  * keeps dur at or above the child's real iteration, which is what the
  * do-while and the derived timeout test_timeout() = 5×duration + 30 s
- * (300 s floor) expect. A host with fewer threads only shrinks n_hi —
- * dur then sits further below the real iteration time, which is the safe
- * direction (the do-while expires after iteration #1, and the child's
- * own n_run bounds that iteration at 200 s regardless of this estimate).
+ * (300 s floor) expect. (Correction of an earlier comment that claimed
+ * a host with fewer threads "only shrinks n_hi — the safe direction":
+ * that was backwards. A hard-coded 127 makes the child's n_mem
+ * denominator SMALLER than n_hi's on sub-127-worker hosts, so child n
+ * can EXCEED n_hi by up to sqrt(127/workers) — dur then UNDER-estimates
+ * the real iteration (cubic: ~2.8× at 64 workers) and the derived
+ * timeout loses its headroom, the UNSAFE direction. Using the actual
+ * worker count restores the invariant on every host; the child's own
+ * n_run still bounds one iteration at 200 s as a second belt.)
  *
  * T1024 measurement record (2026-10-28, this host, 256-bit tier — the
  * joint solver's own [时间校准] probes on the quiet single-slice -n 1
@@ -172,14 +183,21 @@ static int solve_once_gemm(int n)
 
 static int eigen_gemm_double_max_arm_preinit(struct test *test)
 {
-    /* 静态表 c + 参考机 127 有效线程推 n 上界, 再按 AR×2×t(N) 推 duration
-     * 上界: child 精算 n 恒 <= 此上界(spec §4.5)。 */
+    /* 静态表 c + 实际全机 worker 数推 n 上界, 再按 AR×2×t(N) 推 duration
+     * 上界: child 精算 n 恒 <= 此上界(spec §4.5)。worker 数用
+     * sdc_total_threads()(preinit 时 commit_shmem 已初始化, -n/--cpuset
+     * 下是请求的 worker 数)而非参考机 127——子进程 n_mem 分母是同一
+     * worker 口径(折算到节点), 硬编码 127 在 worker<127 主机上使
+     * child n 可超 n_hi 达 √(127/workers), dur 低估真实迭代(不安全向)。 */
     double budget_kb = (double)sdc_budget_bytes(650) / 1024.0;
     /* GEMM_F64 表值引用表函数而非字面量(09c94fc6 遗留项收口): T9 重标定
      * 0.0290→0.0315 后字面量静默陈旧; 引用后 n_hi 随 1/sqrt(c) 收缩 ~4%,
      * 上界性质不变且更紧(child 同表同预算精算, node0-only 时恰等)。 */
     double c_kb = sdc_rss_table_c(SDC_RSS_GEMM_F64);
-    int n_hi = (int)std::sqrt(budget_kb / (127.0 * c_kb));
+    int workers = sdc_total_threads();
+    if (workers < 1)
+        workers = 1;
+    int n_hi = (int)std::sqrt(budget_kb / ((double)workers * c_kb));
     if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
     if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;
     double ar = sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe());

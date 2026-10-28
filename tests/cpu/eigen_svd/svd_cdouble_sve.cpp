@@ -132,30 +132,52 @@ static int solve_once_cdouble_sve(int n)
  * image never ran this preinit, so the old parent-sized static arrived
  * un-initialised at 300). The preinit only writes an UPPER bound:
  *
- *   n_hi  = sqrt(budget650 / (threads × c_BDCSVD_C128)), clamped to
+ *   n_hi  = sqrt(budget650 / (workers × c_BDCSVD_C128)), clamped to
  *           [MDIM_MIN, MDIM_MAX] — the same three-source memory budget
- *           and RSS-table coefficient the child's n_mem uses, with 127
- *           the effective thread count of the reference host class
- *           (single memory node: every online CPU folds into it).
+ *           and RSS-table coefficient (sdc_rss_table_c(), not a literal —
+ *           the table was re-calibrated once already: GEMM_F64
+ *           0.0290→0.0315) the child's n_mem uses, with workers = the
+ *           run's actual whole-machine worker count
+ *           (sdc_total_threads(), available in preinit: commit_shmem()
+ *           runs before test_preinit). The child's n_mem denominator is
+ *           the same worker count scaled to its node
+ *           (sdc_joint_dim_slice folds workers/total_cpus into
+ *           node_cpus), so n_hi tracks it on every host class — not
+ *           just the 127-worker reference the value was historically
+ *           hard-coded to.
  *   dur   = t(n_hi) × 0.95,  t(N) = 243.4s·(N/4400)³ + 1s  (x3b fit,
  *           within ±2% of the measured points at N>=2400).
  *
  * Child n <= n_hi: the child returns min(n_mem, n_run, hi), n_mem uses
- * the same budget/c/threads, and its most-conservative AR(25) keeps n_run
- * below the memory ceiling on this host class. A host with fewer threads
- * only shrinks n_hi — desired_duration then sits further below the real
- * iteration time, which is the safe direction (the do-while expires after
- * iteration #1, and the child's own n_run bounds that iteration at
- * ~140 s (模型, run_budget_ms=140000) / ~213 s (实测最坏) regardless of
- * this estimate; the derived timeout test_timeout() =
- * 5×duration+30s, 300 s floor, covers it).
+ * the same budget/c/worker-scaled threads, and its most-conservative
+ * AR(25) keeps n_run below the memory ceiling on this host class.
+ * (Correction of an earlier comment that claimed a host with fewer
+ * threads "only shrinks n_hi — the safe direction": that was backwards.
+ * A hard-coded 127 makes the child's n_mem denominator SMALLER than
+ * n_hi's on sub-127-worker hosts, so child n can EXCEED n_hi by up to
+ * sqrt(127/workers) — dur then UNDER-estimates the real iteration and
+ * the derived timeout 5×duration+30 s (300 s floor) loses its headroom,
+ * which is the UNSAFE direction, the very P0 timeout mode this PR
+ * fixes. Using the actual worker count restores the invariant on every
+ * host; the child's own n_run still bounds one iteration at ~140 s
+ * (模型, run_budget_ms=140000) / ~213 s (实测最坏) as a second belt.)
  */
 static int size_matrix_preinit(struct test *test)
 {
-    /* 最保守 AR(25) + 静态表 c 推 n 上界, 再推 duration 上界:
-     * child 精算 n 恒 <= 此上界(spec §4.5)。 */
+    /* 最保守 AR(25) + RSS 表 c 推 n 上界, 再推 duration 上界:
+     * child 精算 n 恒 <= 此上界(spec §4.5)。c 引用表函数而非字面量
+     * (0.2055)——GEMM_F64 表值已实测重标定过一次(0.0290→0.0315),
+     * 字面量会静默陈旧; 分母用实际全机 worker 数而非参考机 127,
+     * 子进程 n_mem 的分母是同一 worker 口径(折算到节点), 硬编码 127
+     * 在 worker<127 的主机上使 child n 可超 n_hi 达 √(127/workers)。 */
     double budget_kb = (double)sdc_budget_bytes(650) / 1024.0;
-    int n_hi = (int)std::sqrt(budget_kb / (127.0 * 0.2055));   /* c128 表值 */
+    double c_kb = sdc_rss_table_c(SDC_RSS_BDCSVD_C128);
+    int workers = sdc_total_threads();
+    if (workers < 1)
+        workers = 1;
+    if (c_kb <= 0.0)
+        c_kb = 0.2055;   /* 防御: 表缺失时退回实测字面量口径 */
+    int n_hi = (int)std::sqrt(budget_kb / ((double)workers * c_kb));
     if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
     if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;
     double iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
