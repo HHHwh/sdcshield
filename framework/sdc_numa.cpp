@@ -201,6 +201,18 @@ static int sdc_effective_node(const struct sdc_numa_topology *t, int cpu)
 
 uint64_t sdc_node_budget_bytes(int permille, int cpu)
 {
+    /* 数据新鲜度口径(PR#302 检视 #21, 与 spec §8 对齐):
+     *   - 全局预算 sdc_budget_bytes() 每次【现读】/proc/meminfo 与 cgroup
+     *     文件——MemAvailable 波动(他进程)即时反映(spec §8 承诺的
+     *     "每次 fracture 重读" 指的就是这一层);
+     *   - 节点分摊比例 MemFree/ΣMemFree 取自 sdc_numa_probe() 的探测期
+     *     快照(进程生命期 magic static)——聚合预算逐次新鲜, 仅真多节点
+     *     机上的【节点间分摊】是慢漂移近似; 单内存节点比例恒 1, 精确
+     *     还原全局模型(本机即此形态)。
+     *   不逐次重探节点 MemFree 的理由: fallback 节点选择(C1)与 cpu→node
+     *   归属表都建立在同一快照上, 中途分摊漂移会使无内存节点的线程
+     *   归属与 fallback 选择失配(比陈旧分摊更糟的不一致); 多节点分摊
+     *   漂移为已披露边界(spec §8, 本机 node0-only 不可验)。 */
     const struct sdc_numa_topology *t = sdc_numa_probe();
     /* 探测失败(无节点内存信息): 诚实退化全局模型 —— 全局预算本身已含
      * 三源 min 上界, 退化不会放大可用量。 */
