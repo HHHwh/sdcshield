@@ -16,11 +16,22 @@
  * Eigen namespace is renamed (`-DEigen=EigenSVE`) so it links cleanly
  * beside the NEON baseline build.
  *
- * The matrix dimension is chosen at init time from the RAM available per
- * worker (see size_matrix() below): the largest N whose peak RSS fits the
- * per-worker memory share, capped at the largest N that finishes the whole
- * test (prime BDCSVD + recomputation, both in run) inside a 10-minute
- * budget, and floored at 300. An explicit override is available via
+ * The matrix dimension is chosen in the CHILD test_init (P0-1 fix,
+ * 2026-10-27): an explicit knob/env override wins, else the joint solver
+ * sdc_joint_dim_slice returns min(n_mem, n_run) — n_mem sizes the
+ * per-NUMA-node memory budget against the measured complex-BDCSVD RSS
+ * coefficient (RSS_RATIO_TABLE SDC_RSS_BDCSVD_C128), n_run caps the
+ * full-core single iteration (prime BDCSVD + recomputation, both in run)
+ * at a 140 s table-AR budget via the measured power-law fit and the
+ * memory-bound all-core slowdown factor (140 s at the table AR=25 works
+ * out to ~218 s at this host class' measured worst-child AR≈39 — see the
+ * run_budget_ms note in sve_probe_and_init) — clamped to [300, 6000]. The
+ * preinit no
+ * longer sizes the matrix at all: it only writes a desired_duration
+ * UPPER bound from the same memory ceiling, and sizing in the child also
+ * fixes exec_each_test children, whose freshly-exec'd image never ran the
+ * preinit and previously sized every run at the un-initialised 300.
+ * An explicit override is available via
  * `-O eigen_svd_cdouble_sve.mdim=N` (300..6000).
  *
  * Because SVE instructions are baked into the object, the test gates at
@@ -54,100 +65,60 @@
 
 #include <arm_sve.h>
 #include <device/cpu/arm64/arm64_vl.h>
-#include <unistd.h>
 #include <cmath>
 
 /* Per-tier payload namespaces (svd_cdouble_sve_body.cpp). The EigenSVDTest
  * data type is itself Eigen-parameterised, so allocation/cleanup/run all live
  * in the variant TU; this dispatcher only sees void* — design §4.7. */
-namespace svd_vl128  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); }
-namespace svd_vl256  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); }
-namespace svd_vl512  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); }
+namespace svd_vl128  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); int solve_once(int); }
+namespace svd_vl256  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); int solve_once(int); }
+namespace svd_vl512  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); int solve_once(int); }
 
 /* Tier chosen at init (from the chip maximum) and re-checked at run (from the
  * worker's pinned VL). They must agree: switching variants mid-test would
  * reinterpret the Eigen objects allocated by a different instantiation. */
 static long eigen_svd_cdouble_sve_tier_bits;
 
-/* Runtime dimension mode: the template allocates and compares against
- * d->dim, which size_matrix() derives from available memory. */
-
-/* Dimension bounds, all measured on cortex x3b (VL=128 pinned, same
- * compile flags as this TU, 2026-09-19 — see the plan file
- * docs/superpowers/plans/2026-09-19-svd-cdouble-sve-mdim-5800.md):
- *
- *   MDIM_MIN  = 300: the NEON counterpart's parity point; the floor.
- *   MDIM_TIME = 4400: the largest N whose FULL test time fits a 10-minute
- *                     budget. The framework counts the prime BDCSVD plus
- *                     the DUT recomputation, both in test_run — two
- *                     complete decompositions. Measured single-BDCSVD
- *                     times: 2400→40s, 3600→134s, 4400→243s, 4800→322s,
- *                     5600→511s, 5800→563s, 6000→622s (~N³ scaling);
- *                     4400×2 = 487 s total (19% margin; 4600×2 = 583 s
- *                     leaves only 3% for load variance, 5800×2 = 1124 s
- *                     measured over budget).
- *   MDIM_MAX  = 6000: knob ceiling (6000 alone already busts the budget;
- *                     it exists for opt-in experiments on faster hosts).
- *
- * Memory model: measured peak RSS is a stable ~9.7-10x the input matrix
- * volume (BDCSVD's real-typed m_naiveU/m_naiveV/m_computed plus U/V
- * copies and workspace — N=2400→0.86GB, 4400→2.82GB, 6000→5.22GB).
- * The sizing uses 12x (20% headroom) of 16*N² bytes per worker.
- */
-#define MDIM_MIN 300
-#define MDIM_TIME_CAP 4400
-#define MDIM_MAX 6000
-#define RSS_MATRIX_RATIO 12.0
-
-/*
- * Choose the matrix dimension:
- *   mdim knob (if set)  -> clamped to [MDIM_MIN, MDIM_MAX]
- *   else                -> min(memory-limited N, MDIM_TIME_CAP), floored
- *                          at MDIM_MIN; never below the floor even on
- *                          tiny-memory hosts (300 needs only ~0.2 GB).
- */
-static int size_matrix(struct test *test, int *out_nthreads, double *out_gb_per_worker)
+/* Joint-solver probe dispatch (P0-1): route the sizing probe into the
+ * per-tier namespace recorded above. The probe executes that tier's
+ * fixed-width Eigen packets on the init thread, whose VL is the
+ * framework-pinned control-thread tier (inherited before this aux thread
+ * was created) — the same tier make_data allocates for and test_run
+ * re-checks, so packet width and executing VL always match. */
+static int solve_once_cdouble_sve(int n)
 {
-    long pages = sysconf(_SC_PHYS_PAGES);
-    long page_size = sysconf(_SC_PAGESIZE);
-    int nthreads = thread_count();
-    /* 0.65: reserve 35% of physical DRAM for kernel/pagecache/framework.
-     * The un-reserved sizing let 608 workers hit peak RSS simultaneously
-     * at exactly 100% of node DRAM and the batch system OOM-killed whole
-     * jobs ("reason: job oom", 2026-10-09, four nodes in lockstep on the
-     * 17th test of the campaign). 0.85 itself still sized 608 workers
-     * at ~480 GB, brushing the dynamic batch mem limit (node free RAM
-     * hovers at 450-530 GB), so the reserve was widened to 35%. */
-    if (out_nthreads) *out_nthreads = nthreads;
-    double ram_per_worker = (pages > 0 && page_size > 0 && nthreads > 0)
-                                ? (double)pages * (double)page_size * 0.65 / nthreads
-                                : 0.0;
-    if (out_gb_per_worker) *out_gb_per_worker = ram_per_worker / (1 << 30);
-
-    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
-    if (knob == 0) {
-        int64_t envv = 0;
-        if (sdc_env_knob_int("eigen_svd_cdouble_sve", "mdim", &envv))
-            knob = (envv < MDIM_MIN) ? MDIM_MIN
-                  : (envv > MDIM_MAX ? MDIM_MAX : envv);
+    switch (eigen_svd_cdouble_sve_tier_bits) {
+    case 128:  return svd_vl128::solve_once(n);
+    case 256:  return svd_vl256::solve_once(n);
+    case 512:  return svd_vl512::solve_once(n);
+    default:   return -1;   /* unreachable: tier validated before probing */
     }
-    if (knob > 0)
-        return (int)knob;
-
-    /* memory-limited N: 12 * 16 * N^2 <= per-worker RAM  =>
-     * N <= sqrt(ram_bytes_per_worker / 192) */
-    if (ram_per_worker <= 0.0)
-        return MDIM_MIN;   /* introspection unavailable: conservative floor */
-    int n_mem = (int)std::sqrt(ram_per_worker / (RSS_MATRIX_RATIO * 16.0));
-
-    int n = n_mem < MDIM_TIME_CAP ? n_mem : MDIM_TIME_CAP;
-    return n < MDIM_MIN ? MDIM_MIN : n;
 }
 
-/* Chosen dimension, decided ONCE in the preinit (parent process, before
- * the framework computes test durations) so that both the matrix size and
- * the test timing follow it. Forked children inherit it. */
-static int g_dim = MDIM_MIN;
+/* Runtime dimension mode: the template allocates and compares against
+ * d->dim, which the CHILD test_init derives (knob/env > joint solver). */
+
+/* Dimension bounds (measurement history: cortex x3b, VL=128 pinned, same
+ * compile flags as this TU, 2026-09-19 — plan file
+ * docs/superpowers/plans/2026-09-19-svd-cdouble-sve-mdim-5800.md):
+ *
+ *   MDIM_MIN  = 300: the NEON counterpart's parity point; the floor and
+ *                    the joint-solver lo (quick mode collapses here).
+ *   MDIM_MAX  = 6000: knob ceiling AND joint-solver hi (6000 alone
+ *                    already busts the time budget; it exists for opt-in
+ *                    experiments on faster hosts).
+ *
+ * Measured single-BDCSVD times on that host: 2400→40s, 3600→134s,
+ * 4400→243s, 4800→322s, 5600→511s, 5800→563s, 6000→622s (~N³ scaling);
+ * the old 4400 time cap and the 12x-of-16·N²-per-worker memory model were
+ * superseded by the joint solver (child side: RSS_RATIO_TABLE
+ * SDC_RSS_BDCSVD_C128 = 0.2055 KB/n²/thread measured differential
+ * coefficient + the table-AR iteration budget; preinit side: the
+ * t(N) = 243.4s·(N/4400)³ + 1s fit of those same points, still used for
+ * the desired_duration upper bound below).
+ */
+#define MDIM_MIN 300
+#define MDIM_MAX 6000
 
 /*
  * preinit (runs once in the PARENT, before run_one_test computes
@@ -155,26 +126,61 @@ static int g_dim = MDIM_MIN;
  * for the very first run, unlike in test_init; same pattern as
  * ist_skip_preinit setting test->minimum_duration).
  *
- * Scales the framework's timing with the chosen dimension so neither the
- * run loop nor the ±25% overall-time check misfires:
- * - desired_duration = expected single-iteration time minus 5%: the
- *   do-while time condition is then already expired when iteration #1
- *   finishes -> exactly one iteration at EVERY dimension (a fixed value
- *   would make small dimensions loop for the whole budget and large ones
- *   start an un-budgeted second iteration).
- * - the derived timeout (test_timeout(): 5*duration+30s, 300s floor)
- *   scales along, covering both run-side decompositions (prime + DUT).
- * Model (measured, cortex x3b VL=128; plan 2026-09-19-...md):
- * t(N) ~= 243.4s * (N/4400)^3 + 1s fixed overhead — within ±2% of the
- * measured points at N>=2400 and conservative (over-estimates) below.
+ * P0-1 (spec §4.5, q2 invariant): the dimension itself is no longer sized
+ * here — the child's test_init does that per NUMA node with the joint
+ * solver, which also fixes exec_each_test children (their freshly-exec'd
+ * image never ran this preinit, so the old parent-sized static arrived
+ * un-initialised at 300). The preinit only writes an UPPER bound:
+ *
+ *   n_hi  = sqrt(budget650 / (workers × c_BDCSVD_C128)), clamped to
+ *           [MDIM_MIN, MDIM_MAX] — the same three-source memory budget
+ *           and RSS-table coefficient (sdc_rss_table_c(), not a literal —
+ *           the table was re-calibrated once already: GEMM_F64
+ *           0.0290→0.0315) the child's n_mem uses, with workers = the
+ *           run's actual whole-machine worker count
+ *           (sdc_total_threads(), available in preinit: commit_shmem()
+ *           runs before test_preinit). The child's n_mem denominator is
+ *           the same worker count scaled to its node
+ *           (sdc_joint_dim_slice folds workers/total_cpus into
+ *           node_cpus), so n_hi tracks it on every host class — not
+ *           just the 127-worker reference the value was historically
+ *           hard-coded to.
+ *   dur   = t(n_hi) × 0.95,  t(N) = 243.4s·(N/4400)³ + 1s  (x3b fit,
+ *           within ±2% of the measured points at N>=2400).
+ *
+ * Child n <= n_hi: the child returns min(n_mem, n_run, hi), n_mem uses
+ * the same budget/c/worker-scaled threads, and its most-conservative
+ * AR(25) keeps n_run below the memory ceiling on this host class.
+ * (Correction of an earlier comment that claimed a host with fewer
+ * threads "only shrinks n_hi — the safe direction": that was backwards.
+ * A hard-coded 127 makes the child's n_mem denominator SMALLER than
+ * n_hi's on sub-127-worker hosts, so child n can EXCEED n_hi by up to
+ * sqrt(127/workers) — dur then UNDER-estimates the real iteration and
+ * the derived timeout 5×duration+30 s (300 s floor) loses its headroom,
+ * which is the UNSAFE direction, the very P0 timeout mode this PR
+ * fixes. Using the actual worker count restores the invariant on every
+ * host; the child's own n_run still bounds one iteration at ~140 s
+ * (模型, run_budget_ms=140000) / ~213 s (实测最坏) as a second belt.)
  */
 static int size_matrix_preinit(struct test *test)
 {
-    int nthreads = 1;
-    double gb_per_worker = 0.0;
-    g_dim = size_matrix(test, &nthreads, &gb_per_worker);
-
-    double iter_s = 243.4 * std::pow((double)g_dim / 4400.0, 3.0) + 1.0;
+    /* 最保守 AR(25) + RSS 表 c 推 n 上界, 再推 duration 上界:
+     * child 精算 n 恒 <= 此上界(spec §4.5)。c 引用表函数而非字面量
+     * (0.2055)——GEMM_F64 表值已实测重标定过一次(0.0290→0.0315),
+     * 字面量会静默陈旧; 分母用实际全机 worker 数而非参考机 127,
+     * 子进程 n_mem 的分母是同一 worker 口径(折算到节点), 硬编码 127
+     * 在 worker<127 的主机上使 child n 可超 n_hi 达 √(127/workers)。 */
+    double budget_kb = (double)sdc_budget_bytes(650) / 1024.0;
+    double c_kb = sdc_rss_table_c(SDC_RSS_BDCSVD_C128);
+    int workers = sdc_total_threads();
+    if (workers < 1)
+        workers = 1;
+    if (c_kb <= 0.0)
+        c_kb = 0.2055;   /* 防御: 表缺失时退回实测字面量口径 */
+    int n_hi = (int)std::sqrt(budget_kb / ((double)workers * c_kb));
+    if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
+    if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;
+    double iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
     test->desired_duration = (int)(iter_s * 950.0);   /* ms, -5% margin */
     return EXIT_SUCCESS;
 }
@@ -194,30 +200,21 @@ static int sve_probe_and_init(struct test *test)
     const long svl = arm64_require_sve_vl(test, 128, 1024);
     if (svl < 0)
         return EXIT_SKIP;
-    log_info("M_DIM %d (sized in preinit from memory; expected iteration "
-             "%.1f s, desired_duration %d ms; override with -O "
-             "eigen_svd_cdouble_sve.mdim=N)",
-             g_dim,
-             243.4 * std::pow((double)g_dim / 4400.0, 3.0) + 1.0,
-             test->desired_duration);
 
-    /* Allocate the test data (the runtime-dimension template's run()
-     * primes its own per-thread matrices; the init-time golden BDCSVD
-     * became dead computation once run() stopped reading eigen_test_data's
-     * matrices — removed. Timing note: desired_duration now covers exactly
-     * the two run-side decompositions (prime + DUT); init no longer
-     * contributes a third. */
     /* The framework pinned the control thread before this aux thread was
-     * created, so `svl` is the tier the workers will run at. Allocate the
-     * variant for the tier init ACTUALLY observed; test_run compares the
-     * worker's readback against this value and fails closed on any
-     * divergence instead of reinterpreting objects built for another tier. */
+     * created, so `svl` is the tier the workers will run at. VALIDATE the
+     * tier before anything else: the joint solver's probe below executes
+     * that tier's fixed-width Eigen packets on THIS thread, and make_data
+     * allocates the variant for it; test_run compares the worker's
+     * readback against this value and fails closed on any divergence
+     * instead of reinterpreting objects built for another tier. */
     const long tier = svl * 8;
-    void *data = nullptr;
     switch (tier) {
-    case 128:  data = svd_vl128::make_data(g_dim);  break;
-    case 256:  data = svd_vl256::make_data(g_dim);  break;
-    case 512:  data = svd_vl512::make_data(g_dim);  break;
+    case 128:
+    case 256:
+    case 512:
+        eigen_svd_cdouble_sve_tier_bits = tier;
+        break;
     case 1024:
         /* Eigen's SVE complex ptranspose indexes buf[N][NC] with i < NC,
            which is only in bounds when NC <= N (=4 here). At 1024-bit
@@ -234,7 +231,89 @@ static int sve_probe_and_init(struct test *test)
                  test->id, tier);
         return EXIT_SKIP;
     }
-    eigen_svd_cdouble_sve_tier_bits = tier;
+
+    /* Dimension (P0-1, spec §4.5): knob > env > joint-solver auto, all in
+     * the CHILD so exec_each_test images size themselves. The auto branch
+     * probes solve_once on THIS thread (its VL is the tier just recorded)
+     * and returns min(n_mem, n_run): per-NUMA-node memory budget against
+     * the measured complex-BDCSVD RSS coefficient, and a full-core
+     * single-iteration budget via the power-law fit and the memory-bound
+     * AR factor. quick mode collapses to MDIM_MIN.
+     *
+     * run_budget_ms deviates from the joint contract value 200000 (= 300 s
+     * hard grace × 0.67): the measured WORST-child slowdown on a
+     * single-memory-node host exceeds the AR table's 1-node mem-bound
+     * entry (25). Measured 2026-10-27, 127 threads, n=1100 (~31 GiB
+     * footprint): the node-0 (local-DRAM) children finish while the
+     * children on the memory-less nodes (remote DRAM) see an effective AR
+     * of ~39 — 1.55×, just past the 1.5× margin the 0.67 factor embeds.
+     * With 200000 the solver picked n≈1229 and the remote children could
+     * not finish one iteration inside the 300 s grace (SIGQUIT at
+     * 304-314 s, reproduced twice). 140000 lands n_run ≈ 1050-1095
+     * (n=1100 measured 228 s wall including init), i.e. ~225 s total —
+     * inside the grace with ~25 % margin, and within the plan's expected
+     * [750, 1100]. The principled fix is the AR table entry itself
+     * (framework/sdc_numa.cpp — Task 1 scope, flagged to the
+     * coordinator); this per-test budget is the in-scope compensation
+     * and should be revisited when the table is re-calibrated.
+     * (注: n=1100 是定点实验档; auto 档在同一 run_budget_ms 下实测最坏
+     * ~213 s, 见上方 size_matrix_preinit 注释, 两个口径不矛盾.) */
+    int dim;
+    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
+    if (knob == 0)
+        sdc_env_knob_int_clamped("eigen_svd_cdouble_sve", "mdim", &knob,
+                                 MDIM_MIN, MDIM_MAX);
+    if (knob > 0) {
+        dim = (int)knob;
+    } else {
+        struct sdc_joint_args ja = {
+            .lo = MDIM_MIN, .hi = MDIM_MAX,
+            .fam = SDC_RSS_BDCSVD_C128,    /* 0.2055 KB/n²/thread, measured */
+            .bytes_per_elem = 16, .matrices_per_thread = 1, .rss_ratio = 12.0,
+                    /* legacy triple (pre-table model), ignored while fam
+                     * selects the RSS table */
+            .shared_bytes_per_slice = 0,   /* make_data holds no matrices */
+            .mem_fraction_permille = 650,
+            .ar_fam = SDC_FAM_MEM_BOUND,
+            .run_budget_ms = 140000,       /* worst-child iteration budget;
+                                            * 140 s at the table AR=25 ≈
+                                            * 218 s at the measured
+                                            * worst-child AR≈39 (see above) */
+        };
+        try {
+            dim = sdc_joint_dim_slice(test, "mdim", &ja,
+                                      solve_once_cdouble_sve);
+        } catch (...) {
+            /* probe allocation failure (transient OOM &c): fall back to
+             * the floor — same doctrine as the SVD template's calibrated
+             * path ("上限宁小勿大"): a sizing probe must never terminate
+             * the child. */
+            log_warning("[联合求解] %s: mdim 探针异常 → 退守下限 %d",
+                        test->id, MDIM_MIN);
+            dim = MDIM_MIN;
+        }
+    }
+
+    log_info("M_DIM %d (sized in child init: knob/env, else 联合求解 "
+             "min(n_mem, n_run); preinit desired_duration %d ms is the "
+             "upper-bound model; override with -O "
+             "eigen_svd_cdouble_sve.mdim=N)",
+             dim, test->desired_duration);
+
+    /* Allocate the test data (the runtime-dimension template's run()
+     * primes its own per-thread matrices; the init-time golden BDCSVD
+     * became dead computation once run() stopped reading eigen_test_data's
+     * matrices — removed. Timing note: desired_duration now covers exactly
+     * the two run-side decompositions (prime + DUT); init no longer
+     * contributes a third.) */
+    void *data = nullptr;
+    switch (eigen_svd_cdouble_sve_tier_bits) {
+    case 128:  data = svd_vl128::make_data(dim);  break;
+    case 256:  data = svd_vl256::make_data(dim);  break;
+    case 512:  data = svd_vl512::make_data(dim);  break;
+    default:
+        return EXIT_SKIP;   /* unreachable: tier validated above */
+    }
     test->data = data;
     return EXIT_SUCCESS;
 }
@@ -307,7 +386,7 @@ static int eigen_svd_cdouble_sve_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend with per-tier 128/256/512-bit variants selected at the framework-pinned VL, dimension sized from available memory); counterpart of eigen_svd_cdouble")
+DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend with per-tier 128/256/512-bit variants selected at the framework-pinned VL, dimension sized in child init by the joint memory/time solver); counterpart of eigen_svd_cdouble")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_preinit = size_matrix_preinit,
   .test_init = sve_probe_and_init,
@@ -315,11 +394,12 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
   .test_cleanup = eigen_svd_cdouble_sve_cleanup,
   .minimum_cpu = 0,
   /* desired_duration is written by test_preinit (parent, before the
-   * framework computes test_duration for the first run): expected single-
-   * iteration time from the measured t(N) ~ 243.4s*(N/4400)^3 + 1s model,
-   * minus 5%, so exactly one run iteration executes at every auto-sized
-   * dimension and the derived timeout (5*duration+30s, 300s floor) scales
-   * with the dimension — no under/overtime misreports at small dims. */
+   * framework computes test_duration for the first run) as an UPPER-BOUND
+   * estimate from the memory ceiling (P0-1: the child sizes the dimension
+   * itself via the joint solver; this only keeps the parent's timing
+   * expectation at or above the child's choice, so exactly one run
+   * iteration executes and the derived timeout (5*duration+30s, 300s
+   * floor) scales along). */
   .desired_duration = 0,
   .fracture_loop_count = 5,
   .quality_level = TEST_QUALITY_PROD,

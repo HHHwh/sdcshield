@@ -192,13 +192,73 @@ making `eigen_svd_cdouble_sve` run vectorized SVD (~0.7 s at M_DIM 300 vs
 >10 min scalar). **Runtime-VL rule**: size-specific SVE code requires the
 process vector length to equal the compile-time `-msve-vector-bits`.
 Whether a host has SVE at all is per-machine: probe it (CLAUDE.md rule 2)
-instead of assuming — on a host without SVE the SVD SVE test cleanly skips,
-and on SVE hosts with VL≠128 it needs a `prctl(PR_SVE_SET_VL, 16)` pin (see
-`scripts/eigen-sve-double/` and `arm64_sve_pin_vl()`). All-VL Phase 2 P5:
-the Eigen pair (`eigen_svd_cdouble_sve`, `eigen_gemm_double_max_arm`) self-pins
-each worker thread inside `test_run` via `arm64_sve_pin_vl(16)` — no external
-launcher needed anymore (Eigen's SVE packets are compile-time fixed-width; VLA
-is un-compilable at the C++ language level per the twice-confirmed spike, so
-the 128-bit lock stays; a failed pin skips honestly). `sleef_sve` and the
-sve_rot probe family migrated to the true-VLA `tests_sve_vla` library (no
-`-msve-vector-bits`) — all-VL 128..1024-bit.
+instead of assuming — on a host without SVE the SVD SVE test cleanly skips.
+Tier dispatch (2026-10-27, replaces the earlier 128-bit lock): Eigen packets
+are compile-time fixed-width (VLA is un-compilable at the C++ language level,
+twice-confirmed spike), so the Eigen SVE pair is built **once per tier** under
+its own Eigen namespace and a vector-length-agnostic dispatcher picks the
+variant matching the framework-pinned worker VL (complex SVD has no 1024-bit
+variant — Eigen's SVE complex `ptranspose` has an upstream defect reading
+past `buf[N][NC]`). Each per-tier run wrapper re-pins the worker to the
+framework-chosen
+tier and verifies the readback (a refused pin skips, a mismatch fails).
+`sleef_sve` and the sve_rot probe family live in the true-VLA `tests_sve_vla`
+library (no `-msve-vector-bits`) — all-VL 128..1024-bit.
+
+## Eigen sizing: NUMA-aware joint solve (arm64)
+
+All 21 eigen tests size their matrix dimension through `sdc_joint_dim_slice()`
+(`framework/sdc_stress_config.h`, design
+`docs/superpowers/specs/2026-10-27-eigen-p0-p3-fix-design.md`):
+`n = min(n_mem, n_run, clamp)`. Data flow, in order:
+
+```
+sdc_numa_probe()   nodes-with-memory + per-node MemFree + cpulist
+      ↓
+sdc_budget_bytes() three-source min: phys×‰ / MemAvailable×0.9 /
+                   cgroup v1+v2 headroom; per-node share by MemFree
+      ↓            (zero-memory nodes fold into the fallback node —
+                    on a node0-only host this degrades exactly to
+                    the global model)
+sdc_joint_dim_slice()  n_mem: node budget vs RSS_RATIO_TABLE
+                       (measured per-family c, KB/n²/thread)
+                       n_run: probe power-law fit (fixed overhead
+                       subtracted, 100 ms probe threshold) × AR
+                       all-core-slowdown table (family×topology)
+      ↓
+VmHWM feedback     per-slice MemFeedback slots in shmem (written at
+                   run_one_test_inner tail, no_fork excluded): EMA
+                   α=0.5, median aggregation, 0.7× table floor —
+                   c corrections feed the *next* fracture/test
+```
+
+`eigen_svd_cdouble_sve` / `eigen_gemm_double_max_arm` moved sizing from
+preinit into the child `test_init` (also fixing an exec-mode divergence
+where the exec'd image never saw the preinit-computed dim);
+`eigen_svd_bidiag_sve` already sized in child init. Explicit
+`-O <test>.mdim` bypasses sizing; an `[内存越界]`/`[欠压力]`
+expected-memory warning fires only for callers whose knob query routes
+through the joint layer's early-exit (the ten SVD template-family users
+via `calibrated_auto_dim`). The GEMM/sparse/SVE/bidiag callers still
+short-circuit the knob in their own init (`if (v > 0) return v;` before
+the arch guard) — their explicit paths carry no warning yet (T11b
+follow-up; 10/21 eigen cases covered).
+
+x86-64 keeps the old sizing behavior via the **callers'** `#else` chains
+(e.g. `calibrated_auto_dim`'s legacy two-step memory+2 s-calibration
+chain, `gemm_mdim`'s `sdc_auto_square_dim` path) — rule 5. The `#else`
+branch inside `sdc_joint_dim_slice` itself is the defensive definition
+of the same legacy semantics; no live x86 caller reaches it today (all
+call sites are `#if defined(__aarch64__) && defined(__linux__)`-gated),
+it exists so a future cross-arch caller gets defined, loudly-logged
+behavior instead of a compile error.
+
+One rule-5 exception is disclosed here (approved): the `sdc_calibrated_dim`
+probe threshold was raised 1 ms → 100 ms (M3 — a 1 ms probe is dominated by
+fixed setup overhead and pollutes the power-law fit). That helper is
+deliberately global shared code, so the x86-64 eigen family's calibrated
+dims shift with it; the direction is the intended fix (fit de-distortion),
+not behavior drift. The constructive one-solve ≤ max_single_ms guarantee
+(verification probe + shrink loop) holds on x86-64 unchanged; what shifts
+is the calibrated operating point (larger, less fit-distorted dims) and
+init-time probe cost, both bounded.

@@ -48,11 +48,9 @@ using eigen_svd_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 static int eigen_svd_init(struct test *test)
 {
     auto d = new eigen_svd_test::eigen_test_data;
-    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
-    if (v == 0)
-        sdc_env_knob_int_clamped("eigen_svd", "mdim", &v, 64, 2048);
-    d->dim = (v > 0) ? (int)v
-                     : eigen_svd_test::calibrated_auto_dim(test, 4, 6, 12.0, 650, 64, 2048);
+    /* -O/env 查询与显式短路已收进 calibrated_auto_dim(T11: arm64 显式值
+     * 经联合层 knob 早退打预期内存警告; x86 行为不变)。 */
+    d->dim = eigen_svd_test::calibrated_auto_dim(test, 4, 6, 12.0, 650, 64, 2048);
     test->data = d;
     return EXIT_SUCCESS;
 }

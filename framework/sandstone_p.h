@@ -401,6 +401,7 @@ struct SandstoneApplication : SandstoneApplicationConfig, public test_the_test_d
 
     PerThreadData::Common *thread_data(int thread);
     PerThreadData::Main *main_thread_data(int slice = 0) noexcept;
+    PerThreadData::Main *raw_main_thread_data(int slice) noexcept;
     PerThreadData::Test *test_thread_data(int thread);
     void select_main_thread(int slice);
 
@@ -479,6 +480,21 @@ inline PerThreadData::Main *SandstoneApplication::main_thread_data(int slice) no
 {
     assert(slice == 0 || is_main_process());
     return &main_thread_data_ptr[slice];
+}
+
+/* T7 反馈闭环 (spec §4.4 M5): 子进程读取兄弟 slice 的 MemFeedback 槽用
+ * 的裸访问器 —— main_thread_data(i>0) 在子进程有 is_main_process 断言,
+ * 而反馈聚合恰在 child 的 test_init 里发生。
+ * 基址从 shmem 头重算而非复用 main_thread_data_ptr: 子进程的该指针已被
+ * select_main_thread(slice) 推进到本 slice 槽, 直接索引会把兄弟槽错位
+ * (raw(0)=自己, raw(1)=下一 slice), 从 thread_data_offset 重算才能得到
+ * 全局槽下标。父进程两条路径重合(main_thread_data_ptr 即数组基址)。 */
+inline PerThreadData::Main *SandstoneApplication::raw_main_thread_data(int slice) noexcept
+{
+    assert(slice >= 0);
+    assert(slice < shmem->main_thread_count);
+    auto base = reinterpret_cast<unsigned char *>(shmem) + shmem->thread_data_offset;
+    return reinterpret_cast<PerThreadData::Main *>(base) + slice;
 }
 
 inline PerThreadData::Test *SandstoneApplication::test_thread_data(int thread)

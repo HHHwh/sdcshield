@@ -57,6 +57,15 @@
 
 #include <device/cpu/arm64/arm64_spec_prepare.h>
 
+#if defined(__aarch64__) && defined(__linux__)
+/* T7 VmHWM 反馈闭环(spec §4.4): sdc_joint_cache(联合求解口径登记) +
+ * sdc_read_vm_hwm。仅 arm64 门控 —— x86 的 Main::mem_feedback 字段编译
+ * 存在但无写入/读取者(rule 5, 见 test_data.h)。 */
+# include "sdc_stress_config.h"
+# include "sdc_numa.h"
+# include <algorithm>
+#endif
+
 #ifdef _WIN32
 #  include <ntstatus.h>
 #  include <shlwapi.h>
@@ -1192,6 +1201,133 @@ static void finish_test_common(struct test *test)
     logging_in_test = false;
 }
 
+#if defined(__aarch64__) && defined(__linux__)
+/* ---- VmHWM 反馈闭环 (T7, spec §4.4) ---------------------------------- */
+
+/* test->id 的 FNV-1a 64 位哈希。写入点与读侧聚合共用同一实现; 0 保留为
+ * "空槽"哨兵(fresh memfd 零页)。 */
+static uint64_t sdc_test_id_hash(const char *s)
+{
+    if (!s)
+        return 0;
+    uint64_t h = 1469598103934665603ull;
+    while (*s) {
+        h ^= (uint8_t)*s++;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+/* 读侧聚合(sdc_stress_config.h 声明, 仅 arm64 联合求解分支调用): 遍历
+ * 全部 slice 的 Main::mem_feedback 槽(MAP_SHARED shmem; 子进程经
+ * raw_main_thread_data 从 shmem 头重算数组基址读兄弟槽), 同 test 哈希的
+ * 槽取 eff_ratio 的 median —— q4: max 会取到最噪样本, median 防抖。
+ * 返回 <0 = 无有效反馈(首 fracture / no_fork / 未迁移用例)。 */
+double sdc_feedback_eff_median(const char *test_id)
+{
+    if (!test_id || !sApp->shmem || sApp->shmem->main_thread_count <= 0)
+        return -1.0;
+    uint64_t hash = sdc_test_id_hash(test_id);
+    if (hash == 0)
+        return -1.0;
+    std::vector<double> vals;
+    for (int i = 0; i < sApp->shmem->main_thread_count; ++i) {
+        const PerThreadData::MemFeedback *fb =
+                &sApp->raw_main_thread_data(i)->mem_feedback;
+        /* seqlock 读侧(PR#302 检视 #13/#26): 前后 acquire 各读一次 seq,
+         * 序号一致且为偶才采纳快照; 奇数(兄弟 child 正在写)/序号变动
+         * (读取期间发生过写)的槽丢弃——共享字段的重排混合态不再可能
+         * 进入 median。空槽 seq=0 恒为偶, 走既有 samples==0 无效判据。 */
+        uint32_t s1 = __atomic_load_n(&fb->seq, __ATOMIC_ACQUIRE);
+        if (s1 & 1)
+            continue;
+        uint64_t h = fb->test_id_hash;
+        uint32_t samples = fb->samples;
+        double eff = fb->eff_ratio;
+        uint32_t s2 = __atomic_load_n(&fb->seq, __ATOMIC_ACQUIRE);
+        if (s1 != s2)
+            continue;
+        if (h == hash && samples > 0 && eff > 0.0)
+            vals.push_back(eff);
+    }
+    if (vals.empty())
+        return -1.0;
+    std::sort(vals.begin(), vals.end());
+    size_t m = vals.size();
+    return (m & 1) ? vals[m / 2] : 0.5 * (vals[m / 2 - 1] + vals[m / 2]);
+}
+
+/* 写入点(run_one_test_inner 尾部调用): eff_ratio = VmHWM/(n²·elem·本
+ * slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/threads 取自本
+ * child test_init 里联合求解登记的 sdc_joint_cache —— 显式 knob/未迁移
+ * 用例无口径则不写。写侧始终记录(±15% 死区与 0.7×静态锚下限都在读侧
+ * 判断, 见 sdc_joint_dim_slice)。基线污染口径: fork child 的 VmHWM 起点
+ * = 父进程当时 RSS(实测 ~8.3MB, eigen 家族 <1%); 联合求解探针的高水位
+ * 同样计入(探针远小于正式工作集)—— 记录为已知口径。 */
+static void sdc_feedback_write(const struct test *test)
+{
+    if (!test || !test->id)
+        return;
+    auto it = sdc_joint_cache().find(test->id);
+    if (it == sdc_joint_cache().end())
+        return;
+    const struct sdc_joint_ctx &ctx = it->second;
+    if (ctx.n <= 0 || ctx.threads <= 0 || ctx.elem_bytes <= 0)
+        return;
+    uint64_t hwm = sdc_read_vm_hwm();
+    if (hwm == 0)
+        return;
+    double denom = (double)ctx.n * (double)ctx.n
+                 * (double)ctx.elem_bytes * (double)ctx.threads;
+    if (!(denom > 0.0))
+        return;
+    double eff = (double)hwm / denom;
+
+    PerThreadData::MemFeedback *fb = &sApp->main_thread_data()->mem_feedback;
+    uint64_t hash = sdc_test_id_hash(test->id);
+    /* seqlock 发布(PR#302 检视 #13/#26, 收口 T9 注释自认的已知边界):
+     * 本槽是 MAP_SHARED 上的单写者(本 slice 的当前 child)/多读者(兄弟
+     * slice child 的 test_init 读侧)共享字段, 普通非原子 store/RMW 的
+     * 编译器/架构重排可使读者见到混合态(新 hash 配旧 eff_ratio——异常
+     * 偏大的旧 eff 经读侧无上钳的向上修正直接放大 n_mem)。写序:
+     *   [seq→奇(relaxed)] → 复位+EMA 字段更新 → [seq+1→偶(release)]
+     * release 保证字段 store 不下沉到偶数发布之后; 首次置奇用 relaxed
+     * 即可——字段 store 被提前到置奇之前时, 读者见到的仍是完整
+     * (新或旧)快照, 语义无损。T9 的『先清 samples 再发布 hash』源序
+     * 保留(双保险: 复位期间读者见奇数丢弃或见稳定偶数且 samples==0
+     * 判无效)。
+     * 被杀写者恢复(置奇用 s1 = seq0|1 而非 seq0+1 的原因): 上代 child
+     * 可在两次 seq store 之间被杀(超时 SIGQUIT/OOM), seq 停在奇数。
+     * 若用 seq0+1: 奇数+1=偶——半写字段被当"稳定态"发布一次, 且
+     * seq0+2 又落回奇数, 此后每次写入的 锁定=偶/发布=奇 相位永久
+     * 倒置, 保护彻底失效。用 |1: 奇数保持奇(无虚假稳定窗口),
+     * 完整重写字段后发布 s1+1=偶, 不变式单次写入即恢复; 正常路径
+     * (seq0 偶)与 +1 完全同值。序号单调不减, 2^32 回绕需 40 亿次
+     * 写入(每 test 每 fracture 一次)——不可达。
+     * 上一测试的 eff_ratio 被采进本测试 median 的窗口由 seq 一致性
+     * 判据关闭: 复位期间读者要么见奇数丢弃, 要么见稳定偶数且
+     * samples==0 判无效。 */
+    uint32_t seq0 = __atomic_load_n(&fb->seq, __ATOMIC_RELAXED);
+    uint32_t s1 = seq0 | 1;                 /* 奇数=写入中(被杀写者恢复) */
+    __atomic_store_n(&fb->seq, s1, __ATOMIC_RELAXED);
+    if (fb->test_id_hash != hash) {         /* 槽被上一测试占用 → 重置 */
+        fb->samples = 0;
+        fb->test_id_hash = hash;
+        fb->eff_ratio = 0.0;
+    }
+    if (fb->samples == 0)
+        fb->eff_ratio = eff;                /* 首样本直写 */
+    else
+        fb->eff_ratio = 0.5 * fb->eff_ratio + 0.5 * eff;   /* EMA α=0.5 */
+    ++fb->samples;
+    __atomic_store_n(&fb->seq, s1 + 1, __ATOMIC_RELEASE);   /* 偶数=稳定 */
+    log_warning("[反馈] %s: VmHWM=%.1f MiB / (n=%d²×%dB×%d线程) → "
+                "eff_ratio=%.3f (EMA α=0.5, 样本=%u)",
+                test->id, (double)hwm / 1048576.0, ctx.n, ctx.elem_bytes,
+                ctx.threads, fb->eff_ratio, (unsigned)fb->samples);
+}
+#endif /* __aarch64__ && __linux__ */
+
 static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread = false)
 {
     s_current_test = test;
@@ -1281,6 +1417,16 @@ static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread 
         }
 
         sApp->test_tests_finish(test);
+#if defined(__aarch64__) && defined(__linux__)
+        /* T7 (spec §4.4): VmHWM 反馈写入 —— test_cleanup 之后、返回之前。
+         * 门控(M6): no_fork 下测试在主进程跑, VmHWM 跨测试累计只会虚高,
+         * 不写; test_in_parent(父进程内跑)由 is_main_process() 同理排除。
+         * 选择偏差(m1, 如实记录): 超时/被杀 child 到不了这里 —— 反馈只
+         * 收成功样本, c 偏乐观方向, 读侧 15% 死区 + 0.7×静态锚下限兜底。 */
+        if (sApp->current_fork_mode() != SandstoneApplication::ForkMode::no_fork
+                && !sApp->is_main_process())
+            sdc_feedback_write(test);
+#endif
         return state;
     }();
 

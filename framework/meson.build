@@ -194,6 +194,7 @@ framework_files += files(
     'generated_vectors.c',
     'logging.cpp',
     'random.cpp',
+    'sdc_numa.cpp',
     'sandstone.cpp',
     'sandstone_chrono.cpp',
     'sandstone_context_dump.cpp',

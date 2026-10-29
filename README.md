@@ -71,7 +71,7 @@ bash scripts/run/sdc_detect.sh
 
 1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
 2. **停下且有 FAIL**：先看挂在哪个测试——
-   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**——per-thread 同源 golden（每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；多机满核多 seed 长窗 + gem5-fi 双线程验证全绿，完整验证记录见 CLAUDE.md 平台怪癖条目）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑可作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。检出通道口径：eigen 族的同源重算比对检出**非确定性缺陷**（同输入不同位）；对**确定性核缺陷**存在结构性盲区（golden 与重算走同一错误路径、位级一致地错）——全套件没有 Eigen 分解路径的固定 golden 测试，这是**已披露的覆盖空洞**（旧共享 golden 的概率性检出通道被主动换弃以消除满核假阳）。
+   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**——per-thread 同源 golden（每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；多机满核多 seed 长窗 + gem5-fi 双线程验证全绿，完整验证记录见 CLAUDE.md 平台怪癖条目）。2026-10-27 起（feat/eigen-p0-p3-fix）全族 sizing 改走 `sdc_joint_dim_slice` 联合求解——内存×时间双上限 + AR 全核慢化表（族×拓扑）估算的结构约束：对绝大多数族已实证留有裕度，但 GEMM 等族的 AR 表存在已知低估边界（本宿主类实测有效 AR≈15 vs 表值 5，3×），低估时按预算 200s 选出的单次迭代实际可跑 ~600s、超过 300s 硬宽限——AR 表足迹感知重标定是已登记的后续项。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑可作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。检出通道口径：eigen 族的同源重算比对检出**非确定性缺陷**（同输入不同位）；对**确定性核缺陷**存在结构性盲区（golden 与重算走同一错误路径、位级一致地错）——全套件没有 Eigen 分解路径的固定 golden 测试，这是**已披露的覆盖空洞**（旧共享 golden 的概率性检出通道被主动换弃以消除满核假阳）。
    - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / full_core_only / transient / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
@@ -501,8 +501,8 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `zstd1` / `zstd19` | `.maxbuffersize` | 4096.. | 按变体 | 每迭代缓冲上限（level 固定 1 / 19，无 level knob） |
 | `zlib*`（NEON 家族） | `.level` / `.maxbuffersize` | 1..9 / 按变体 | 按变体 | zlib 压缩级别 / 缓冲上限（`zfuzz` 为随机 level 的 fuzz 往返、无 knob） |
 | `eigen_gemm_*`（NEON 家族） | `.mdim` | 16..4096（按变体，clamp） | 内存自适应 | 矩阵维度（覆盖自适应选择） |
-| `eigen_gemm_double_max_arm` | `.mdim` | 1024..4096 | 内存自适应 | SVE GEMM 逐档变体的矩阵维度 |
-| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000（clamp） | **内存自适应** | 强制矩阵维度（覆盖自适应选择） |
+| `eigen_gemm_double_max_arm` | `.mdim` | 1024..4096（clamp） | **按内存×时间联合自适应** | SVE GEMM 逐档变体的矩阵维度（覆盖自适应选择） |
+| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000（clamp） | **按内存×时间联合自适应** | 强制矩阵维度（覆盖自适应选择；预期内存警告 `[内存越界]` 目前覆盖 SVD 模板族，本用例显式路径在调用方短路、暂无警告——T11b 将统一路由） |
 | `eigen_svd_bidiag_sve` | `.mdim` | 64..2048（clamp） | 自适应 | 自写 Householder 双对角化负载维度 |
 | `eigen_sparse` | `.n` | 64..8192（clamp） | 自适应 | 稀疏 Cholesky 规模 |
 | `openssl_sha` / `openssl_sha3` | `.arena_bytes` | 1MiB..4GiB（clamp） | 内存自适应 | 哈希数据竞技场字节数（SHA-2 加法链 / Keccak 置换的工作集） |

@@ -42,21 +42,20 @@ typedef Eigen::BDCSVD < Mat > SVD;
  */
 using eigen_svd_double_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
-static int eigen_svd_double_init_common(struct test *test, const char *test_id)
+static int eigen_svd_double_init_common(struct test *test)
 {
     auto d = new eigen_svd_double_test::eigen_test_data;
-    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
-    if (v == 0)
-        sdc_env_knob_int_clamped(test_id, "mdim", &v, 64, 2048);
-    d->dim = (v > 0) ? (int)v
-                     : eigen_svd_double_test::calibrated_auto_dim(test, 8, 6, 12.0, 650, 64, 2048);
+    /* -O/env 查询与显式短路已收进 calibrated_auto_dim(T11: arm64 显式值
+     * 经联合层 knob 早退打预期内存警告; x86 行为不变)。env 名称随之改用
+     * test->id, 与原 test_id 字面量恒等。 */
+    d->dim = eigen_svd_double_test::calibrated_auto_dim(test, 8, 6, 12.0, 650, 64, 2048);
     test->data = d;
     return EXIT_SUCCESS;
 }
 
 static int eigen_svd_double_init(struct test *test)
 {
-    return eigen_svd_double_init_common(test, "eigen_svd_double");
+    return eigen_svd_double_init_common(test);
 }
 
 DECLARE_TEST(eigen_svd_double, "Eigen SVD (Singular Value Decomposition) solving payload,  which issues a bunch of matrix multiplies underneath, now operating on doubles")
@@ -70,7 +69,7 @@ END_DECLARE_TEST
 
 static int eigen_svd_double2_init(struct test *test)
 {
-    return eigen_svd_double_init_common(test, "eigen_svd_double2");
+    return eigen_svd_double_init_common(test);
 }
 
 using eigen_svd_double2_test = eigen_svd_double_test;
