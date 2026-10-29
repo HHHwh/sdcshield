@@ -96,7 +96,17 @@ static int mrn_nuke_dense_sve_run(struct test *test, int cpu)
     auto *data = static_cast<MrnNukeDenseSveData *>(test->data);
     const int lanes = svcntd();
 
-    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
+    /* #314: temp carries `lanes` elements of tail slack — the final
+     * block (count % lanes != 0, reachable only at lanes=16 with a
+     * count ≡ 8 mod 16 knob) leaves r < lanes valid elements, but
+     * load_vec_sve's unpredicated `ldr z` below still reads lanes*8
+     * bytes; the exact-count allocation only had r*8 left. The slack
+     * values read are dropped by the predicated svst1 (never reach
+     * dst). kreg/arm0102_* tail-slack form. dst/src stay exact-count
+     * (predicated accesses, base+n <= count). */
+    const size_t temp_bytes =
+        ((data->count + (size_t)lanes) * sizeof(uint64_t) + 63) & ~(size_t)63;
+    uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, temp_bytes));
     uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, data->count * sizeof(uint64_t)));
 
     TEST_LOOP(test, 1 << 13) {

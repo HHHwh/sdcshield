@@ -129,7 +129,7 @@ static int mesh_upi_avx512_asymm_read_L3_int_run(struct test *test, int cpu) {
 
                 if (svcntp_b32(pg, cmp) != NEON_VECTOR_SIZE) {
                     consistent = false;
-                    bad_vec = i + v * VECTOR_SIZE;
+                    bad_vec = i + v * NEON_VECTOR_SIZE; /* #315: v is the 4-element sub-vector index */
                     break;
                 }
             }

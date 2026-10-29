@@ -141,7 +141,7 @@ static int mesh_upi_sve_wide_asymm_read_only_int_run(struct test *test, int cpu)
                 svbool_t cmp = svcmpeq_s32(pg, orig, reload);
                 if (svcntp_b32(pg, cmp) != NEON_VECTOR_SIZE) {
                     consistent = false;
-                    bad_vec = i + v * VECTOR_SIZE;
+                    bad_vec = i + v * NEON_VECTOR_SIZE; /* #315: v is the 4-element sub-vector index */
                     break;
                 }
             }
