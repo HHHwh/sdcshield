@@ -45,7 +45,11 @@ static inline void sve_write_partial(uint8_t *addr, int sz, uint64_t val) {
     svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)sz);
     uint8_t bytes[8];
     memcpy(bytes, &val, 8);
-    svuint8_t v = svld1_u8(svptrue_b8(), bytes);
+    /* #313: broadcast load reuses the store predicate — svptrue_b8 read
+     * svcntb() bytes through this 8-byte array (OOB read at every tier;
+     * inactive lanes are irrelevant: the predicated store below only
+     * takes lanes 0..sz-1, which is exactly val's low sz bytes). */
+    svuint8_t v = svld1_u8(pg, bytes);
     svst1_u8(pg, addr, v);
 }
 /* SVE 谓词控部分读: 读回 sz 字节零扩展 */
