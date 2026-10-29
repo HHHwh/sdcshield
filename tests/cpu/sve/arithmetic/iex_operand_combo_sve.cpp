@@ -88,7 +88,12 @@ static inline uint64_t sve_rev(uint64_t v) {
     uint8_t in[8], out[8];
     std::memcpy(in, &v, 8);
     static const uint8_t idx[8] = {7, 6, 5, 4, 3, 2, 1, 0};
-    svbool_t pg = svptrue_b8();
+    /* #312: predicate clamped to the 8 lanes the byte-table reverse
+     * consumes — svptrue_b8 made svld1/svst1 read/write svcntb() bytes
+     * through these 8-byte arrays (an OOB at every VL >= 128-bit, the
+     * issue #309 form; inactive ld1 lanes zero-fill, the svtbl result
+     * for lanes 8+ is never stored). */
+    svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)8);
     svuint8_t vi = svld1_u8(pg, in);
     svuint8_t vidx = svld1_u8(pg, idx);
     svuint8_t vo = svtbl_u8(vi, vidx);
@@ -109,7 +114,10 @@ static inline uint64_t sve_rbit(uint64_t v) {
 static inline uint64_t sve_clz(uint64_t v) {
     uint64_t in[4], out[4];
     in[0] = v;
-    svbool_t pg = svptrue_b64();
+    /* #312: lane 0 only — svptrue_b64 overran these 32-byte arrays from
+     * the 512-bit tier up (svcntd() >= 8); the other lanes' clz results
+     * were never read. */
+    svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)1);
     svuint64_t vi = svld1_u64(pg, in);
     svst1_u64(pg, out, svclz_u64_x(pg, vi));
     return out[0];
