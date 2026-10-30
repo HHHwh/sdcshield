@@ -225,8 +225,10 @@ END_DECLARE_TEST
 - **PR review-fix loop** (agent-driven: five bots (four external SaaS + the local
   headless claude adversarial reviewer) → subagent critical triage →
   fix → loop → human merge; never auto-merge): `docs/build-deploy-pr-ci/pr-loop.md`;
-  engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot）; `/pr-loop` command
-  (`.claude/commands/`) and Trae rule (`.trae/rules/`) are content-twins.
-- **CI 无人值守分诊**（cron/双车道/熔断/kill switch 运维手册）:
-  `docs/build-deploy-pr-ci/ci-triage.md`; engine `scripts/ci_triage.py`（pr_loop 姊妹件,
-  main CI 红 → issue → headless agent 修复 → fix/ci-* PR）。
+  engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot;
+  unattended orchestration is task_loop's); `/pr-loop` and `/dev-loop` commands
+  (`.claude/commands/`) and Trae rules (`.trae/rules/`) are content-twins.
+- **task-loop 无人值守任务闭环**（统一编排引擎: CI 红/main 审查/会话/手建
+  issue → agent → PR 闭环;ci_triage 的泛化后继,含迁移说明）:
+  `docs/build-deploy-pr-ci/task-loop.md`;引擎 `scripts/task_loop.py`;
+  会话命令 `/dev-loop`。

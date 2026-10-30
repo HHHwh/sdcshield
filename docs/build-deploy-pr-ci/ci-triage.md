@@ -1,5 +1,9 @@
 # ci-triage：CI 无人值守分诊与修复闭环
 
+> **已由 task-loop 取代（2026-10-29，PR #317）**：ci_triage.py 的编排职责已并入
+> 统一任务引擎 `scripts/task_loop.py`（经模块别名薄壳过渡）。本文保留为历史
+> 手册；现行运维见 [task-loop.md](task-loop.md)。cron 部署行以 task-loop.md 为准。
+
 **定位**：cron 每 30 分钟驱动 `scripts/ci_triage.py scan`——main 分支 CI 红 run
 自动开跟踪 issue → 派 headless claude agent 在**独立克隆**里修复 → push
 `fix/ci-<runid>` 分支 → `auto-pr.yml` 自动开 PR → 复用

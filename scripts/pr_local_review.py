@@ -12,8 +12,9 @@
 # + 意见发布(publish_review)。pr_loop 判据扩展与 wait 内触发见 pr_loop.py。
 #
 # 依赖: Python 3 标准库 + gh/claude 子进程,零第三方运行时依赖(与 pr_loop.py
-# 同策略,本脚本不管理 token;claude 凭据 source
-# ~/.local/state/sdcshield-ci-triage/agent.env,见设计文档 C1/C3)。
+# 同策略,本脚本不管理 token;claude 凭据 source agent.env——新 state 目录
+# ~/.local/state/sdcshield-task-loop/ 优先,旧 sdcshield-ci-triage/ 回退,
+# 见 agent_env_path() 与设计文档 C1/C3)。
 #
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
@@ -209,8 +210,26 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
 
 # ============ 检视引擎子进程缝(测试 monkeypatch 离线替身,不触网/不真跑 claude) ============
 
-# claude headless 认证环境(与 ci_triage 共用 agent.env,见设计文档 C1/C3)
-AGENT_ENV_PATH = os.path.expanduser("~/.local/state/sdcshield-ci-triage/agent.env")
+# claude headless 认证环境(与 task_loop 共用 agent.env,见设计文档 C1/C3):
+# env 重定向目录无条件优先,默认实例走 新目录优先、旧目录回退(迁移过渡期)。
+def agent_env_path() -> str:
+    """claude 认证 env 文件: TASKLOOP_STATE_DIR/CITRIAGE_STATE_DIR 重定向
+    目录无条件优先(轮5 B45——与 task_loop._resolve_state_dir 同口径:
+    重定向实例的 5th-bot/audit/lane-b 用自己的凭据;重定向目录缺文件
+    就报错,绝不静默回落默认实例的 agent.env 造成同进程双凭据源),
+    默认实例新 state 目录优先,旧目录回退(迁移过渡期)。"""
+    for key in ("TASKLOOP_STATE_DIR", "CITRIAGE_STATE_DIR"):
+        v = os.environ.get(key)
+        if v:
+            return os.path.join(os.path.expanduser(v), "agent.env")
+    for d in ("~/.local/state/sdcshield-task-loop",
+              "~/.local/state/sdcshield-ci-triage"):
+        p = os.path.join(os.path.expanduser(d), "agent.env")
+        if os.path.exists(p):
+            return p
+    return os.path.join(os.path.expanduser(
+        "~/.local/state/sdcshield-task-loop"), "agent.env")
+
 # claude 检视最长运行时间(秒,与 ci_triage.AGENT_TIMEOUT_SEC 一致)
 CLAUDE_TIMEOUT = 3600
 
@@ -321,7 +340,7 @@ def build_claude_command() -> str:
     --dangerously-skip-permissions(无头非交互)。prompt 不放在命令行——大
     diff 会超 execve ARG_MAX(Errno 7 Argument list too long),改由 _run_claude
     经 stdin 传入(真机首跑 #258 实证)。"""
-    return (f"source {shlex.quote(AGENT_ENV_PATH)} && "
+    return (f"source {shlex.quote(agent_env_path())} && "
             f"claude -p --dangerously-skip-permissions")
 
 
@@ -346,12 +365,23 @@ def _run_claude(cmd: str, cwd: str, prompt: str) -> str:
     return proc.stdout
 
 
-def _parse_findings(output: str) -> list[dict]:
+def _parse_findings(output: str, strict: bool = False) -> list[dict]:
     """把 claude 输出解析为结构化 findings 列表,每条 {path, line, severity,
     category, message, evidence}。输出契约是 JSON 数组;容忍 claude 把它包在
-    markdown 代码围栏里的情形(取首个 [ ... ] 段)。"""
+    markdown 代码围栏里的情形(取首个 [ ... ] 段)。
+
+    strict=False(缺省,第 5 bot 发布路径,行为不变): 空输出 → []、畸形
+    dict 逐条跳过——发布侧把「无有效 finding」当零意见处理。
+    strict=True(task_loop audit 用,PR#317 检视#7): 空输出、以及「顶层是
+    JSON 数组但零条有效 finding」(schema 漂移,如 message 字段被改名后
+    全部被跳过)都抛 GhError——audit 把这两种情形当「零 findings 的成功
+    审查」会让无人值守对抗审查覆盖面静默退化为零且 cursor 照样推进,
+    该 commit 区间从此永不再审;宁可失败重审也不假成功。真·零 findings
+    (claude 输出空 JSON 数组 [])两种模式都返回 []。"""
     text = (output or "").strip()
     if not text:
+        if strict:
+            raise GhError("claude 检视输出为空——无法确认审查结论(audit 不推进 cursor)")
         return []
     data = None
     try:
@@ -382,7 +412,47 @@ def _parse_findings(output: str) -> list[dict]:
             "message": item.get("message"),
             "evidence": item.get("evidence"),
         })
+    if strict and data and not findings:
+        raise GhError(
+            f"claude 检视输出含 {len(data)} 条但零条有效(schema 漂移?)——"
+            "无法确认审查结论(audit 不推进 cursor)")
     return findings
+
+
+# ============ 公开接缝(受支持的外部契约,PR#317 检视#17 轮2) ============
+# task_loop 等外部模块只允许经这四个公开包装调用审查引擎——下划线私有
+# 实现保留(本模块内部使用),签名/返回契约以本节 docstring 为准;基座
+# 内部重构不得静默破坏公开接缝(私有函数签名变更不被任何 lint/类型检查
+# 捕获,只有运行时爆炸)。
+
+def worktree_add(head_sha: str) -> str:
+    """隔离 worktree: 在临时目录 checkout head_sha(即用即弃),返回路径。
+
+    继承式 git 调用落在调用方 cwd——task_loop 的 audit 须先 chdir 到
+    克隆目录再调用(裁定 8)。"""
+    return _worktree_add(head_sha)
+
+
+def worktree_remove(path: str) -> None:
+    """删除隔离 worktree(审查结束的清理,幂等容忍已不存在)。"""
+    return _worktree_remove(path)
+
+
+def run_claude(cmd: str, cwd: str, prompt: str) -> str:
+    """跑 claude 子进程(bash -c cmd,cwd=隔离 worktree),返回 stdout。
+
+    失败/超时抛 GhError(消息内嵌 stderr 前 300 字符)。"""
+    return _run_claude(cmd, cwd, prompt)
+
+
+def parse_findings(output: str, strict: bool = False) -> list[dict]:
+    """claude 输出 → 结构化 findings 列表({path,line,severity,category,
+    message,evidence});非 JSON 数组抛 GhError。
+
+    strict=False(缺省,发布路径): 空输出/全畸形 → [](零意见)。
+    strict=True(audit 用): 空输出、以及「JSON 数组但零条有效」均抛
+    GhError——不当零 findings 成功,cursor 不推进。"""
+    return _parse_findings(output, strict=strict)
 
 
 # ============ 意见发布(第 5 bot 身份 = wangxumarshall + 唯一标记) ============

@@ -226,9 +226,9 @@ PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ 新增�
 
 PR 检视共 **五个 bot**：四个外部 SaaS（codex、CodeRabbit、PR-Agent、Greptile——配置 `AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、`.greptile/`，均内嵌 SDC 激发专属检视要点：激发强度与覆盖、数据模式与缺陷激活、golden 字节比对、x86-64 非回归、占位诚实性、SVE/NEON VL、失败现场留证、多样性与检出率口径）+ 第 5 个**本地无头 claude 对抗检视**（`scripts/pr_local_review.py`，PR 检视-修复闭环引擎 `scripts/pr_loop.py` 的组成部分，本地触发无需 GitHub 使能）。`bot-coverage.yml` 做**非阻塞**覆盖度校验：有界轮询四个外部 bot 是否已检视，结果写入 step summary 并评论告警，**恒 exit 0、绝不阻塞合并**。四个外部机器人均已生效（Greptile 于 2026-10-13 完成安装授权，PR #238 首次实测产出检视）。生效核查方法（`gh` 命令与账号对照）、Greptile 安装记录与 SDC 检视要点汇总见 [docs/build-deploy-pr-ci/pr-review-bots.md](docs/build-deploy-pr-ci/pr-review-bots.md)；五 bot 检视-修复闭环全流程见 [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)。
 
-### CI 无人值守分诊（main CI 红 → 修复 PR 闭环）
+### task-loop：无人值守任务闭环（issue 驱动开发闭环）
 
-`scripts/ci_triage.py`（pr_loop 姊妹件，cron 每 30 分钟驱动 `scan`）：main 分支 CI 红 run 自动开跟踪 issue → headless agent 在独立克隆里修复 → push `fix/ci-<runid>` 分支 → `auto-pr.yml` 自动开 PR → 复用 pr-loop 检视闭环 → READY_TO_MERGE 时 @人工 merge。**merge 永远在人**；双车道（修复派发 / PR 收割）、flock 单实例、PAUSED kill switch 等运维细节见 [docs/build-deploy-pr-ci/ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)。
+`scripts/task_loop.py`（统一任务编排引擎，`ci_triage.py` 的泛化后继——后者现为过渡薄壳；cron 每 30 分钟驱动 `scan`、每 6 小时驱动 `audit`）：四类触发源——main 分支 CI 红 run、main 增量对抗审查（audit）、会话 enqueue（`/dev-loop` 命令）、GitHub 手建 issue——统一进入 `agent-task` 标签 issue 队列，单飞 headless agent 在独立克隆里修复/实现 → push `fix|feat/issue-<N>` 分支 → agent 自开 PR（`Closes #N`）→ 复用 pr-loop 五 bot 检视闭环 → READY_TO_MERGE 时 @人工 merge。**merge 永远在人**；标签协议/队列对账/单飞/熔断/kill switch/状态目录迁移等运维细节见 [docs/build-deploy-pr-ci/task-loop.md](docs/build-deploy-pr-ci/task-loop.md)；前代 CI 分诊手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)（历史保留）。
 
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
@@ -534,7 +534,7 @@ SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite
 ## 延伸
 
 - [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md) — 会话内 agent 自动化：push 自动开 PR → 五 bot 检视（四外部 SaaS + 本地无头 claude）→ subagent 批判性处置修复 → 循环闭环 → 人工 merge（引擎 `scripts/pr_loop.py` + `scripts/pr_local_review.py`，双端入口 `/pr-loop` 与 `.trae/rules/pr-loop.md`）
-- [CI 无人值守分诊手册](docs/build-deploy-pr-ci/ci-triage.md) — main CI 红 → issue → headless agent 修复 → fix/ci-* PR → 检视闭环 → 人工 merge（引擎 `scripts/ci_triage.py`，cron 每 30 分钟，双车道/熔断/kill switch）
+- [task-loop 无人值守任务闭环手册](docs/build-deploy-pr-ci/task-loop.md) — CI 红/main 审查/会话/手建 issue → agent-task 队列 → headless agent 修复/实现 → PR → 检视闭环 → 人工 merge（引擎 `scripts/task_loop.py`，cron scan */30 + audit 每 6h，标签协议/单飞/熔断/kill switch；会话命令 `/dev-loop`；`ci_triage.py` 为过渡薄壳，历史手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)）
 - [编写测试指南](docs/coding/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
 - [离线构建依赖与排坑](docs/build-deploy-pr-ci/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
 - [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据

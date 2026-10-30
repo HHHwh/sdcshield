@@ -333,6 +333,20 @@ def _reviews_json(items):
     return json.dumps({"reviews": items})
 
 
+def test_agent_env_path_honors_env_redirect(monkeypatch, tmp_path):
+    """轮5 B45: env 重定向目录无条件优先——重定向实例用自己的凭据,
+    即使该目录尚无 agent.env 也绝不静默回落默认实例的文件(双凭据源)。"""
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "inst2"))
+    assert plr.agent_env_path() == str(tmp_path / "inst2" / "agent.env")
+    # TASKLOOP 优先级高于 CITRIAGE(与 _resolve_state_dir 同口径)
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path / "inst3"))
+    assert plr.agent_env_path() == str(tmp_path / "inst2" / "agent.env")
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    assert plr.agent_env_path() == str(tmp_path / "inst3" / "agent.env")
+
+
 def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path):
     import pr_loop
 
@@ -441,9 +455,65 @@ def test_parse_findings_skips_malformed():
          "severity": "Minor", "category": "性能", "message": ""},
         "not-a-dict",
     ])
-    findings = plr._parse_findings(out)
+    findings = plr.parse_findings(out)
     assert len(findings) == 1
     assert findings[0]["message"] == "近似比对是 SDC 盲区"
+
+
+def test_parse_findings_strict_rejects_empty_and_all_drift():
+    """PR#317 检视#7: strict 模式(task_loop audit 用)下,空输出/全畸形
+    (schema 漂移,零条有效 finding)必须报错而非静默归零——否则无人值守
+    审查覆盖面退化为零仍被当成功。非 strict(第 5 bot 发布路径)保持旧
+    契约(空/全畸形 → []),行为不变。"""
+    # 空输出 → strict 报错
+    try:
+        plr.parse_findings("", strict=True)
+        assert False, "空输出在 strict 下必须报错"
+    except plr.GhError:
+        pass
+    # 全畸形(全部缺 message)→ strict 报错
+    drifted = json.dumps([{"summary": "x"}, {"note": "y"}])
+    try:
+        plr.parse_findings(drifted, strict=True)
+        assert False, "全畸形输出在 strict 下必须报错"
+    except plr.GhError:
+        pass
+    # 非 strict 旧契约不变: 第 5 bot 发布路径零行为变化
+    assert plr.parse_findings("") == []
+    assert plr.parse_findings(drifted) == []
+    # 真·零 findings(空 JSON 数组)与正常输出在 strict 下照常通过
+    assert plr.parse_findings("[]", strict=True) == []
+    assert plr.parse_findings(json.dumps(
+        [{"path": "a.c", "line": 1, "message": "m"}]), strict=True) == [
+        {"path": "a.c", "line": 1, "severity": None, "category": None,
+         "message": "m", "evidence": None}]
+
+
+def test_public_seam_wrappers_delegate_to_impls(monkeypatch):
+    """PR#317 检视#17(轮2): 外部模块(task_loop)只经公开包装调用本模块,
+    不得伸手进下划线私有 API——四个公开接缝逐一委托私有实现,签名/返回
+    契约以包装 docstring 为准(基座内部重构不得静默破坏顶层)。"""
+    seen = {}
+    monkeypatch.setattr(plr, "_worktree_add",
+                        lambda sha: (seen.setdefault("add", sha), "/wt")[1])
+    monkeypatch.setattr(plr, "_worktree_remove",
+                        lambda p: seen.setdefault("rm", p))
+    monkeypatch.setattr(plr, "_run_claude",
+                        lambda cmd, cwd, prompt:
+                        (seen.setdefault("run", (cmd, cwd, prompt)), "OUT")[1])
+    assert plr.worktree_add("sha1") == "/wt"
+    assert seen["add"] == "sha1"
+    plr.worktree_remove("/wt")
+    assert seen["rm"] == "/wt"
+    assert plr.run_claude("cmd", "cwd", "p") == "OUT"
+    assert seen["run"] == ("cmd", "cwd", "p")
+    # parse_findings 直通真实实现(strict 语义经公开接缝同样生效)
+    assert plr.parse_findings("[]") == []
+    try:
+        plr.parse_findings("", strict=True)
+        assert False, "strict 语义须经公开接缝同样生效"
+    except plr.GhError:
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -256,7 +256,11 @@ code**，以对抗性渗透测试者身份检视 PR，意见上 GitHub 后与四
 `pr_loop` 的 wait 信号、collect 导出、闭环逐条处置）。引擎
 [`scripts/pr_local_review.py`](../../scripts/pr_local_review.py)（`pr_loop` 姊妹件，
 Python3 标准库 + `gh`/`claude` 子进程，零第三方依赖；claude 凭据 `source
-~/.local/state/sdcshield-ci-triage/agent.env`）。
+<agent.env>`——**轮5 起与 task_loop 同一解析**：`TASKLOOP_STATE_DIR`/
+`CITRIAGE_STATE_DIR` 重定向目录无条件优先，默认实例
+`~/.local/state/sdcshield-task-loop/agent.env` 优先、
+`~/.local/state/sdcshield-ci-triage/agent.env` 回退（迁移过渡期两份并存
+时**换 token 要换 task_loop 目录那份**，旧目录只是回退）。
 
 ### 8.1 判据（双条件）
 
