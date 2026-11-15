@@ -268,6 +268,7 @@ struct TestConfig
     OutputFormat output_format = DefaultOutputFormat;
     uint8_t output_yaml_indent = 0;
     bool log_test_knobs = false;
+    bool compact_log = true;        // default on: lossless YAML log compaction (--full-log disables)
 };
 
 // Isolate variables set during opts parsing into a separate struct.
@@ -678,6 +679,8 @@ void logging_init_child_preexec();
 void logging_finish();
 TestResult logging_print_results(std::span<const ChildExitStatus> status, const struct test *test);
 int log_skip_or_print(SkipCategory cat, const char *fmt, ...) ATTRIBUTE_PRINTF(2, 3);
+void compact_log_set_progress_total(int total);
+void compact_log_update_progress(int distinct_done, int iteration);
 
 /* random.cpp */
 void random_init_global(const char *argument);

@@ -1238,6 +1238,11 @@ int main(int argc, char **argv)
     TestResult lastTestResult = TestResult::Skipped;
 
     preinit_tests();
+    // Compact logging: tell the logger how many distinct tests are in this
+    // enabled set so it can show an overall [N/total pct%] run progress.
+    compact_log_set_progress_total(static_cast<int>(test_set->size()));
+    int compact_round = 1;
+    int compact_prev_index = 0;
     for (auto it = get_first_test(); it != test_set->end(); it = get_next_test(it)) {
         if (lastTestResult != TestResult::Skipped) {
             if (sApp->service_background_scan) {
@@ -1252,6 +1257,16 @@ int main(int argc, char **argv)
                 }
             }
         }
+
+        // Compact logging: report this test's 1-based position in the set so
+        // the stdout banner reads "test: <name> [N/total pct%]". The index
+        // derives from the iterator, so a -T loop that wraps back to the
+        // start of the set restarts the counter instead of running past 100%.
+        int compact_index = static_cast<int>(it - test_set->begin()) + 1;
+        if (compact_index < compact_prev_index)
+            ++compact_round;
+        compact_prev_index = compact_index;
+        compact_log_update_progress(compact_index, compact_round);
 
         lastTestResult = run_one_test(*it, per_thread_failures);
 

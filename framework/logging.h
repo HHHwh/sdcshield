@@ -164,6 +164,22 @@ public:
     static inline std::string get_current_time();
     static const char *quality_string(const struct test *test);
 
+    // compact logging support (default on; --full-log disables)
+    static bool compact_log_enabled();
+    // failure signature for compact-mode deduplication: (test, result,
+    // cpu-mask, aggregated message set); deliberately excludes seed and
+    // timings so jittered retries of the same incident fold together.
+    static std::string failure_signature(const struct test *test, TestResult result);
+    // returns true if this signature was already logged once (the caller
+    // must then emit only a one-line repeat marker instead of the entry)
+    static bool register_and_check_repeated_failure(const std::string &signature);
+    static void print_compact_failure_repeat(const struct test *test, TestResult result);
+    static void print_compact_pass_summary(const struct test *test);
+    // writes out any buffered consecutive same-test pass run (called when a
+    // non-pass entry arrives and at end of log)
+    static void flush_compact_pass_run();
+    static void emit_compact_failure_summary();
+
     // non-virtual override
     void print();
     static void print_header(std::string_view cmdline, Duration test_duration, Duration test_timeout);
@@ -179,6 +195,14 @@ private:
     int init_skip_message_bytes = 0;
     bool file_printed_messages_header = false;
     bool stdout_printed_messages_header = false;
+
+    // compact logging: single dispatch point used by print() when enabled
+    void print_compact();
+    // emits the entry header fields that logging_init() deferred in compact mode
+    void emit_compact_entry_header();
+    // renders the thread section with identical-payload worker threads folded
+    // into thread-range lines (safety valve 2)
+    void print_thread_messages_compact();
 
     inline void maybe_print_messages_header(int fd);
     void print_fixed();
