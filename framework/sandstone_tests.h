@@ -89,6 +89,7 @@ public:
 
     EnabledTestList::iterator begin() noexcept { return test_set.begin(); }
     EnabledTestList::iterator end() noexcept { return test_set.end(); }
+    size_t size() const noexcept { return test_set.size(); }
 
     int remove(const char *name);
     int remove(const struct test *t);

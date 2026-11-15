@@ -112,6 +112,8 @@ enum {
     _action_option,
     _verbosity_option,
     _format_option,
+
+    full_log_option,
 };
 
 static struct option long_options[]  = {
@@ -130,6 +132,7 @@ static struct option long_options[]  = {
     { "fatal-errors", no_argument, nullptr, 'F'},
     { "fatal-skips", no_argument, nullptr, fatal_skips_option },
     { "fork-mode", required_argument, nullptr, 'f' },
+    { "full-log", no_argument, nullptr, full_log_option },
     { "help", no_argument, nullptr, 'h' },
     { "ignore-mce-errors", no_argument, nullptr, ignore_mce_errors_option },
     { "ignore-os-errors", no_argument, nullptr, ignore_os_errors_option },
@@ -227,6 +230,18 @@ Common command-line options are:
      Treat skipped tests as failures when computing the program exit status.
      Intended for automation/CI where a silently skipped test must not be
      reported as a pass.
+ --full-log
+     Disable the default YAML log compaction. By default the YAML log is
+     compacted to keep full-run logs small without losing failure evidence:
+     passing/skipped tests are logged as a single line, and consecutive
+     passes of the same test (fracturing short tests) are folded into one
+     line with an iterations count; failing entries that repeat an
+     already-logged signature (same test, result, cpu-mask and message set)
+     are collapsed to a one-line "repeats" counter, and worker threads
+     sharing identical messages are aggregated into thread ranges. The first
+     occurrence of every failure signature is always kept in full. With
+     --full-log, every test result gets its own complete entry. Only applies
+     to the YAML output format.
  -T <time>, --total-time=<time>
      Specify the minimum run time for the program. A special value for <time> of
      "forever" causes the program to loop indefinitely. The default units for
@@ -494,6 +509,7 @@ struct ProgramOptionsParser {
 #endif
             case include_optional_option:
             case ignore_unknown_tests_option:
+            case full_log_option:
                 opts_map.emplace(opt, true);
                 break;
 
@@ -866,6 +882,7 @@ struct ProgramOptionsParser {
 
         // boolean flags
         opts.fatal_errors = opts_map.contains('F');
+        opts.shmem_cfg.compact_log = !opts_map.contains(full_log_option);
 
         opts.test_set_config.ignore_unknown_tests = opts_map.contains(ignore_unknown_tests_option);
         opts.test_set_config.randomize = opts_map.contains(test_list_randomize_option);
