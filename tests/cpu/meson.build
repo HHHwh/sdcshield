@@ -565,8 +565,10 @@ tests_set_skx.add(
 
 # ARM64 SVE-backed Eigen cases (the SVE counterparts of the NEON
 # eigen_svd/eigen_svd_jacobi/eigen_gemm families; 2 pre-existing + 12
-# added 2026-11-03 by the eigen SVE unification); only built on aarch64
-# (see the SVE build block below). These 14 files are the DISPATCH TUs —
+# added 2026-11-03 by the eigen SVE unification, each joined 2026-11-13
+# by an _sve2 companion from feat/eigen-sve2-companion); only built on
+# aarch64 (see the SVE build block below). These 28 files are the
+# DISPATCH TUs (14 SVE-family + 14 _sve2 companions) —
 # the only members of tests_sve from this block — and are deliberately
 # vector-length agnostic: they hold no
 # Eigen SVE types, so tests_sve compiles them with march_sve_dispatch
@@ -1264,9 +1266,11 @@ if host_machine.cpu_family() == 'x86_64'
 endif
 
 # ARM64 SVE build block: mirror of the x86 SKX/HSW blocks above. Compiles the
-# per-tier payloads of the 14 Eigen SVE cases (2 pre-existing + 12 added
-# 2026-11-03 by the eigen SVE unification; their dispatch TUs are loaded
-# into tests_sve above) against Eigen's SVE packet backend
+# per-tier payloads of the 14 Eigen SVE cases and their 14 _sve2 companions
+# (28 dispatch TUs in tests_sve above — the 14 SVE cases are 2 pre-existing
+# + 12 added 2026-11-03 by the eigen SVE unification, the 14 _sve2
+# companions were added 2026-11-13 by feat/eigen-sve2-companion; both
+# families share these 10 body sources) against Eigen's SVE packet backend
 # (-DEIGEN_ARM64_USE_SVE) with a fixed vector length, renaming the Eigen
 # namespace per tier so the variants link beside each other and the NEON
 # baseline without symbol clashes. Eigen's SVE packets are compile-time

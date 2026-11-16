@@ -68,7 +68,12 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               main #472 迁移/增量 + feat/eigen-sve-unification
                                                #               +12 SVE eigen cases, − eigen_svd_bidiag_sve;
                                                #               full chain in README)
-                                               #   no-SVE 920 (本机): 439 PROD / 547 q0 / 551 q-1  (2026-11-02 main 实测,
+                                               #   14 eigen *_sve2 companions (2026-11-13, feat/eigen-sve2-companion)
+                                               #     are INVISIBLE in every list 口径 on this SVE1 host — spec filter
+                                               #     precedes list; explicit -e registers them and skips honestly.
+                                               #     SVE2 host: default set +10 PROD, q-1 +14 (4 Jacobi are SKIP-level).
+                                               #   no-SVE 920 主机: 439 PROD / 547 q0 / 551 q-1  (2026-11-02 实测于
+                                               #               那台 no-SVE 920 (not THIS SVE1-256 host);
                                                #               = 迁移 121 + arm_add 7 + _neon 14 + cache 新 9 PROD 后;
                                                #               eigen SVE 分支 12 新 + 退役 1 全 ARM64_REQUIRES_SVE, 净变化 0)
                                                # full dated chain: README「测试用例与检测能力」
@@ -181,7 +186,22 @@ END_DECLARE_TEST
   `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h` (2 pre-existing:
   `eigen_svd_cdouble_sve`/`eigen_gemm_double_max_arm`; 12 new: BDCSVD×4,
   JacobiSVD×4 — SKIP-level, GEMM×4; `eigen_svd_bidiag_sve` retired
-  2026-11-02, its purpose eliminated by #410). Every payload runs all
+  2026-11-02, its purpose eliminated by #410). Each of the 14 has an
+  `_sve2` companion (2026-11-13, feat/eigen-sve2-companion, 14+14): the
+  same per-tier bodies are dual-compiled per tier — `armv8.2-a+sve`
+  (Eigen ns `EigenSVE<t>`) vs `armv9-a+sve2` (Eigen ns `EigenSVE2<t>`) —
+  and each `<pfx>_sve2` dispatcher is the `_sve` template plus exactly six
+  differences (id/env `_sve2`, pfx at every call site, an
+  `arm64_cpu_has_sve2()` honest-SKIP gate before `arm64_require_sve_vl`,
+  `ARM64_REQUIRES_SVE2`, the "SVE2 packet backend … counterpart" description
+  string, header counterpart + honest-scope note). Honesty boundary: the
+  SVE2 compilation emits ZERO SVE2-only instructions (objdump-audited,
+  40/40 libraries) — the companions run an SVE1 subset backward-compatible
+  on SVE2 hardware and provide an SVE2-gated entry point, NOT SVE2-only
+  datapath coverage. gem5 evidence: SE pairing matrix 10 body
+  families × 8 legs, per-tier sve2↔sve checksums byte-identical, plus an
+  FS real-binary leg validating the dispatcher path
+  (`eigen_svd_double_sve2 -n 2`, VL=128, pass). Every payload runs all
   four tiers since the vendored-Eigen ptranspose
   scatter rewrite (issue #410, 2026-11-01: the memory-bridge form read past
   `buf[N][NC]` when NC > N — 1024-bit NC=8; the scatter form is in bounds
