@@ -194,7 +194,12 @@ END_DECLARE_TEST
   differences (id/env `_sve2`, pfx at every call site, an
   `arm64_cpu_has_sve2()` honest-SKIP gate before `arm64_require_sve_vl`,
   `ARM64_REQUIRES_SVE2`, the "SVE2 packet backend … counterpart" description
-  string, header counterpart + honest-scope note). Honesty boundary: the
+  string, header counterpart + honest-scope note). (Exception,
+  disclosed in the commit: where the `_sve` template's header carried
+  stale build-mechanics claims that would contradict the `_sve2` build,
+  the header is factually corrected — the two known cases:
+  `eigen_svd_cdouble_sve2` ×3, `eigen_gemm_double_max_arm_sve2` ×1.)
+  Honesty boundary: the
   SVE2 compilation emits ZERO SVE2-only instructions (objdump-audited,
   40/40 libraries) — the companions run an SVE1 subset backward-compatible
   on SVE2 hardware and provide an SVE2-gated entry point, NOT SVE2-only

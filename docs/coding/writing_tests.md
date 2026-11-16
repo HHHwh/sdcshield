@@ -809,7 +809,12 @@ instead of assuming one tier:
   `arm64_require_sve_vl`; ④ `.arm64_requires = ARM64_REQUIRES_SVE2`;
   ⑤ the description string gains "body compiled for the armv9-a+sve2
   target; counterpart of <the `_sve` case>"; ⑥ the header counterpart
-  reference + the honest-scope note. Honesty boundary: the SVE2 target
+  reference + the honest-scope note. (Exception to "verbatim",
+  disclosed in the commit: where the `_sve` template's header carried
+  stale build-mechanics claims that would contradict the `_sve2` build,
+  the header is factually corrected — the two known cases:
+  `eigen_svd_cdouble_sve2` ×3, `eigen_gemm_double_max_arm_sve2` ×1.)
+  Honesty boundary: the SVE2 target
   recompiles the same SVE1-subset bodies (zero SVE2-only instructions,
   objdump-audited) — the companion is an SVE2-gated entry point and a
   compile-target declaration, NOT SVE2-only datapath coverage; without
