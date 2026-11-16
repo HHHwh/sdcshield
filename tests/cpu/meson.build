@@ -326,6 +326,11 @@ tests_set_base.add(
 #     the kernel-shaped repro payload
 #   - cache/cachebounce_sdc, cache_stress_civac (dc civac asm),
 #     memory/mem_disambig_alu (store-forwarding discrimination probe)
+# The 2026-11-16 import brings misc/adaptive_mem_sdc (3-file byte-identical
+# migration from the research repo's working tree): adaptive 30-combo
+# rotation SDC test — NEON engine + DECLARE_TEST here, SVE/SVE2 engine TU
+# in the dedicated tests_sve_adaptive static_library below (see the SVE
+# library block). HWCAP ladder SVE2>SVE>NEON self-selects at runtime.
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
@@ -339,6 +344,7 @@ if host_machine.cpu_family() == 'aarch64'
             'arm-0102/arm0102_kreg_not.cpp',
             'arm-0102/arm0102_kreg_select.cpp',
             'arm-0102/arm0102_swizzle.cpp',
+            'misc/adaptive_mem_sdc.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
@@ -1501,6 +1507,32 @@ if host_machine.cpu_family() == 'aarch64'
         )
         sandstone_tests += [tests_sve_vla_a]
     endif
+endif
+
+# adaptive_mem_sdc SVE/SVE2 引擎 TU (2026-11-16 研究仓逐字节迁移): 独立翻译
+# 单元用 +sve2 march 编译 (编译期无需 SVE 硬件——本机鲲鹏 920 编过、运行期
+# HWCAP 永不选中; SVE 机上由 adaptive_mem_sdc.cpp 的 getauxval 探测分发,
+# SVE/SVE2 共码, SVE2-only 轮换槽是 future extension, 当前零 SVE2 指令)。
+# 库名避撞既有 tests_sve (dispatch TU 库); sve_sanitize_exempt 对齐全部 SVE
+# 库纪律 (GCC 12.3 SVE intrinsics + 插桩 codegen ICE, 见文件头注释)。
+# 真实 VL 几何 (svcntd/cntb 步进) 与 tests_sve_vla 同为 VLA, 但保研究仓
+# +sve2 march 编译语义 (spec: 研究仓 docs/ADAPTIVE_MEM_SDC_DESIGN_20261113.md
+# §3), 故独立成库而非并入 sve_vla。
+if host_machine.cpu_family() == 'aarch64'
+    sve2_march = cpp.compiles(
+        '#include <arm_sve.h>\nint f(void) { return 0; }',
+        args: ['-march=armv9-a+sve2'],
+        name: 'armv9-a+sve2 compile probe',
+    ) ? ['-march=armv9-a+sve2'] : ['-march=armv8.2-a+sve2']
+
+    tests_sve_adaptive_a = static_library(
+        'tests_sve_adaptive',
+        sources: ['misc/adaptive_mem_sdc_sve.cpp'],
+        build_by_default: false,
+        include_directories: [tests_common_incdirs],
+        cpp_args: [tests_common_cpp_args, sve2_march, sve_sanitize_exempt],
+    )
+    sandstone_tests += [tests_sve_adaptive_a]
 endif
 
 # ARM64-native arithmetic tests that exercise third-party optimised libraries
