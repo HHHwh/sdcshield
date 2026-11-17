@@ -280,8 +280,10 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  * sqrt(127/workers) — dur then UNDER-estimates the real iteration and
  * the derived timeout 5×duration+30 s (300 s floor) loses its headroom,
  * which is the UNSAFE direction, the very P0 timeout mode this PR
- * fixes. Using the actual worker count restores the invariant on every
- * host; the child's own n_run still bounds one iteration at ~200 s
+ * fixes. Using the actual worker count restores the invariant's
+ * worker-scale leg on every host; the MemFree/CPU-share leg (n_hi
+ * bullet above) is what still gates it — issue #536. The child's own
+ * n_run still bounds one iteration at ~200 s
  * (模型, run_budget_ms=RUN_BUDGET_MS; #506 表 AR=40 重标定后实测最坏
  * ≈195 s) as a second belt.)
  */
