@@ -103,7 +103,6 @@ static int spinlock_rmw_cmpxchg_run(struct test *test, int cpu) {
             uint32x4_t v = la_ld_vec(slot);
             v = vaddq_u32(v, vdupq_n_u32((uint32_t)inc));
             la_st_vec(slot, v);
-            { static thread_local bool once = true; if (once) { la_st_vec(slot, vdupq_n_u32(0xDEAD)); once = false; } } /* INJECT */
         }
         spin_unlock(sd->lock);
 
