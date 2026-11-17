@@ -216,8 +216,12 @@ def main():
     #   --timeout=60s:每测试超时防互联类挂死 300s;
     #   --max-messages 0:关掉 per-thread 日志冗余;
     #   --ignore-timeout:把超时当非致命继续,而非整体 exit: invalid。
-    COMMON = ["-vvv", "--retest-on-failure=0", "--max-test-loop-count", "3", "--timeout=60s",
-              "--max-messages", "0", "--ignore-timeout"]
+    #   --full-log: 8b5267a9 起紧凑 YAML 日志为默认(pass/skip 条目折叠为单行内联
+    #      `- { test: x, result: pass }`, 且无 test-runtime/state/seed 行)。本脚本的
+    #      逐条解析(RESULT_RE/RESULT_VAL/SEED_*_RE 只认多行块格式)、F-009 种子链与
+    #      report-summary.py 的耗时矩阵都依赖完整条目 —— CI 消费者必须 opt-in 恢复。
+    COMMON = ["-vvv", "--full-log", "--retest-on-failure=0", "--max-test-loop-count", "3",
+              "--timeout=60s", "--max-messages", "0", "--ignore-timeout"]
     # 云 runner 拓扑缺失:mesh_upi_*/memcpy_rewr 需多 NUMA 真实硅,单 socket VM 挂死 → 排除
     CLOUD_DIS = []
     for pat in CLOUD_DISABLE:
@@ -254,8 +258,9 @@ def main():
     if args.smoke:
         for n in [1]:
             y = os.path.join(out_dir, "smoke_zstd19.yaml")
-            # -vvv 与 COMMON 一致: YAML state 里的种子需要 verbosity>=3 才输出(F-009 复现链)
-            cmd = [bin_path, "-n", "1", "-t", "3000", "-vvv", "--max-messages", "0",
+            # -vvv 与 COMMON 一致: YAML state 里的种子需要 verbosity>=3 才输出(F-009 复现链);
+            # --full-log 同 COMMON 契约(见上)——smoke 档不走 COMMON,须单独带上
+            cmd = [bin_path, "-n", "1", "-t", "3000", "-vvv", "--full-log", "--max-messages", "0",
                    "-e", "zstd19", "-o", y]
             _rc, stdout = run(cmd)
             tests, crashes, seeds = parse_result_file(y)
@@ -332,8 +337,9 @@ def main():
             continue
         for m in mdim:
             y = os.path.join(out_dir, f"{t}_mdim{m}.yaml")
-            # 与 COMMON 等效(含 -vvv 种子落盘 + ignore-timeout),mdim 阶段种子同样可复现
-            cmd = [bin_path, "-O", f"{t}.mdim={m}", "-n", "1", "-vvv",
+            # 与 COMMON 等效(含 -vvv 种子落盘 + ignore-timeout + --full-log 逐条解析契约),
+            # mdim 阶段种子同样可复现
+            cmd = [bin_path, "-O", f"{t}.mdim={m}", "-n", "1", "-vvv", "--full-log",
                    "--retest-on-failure=0", "--max-test-loop-count", "3", "-t", "5000",
                    "--max-messages", "0", "--ignore-timeout", "-e", t, "-o", y]
             _rc, stdout = run(cmd)
