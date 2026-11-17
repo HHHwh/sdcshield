@@ -34,3 +34,13 @@
 - 框架 cache-info：L3 unified 25165824B，breakdown {24MB, cpu0, ×24}
 - mesh 族 4MB 共享数组 ∈ (L2, 簇 L3) → 几何正确不改
 - 32MiB/线程 vs 每线程有效份额 1MB → 32× 过订阅 = DRAM 流式化
+
+## 单元 6（2026-11-17 追加）：L3_cache_920 精选目录
+
+用户指令：复审八件套代码逻辑，能真检测本机 L3 者收入新目录
+`tests/cpu/L3_cache_920/`。终裁 **1/8 合格**（memcpy_l3_cache_size：
+L3 尺度窗 + memcmp 全量重读校验），连带其 NEON 孪生
+（memcpy_l3_cache_size_neon，同构合格，含 arm_add 相对包含修复与
+56MB 勘误）。收录判据：工作集 L3 尺度 + 校验点经存储层级重读比对。
+其余 7 件落选原因入目录 README（README 同时登记 mesh read 族六个
+未随迁的合格者）。SVE 孪生不随迁（属 tests/cpu/sve 组织）。

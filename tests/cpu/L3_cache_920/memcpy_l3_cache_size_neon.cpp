@@ -1,11 +1,13 @@
-/*  NEON variant of tests/cpu/memory/memcpy_l3_cache_size_neon.cpp — auto-derived by the 2026-11-02
- *  cache/memory NEON pass: load-point neon_copy() calls replaced with the explicit
- *  vld1q/vst1q stream in arm_add_neon_copy.h (bypasses the libc IFUNC dispatcher,
- *  keeps the NEON datapath attribution).  Original test untouched; identifiers
- *  carry the _neon suffix to avoid ODR clashes with the original TU.
+/*  NEON variant of memcpy_l3_cache_size (scalar twin, co-located in
+ *  tests/cpu/L3_cache_920/ after the 2026-11-17 L3-audit curation) —
+ *  auto-derived by the 2026-11-02 cache/memory NEON pass: load-point
+ *  neon_copy() calls replaced with the explicit vld1q/vst1q stream in
+ *  arm_add/arm_add_neon_copy.h (bypasses the libc IFUNC dispatcher,
+ *  keeps the NEON datapath attribution).  Identifiers carry the _neon
+ *  suffix to avoid ODR clashes with the original TU.
  */
 #include <sandstone.h>
-#include "arm_add_neon_copy.h"
+#include "../arm_add/arm_add_neon_copy.h"
 using arm_add_neon::neon_copy;
 #include "sandstone_p.h"
 #include <cstdint>
@@ -15,11 +17,13 @@ using arm_add_neon::neon_copy;
 #include <vector>
 
 // 获取 L3 缓存大小（字节）。探测顺序（randomization hardening H8'）：
-//   1. 框架 device_info[].cache[]（topology.cpp 启动时已从 sysfs 填好，
-//      本机实测 56MB——零测试使用过的现成数据源）
+//   1. 框架 device_info[].cache[]（topology.cpp 启动时已从 sysfs 填好；
+//      鲲鹏 920 实测 24MB/簇——L3 分布式，24 核一簇共享一个切片，框架
+//      cache-info breakdown 与 sysfs shared_cpu_list 双源一致。
+//      2026-11-17 L3 审计勘误：旧注"本机实测 56MB"为异板/陈旧记录）
 //   2. sysconf(_SC_LEVEL3_CACHE_SIZE)（本机 openEuler 24.03 返回 0）
 //   3. 8MB 兜底
-// 原实现只有 2/3，在本机上永远走 8MB 兜底，真实 L3（56MB）从未被覆盖。
+// 原实现只有 2/3，在本机上永远走 8MB 兜底，真实 L3 从未被覆盖。
 static size_t get_l3_size() {
     int ndev = device_count();
     for (int i = 0; i < ndev; ++i) {
