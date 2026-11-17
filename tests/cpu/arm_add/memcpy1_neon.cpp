@@ -25,7 +25,6 @@ static int memcpy1_run(struct test *test, int cpu) {
     /* randomization hardening (B3-007): framework RNG (per-thread stream,
      * -s reproducible) replaces std::mt19937; range [0, 255]. */
     auto dist = []() { return (uint8_t)((0) + (int64_t)(random64() % (uint64_t)((255) - (0) + 1))); };
-    unsigned long iteration = 0;
 
     do {
         // 生成随机数据
@@ -38,13 +37,6 @@ static int memcpy1_run(struct test *test, int cpu) {
 
         // 校验
         bool passed = (memcmp(dst, src, BLOCK_SIZE) == 0);
-
-        // 输出本轮输入（前8字节十六进制）和验证结果
-        char hex_str[32];
-        snprintf(hex_str, sizeof(hex_str), "%02x%02x%02x%02x%02x%02x%02x%02x",
-                 src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7]);
-        fprintf(stderr, "memcpy1_neon: Iteration %lu, src first 8 bytes = %s, result = %s\n",
-                iteration++, hex_str, passed ? "PASS" : "FAIL");
 
         if (!passed) {
             report_fail_msg("memcpy1_neon: data mismatch after copy");

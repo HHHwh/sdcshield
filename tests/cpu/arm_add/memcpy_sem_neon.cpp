@@ -63,8 +63,6 @@ static int memcpy_sem_run(struct test *test, int cpu) {
     std::vector<std::thread> threads;
     threads.reserve(NUM_THREADS);
 
-    static std::atomic<uint64_t> iter{0};
-
     do {
         // 1. 为每个线程准备随机数据
         for (int i = 0; i < NUM_THREADS; ++i) {
@@ -103,21 +101,6 @@ static int memcpy_sem_run(struct test *test, int cpu) {
                 break;
             }
         }
-
-        uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = all_passed ? "\033[32m" : "\033[31m";
-        const char *result_str = all_passed ? "PASS" : "FAIL";
-
-        // 输出第一个线程的输入摘要（代表整体）
-        fprintf(stderr, "memcpy_sem_neon: Iter %lu, src[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                iteration,
-                thread_data[0].src[0], thread_data[0].src[1],
-                thread_data[0].src[2], thread_data[0].src[3],
-                thread_data[0].src[4], thread_data[0].src[5],
-                thread_data[0].src[6], thread_data[0].src[7]);
-        fprintf(stderr, "  all_passed=%d, result=%s%s\033[0m\n",
-                all_passed, color, result_str);
-        fflush(stderr);
 
         if (!all_passed) {
             report_fail_msg("memcpy_sem_neon: data mismatch or consistency failure in one or more threads");
