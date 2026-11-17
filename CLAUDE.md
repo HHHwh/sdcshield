@@ -280,7 +280,9 @@ END_DECLARE_TEST
 - **Theory**: `docs/hypothesis/ARM64-SDC-uArch.md`; **output schema**:
   `docs/sdcshield-cpu.schema.json`; **provenance/compliance**:
   `docs/coding/OPEN_SOURCE_PROVENANCE.md`.
-- **Process artifacts**: `docs/superpowers/` (plans/, specs/, inventory/).
+- **Process artifacts**: `docs/superpowers/plans/` only — specs/ and
+  inventory/ were cleaned out of the repo by 31f6a99e (2026-11-17);
+  recover them from git history at `31f6a99e^`.
 - **PR review-fix loop** (agent-driven: five bots (four external SaaS + the local
   headless claude adversarial reviewer) → subagent critical triage →
   fix → loop → merge): `docs/build-deploy-pr-ci/pr-loop.md`;
