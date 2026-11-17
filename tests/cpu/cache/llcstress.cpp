@@ -7,6 +7,15 @@
  *  under pressure; the data is fresh random64 every round ("dynamic
  *  random data").
  *
+ *  Detection-surface honesty (2026-11-17 L3 audit): on the Kunpeng
+ *  920 the 64 MB window exceeds the per-cluster L3 slice (24 MB), so
+ *  the LLC replacement pressure is real — but the verification pair
+ *  (store then IMMEDIATE load-back of the same qword) is served by
+ *  the store-buffer/L1 forwarding path and does not reach L2/L3.
+ *  This test stresses LLC traffic and verifies the LSU forwarding
+ *  path; L3-resident data-integrity verification is carried by the
+ *  mesh read_L3 family (sum/golden over a shared 4 MB array).
+ *
  *  FALSE-POSITIVE FIX over the user's draft (measured reasoning): the
  *  draft let ALL threads randomly write ANY qword in the shared 64 MB
  *  and verified read-back == just-written value.  With ~48 writers and
