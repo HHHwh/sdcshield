@@ -194,7 +194,16 @@ END_DECLARE_TEST
   2026-11-02, its purpose eliminated by #410). Each of the 14 has an
   `_sve2` companion (2026-11-13, feat/eigen-sve2-companion, 14+14): the
   same per-tier bodies are dual-compiled per tier — `armv8.2-a+sve`
-  (Eigen ns `EigenSVE<t>`) vs `armv9-a+sve2` (Eigen ns `EigenSVE2<t>`) —
+  (Eigen ns `EigenSVE<t>`) vs `armv8.2-a+sve2` (Eigen ns `EigenSVE2<t>`;
+  2026-11-17 前曾用 `armv9-a+sve2`——armv9-a 架构名需 GCC 11+，曾致 Multi-OS
+  Verify 的 20.03/22.03 gcc-10 镜像 Build 全红（PR #661 回归，run 44011713221）；
+  +sve2 在 armv8.x-a base 上 GCC 10 即可编；双 march 40 库 objdump A/B 实测
+  （2026-11-17 干净同源全量构建对比，flags 除 march 外逐项全等）：40/40 库
+  原始反汇编有差异（分支偏移/地址移位 + 标量调度重排，合计 ~10.2k 行），
+  32/40 库助记符多重集逐库全等，余 8/40 库另有 ±1..13 次纯标量计数微差
+  （mov/ldr/str/stp/ldp/ldur/stur/nop/add/lsl/madd/mul/b.*，含一次整数
+  mul↔madd 融合翻转；零 SVE 族、零 FP 族计数变化 → 数值面不变），
+  WHILEWR 逐库计数 A/B 全等（合计 1549 实例分布于 35 库），诚实边界不变) —
   and each `<pfx>_sve2` dispatcher is the `_sve` template plus exactly six
   differences (id/env `_sve2`, pfx at every call site, an
   `arm64_cpu_has_sve2()` honest-SKIP gate before `arm64_require_sve_vl`,
@@ -204,11 +213,17 @@ END_DECLARE_TEST
   stale build-mechanics claims that would contradict the `_sve2` build,
   the header is factually corrected — the two known cases:
   `eigen_svd_cdouble_sve2` ×3, `eigen_gemm_double_max_arm_sve2` ×1.)
-  Honesty boundary: the
-  SVE2 compilation emits ZERO SVE2-only instructions (objdump-audited,
-  40/40 libraries) — the companions run an SVE1 subset backward-compatible
-  on SVE2 hardware and provide an SVE2-gated entry point, NOT SVE2-only
-  datapath coverage. gem5 evidence: SE pairing matrix 10 body
+  Honesty boundary (corrected 2026-11-17): the stress kernels are an SVE1
+  subset, but GCC idiom-recognizes Eigen's aliasing-checked copy plumbing
+  (call_assignment/gemm_pack_rhs loops) into WHILEWR — an SVE2-only
+  address-overlap instruction, 1549 instances in 35/40 libraries, present
+  since #661 (armv9-a+sve2) and per-library IDENTICAL after the march
+  switch (the earlier "emits ZERO SVE2-only instructions, objdump-audited
+  40/40" claim missed this class; caught by the binutils SVE1-only
+  assembler gate). The companions still provide an SVE2-gated entry
+  point, NOT SVE2-only datapath coverage, and runtime is HWCAP2_SVE2-
+  gated so WHILEWR only ever executes on SVE2 hardware. gem5 evidence:
+  SE pairing matrix 10 body
   families × 8 legs, per-tier sve2↔sve checksums byte-identical, plus an
   FS real-binary leg validating the dispatcher path
   (`eigen_svd_double_sve2 -n 2`, VL=128, pass). Every payload runs all

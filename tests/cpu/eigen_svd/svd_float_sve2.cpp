@@ -17,8 +17,14 @@
  * 存在理由——vendored Eigen SVE packet SIGSEGV——已被 issue #410 消除)。
  *
  * 诚实边界(design spec §4):本变体的指令集实质 = SVE1 子集在 SVE2
- * 硬件上向后兼容执行(spike 实证 +sve2 目标零 SVE2-only 指令);价值 =
+ * 硬件上向后兼容执行(2026-11-17 binutils SVE1-only 汇编门修正:旧「零 SVE2-only」
+ * 结论不准确,修正注见下一行);价值 =
  * SVE2 门控入口 + 编译目标声明,不是 SVE2-only 数据通路覆盖。
+ * 修正注(2026-11-17):GCC 在 +sve2 下把 Eigen 拷贝管线(call_assignment/
+ * gemm_pack_rhs 的别名检查环路)惯用化为 WHILEWR——SVE2-only 地址重叠测试
+ * 指令:40 库共 1549 实例分布于其中 35 库,系拷贝管线而非压力内核,#661 时代
+ * (armv9-a+sve2)即已存在,armv8.2-a+sve2 降级后逐库计数不变;运行面无影响
+ * (用例 HWCAP2_SVE2 门控,仅在 SVE2 硬件执行)。
  *
  * 维度:knob/env > 联合求解,镜像 eigen_svd 的
  * calibrated_auto_dim(test, 4, 6, 12.0, 650, 64, 2048) 参数口径;
@@ -99,7 +105,7 @@ static int eigen_svd_sve2_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(eigen_svd_sve2, "Eigen SVD (Singular Value Decomposition) solving payload on the ARM64 SVE2 packet backend (per-tier 128/256/512/1024-bit variants, body compiled for the armv9-a+sve2 target); counterpart of eigen_svd_sve")
+DECLARE_TEST(eigen_svd_sve2, "Eigen SVD (Singular Value Decomposition) solving payload on the ARM64 SVE2 packet backend (per-tier 128/256/512/1024-bit variants, body compiled for the armv8.2-a+sve2 target); counterpart of eigen_svd_sve")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_init = eigen_svd_sve2_init,
   .test_run = eigen_svd_sve2_run,

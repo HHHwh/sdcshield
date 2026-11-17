@@ -20,8 +20,14 @@
  * gemm_c128_sve_body.cpp。
  *
  * 诚实边界(design spec §4):本变体的指令集实质 = SVE1 子集在 SVE2
- * 硬件上向后兼容执行(spike 实证 +sve2 目标零 SVE2-only 指令);价值 =
+ * 硬件上向后兼容执行(2026-11-17 binutils SVE1-only 汇编门修正:旧「零 SVE2-only」
+ * 结论不准确,修正注见下一行);价值 =
  * SVE2 门控入口 + 编译目标声明,不是 SVE2-only 数据通路覆盖。
+ * 修正注(2026-11-17):GCC 在 +sve2 下把 Eigen 拷贝管线(call_assignment/
+ * gemm_pack_rhs 的别名检查环路)惯用化为 WHILEWR——SVE2-only 地址重叠测试
+ * 指令:40 库共 1549 实例分布于其中 35 库,系拷贝管线而非压力内核,#661 时代
+ * (armv9-a+sve2)即已存在,armv8.2-a+sve2 降级后逐库计数不变;运行面无影响
+ * (用例 HWCAP2_SVE2 门控,仅在 SVE2 硬件执行)。
  *
  * 维度:knob/env > 联合求解,镜像 eigen_gemm_cdouble_dynamic_square 的
  * clamp [16, 4096] 与 GEMM_C128 联合层参数口径;
@@ -102,7 +108,7 @@ static int eigen_gemm_cdouble_dynamic_square_sve2_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(eigen_gemm_cdouble_dynamic_square_sve2, "Eigen GEMM payload (cplx double, dynamic, square) on the ARM64 SVE2 packet backend (per-tier 128/256/512/1024-bit variants, body compiled for the armv9-a+sve2 target); counterpart of eigen_gemm_cdouble_dynamic_square_sve")
+DECLARE_TEST(eigen_gemm_cdouble_dynamic_square_sve2, "Eigen GEMM payload (cplx double, dynamic, square) on the ARM64 SVE2 packet backend (per-tier 128/256/512/1024-bit variants, body compiled for the armv8.2-a+sve2 target); counterpart of eigen_gemm_cdouble_dynamic_square_sve")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_init = eigen_gemm_cdouble_dynamic_square_sve2_init,
   .test_run = eigen_gemm_cdouble_dynamic_square_sve2_run,

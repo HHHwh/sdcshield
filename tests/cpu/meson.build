@@ -567,9 +567,8 @@ tests_set_skx.add(
 # eigen_svd/eigen_svd_jacobi/eigen_gemm families; 2 pre-existing + 12
 # added 2026-11-03 by the eigen SVE unification, each joined 2026-11-13
 # by an _sve2 companion from feat/eigen-sve2-companion); only built on
-# aarch64 (see the SVE build block below). These files are the
-# DISPATCH TUs (14 SVE-family always + 14 _sve2 companions behind the
-# compiler gate directly below) —
+# aarch64 (see the SVE build block below). These 28 files are the
+# DISPATCH TUs (14 SVE-family + 14 _sve2 companions) —
 # the only members of tests_sve from this block — and are deliberately
 # vector-length agnostic: they hold no
 # Eigen SVE types, so tests_sve compiles them with march_sve_dispatch
@@ -586,68 +585,39 @@ tests_set_skx.add(
 # four tiers (128/256/512/1024) since the issue #410 ptranspose scatter
 # rewrite (see the loop's comment). VL plumbing:
 # framework/device/cpu/arm64/arm64_vl.h.
-# _sve2 companion compiler gate (issue #773): the companion dual-target is
-# compiled with -march=armv9-a+sve2, which GCC only understands from GCC 12 —
-# the openEuler 20.03/22.03 Multi-OS Verify images build with GCC 10 (20.03
-# via its baked gcc-toolset-10, 22.03 via the stock GCC 10.3; valid -march
-# values top out at armv8.6-a), which hard-errors on every one
-# of the 40 per-tier payload libraries and broke the whole build. Gate BOTH
-# the 14 _sve2 dispatch TUs (they hard-link the per-tier <pfx>_sve2_vl<t>
-# body namespaces, so they cannot link without the payloads) and the sve2
-# target row of the payload loop in the ARM64 SVE build block below on the
-# compiler accepting the march — the same graceful-degradation convention
-# as the tests_arm64_sve2/_sve_mm libraries (tests/cpu/arm64/meson.build:
-# cpp.has_argument gate + message). On compilers without the target the
-# companions are simply absent from the binary, like the FMMLA/SVE2/SME
-# libraries already are. On x86-64 the gate is inert (tests_set_sve is only
-# applied inside the aarch64 block below).
-eigen_sve2_march = '-march=armv9-a+sve2'
-build_eigen_sve2 = host_machine.cpu_family() == 'aarch64' and cpp.has_argument(eigen_sve2_march)
-if host_machine.cpu_family() == 'aarch64' and not build_eigen_sve2
-    message('Compiler lacks ' + eigen_sve2_march +
-            ' support - the 14 _sve2 eigen companion tests are not built.')
-endif
 tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
         'eigen_gemm/gemm_double_max_arm.cpp',
+        'eigen_gemm/gemm_double_max_arm_sve2.cpp',
         'eigen_gemm/gemm_double_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_double_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_float_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_float_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_cdouble_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_double14_sve.cpp',
+        'eigen_gemm/gemm_double14_sve2.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
+        'eigen_svd/svd_cdouble_sve2.cpp',
         'eigen_svd/svd_double_sve.cpp',
+        'eigen_svd/svd_double_sve2.cpp',
         'eigen_svd/svd_double2_sve.cpp',
+        'eigen_svd/svd_double2_sve2.cpp',
         'eigen_svd/svd_float_sve.cpp',
+        'eigen_svd/svd_float_sve2.cpp',
         'eigen_svd/svd_fvectors_sve.cpp',
+        'eigen_svd/svd_fvectors_sve2.cpp',
         'eigen_svd_jacobi/svd_cdouble_sve.cpp',
+        'eigen_svd_jacobi/svd_cdouble_sve2.cpp',
         'eigen_svd_jacobi/svd_double_sve.cpp',
+        'eigen_svd_jacobi/svd_double_sve2.cpp',
         'eigen_svd_jacobi/svd_float_sve.cpp',
+        'eigen_svd_jacobi/svd_float_sve2.cpp',
         'eigen_svd_jacobi/svd_fvectors_sve.cpp',
+        'eigen_svd_jacobi/svd_fvectors_sve2.cpp',
     )
 )
-# the 14 _sve2 companion dispatch TUs — behind the compiler gate above
-if build_eigen_sve2
-    tests_set_sve.add(
-        when : eigen3_dep,
-        if_true : files(
-            'eigen_gemm/gemm_double_max_arm_sve2.cpp',
-            'eigen_gemm/gemm_double_dynamic_square_sve2.cpp',
-            'eigen_gemm/gemm_float_dynamic_square_sve2.cpp',
-            'eigen_gemm/gemm_cdouble_dynamic_square_sve2.cpp',
-            'eigen_gemm/gemm_double14_sve2.cpp',
-            'eigen_svd/svd_cdouble_sve2.cpp',
-            'eigen_svd/svd_double_sve2.cpp',
-            'eigen_svd/svd_double2_sve2.cpp',
-            'eigen_svd/svd_float_sve2.cpp',
-            'eigen_svd/svd_fvectors_sve2.cpp',
-            'eigen_svd_jacobi/svd_cdouble_sve2.cpp',
-            'eigen_svd_jacobi/svd_double_sve2.cpp',
-            'eigen_svd_jacobi/svd_float_sve2.cpp',
-            'eigen_svd_jacobi/svd_fvectors_sve2.cpp',
-        )
-    )
-endif
 
 # ARM64-only SVE SDC probes: SVE/SVE2 ports of the core-179 NEON attribution
 # family (tests/cpu/misc/neon_rot_ldr_at_top*.cpp). All-VL Phase 2 P5 —
@@ -1312,19 +1282,22 @@ endif
 # dispatchers pick the variant that matches the worker's pinned tier at run
 # time.
 # Dual-target extension (2026-11-12, SVE2 companion design): the same table
-# is additionally compiled for the armv9-a+sve2 target as
+# is additionally compiled for the armv8.2-a+sve2 target as
 # tests_eigen_<pfx>_sve2_vl<N> libraries (Eigen namespace EigenSVE2<N>, body
 # symbol namespace <pfx>_sve2_vl<N>) for the _sve2 companion cases; the sve
-# rows keep their library names and args byte-identical. Honesty boundary:
-# the sve2 libraries recompile the same SVE1-subset bodies for backward-
-# compatible execution on SVE2 hardware (objdump-audited: zero SVE2-only
-# instructions); they provide an SVE2-gated entry point, a compile-target
-# declaration and the future hook for an Eigen SVE2 backend — NOT SVE2-only
-# datapath coverage.
-# Compiler gate (issue #773): the armv9-a+sve2 march needs GCC 12+; on
-# older compilers (openEuler 20.03/22.03 GCC 10, armv8.6-a max)
-# the sve2 row and the 14 _sve2 companion dispatch TUs are not built —
-# gate definition and rationale at tests_set_sve above.
+# rows keep their library names and args byte-identical. Honesty boundary
+# (corrected 2026-11-17): the sve2 libraries recompile the same SVE1-subset
+# stress bodies for backward-compatible execution on SVE2 hardware — but
+# GCC idiom-recognizes the Eigen copy plumbing (call_assignment/
+# gemm_pack_rhs aliasing-checked copy loops) into WHILEWR, an SVE2-only
+# address-overlap instruction: 1549 instances in 35/40 libraries, present
+# since #661 (armv9-a+sve2) and per-library identical after the
+# armv8.2-a+sve2 switch (the earlier "objdump-audited: zero SVE2-only"
+# claim missed this class; caught by the binutils SVE1-only assembler
+# gate). Runtime is unaffected (HWCAP2_SVE2-gated, executes only on SVE2
+# hardware). The libraries still provide an SVE2-gated entry point, a
+# compile-target declaration and the future hook for an Eigen SVE2
+# backend — NOT SVE2-only datapath coverage.
 if host_machine.cpu_family() == 'aarch64'
     # --- Eigen payload: one instantiation per VL tier, table-driven --------
     # Eigen's SVE packet types are compile-time fixed-width and appear as
@@ -1385,17 +1358,29 @@ if host_machine.cpu_family() == 'aarch64'
         pfx = spec[1]
         stack_limit_1024 = spec[2]
         # [suffix, march, Eigen-ns-prefix]: sve keeps the existing
-        # names/args byte-identical; sve2 adds the armv9-a+sve2 target —
-        # only when the compiler accepts that march (GCC 12+; GCC-10 CI
-        # images of openEuler 20.03/22.03 top out at armv8.6-a). The gate
-        # and its rationale live at tests_set_sve above (issue #773); the
-        # 14 _sve2 dispatch TUs are gated there in lockstep so the payload
-        # symbols they hard-link never go missing.
-        eigen_sve_targets = [['', 'armv8.2-a+sve', 'EigenSVE']]
-        if build_eigen_sve2
-            eigen_sve_targets += [['_sve2', 'armv9-a+sve2', 'EigenSVE2']]
-        endif
-        foreach tgt : eigen_sve_targets
+        # names/args byte-identical; sve2 adds the armv8.2-a+sve2 target
+        # (NOT armv9-a+sve2: the armv9-a base name needs GCC 11+, which
+        # broke the GCC-10 Multi-OS Verify images 2026-11-10..17
+        # — cc1plus "unknown value 'armv9-a+sve2' for '-march'",
+        # run 44011713221. SVE2 has been a plain -march extension on
+        # the armv8.x-a base since GCC 10; the gcc-12 objdump A/B audit
+        # (2026-11-17, same-source full builds, compile flags verified
+        # identical modulo march) shows all 40 libraries differ in raw
+        # disassembly (branch-offset/address shifts + scalar
+        # scheduling reorder, ~10.2k lines total); 32/40 keep an
+        # identical mnemonic multiset, the remaining 8/40 (gemm_c128
+        # vl256/vl1024, svd_j_c128 vl256/vl1024, f32-svd vl128-1024)
+        # add ±1..13 scalar-only count deltas (mov/ldr/str/stp/ldp/
+        # ldur/stur/nop/add/lsl/madd/mul/b.*; one integer mul↔madd
+        # fusion flip) — ZERO SVE- or FP-family mnemonic count changed
+        # anywhere, so the numeric datapath is untouched; and the
+        # SVE2-only WHILEWR footprint (GCC's aliasing-checked
+        # copy-loop idiom — see the honesty note in the block header
+        # above) is per-library IDENTICAL under both marches (1549
+        # instances across 35/40 libraries), so the SVE2-gated entry
+        # point is unaffected).
+        foreach tgt : [['',   'armv8.2-a+sve', 'EigenSVE'],
+                       ['_sve2', 'armv8.2-a+sve2', 'EigenSVE2']]
             foreach tier : ['128', '256', '512', '1024']
                 eigen_tier_args = [
                     '-march=' + tgt[1],

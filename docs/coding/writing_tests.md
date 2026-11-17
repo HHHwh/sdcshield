@@ -801,24 +801,33 @@ instead of assuming one tier:
   `docs/superpowers/specs/2026-11-12-eigen-sve2-companion-design.md`):
   the same body TU is compiled per tier for BOTH targets —
   `armv8.2-a+sve` (Eigen ns `EigenSVE<t>`, lib `tests_eigen_<pfx>_vl<t>`)
-  and `armv9-a+sve2` (Eigen ns `EigenSVE2<t>`, lib
-  `tests_eigen_<pfx>_sve2_vl<t>`) — and the `<pfx>_sve2` dispatcher TU is
+  and `armv8.2-a+sve2` (Eigen ns `EigenSVE2<t>`, lib
+  `tests_eigen_<pfx>_sve2_vl<t>`; NOT `armv9-a+sve2` — the armv9-a base
+  name needs GCC 11+ and broke the GCC-10 Multi-OS Verify images
+  2026-11-17, while `+sve2` on the armv8.x-a base is accepted since
+  GCC 10) — and the `<pfx>_sve2` dispatcher TU is
   the `_sve` template copied verbatim plus exactly SIX differences:
   ① test id/env names `_sve2`; ② `<pfx>_sve2` at every call site;
   ③ an `arm64_cpu_has_sve2()` honest-SKIP gate in init BEFORE
   `arm64_require_sve_vl`; ④ `.arm64_requires = ARM64_REQUIRES_SVE2`;
-  ⑤ the description string gains "body compiled for the armv9-a+sve2
+  ⑤ the description string gains "body compiled for the armv8.2-a+sve2
   target; counterpart of <the `_sve` case>"; ⑥ the header counterpart
   reference + the honest-scope note. (Exception to "verbatim",
   disclosed in the commit: where the `_sve` template's header carried
   stale build-mechanics claims that would contradict the `_sve2` build,
   the header is factually corrected — the two known cases:
   `eigen_svd_cdouble_sve2` ×3, `eigen_gemm_double_max_arm_sve2` ×1.)
-  Honesty boundary: the SVE2 target
-  recompiles the same SVE1-subset bodies (zero SVE2-only instructions,
-  objdump-audited) — the companion is an SVE2-gated entry point and a
-  compile-target declaration, NOT SVE2-only datapath coverage; without
-  SVE2 hardware it registers only via explicit `-e` and skips honestly.
+  Honesty boundary (corrected 2026-11-17): the SVE2 target
+  recompiles the same SVE1-subset stress bodies — but GCC idiom-recognizes
+  the Eigen copy plumbing (call_assignment/gemm_pack_rhs aliasing-checked
+  copy loops) into WHILEWR, an SVE2-only address-overlap instruction
+  (1549 instances in 35/40 libraries; the earlier "zero SVE2-only,
+  objdump-audited" claim missed this class, caught by the binutils
+  SVE1-only assembler gate; counts are per-library identical between
+  armv9-a+sve2 and armv8.2-a+sve2) — the companion is an SVE2-gated
+  entry point and a compile-target declaration, NOT SVE2-only datapath
+  coverage; without SVE2 hardware it registers only via explicit `-e`
+  and skips honestly.
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 

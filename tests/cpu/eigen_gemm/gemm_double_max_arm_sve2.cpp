@@ -49,15 +49,21 @@
  * Compiled only on aarch64 in the tests_sve set — the dispatcher TU
  * deliberately vector-length agnostic (-march=armv8.2-a+sve, no
  * -msve-vector-bits), the per-tier payload in the
- * tests_eigen_gemm_sve2_vl<t> libraries (-march=armv9-a+sve2
+ * tests_eigen_gemm_sve2_vl<t> libraries (-march=armv8.2-a+sve2
  * -msve-vector-bits=<t> -DEigen=EigenSVE2<t>) — so Eigen's ARM SVE
  * packet backend drives the GEMM kernels. x86-64 untouched (stock
  * gemm_double_dynamic_square stays at M_DIM 256). Non-aarch64 hosts:
  * the file is not even in the build (meson guard).
  *
  * 诚实边界(design spec §4):本变体的指令集实质 = SVE1 子集在 SVE2
- * 硬件上向后兼容执行(spike 实证 +sve2 目标零 SVE2-only 指令);价值 =
+ * 硬件上向后兼容执行(2026-11-17 binutils SVE1-only 汇编门修正:旧「零 SVE2-only」
+ * 结论不准确,修正注见下一行);价值 =
  * SVE2 门控入口 + 编译目标声明,不是 SVE2-only 数据通路覆盖。
+ * 修正注(2026-11-17):GCC 在 +sve2 下把 Eigen 拷贝管线(call_assignment/
+ * gemm_pack_rhs 的别名检查环路)惯用化为 WHILEWR——SVE2-only 地址重叠测试
+ * 指令:40 库共 1549 实例分布于其中 35 库,系拷贝管线而非压力内核,#661 时代
+ * (armv9-a+sve2)即已存在,armv8.2-a+sve2 降级后逐库计数不变;运行面无影响
+ * (用例 HWCAP2_SVE2 门控,仅在 SVE2 硬件执行)。
  *
  * All-VL Phase 2 (design 2026-10-27 §4.7): Eigen's SVE packet backend is
  * compile-time fixed-width (arm_sve_vector_bits(EIGEN_ARM64_SVE_VL));
@@ -534,7 +540,7 @@ static int eigen_gemm_double_max_arm_sve2_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(eigen_gemm_double_max_arm_sve2, "Eigen max-matrix GEMM payload (double, dynamic, memory-safe max square, ARM64 SVE2 packet backend with per-tier 128/256/512/1024-bit variants, body compiled for the armv9-a+sve2 target, dimension sized in child init by the joint memory/time solver); counterpart of eigen_gemm_double_max_arm")
+DECLARE_TEST(eigen_gemm_double_max_arm_sve2, "Eigen max-matrix GEMM payload (double, dynamic, memory-safe max square, ARM64 SVE2 packet backend with per-tier 128/256/512/1024-bit variants, body compiled for the armv8.2-a+sve2 target, dimension sized in child init by the joint memory/time solver); counterpart of eigen_gemm_double_max_arm")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_preinit = eigen_gemm_double_max_arm_sve2_preinit,
   .test_init = eigen_gemm_double_max_arm_sve2_init,
