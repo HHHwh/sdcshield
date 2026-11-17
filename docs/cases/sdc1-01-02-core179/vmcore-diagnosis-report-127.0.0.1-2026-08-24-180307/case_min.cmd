@@ -1,4 +1,0 @@
-sys
-panic
-bt
-quit

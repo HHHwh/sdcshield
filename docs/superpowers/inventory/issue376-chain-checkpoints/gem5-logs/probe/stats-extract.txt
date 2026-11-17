@@ -1,3 +1,0 @@
-simTicks                                    818891000                       # Number of ticks simulated (Tick)
-hostSeconds                                     11.41                       # Real time elapsed on the host (Second)
-board.chaos_fpu.numFaultsInjected                   1                       # Total Exec faults injected (Count)

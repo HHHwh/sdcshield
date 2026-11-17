@@ -1,2 +1,0 @@
-simTicks                                    820350000                       # Number of ticks simulated (Tick)
-hostSeconds                                     11.38                       # Real time elapsed on the host (Second)

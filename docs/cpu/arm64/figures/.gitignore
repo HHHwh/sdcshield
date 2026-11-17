@@ -1,2 +1,0 @@
-# 中间产物：由 gen_figs.py 生成，再复制为 sdc-fig-*.svg 并栅格化为 PNG
-*_tmp.svg

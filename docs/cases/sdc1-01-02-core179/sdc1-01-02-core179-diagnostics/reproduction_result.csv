@@ -1,4 +1,0 @@
-case_id,N,cluster,mode,reproduced,windows_tried,mru_fail_last,elem0_actual,elem0_golden,popcount,cluster_sig
-sdc_fuzz_000,256,rename,0,YES,1,7,0.0247013,0.0247015,21,register-rename-table
-sdc_fuzz_001,384,rob,0,YES,1,3,-0.0412628,-0.0412628,15,rob-speculation
-sdc_fuzz_002,512,lsu,1,YES,1,13,-0.02447,-0.02447,14,lsu-store-buffer
