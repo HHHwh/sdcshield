@@ -51,6 +51,7 @@
 #include <chrono>
 #include <map>
 #include <string>
+#include <sysexits.h>
 #include <unistd.h>
 
 /* NUMA 探测/AR 与联合求解的 per-node 分支仅 ARM64-Linux(spec §5 rule 5)。
@@ -1380,8 +1381,42 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                                       const struct sdc_joint_args *a,
                                       int solve_once(int))
 {
-    if (!a)
-        return 0;
+    /* issue #607: NULL args 与 lo<1 都是调用方编程错误, 不得返回静默
+     * 哨兵 0——调用方模式 `d->n = sdc_joint_dim_slice(...)` 直通赋值无
+     * 校验, 而 0 是不可用维度: 0×0 矩阵 + 0 字节 memcmp + 0 次迭代即
+     * 空转 PASS(实测本机 glibc aligned_alloc(64,0) 返回非 NULL), 即
+     * CLAUDE.md rule 6 定性为 bug 的 no-op-pass 形态。a 非 NULL 且
+     * lo ≥ 1 时全部出口恒 ≥ lo(退化区间/quick/尾部钳底, ARM 另有 knob
+     * clamp 早退)——0 的来源仅 NULL 分支与 lo<1 非法调用两类, 由下方
+     * 两守卫分别 fail-loud 封堵; NULL 情形取不到安全出口值(退化区间
+     * hi<=lo 尚可 return a->lo, a 缺失则 lo 不可得)。处置逐项裁定:
+     * 非 assert(b_ndebug=if-release 下 release 定义 NDEBUG, 防线被
+     * 编译掉); 非 abort(调用点均在 forked child 的 test_init, SIGABRT
+     * 被 parent 分类 "crash" 与真实测试崩溃混淆; _exit(EX_SOFTWARE)=70
+     * → OperatingSystemError 才是编程错误的准确分类, issue #396
+     * thread_stack_setup_failed 同型); fprintf(stderr) 而非 log_warning
+     * (no_output 日志模式下编译为 (void)0, 致命消息须直达终端)。
+     * lo<1 属防御性封堵: 现全部调用方硬编码 lo≥16, 非现行 bug, 无独立
+     * 死亡单测——本机 GCC 12 -O3 实测, 与 NULL 用例共存时 ipa-cp 按公共
+     * 常量(test/knob/solve_once)合并克隆、a 留运行期参数, 主体存活越
+     * #420 单测链接边界(见单测文件头注); 机制级验证走本 issue harness。
+     * NULL 用例死亡单测锁定: unit-tests/sdc_stress_config_tests.cpp
+     * SdcJointDimSlice(__OPTIMIZE__ 门)。 */
+    if (!a) {
+        fprintf(stderr, "%s: sdc_joint_dim_slice(\"%s\"): NULL sdc_joint_args"
+                        " — 调用方编程错误, 拒绝返回静默哨兵 0 (issue #607)\n",
+                (test && test->id) ? test->id : "(global)",
+                knob ? knob : "?");
+        _exit(EX_SOFTWARE);
+    }
+    if (a->lo < 1) {
+        fprintf(stderr, "%s: sdc_joint_dim_slice(\"%s\"): 非法 lo=%d(<1, "
+                        "0 维 = 空转 PASS) — 调用方编程错误, 拒绝返回静默"
+                        "哨兵 0 (issue #607)\n",
+                (test && test->id) ? test->id : "(global)",
+                knob ? knob : "?", a->lo);
+        _exit(EX_SOFTWARE);
+    }
     /* permille/c 提前到 knob/quick 早退之前(T11): knob 早退的预期内存
      * 警告需要 c; 纯计算无副作用, 相对退化区间/quick 检查的顺序提升
      * 零行为差(两条早退路径原本就不读这两个值)。 */

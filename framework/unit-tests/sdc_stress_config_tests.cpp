@@ -21,6 +21,18 @@
  * 记录该边界)。其外部依赖仅 log_warning 宏展开所需的 thread_num 与
  * log_message(sandstone.h 声明)——在此提供 unittests 域定义, 与
  * sandstone_unittests_utils.cpp 的 dummy 模式同款。
+ *
+ * 联合层的例外是下方 issue #607 NULL-args 契约死亡用例: 调用点四实参
+ * 全编译期常量(!a 恒真), -O≥1 构建内联+死代码消除把联合层函数体连同
+ * numa/反馈符号引用折叠干净(链接零边际成本), 故以 __OPTIMIZE__ 门住;
+ * debug(-O0, 无 __OPTIMIZE__/无 DCE)下该语句会把 sdc_numa_* 符号引进
+ * 单测链接(#420 记录的链接边界, 维持原判定)。不用 NDEBUG: b_ndebug
+ * =if-release 下仅 release 定义它, 而执行单测的两条 CI lane(pr.yaml/
+ * sanitizer.yaml)均 debugoptimized——NDEBUG 门会让回归锁在 CI 从不
+ * 编译执行。lo<1 同源守卫不设独立死亡用例: 本机 GCC 12 -O3 实测, 两
+ * 用例共存时 ipa-cp 按公共常量(test/knob/solve_once)合并克隆、a 留
+ * 运行期参数, 联合层主体存活即越 #420 边界(单 NULL 用例四实参全常量,
+ * 折叠干净链接通过)。真实求解路径的联合层行为仍不进本 TU, 边界不变。
  */
 
 #include <gtest/gtest.h>
@@ -28,6 +40,7 @@
 #include "sdc_stress_config.h"
 
 #include <chrono>
+#include <sysexits.h>
 
 thread_local int thread_num = -1;
 
@@ -139,3 +152,20 @@ TEST(SdcJointKnobValue, CacheHitZeroSentinelPassesThrough)
      * 链)会被 lo 抬升破坏 */
     EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 0);
 }
+
+#if defined(__OPTIMIZE__)
+/* issue #607: sdc_joint_dim_slice 的 NULL args 是调用方编程错误, 修复前
+ * 契约静默返回 0——0 是不可用维度, 调用方模式
+ * `d->n = sdc_joint_dim_slice(...)` 直通赋值后即 0×0 矩阵、0 字节比对
+ * 的空转 PASS(no-op-pass, CLAUDE.md rule 6); 修复后必须 fail-loud:
+ * _exit(EX_SOFTWARE)=70 + stderr 消息(70 → parent 侧 OperatingSystemError
+ * 分类, issue #396 同型裁定)。死亡断言双重锁: 退出码 + stderr 含
+ * issue 标识。__OPTIMIZE__ 门的原因与 lo<1 无独立用例的折叠边界见
+ * 文件头注释。 */
+TEST(SdcJointDimSlice, NullArgsFailsLoudInsteadOfSilentZero)
+{
+    EXPECT_EXIT(sdc_joint_dim_slice(nullptr, "mdim", nullptr, nullptr),
+                ::testing::ExitedWithCode(EX_SOFTWARE), "issue #607");
+}
+
+#endif
