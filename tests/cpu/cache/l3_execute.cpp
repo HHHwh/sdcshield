@@ -4,8 +4,14 @@
  *
  * @test l3_execute
  * @parblock
- * Reads and executes code from L3 at the same time (633 #30 lineage,
- * user spec 2026-11-02).
+ * Reads and executes code through the re-fetch path at the same time
+ * (633 #30 lineage, user spec 2026-11-02).  Fetch-path honesty
+ * (2026-11-17 L3 audit): ic ivau invalidates to the PoU, which on
+ * this class of part is the private unified L2 — the 256 B hot
+ * worker stays L2-resident, so the forced re-fetch is served from
+ * L2 in practice and L3 only participates on an L2 miss.  This is
+ * an instruction-fetch-path SDC detector, not an L3 test; the
+ * historical l3 name is kept for registry stability.
  *
  * Mechanism: every iteration the worker function's instruction-cache
  * lines are invalidated (ic ivau per 64B line, then dsb ish + isb —
@@ -135,7 +141,7 @@ static int l3_execute_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(l3_execute, "Reads and executes code from L3: ic-ivau invalidation + dsb/isb resync forces re-fetch, executed results bit-compared to the init snapshot (fetch-path SDC) (ARM64)")
+DECLARE_TEST(l3_execute, "Forces instruction re-fetch (ic-ivau + dsb/isb resync) and bit-compares executed results to the init snapshot (fetch-path SDC; re-fetch served from L2-the-PoU in practice, historical l3 name kept) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = l3_execute_init,
     .test_run = l3_execute_run,
