@@ -11,6 +11,11 @@
 #define PER_THREAD_SIZE (1 << 20)      // 每个线程 1M 个 int32 = 4MB
 #define VECTOR_SIZE 4                  // NEON 每次存储 4 个 int32（128 位）
 
+// L3 几何注记（2026-11-17 L3 审计）：4MB/线程私有窗。鲲鹏 920 分布式
+// L3 = 24MB/24 核簇——簇内并发 ≤6 线程时窗驻留 L3；全簇 24 线程时聚合
+// 96MB ≫ 24MB 切片，写以流式+驱逐为主（L3 压力在、容量驻留不在）。
+// 仓库单测试独占跑法处于驻留区。
+
 namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     std::atomic<uint64_t> thread_idx;

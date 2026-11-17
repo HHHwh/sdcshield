@@ -12,6 +12,9 @@
 
 #define TOTAL_ELEMENTS 1024               // 总元素数（小工作集，保证快速完成）
 #define VECTOR_SIZE 4                     // NEON 每次处理 4 个 int32
+// 几何注记（2026-11-17 L3 审计）：工作集 4KB，设计上驻留 L1/L2——描述
+// "stores to L1/L2/L3" 指跨核一致性路径（写者→读者可见性经 L2/簇 L3
+// 切片），非容量意义上的 L3 驻留。
 #define BLOCK_ELEMENTS VECTOR_SIZE
 #define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 256
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
