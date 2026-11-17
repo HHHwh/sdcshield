@@ -1245,13 +1245,34 @@ struct sdc_joint_args {
  * sdc_knob_int_clamped(def=0) 一致: 0 = 未显式配置(-O/配置文件通道)。
  * env 兜底通道不经过本函数(sdc_env_knob_int_clamped 不写 cache), 由
  * sdc_joint_dim_slice 的 knob 早退块自行补查。
+ *
+ * issue #692: cache 键(test->id+"."+key)不含边界——命中值是按首次查询
+ * 调用点的边界 clamp 的结果, 不保证在本次调用的 [lo, hi] 内; 边界不同
+ * 的二次查询会静默拿到按旧边界 clamp 的越界值。故命中后按本次边界重
+ * clamp(0 = 未显式配置哨兵, 原样透传, 不参与 clamp), 越界时有声告警
+ * ——调用方边界分歧是缺陷信号, 不静默截断; 重 clamp 结果不回写 cache
+ * (缓存的是首次查询口径, 回写会让另一边界口径的读者失真)。现状核实
+ * (2026-11-17): 全部调用方预热边界与 ja.lo/hi 一致, 且显式值都在调用
+ * 方 init 短路——命中路径今天只返回 0, 本重 clamp 是对未来调用方形态
+ * 的防御, 既有行为逐位不变。
  */
 static inline int64_t sdc_joint_knob_value(struct test *test, const char *key,
                                            int64_t lo, int64_t hi)
 {
     auto it = sdc_knob_cache().find(sdc_knob_cache_key(test, key));
-    if (it != sdc_knob_cache().end())
-        return it->second;
+    if (it != sdc_knob_cache().end()) {
+        int64_t v = it->second;
+        if (v != 0 && (v < lo || v > hi)) {
+            int64_t clamped = v < lo ? lo : hi;
+            log_warning("%s: %s=%ld 越界 (有效 %ld..%ld; cache 键不含边界, "
+                        "与首次查询调用点的边界分歧, issue #692), "
+                        "已重 clamp 为 %ld",
+                        test ? test->id : "(global)", key, (long)v,
+                        (long)lo, (long)hi, (long)clamped);
+            return clamped;
+        }
+        return v;
+    }
     return sdc_knob_int_clamped(test, key, 0, lo, hi);
 }
 

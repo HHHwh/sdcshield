@@ -96,3 +96,46 @@ TEST(SdcCalibratedDim, HealthyProbeUnchanged)
     EXPECT_GT(fit.a_ms, 0.0);              /* mid==p1 退化回退 a=t1/p1^k */
     EXPECT_DOUBLE_EQ(fit.p, 3.0);
 }
+
+/*
+ * issue #692: sdc_joint_knob_value cache 命中重 clamp。cache 键
+ * (test->id+"."+key)不含边界——命中值是按首次查询调用点的边界 clamp
+ * 的结果, 边界不同的二次查询须按本次 [lo, hi] 重 clamp; 0(未显式配置
+ * 哨兵)透传。生产代码当前所有调用方预热边界与 ja.lo/hi 一致、且显式值
+ * 都在调用方 init 短路(命中路径今天只返回 0), 修复分支无法经真实二进制
+ * 触达——按本文件头注的机制级验证教义, 直接操作本 TU 的 cache 实例
+ * (static inline 函数局部 static, 每 TU 一份)锁定该分支契约。
+ */
+TEST(SdcJointKnobValue, CacheHitInRangePassesThrough)
+{
+    struct test t = {};
+    t.id = "ut692";
+    sdc_knob_cache()[sdc_knob_cache_key(&t, "mdim")] = 500;
+    EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 500);
+}
+
+TEST(SdcJointKnobValue, CacheHitAboveHiReclampsDown)
+{
+    struct test t = {};
+    t.id = "ut692";
+    sdc_knob_cache()[sdc_knob_cache_key(&t, "mdim")] = 5000;
+    EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 2048);  /* 修复前: 5000 */
+}
+
+TEST(SdcJointKnobValue, CacheHitBelowLoReclampsUp)
+{
+    struct test t = {};
+    t.id = "ut692";
+    sdc_knob_cache()[sdc_knob_cache_key(&t, "mdim")] = 16;
+    EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 64);    /* 修复前: 16 */
+}
+
+TEST(SdcJointKnobValue, CacheHitZeroSentinelPassesThrough)
+{
+    struct test t = {};
+    t.id = "ut692";
+    sdc_knob_cache()[sdc_knob_cache_key(&t, "mdim")] = 0;
+    /* 0 = 未显式配置哨兵, 不参与 clamp——否则 def=0 语义(→ env 兜底/自适应
+     * 链)会被 lo 抬升破坏 */
+    EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 0);
+}
