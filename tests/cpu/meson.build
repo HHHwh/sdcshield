@@ -935,7 +935,6 @@ if host_machine.cpu_family() == 'aarch64'
             'arm_add/store_visibility_cross_class_neon.cpp',
             'arm_add/store_lost_write_detect_neon.cpp',
             'arm_add/barrier_after_lock_store_neon.cpp',
-            'arm_add/barrier_after_lock_store_neon_2.cpp',
             'arm_add/low_load_cache_pressure_neon.cpp',
             'arm_add/str_instruction_stress_neon.cpp',
             'arm_add/cache_stress_clflush_neon.cpp',
@@ -1104,12 +1103,9 @@ endif
 # + init 快照 golden + 段轮转防折叠（ma_tail_probe.h）。针对实测故障
 # 签名：负载结束后连续访存对中第二个写回错位。仅 aarch64。
 #
-# 2026-11-04 增补（同一目录、非尾探针族）：L1D 旁路 NEON 化三件套
-# ma_l2evict_{rev,2src,plain}——标量负对照 movbe_l2 / mrn_rmw_l1d /
-# cache_stress_civac 的 128-bit lane 移植（civac+dsb 逐出后 reload 走
-# L2/L3，预注册预期 0 fail：检验"L1D 域 reload"必要性与 lane 宽度无关）；
-# ma_src_overl2——3ldr+ALU+2str 配方源数组 4 MiB/个（8 MiB，8× 每核 L2），
-# 源 load 走 L3/DRAM、scratch/temp/dst 保持 L1D 驻留的 footprint 判别格。
+# 注：2026-11-04 增补的 ma_l2evict_{rev,2src,plain} / ma_src_overl2 四个
+# 基测试为 co-worker 未提交 WIP（disk state 为准、fresh clone 不携带），
+# 本仓仅落地其 FP64 变体（见下方 fp64/ 块）。
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
@@ -1122,10 +1118,6 @@ if host_machine.cpu_family() == 'aarch64'
             'memory-access/ma_atomic.cpp',
             'memory-access/ma_nt.cpp',
             'memory-access/ma_alu_fixed.cpp',
-            'memory-access/ma_l2evict_rev.cpp',
-            'memory-access/ma_l2evict_2src.cpp',
-            'memory-access/ma_l2evict_plain.cpp',
-            'memory-access/ma_src_overl2.cpp',
         )
     )
 endif
