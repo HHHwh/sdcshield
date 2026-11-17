@@ -1292,7 +1292,28 @@ double sdc_feedback_eff_median(const char *test_id)
  * threads), 结果 clamp ≥ 0。读取失败(baseline=0)退化为原口径并告警一次;
  * hwm ≤ baseline(增量不可测)则不发布样本, 不写零/负值。联合求解探针的
  * 高水位仍在分子内(探针远小于 n_mem 路径的正式工作集; n_run 受限的小 n
- * 路径由读侧 4× 锚上钳兜底, 见 sdc_stress_config.h)。 */
+ * 路径由读侧 4× 锚上钳兜底, 见 sdc_stress_config.h)。
+ *
+ * issue #766: fork 基线只扣到 child 起点, init 期驻留仍在分子: 联合求解
+ * 探针的高水位(上段末句披露)与 test_init 分配的共享数据(GEMM 族
+ * lhs/rhs/prod 3 个 n² 矩阵, 24·n² B)都不随 slice 线程数缩放, 而分母
+ * n²·elem·threads 全按 T 缩放——模型把它们整摊进 per-thread 项:
+ * eff = c/elem + fixed/(n²·elem·T), 偏置 ∝ 1/T。GEMM_F64 口径
+ * eff=(24+32.256·T)/(8T)=4.032+3/T: 全核 +0.6%(T9 表值重标定 0.0290→
+ * 0.0315 已吸收该口径), -n 1 部署 +74% → c_fb≈56 B vs 真值 32.256 B,
+ * 读侧向上修正无死区全额采纳(4× 锚上钳不触发), EMA α=0.5 对该系统
+ * 偏置(非噪声)整 run 锁定 → n_mem-bound 部署 n 被压到 ~0.76n。
+ * 修法(本侧): 基线推进到 init 成功之后(见 sdc_feedback_capture_
+ * post_init), 分子 = VmHWM − init 后基线 = worker 期增量, 与分母
+ * per-thread 口径对齐, 探针/init 共享数据/父 RSS 全部自然扣除(fork
+ * 基线降级为 init 后采样失败时的兜底)。
+ * 残差如实记录(低估方向): 探针跑完释放的页可能被 worker 分配复用,
+ * VmHWM(峰值)不抬升 → 低 T 小 n 下增量低估甚至 ≤0; ≤0 走既有"增量
+ * 不可测不发布"判据, 低估由读侧 0.7×静态锚下限钳制(n 至多膨胀
+ * 1/√0.7≈1.2×), 生产构建另有 T10 bad_alloc 降档/线程级 SKIP 兜底
+ * (与 T10 worker 期 bad_alloc 残差同口径)。全核主路径: 修后分子口径
+ * 与表值(T9 重标定, 含探针高水位 ~4.7% 口径)差 ~5%, 落向下 15% 死区
+ * 维持表值, 零行为变化。 */
 static uint64_t s_feedback_vm_hwm_baseline;
 
 static void sdc_feedback_capture_baseline(void)
@@ -1300,8 +1321,19 @@ static void sdc_feedback_capture_baseline(void)
     s_feedback_vm_hwm_baseline = sdc_read_vm_hwm();
 }
 
-/* 写入点(run_one_test_inner 尾部调用): eff_ratio = (VmHWM − fork 基线)/
- * (n²·elem·本 slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/
+/* issue #766: init 成功后基线(在 run_one_test_inner 里 init 状态判定
+ * 通过之后、at_run_threads_start(纯计时钩子, 无分配)之前采样): 此后
+ * 进 child VmHWM 的只剩 worker 期驻留, 反馈分子从 #385 的 fork 口径
+ * 换成纯 worker 增量口径(动机/残差见上方注释块)。 */
+static uint64_t s_feedback_vm_hwm_post_init;
+
+static void sdc_feedback_capture_post_init(void)
+{
+    s_feedback_vm_hwm_post_init = sdc_read_vm_hwm();
+}
+
+/* 写入点(run_one_test_inner 尾部调用): eff_ratio = (VmHWM − init 后
+ * 基线)/(n²·elem·本 slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/
  * threads 取自本 child test_init 里联合求解登记的 sdc_joint_cache ——
  * 显式 knob/未迁移用例无口径则不写。写侧始终记录(±15% 死区、0.7×静态
  * 锚下限与 4×锚上钳都在读侧判断, 见 sdc_joint_dim_slice)。 */
@@ -1318,18 +1350,23 @@ static void sdc_feedback_write(const struct test *test)
     uint64_t hwm = sdc_read_vm_hwm();
     if (hwm == 0)
         return;
-    /* #385: 扣除 fork 基线(父进程 RSS 随 fork 计入本 child VmHWM)。 */
-    uint64_t baseline = s_feedback_vm_hwm_baseline;
+    /* 基线扣除: #766 优先用 init 后 VmHWM(探针高水位/init 共享数据/
+     * #385 的父 RSS 全部归基线), init 后采样失败(0)退 fork 基线
+     * (#385 口径)。 */
+    uint64_t baseline = s_feedback_vm_hwm_post_init
+                        ? s_feedback_vm_hwm_post_init
+                        : s_feedback_vm_hwm_baseline;
     uint64_t used;
     if (baseline == 0) {
         used = hwm;                     /* 基线读取失败 → 退原口径(告警) */
-        log_warning("[反馈] %s: fork 基线读取失败 → 本样本未扣除基线 "
-                    "(VmHWM=%.1f MiB, issue #385)", test->id,
-                    (double)hwm / 1048576.0);
+        log_warning("[反馈] %s: 基线读取失败(fork 与 init 后均失败) → "
+                    "本样本未扣除基线 (VmHWM=%.1f MiB, issue #385/#766)",
+                    test->id, (double)hwm / 1048576.0);
     } else if (hwm <= baseline) {
-        /* 工作集增量小于 /proc 的 1 KiB 粒度或测试根本未增长 RSS: 样本
-         * 不含有效信息, 不发布(写 0 会把 c 压向 0.7×锚下限)。 */
-        log_warning("[反馈] %s: VmHWM=%.1f MiB 未超过 fork 基线 %.1f MiB → "
+        /* 工作集增量小于 /proc 的 1 KiB 粒度、测试根本未增长 RSS, 或
+         * (#766 init 后基线下)探针释放页被 worker 复用使峰值不再抬升:
+         * 样本不含有效信息, 不发布(写 0 会把 c 压向 0.7×锚下限)。 */
+        log_warning("[反馈] %s: VmHWM=%.1f MiB 未超过基线 %.1f MiB → "
                     "无有效增量, 本 child 不发布样本", test->id,
                     (double)hwm / 1048576.0, (double)baseline / 1048576.0);
         return;
@@ -1474,6 +1511,11 @@ static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread 
             return TestResult::Skipped;
         }
 
+#if defined(__aarch64__) && defined(__linux__)
+        /* #766: init 成功后、worker 启动前采 init 后基线(反馈分子只计
+         * worker 期增量, 见 sdc_feedback_write 上方注释块)。 */
+        sdc_feedback_capture_post_init();
+#endif
         sApp->at_run_threads_start(test);
         run_threads(test);
 

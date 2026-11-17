@@ -78,7 +78,10 @@ static int gemm_mdim(struct test *test, bool *is_explicit)
      *     fam 命中 RSS 表后忽略;
      *   - shared_bytes_per_slice=0: init 持有 3 个共享矩阵 lhs/rhs/
      *     prod(3×8×n², n=4096 天花板时 403MB)——单 slice 相对节点预算 <1%
-     *     (聚合全节点约 3%, 在反馈收敛半径内), 一阶忽略(T4 同款近似);
+     *     (聚合全节点约 3%), n_mem 预算口径一阶忽略(T4 同款近似); 该项
+     *     不随 slice 线程数缩放, 在 VmHWM 反馈 eff 口径里曾被整摊进
+     *     per-thread 项(-n 1 部署 eff +74%), 现由 issue #766 框架侧统一
+     *     扣除(反馈分子基线推进到 init 后), 调用方无需登记;
      *   - run_budget_ms=200000 保持契约值(GEMM 族, T6 同款无补偿)。
      *     已知边界(T6 审查实测): compute 族 AR 表值(单节点 5.0)低估
      *     天花板足迹的 GEMM——N=3364 全核单乘实测 ~55-60s vs 静默模型
