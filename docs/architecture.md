@@ -294,7 +294,12 @@ through the joint layer's early-exit (the ten SVD template-family users
 via `calibrated_auto_dim`). The GEMM/sparse/SVE callers still
 short-circuit the knob in their own init (`if (v > 0) return v;` before
 the arch guard) — their explicit paths carry no warning yet (T11b
-follow-up; 10/32 eigen cases covered; the fourth bidiag caller was
+follow-up; 10/47 eigen cases covered — 32 at the 2026-11-03
+unification docs count + `eigen_gemm_double_ab_split` (migration
+#472 content, in the same-day unification merge; no -O mdim knob,
+dimension from the raw `GEMM_K_DIM` env) + 14 `_sve2` companions
+(2026-11-13, inits short-circuiting the knob like their `_sve`
+templates) — the covered ten unchanged; the fourth bidiag caller was
 retired with its case).
 
 x86-64 keeps the old sizing behavior via the **callers'** `#else` chains

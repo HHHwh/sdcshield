@@ -155,7 +155,12 @@ END_DECLARE_TEST
   through the joint layer via `calibrated_auto_dim`) —
   gemm/sparse/sve callers still short-circuit the knob in
   their own init (before the arch guard), no warning yet (T11b
-  follow-up; 10/32 eigen cases covered; the fourth bidiag caller was
+  follow-up; 10/47 eigen cases covered — 32 at the 2026-11-03
+  unification docs count + `eigen_gemm_double_ab_split` (migration
+  #472 content, in the same-day unification merge; no -O mdim knob,
+  dimension from the raw `GEMM_K_DIM` env) + 14 `_sve2` companions
+  (2026-11-13, inits short-circuiting the knob like their `_sve`
+  templates) — the covered ten unchanged; the fourth bidiag caller was
   retired with its case 2026-11-02). The pre-fix "ULP-level
   sporadic failure under full-core multithreading" advice is
   obsolete.
