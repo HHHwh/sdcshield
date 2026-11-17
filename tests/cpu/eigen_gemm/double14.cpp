@@ -70,8 +70,10 @@ static int gemm_mdim(struct test *test, bool *is_explicit)
      * 其余 6 文件(4 矩阵: l_* 三连 + reroll 乘积 x)的 1.5 倍。RSS 表
      * GEMM_F64(0.0315 KB = 4 矩阵×8B, T6/T9 按 4 矩阵用例差分实测)对
      * 本用例系统性低估 1.5×: 按表值求解 n≈3.5k 时峰值需求 ≈ 74 GiB,
-     * 对 ~46 GiB 节点预算必然 OOM/bad_alloc(run 期分配无 try/catch,
-     * 直接 FAIL)。故走 legacy 三元组通道(fam=SDC_RSS_INVALID)并给
+     * 对 ~46 GiB 节点预算必然 OOM/bad_alloc——T10 后 run 期分配失败已
+     * 降为窄 catch→线程级资源 SKIP(见 run() 内 bad_alloc 分流), 不再
+     * 直接 FAIL, 但退化为资源 SKIP 同样不产出压力覆盖。故走 legacy
+     * 三元组通道(fam=SDC_RSS_INVALID)并给
      * 诚实模型: 8B×6 矩阵×rss_ratio 1.0(差分口径实测 ≈ bytes×矩阵数
      * ×1.03, 见 GEMM_F64 表注释)→ c=48 B/n²/线程; VmHWM 反馈闭环照常
      * 生效(锚 = 该三元组)。若后续把 6 矩阵结构收编进 RSS 表(新增
