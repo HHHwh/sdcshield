@@ -968,6 +968,19 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/memcpy_sem_neon.cpp',
             'neon_memcpy_cache/memcpy_shuffle_neon.cpp',
             'neon_memcpy_cache/memcpy_shuffle_v2_neon.cpp',
+            # Attribution-pure NEON FMA matrix stress + dc-civac writeback
+            # coverage: hand-written 448x448 f64 vfmaq_f64 block-row GEMM
+            # (16 FMA per k-step, mirror-written to two buffers), per-
+            # iteration dc civac + dsb writeback-to-PoC of both result
+            # tiles followed by cold-reload byte-exact verify vs an
+            # independent scalar std::fma golden (issue #373 paradigm,
+            # same k-order single rounding). The 128-bit hand-written
+            # NEON FMA matrix shape had zero coverage — existing matrix
+            # suites go through libraries (eigen/acl) or SVE/SME matrix
+            # instructions (FMMLA/FMOPA). Baseline armv8.0-a NEON FMA +
+            # dc civac only, no extra -march needed (same as this block's
+            # existing dc civac users). Built only on aarch64.
+            'neon_memcpy_cache/neon_fma_gemm_flush_arm.cpp',
         )
     )
 endif
