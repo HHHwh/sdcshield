@@ -1644,3 +1644,54 @@ def test_audit_non_dry_ensures_labels(monkeypatch, tmp_path):
     monkeypatch.setattr(tl, "_paused", lambda: True)   # PAUSED 早退前已确保
     assert tl.run_audit(dry_run=False) == 0
     assert called == ["m", 1]                # 迁移后、PAUSED 闸前已确保标签
+
+
+# ============ issue #811 worktree_cleanup 回归(检视#5/#6/#7/#8) ============
+
+def test_worktree_cleanup_no_dangling_registration(tmp_path):
+    """#811 检视#8 回归(真实 git): 清理后同 key 重加必须成功——unlock→
+    remove→prune→rmtree 顺序正确,否则残留 .git/worktrees/<key> 注册令
+    同 key 下次 `git worktree add` exit 128「丢失但已注册」炸派发。"""
+    import subprocess as sp
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    g = lambda *a: sp.run(["git", "-C", str(repo), *a],
+                          capture_output=True, text=True, check=True)
+    g("init", "-q")
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (repo / "f").write_text("x")
+    g("add", "f")
+    g("commit", "-q", "-m", "init")
+    # 生产布局恒是 <clone>/.worktrees/<key>: worktree_cleanup 以
+    # dirname(dirname(path)) 反推主仓,路径不对会打错仓库(测试自证)。
+    wt = str(repo / ".worktrees" / "k")
+    g("worktree", "add", "--detach", wt, "HEAD")
+    assert os.path.exists(os.path.join(wt, "f"))
+    tl.worktree_cleanup(wt)                       # 不得抛异常
+    assert not os.path.exists(wt)                 # 目录已删
+    r = sp.run(["git", "-C", str(repo), "worktree", "add",
+                "--detach", wt, "HEAD"],
+               capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr            # 同 key 重加成功,不 exit 128
+
+
+def test_worktree_cleanup_remove_timeout_swallowed_and_prunes(
+        tmp_path, monkeypatch):
+    """#811 检视#5/#6/#7 回归: remove 挂死/超时不外抛,prune/rmtree 保底仍
+    执行——软停/派发路径不能被 cleanup 一次失败掀翻(否则夜报丢失复现)。"""
+    wt = tmp_path / "k"
+    wt.mkdir()
+    calls = []
+    def fake_run(args, **kw):
+        calls.append(tuple(args))
+        if "remove" in args:
+            raise tl.subprocess.TimeoutExpired(args, kw.get("timeout", 0))
+        return None
+    monkeypatch.setattr(tl.subprocess, "run", fake_run)
+    tl.worktree_cleanup(str(wt))                  # 不得抛异常
+    flat = [a for call in calls for a in call]
+    assert "unlock" in flat                       # unlock 前置仍在
+    assert "remove" in flat                       # remove 确实被调(且抛超时)
+    assert "prune" in flat                        # remove 抛超时后 prune 仍执行
+    assert not wt.exists()                        # rmtree 兜底仍删目录

@@ -353,6 +353,38 @@ def test_worktree_prepare_cleanup_roundtrip(tmp_path):
     assert os.path.isdir(tl._worktree_prepare(str(clone), "issue-1"))
 
 
+def test_worktree_cleanup_locked_missing_zombie(tmp_path):
+    """真实 git 集成(#811): killpg 击杀在途 agent 留下「丢失但锁定」
+    (missing-but-locked) 僵尸——locked 的 remove --force 必拒、prune 永不
+    清 locked,注册永久残留、同 key 重加炸派发(git 2.43 /tmp 实测 fatal
+    'is a missing but locked worktree');cleanup 须 unlock(容错)后再清。
+    与检视#8 的 no_dangling(健康树)互补: 本测试锁定的正是 unlock 前置
+    ——删掉它本测试即红,健康树测试不红。"""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "f.txt").write_text("x")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t",
+                    "-c", "user.name=t", "commit", "-qm", "init"], check=True)
+    wt = os.path.join(str(repo), ".worktrees", "issue-811")
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach",
+                    wt, "HEAD"], check=True)
+    # 伪造软停现场的两半: 目录丢失 + admin 标记锁定(不可清除态)
+    subprocess.run(["git", "-C", str(repo), "worktree", "lock", wt], check=True)
+    shutil.rmtree(wt)
+    # 修复前: 2.54 生产挂满 135s 超时 / 2.43 注册永久残留——须秒清不抛
+    tl.worktree_cleanup(wt)
+    # 注册清除(git 2.43 实测: 修复前 prune 跳过 locked,注册仍在)
+    assert not os.path.exists(os.path.join(str(repo), ".git", "worktrees"))
+    # 同 key 重加成功(修复前 fatal 'is a missing but locked worktree')
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach",
+                    wt, "HEAD"], check=True)
+    # 未锁容错: 健康路径 unlock exit 非零被忽略,cleanup 照常清干净
+    tl.worktree_cleanup(wt)
+    assert not os.path.exists(wt)
+    assert not os.path.exists(os.path.join(str(repo), ".git", "worktrees"))
+
+
 # ============ Task 5: 动态轮次 + reap 释放槽位 + 同 key 占位早退 ============
 
 
