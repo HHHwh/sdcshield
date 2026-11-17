@@ -48,7 +48,6 @@ static int memcpy_shuffle_run(struct test *test, int cpu) {
         __sync_synchronize();
 
         neon_copy(dst.data(), src.data(), BLOCK_SIZE);
-        dst[100] ^= 0xFF; /* INJECT */
 
         bool data_ok = (memcmp(dst.data(), src.data(), BLOCK_SIZE) == 0);
 

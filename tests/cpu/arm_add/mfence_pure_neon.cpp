@@ -67,7 +67,6 @@ static int mfence_pure_neon_run(struct test *test, int cpu) {
 
         /* NEON store to destination */
         vst1q_u64(reinterpret_cast<uint64_t *>(&d->data_dst[idx]), d->golden_dst[idx]);
-        if (idx == 100) { *reinterpret_cast<uint64_t *>(&d->data_dst[idx]) ^= 1; } /* INJECT */
 
         /* verify the loaded value against the source and the stored
          * value against the golden, both through NEON loads */

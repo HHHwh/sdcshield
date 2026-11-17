@@ -298,7 +298,6 @@ static void func_data_make(memcpy_rewr_state *st, int size)
     if (!m_tmp_p)
         return;
     neon_copy(st->gl_tester.b1, m_tmp_p, size);
-            st->gl_tester.b1[0] ^= 0xFF; /* INJECT */
 }
 
 static void func_memtest(memcpy_rewr_state *st, int size)

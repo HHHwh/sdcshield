@@ -60,7 +60,6 @@ static int memcpy_l2_cache_size_run(struct test *test, int cpu) {
         memset(dst.data() + dst_off, 0x5A, len);   // 先污染目标，懒惰复制无法通过
 
         neon_copy(dst.data() + dst_off, src.data() + src_off, len);
-        dst[dst_off] ^= 0xFF; /* INJECT */
 
         bool data_ok = (memcmp(dst.data() + dst_off, src.data() + src_off, len) == 0);
 

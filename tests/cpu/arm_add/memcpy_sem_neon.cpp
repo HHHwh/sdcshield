@@ -33,7 +33,6 @@ static void worker_thread(ThreadData *data, sem_t *sem) {
 
     // 执行内存复制
     neon_copy(data->dst.data(), data->src.data(), BLOCK_SIZE);
-    data->dst[100] ^= 0xFF; /* INJECT */
 
     // 验证数据是否一致
     data->data_ok = (memcmp(data->dst.data(), data->src.data(), BLOCK_SIZE) == 0);

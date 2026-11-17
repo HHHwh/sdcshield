@@ -35,7 +35,6 @@ static int memcpy1_run(struct test *test, int cpu) {
 
         // 执行复制
         neon_copy(dst, src, BLOCK_SIZE);
-        dst[0] ^= 0xFF; /* INJECT */
 
         // 校验
         bool passed = (memcmp(dst, src, BLOCK_SIZE) == 0);

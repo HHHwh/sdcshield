@@ -80,7 +80,6 @@ static int mem_disambig_alu_neon_run(struct test *test, int cpu) {
 
             /* NEON vector ALU result through the store buffer */
             vst1q_u64(reinterpret_cast<uint64_t *>(buffer + off), res);
-            *(reinterpret_cast<uint64_t *>(buffer + off)) ^= 1; /* INJECT */
             uint64x2_t loaded = vld1q_u64(reinterpret_cast<const uint64_t *>(buffer + off));
 
             uint64x2_t diff = veorq_u64(loaded, d->expected[i]);
