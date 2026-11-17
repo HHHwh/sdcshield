@@ -72,6 +72,53 @@ OPENBLAS_MDIM = ["64", "256", "512"]
 # 注意:--disable 接受通配符,这里用精确前缀 + 通配。
 CLOUD_DISABLE = ["mesh_upi*", "memcpy_rewr"]
 
+# CI 矩阵用例统一钉维(用户决策 2026-11-17, 根因取证见
+# docs/superpowers/plans/2026-11-17-eigen-ci-timeout-fix.md):
+#   --timeout=60s 是每测试整体墙钟预算, 而矩阵用例自适应 sizing 的设计目标是
+#   每迭代 200s(sparse 144s, 按 300s 硬看门狗口径标定) → 4 核 CI runner 上
+#   联合求解选出的大维度单迭代即超 60s(run 44011713221: 5 个 24.03 镜像一致
+#   超时——Jacobi 4 件套时间受限档 n_run≈1019-1934, sparse/float-gemm 被 hi
+#   封顶 8192, cdouble-gemm 封顶 4096; prod_n1 的 openblas d/z/c gemm 同型)。
+#   统一 -O 钉 mdim=200 走 knob 早退完全旁路 sizing 与试解探针, 单迭代毫秒级,
+#   从根上消除该超时类。代价(有意): CI 上这些用例的压测强度降为 smoke 档,
+#   本地/自建 runner 不传 -O 仍自适应; openblas 的参数覆盖由本脚本 mdim 扫谱
+#   阶段(64/256/512, 不经 COMMON)独立承担。[欠压力] 警告是显式 knob 的框架
+#   诚实披露, 属预期日志噪声。
+# 排除(勿加): SVE/SVE2 变体(eigen_*_sve/_sve2、acl_gemm_sve)——CI runner 的
+#   运行集里没有它们(arm64 spec 过滤在 list 之前), 钉维惰性; CI 实跑的 19 个
+#   非 SVE eigen + 5 个 openblas 矩阵用例全部在列。eigen_gemm_double_max_arm
+#   的下限已随 4c6297ab 放开(MDIM_MIN 1024→200), 200 原值接受。
+MATRIX_CI_DIM = 200
+MATRIX_DIM_PIN_KEYS = [
+    # Eigen SVD(BDCSVD ×6, knob clamp [64,2048]):
+    "eigen_svd.mdim", "eigen_svd_double.mdim", "eigen_svd_double2.mdim",
+    "eigen_svd_cdouble.mdim", "eigen_svd_cdouble_noavx512.mdim",
+    "eigen_svd_fvectors.mdim",
+    # Eigen SVD(Jacobi ×4, clamp [64,2048]):
+    "eigen_svd_jacobi.mdim", "eigen_svd_jacobi_double.mdim",
+    "eigen_svd_jacobi_cdouble.mdim", "eigen_svd_jacobi_fvectors.mdim",
+    # Eigen GEMM 动态方阵 ×6 + double14(clamp [16,8192]/[16,4096]):
+    "eigen_gemm_double_dynamic_square.mdim",
+    "eigen_gemm_double_dynamic_square_dump.mdim",
+    "eigen_gemm_float_dynamic_square.mdim",
+    "eigen_gemm_float_dynamic_square_dump.mdim",
+    "eigen_gemm_cdouble_dynamic_square.mdim",
+    "eigen_gemm_cdouble_dynamic_square_dump.mdim",
+    "eigen_gemm_double14.mdim",
+    # Eigen max-matrix GEMM(ARM64+SVE, clamp [200,4096] 自 4c6297ab;
+    #   CI runner 运行集无此用例, 自建 SVE 主机跑本脚本时生效):
+    "eigen_gemm_double_max_arm.mdim",
+    # Eigen 稀疏 Cholesky(knob 名为 n, clamp [64,8192]):
+    "eigen_sparse.n",
+    # OpenBLAS GEMM ×4 + LU(knob mdim/n, clamp [16,16384];
+    #   prod 阶段曾同型超时, 参数覆盖由 mdim 扫谱阶段独立承担):
+    "openblas_dgemm.mdim", "openblas_sgemm.mdim", "openblas_zgemm.mdim",
+    "openblas_cgemm.mdim", "openblas_lu.n",
+]
+MATRIX_DIM_PINS = []
+for _k in MATRIX_DIM_PIN_KEYS:
+    MATRIX_DIM_PINS += ["-O", f"{_k}={MATRIX_CI_DIM}"]
+
 
 def run(cmd, timeout=900):
     """跑一条命令,返回 (exit_code, stdout_text)。容器内用 --ignore-timeout 规避 cgroup 超时误报。
@@ -220,8 +267,11 @@ def main():
     #      `- { test: x, result: pass }`, 且无 test-runtime/state/seed 行)。本脚本的
     #      逐条解析(RESULT_RE/RESULT_VAL/SEED_*_RE 只认多行块格式)、F-009 种子链与
     #      report-summary.py 的耗时矩阵都依赖完整条目 —— CI 消费者必须 opt-in 恢复。
+    #   + MATRIX_DIM_PINS: 全部矩阵用例统一 -O mdim=200 钉维(根因/清单依据见顶部
+    #      MATRIX_CI_DIM 注释与 plan 文档) —— COMMON 同时覆盖 all-quality(-n1) 与
+    #      all-PROD n1/4/8 两个超时现场。
     COMMON = ["-vvv", "--full-log", "--retest-on-failure=0", "--max-test-loop-count", "3",
-              "--timeout=60s", "--max-messages", "0", "--ignore-timeout"]
+              "--timeout=60s", "--max-messages", "0", "--ignore-timeout"] + MATRIX_DIM_PINS
     # 云 runner 拓扑缺失:mesh_upi_*/memcpy_rewr 需多 NUMA 真实硅,单 socket VM 挂死 → 排除
     CLOUD_DIS = []
     for pat in CLOUD_DISABLE:

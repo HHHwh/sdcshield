@@ -33,6 +33,12 @@
 
 ## 修复设计：pin 档位表（核心决策，逐项给出依据）
 
+> **[2026-11-17 实施期设计变更（用户决策）]** 本节原设计为逐测试调档（512/256/4096/2048），
+> 实施中被用户改为**全部矩阵用例统一 `mdim=200`**（更简单、且顺带覆盖 openblas 同型
+> 超时），并为使 `eigen_gemm_double_max_arm`（clamp 下限原为 1024）接受 200 而配套
+> `MDIM_MIN 1024→200` 源码级例外（用户明确指示）。下表保留为根因档位依据；最终实施
+> 见文末「最终实施记录」。
+
 档位原则：按 CI 实测试解幂律外推，**首迭代（preamble+DUT1）≤ ~13s、全程 ≤ ~13s**，对 60s 预算 ≥4.5× 墙钟裕度；对超时档（hi/n_run）单解成本 **8-32× 缩小**；全部落在 knob clamp 区间；与历史硬编码同数量级（jacobi 256 / sparse 256 / gemm 221 的老 CI 曾全绿）。
 
 | `-O` 键 | cap | 依据（CI 试解外推单解耗时@cap） | 预计 CI 全程 |
@@ -47,7 +53,7 @@
 | eigen_gemm_cdouble_dynamic_square.mdim | 2048 | fill+1乘 3.1s | ~10-13s |
 | eigen_gemm_cdouble_dynamic_square_dump.mdim | 2048 | 同上 | ~10-13s |
 
-实现形态：`verify-params.py` 顶部（`CLOUD_DISABLE` 之后）加 `EIGEN_CI_DIMS` dict + 展开为 `EIGEN_DIM_PINS`（`["-O", "<key>=<cap>", ...]`），`COMMON` 追加 `+ EIGEN_DIM_PINS`；注释块写根因一行版 + 指向本 plan。COMMON 被 allquality 与全部 prod_n 阶段共用——一处注入覆盖两个超时现场；smoke（zstd19 only）与 openblas mdim 扫谱（自带 -O）不经 COMMON，零影响。
+实现形态（原设计）：`verify-params.py` 顶部（`CLOUD_DISABLE` 之后）加 `EIGEN_CI_DIMS` dict + 展开为 `EIGEN_DIM_PINS`（`["-O", "<key>=<cap>", ...]`），`COMMON` 追加 `+ EIGEN_DIM_PINS`；注释块写根因一行版 + 指向本 plan。COMMON 被 allquality 与全部 prod_n 阶段共用——一处注入覆盖两个超时现场；smoke（zstd19 only）与 openblas mdim 扫谱（自带 -O）不经 COMMON，零影响。
 
 ## Global Constraints
 
@@ -205,3 +211,59 @@ git commit -s -m "fix(gha): verify-params.py 为 9 个 eigen 用例注入 -O 钉
   - 验证边界：本机 128 核 vs CI 4 核——pin 旁路 sizing 后唯一差异是固定维度单解速度，CI 预测锚定 CI 实测试解数据（≥4.5× 裕度）；**终验 = 合并后次日 nightly 5 个 24.03 镜像 allquality 9 例全 pass**；
   - 修后 PR CI（pr.yaml 自身）预期绿。
 - [ ] **Step 3:** 报告用户：根因结论（逐用例）、最终方案、每 commit 验证输出引文、PR 链接、未尽事项与边界。
+
+---
+
+## 最终实施记录（2026-11-17，含实施期设计变更）
+
+**用户实施期决策（逐条，覆盖原 plan 对应项）：**
+
+1. **统一 mdim=200**（覆盖原逐测试调档表）：CI 配置中所有矩阵用例默认 `mdim=200`。
+   清单从 9 例扩为 **24 个矩阵 knob 键**（含 CI 实跑的全部 19 个非 SVE eigen +
+   5 个 openblas 矩阵用例），顺带覆盖原范围外的 openblas prod_n1 同型超时。
+   SVE/SVE2 变体不在 CI runner 运行集（arm64 spec 过滤先于 list，run 44011713221
+   allquality 242 条目中 `_sve` 计数为 0），钉维惰性，明确排除。
+2. **`eigen_gemm_double_max_arm` 下限放开**（源码级例外，用户明确指示）：
+   `MDIM_MIN 1024→200`（tests/cpu/eigen_gemm/gemm_double_max_arm.cpp），使显式
+   200 原值接受。行为面（实测）：自适应路径不变（本机 `-n 1` 联合求解
+   `n_mem=25562 n_run=8364 → 4096`，lo 仅兜底）；变化仅 probe 失败退守与 quick
+   收缩档 1024→200（更保守方向）+ 显式 200..1023 由钳 1024 变为原值接受。
+   x86 零接触（TU 在 `tests_set_sve` ARM64 专属 source set）。
+3. **交付方式**：不开 PR，两个 commit 直接合到 main 并 push（用户指示，覆盖
+   原 plan 的 PR 流程与 CLAUDE.md rule 3 的本次适用性；rule 2 的 100% 实证
+   验证不折不扣执行）。
+
+**commit 序列（fix/eigen-ci-timeout → main）：**
+
+- `0a40818a` docs(plan): 本计划（原逐测试调档设计）。
+- `4c6297ab` fix(eigen): gemm_double_max_arm MDIM_MIN 1024→200。
+- （本 commit）fix(gha): verify-params.py 统一矩阵 mdim=200 钉维 + plan 定稿。
+
+**验证证据（本机 SVE1-256 / 128 核，全部真实输出）：**
+
+- 改前复现（CI 口径逐字同款、无 pin、9 用例清单）：**9/9 `result: timed out`**，
+  loop-count 0，runtime 61.8-75.9s；sizing 现场与 CI 同构——Jacobi 时间受限档
+  `n_run=715/957/1315/1345`（设计 200s/迭代，任何主机 60s 必死）、
+  float-gemm/float-dump `→ 8192`（hi 封顶）、cdouble-gemm/cdouble-dump `→ 4096`
+  （hi 封顶）、sparse `n_run=5827`。
+- 改后（脚本构造的 48 个 pin 参数逐字进 argv、24 用例清单、CI 口径同款命令）：
+  **24/24 `result: pass`**，最慢 eigen_svd_jacobi_cdouble 3349ms（对 60s 预算
+  18× 裕度），其余 4ms-551ms；YAML 中全部 `显式 200`（唯一值，零 clamp 改档），
+  max_arm `N=200` 实跑；全程零 `[时间校准]`/`[联合求解]` sizing 行（旁路实证）。
+- 脚本级：`py_compile` 过；模块断言 24 键/48 参数/全 `=200`；
+  `verify-params.py --smoke` 端到端 `RESULT: PASS`。
+- 回归：`-e zstd19 -t 2000 -n 1` → `exit: pass`；`./scripts/build.sh` 干净零新警告。
+
+**诚实边界：**
+
+- 本机 128 核 ≠ CI 4 核：pin 旁路 sizing 后唯一主机差异是固定维度 200 的单解
+  速度；本机最慢 3.35s、CI 试解幂律外推 200 档单解毫秒级——两个口径都有大裕度。
+  **终验 = 合并后次日 nightly（multi-os-verify cron）5 个 24.03 镜像 allquality**
+  中 24 例全 pass；20.03/22.03 在 #661 Build 修复前无法到达 Verify 步骤。
+- CI 压测强度口径变化（有意，用户决策）：矩阵用例在 CI 从自适应大维度降为
+  统一 200 的 smoke 档；本地/自建 runner 不传 `-O` 仍自适应。openblas 参数
+  覆盖由 mdim 扫谱阶段（64/256/512）独立承担。
+- 范围外遗留：acl_gemm_sve 在 prod_n4 超时（CI runner 无 SVE，疑似缺 arm64
+  门控，需单独查证——非本轮 9 例同型，未处理）；#661 Build 红另案。
+- `[欠压力]`/`mdim=200` 相关告警与 knob 回显是显式钉维的框架诚实披露，属预期
+  日志噪声（部分 GEMM 族走调用方短路无 T11 警告，为已知 T11b 跟进项）。
