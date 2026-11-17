@@ -585,39 +585,59 @@ tests_set_skx.add(
 # four tiers (128/256/512/1024) since the issue #410 ptranspose scatter
 # rewrite (see the loop's comment). VL plumbing:
 # framework/device/cpu/arm64/arm64_vl.h.
+# eigen_sve2_companion_capable: the 14 _sve2 companion dispatch TUs below
+# link against payload libraries compiled for -march=armv9-a+sve2 (the
+# eigen_sve_body_specs loop), which GCC <= 12 cannot parse ("unknown value
+# for -march"). Probe the compiler and degrade gracefully — the companions
+# simply stay absent, the same gmp/acl/openblas pattern as the FMMLA/SVE2/
+# SME libs in tests/cpu/arm64/meson.build. The 14 SVE1 counterparts stay
+# byte-identically built.
+eigen_sve2_march = '-march=armv9-a+sve2'
+eigen_sve2_companion_capable = host_machine.cpu_family() == 'aarch64' and cpp.has_argument(eigen_sve2_march)
+if host_machine.cpu_family() == 'aarch64' and not eigen_sve2_companion_capable
+    message('Compiler lacks ' + eigen_sve2_march + ' support - the 14 Eigen ' +
+            '_sve2 companion tests are not built (SVE1 counterparts unaffected)')
+endif
 tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
         'eigen_gemm/gemm_double_max_arm.cpp',
-        'eigen_gemm/gemm_double_max_arm_sve2.cpp',
         'eigen_gemm/gemm_double_dynamic_square_sve.cpp',
-        'eigen_gemm/gemm_double_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_float_dynamic_square_sve.cpp',
-        'eigen_gemm/gemm_float_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square_sve.cpp',
-        'eigen_gemm/gemm_cdouble_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_double14_sve.cpp',
-        'eigen_gemm/gemm_double14_sve2.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
-        'eigen_svd/svd_cdouble_sve2.cpp',
         'eigen_svd/svd_double_sve.cpp',
-        'eigen_svd/svd_double_sve2.cpp',
         'eigen_svd/svd_double2_sve.cpp',
-        'eigen_svd/svd_double2_sve2.cpp',
         'eigen_svd/svd_float_sve.cpp',
-        'eigen_svd/svd_float_sve2.cpp',
         'eigen_svd/svd_fvectors_sve.cpp',
-        'eigen_svd/svd_fvectors_sve2.cpp',
         'eigen_svd_jacobi/svd_cdouble_sve.cpp',
-        'eigen_svd_jacobi/svd_cdouble_sve2.cpp',
         'eigen_svd_jacobi/svd_double_sve.cpp',
-        'eigen_svd_jacobi/svd_double_sve2.cpp',
         'eigen_svd_jacobi/svd_float_sve.cpp',
-        'eigen_svd_jacobi/svd_float_sve2.cpp',
         'eigen_svd_jacobi/svd_fvectors_sve.cpp',
-        'eigen_svd_jacobi/svd_fvectors_sve2.cpp',
     )
 )
+if eigen_sve2_companion_capable
+    tests_set_sve.add(
+        when : eigen3_dep,
+        if_true : files(
+            'eigen_gemm/gemm_double_max_arm_sve2.cpp',
+            'eigen_gemm/gemm_double_dynamic_square_sve2.cpp',
+            'eigen_gemm/gemm_float_dynamic_square_sve2.cpp',
+            'eigen_gemm/gemm_cdouble_dynamic_square_sve2.cpp',
+            'eigen_gemm/gemm_double14_sve2.cpp',
+            'eigen_svd/svd_cdouble_sve2.cpp',
+            'eigen_svd/svd_double_sve2.cpp',
+            'eigen_svd/svd_double2_sve2.cpp',
+            'eigen_svd/svd_float_sve2.cpp',
+            'eigen_svd/svd_fvectors_sve2.cpp',
+            'eigen_svd_jacobi/svd_cdouble_sve2.cpp',
+            'eigen_svd_jacobi/svd_double_sve2.cpp',
+            'eigen_svd_jacobi/svd_float_sve2.cpp',
+            'eigen_svd_jacobi/svd_fvectors_sve2.cpp',
+        )
+    )
+endif
 
 # ARM64-only SVE SDC probes: SVE/SVE2 ports of the core-179 NEON attribution
 # family (tests/cpu/misc/neon_rot_ldr_at_top*.cpp). All-VL Phase 2 P5 —
@@ -1364,9 +1384,15 @@ if host_machine.cpu_family() == 'aarch64'
         pfx = spec[1]
         stack_limit_1024 = spec[2]
         # [suffix, march, Eigen-ns-prefix]: sve keeps the existing
-        # names/args byte-identical; sve2 adds the armv9-a+sve2 target.
-        foreach tgt : [['',   'armv8.2-a+sve', 'EigenSVE'],
-                       ['_sve2', 'armv9-a+sve2', 'EigenSVE2']]
+        # names/args byte-identical; sve2 adds the armv9-a+sve2 target —
+        # only when the compiler accepts it (eigen_sve2_companion_capable,
+        # probed near the dispatch-TU block; GCC <= 12 rejects the march).
+        # Meson foreach has no 'continue', so the row is dropped here.
+        eigen_sve_targets = [['', 'armv8.2-a+sve', 'EigenSVE']]
+        if eigen_sve2_companion_capable
+            eigen_sve_targets += [['_sve2', 'armv9-a+sve2', 'EigenSVE2']]
+        endif
+        foreach tgt : eigen_sve_targets
             foreach tier : ['128', '256', '512', '1024']
                 eigen_tier_args = [
                     '-march=' + tgt[1],

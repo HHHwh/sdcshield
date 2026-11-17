@@ -819,6 +819,13 @@ instead of assuming one tier:
   objdump-audited) — the companion is an SVE2-gated entry point and a
   compile-target declaration, NOT SVE2-only datapath coverage; without
   SVE2 hardware it registers only via explicit `-e` and skips honestly.
+  Compiler gate: the `_sve2` target (both the payload loop and the 14
+  dispatcher TUs) is guarded by `cpp.has_argument('-march=armv9-a+sve2')`
+  (`eigen_sve2_companion_capable` in `tests/cpu/meson.build`) — compilers
+  that cannot parse armv9-a (e.g. GCC <= 12) degrade gracefully: the
+  companions are not built, the SVE1 counterparts stay byte-identically
+  built (same `cpp.has_argument` convention as the FMMLA/SVE2/SME libs
+  in `tests/cpu/arm64/meson.build`).
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 
