@@ -15,6 +15,16 @@ using arm_add_neon::neon_copy;
 static constexpr size_t BLOCK_SIZE = 4096;  // 4KB，包含多个缓存行
 static constexpr size_t CACHE_LINE = 64;
 
+/* ARM64 数据缓存行 clean+invalidate（CLFLUSH 等价），配合 dsb sy 冲刷。
+ * 注意：__builtin___clear_cache 是 I-cache 维护原语（ic ivau+isb），不是
+ * 数据缓存冲刷，不能用来制造本测试宣称的 dc-civac 干扰。 */
+static inline void dc_civac(void *addr) {
+    __asm__ volatile("dc civac, %0" :: "r"(addr) : "memory");
+}
+static inline void dsb_sy() {
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
 static int memcpy_shuffle_init(struct test *test) {
     (void)test;
     return EXIT_SUCCESS;
@@ -39,13 +49,10 @@ static int memcpy_shuffle_run(struct test *test, int cpu) {
         size_t src_off = offset_dist();
         size_t dst_off = offset_dist();
 
-        // ARM64 兼容的缓存行冲刷（使用 __builtin___clear_cache）
-        __builtin___clear_cache((char*)src.data() + src_off,
-                                (char*)src.data() + src_off + CACHE_LINE);
-        __builtin___clear_cache((char*)dst.data() + dst_off,
-                                (char*)dst.data() + dst_off + CACHE_LINE);
-        // 内存屏障，确保冲刷完成
-        __sync_synchronize();
+        // ARM64 数据缓存行冲刷：dc civac + dsb sy（真正刷数据缓存）
+        dc_civac(src.data() + src_off);
+        dc_civac(dst.data() + dst_off);
+        dsb_sy();
 
         neon_copy(dst.data(), src.data(), BLOCK_SIZE);
 
@@ -69,7 +76,7 @@ static int memcpy_shuffle_finish(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(memcpy_shuffle_neon, "Memory copy with cache flush interference (using __clear_cache)")
+DECLARE_TEST(memcpy_shuffle_neon, "Memory copy with dc-civac cache flush interference (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = memcpy_shuffle_init,
     .test_run = memcpy_shuffle_run,
