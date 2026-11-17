@@ -68,5 +68,18 @@ int sdc_numa_effective_threads_selected(int cpu, int *total_selected);
  * 由读侧 4×静态锚上钳兜底)。 */
 uint64_t sdc_read_vm_hwm(void);
 
+/* 联合口径查询回调的注册点(issue #747 依赖倒置修复): 配置层
+ * (sdc_stress_config.h)在登记口径时把查询函数注册给框架, 框架的
+ * VmHWM 反馈写入点经回调取 per-test 联合求解口径(n/slice 线程数/
+ * 元素字节)——调度 TU 不再 include 配置层头、不直接查其跨 TU 账本,
+ * 框架与测试 sizing 机制解耦。回调契约: test_id 无登记条目或口径无效
+ * 返回 false; 三个出参仅在返回 true 时写入。注册须先于读取: 配置层与
+ * 反馈写入点同在 child 进程内(init 登记在先、run 尾写入在后), child
+ * 从 parent fork 时本指针为 null(parent 不跑 test_init)——未走联合
+ * 求解的 child 无注册/无条目, 写入点不写(与修复前无条目口径一致)。 */
+typedef bool (*sdc_joint_ctx_lookup_fn)(const char *test_id, int *n,
+                                        int *threads, int *elem_bytes);
+void sdc_register_joint_ctx_lookup(sdc_joint_ctx_lookup_fn fn);
+
 #endif /* __aarch64__ && __linux__ */
 #endif

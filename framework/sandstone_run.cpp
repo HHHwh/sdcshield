@@ -58,10 +58,11 @@
 #include <device/cpu/arm64/arm64_spec_prepare.h>
 
 #if defined(__aarch64__) && defined(__linux__)
-/* T7 VmHWM 反馈闭环(spec §4.4): sdc_joint_cache(联合求解口径登记) +
- * sdc_read_vm_hwm。仅 arm64 门控 —— x86 的 Main::mem_feedback 字段编译
- * 存在但无写入/读取者(rule 5, 见 test_data.h)。 */
-# include "sdc_stress_config.h"
+/* T7 VmHWM 反馈闭环(spec §4.4): 联合口径经配置层注册的查询回调获取
+ * (sdc_register_joint_ctx_lookup, issue #747)+ sdc_read_vm_hwm。调度
+ * TU 不再 include 配置层头 sdc_stress_config.h(依赖倒置修复, #747)。
+ * 仅 arm64 门控 —— x86 的 Main::mem_feedback 字段编译存在但无写入/
+ * 读取者(rule 5, 见 test_data.h)。 */
 # include "sdc_numa.h"
 # include <algorithm>
 #endif
@@ -1236,6 +1237,16 @@ static uint64_t sdc_test_id_hash(const char *s)
     return h;
 }
 
+/* 联合口径查询回调(sdc_numa.h 声明的注册点, #747): 配置层在登记口径时
+ * 注册, 本 TU 的反馈写入点经回调取数 —— 调度器不再 include 配置层头、
+ * 不再直接持有对测试 sizing 账本的知识。 */
+static sdc_joint_ctx_lookup_fn s_joint_ctx_lookup;
+
+void sdc_register_joint_ctx_lookup(sdc_joint_ctx_lookup_fn fn)
+{
+    s_joint_ctx_lookup = fn;
+}
+
 /* 读侧聚合(sdc_stress_config.h 声明, 仅 arm64 联合求解分支调用): 遍历
  * 全部 slice 的 Main::mem_feedback 槽(MAP_SHARED shmem; 子进程经
  * raw_main_thread_data 从 shmem 头重算数组基址读兄弟槽), 同 test 哈希的
@@ -1334,17 +1345,19 @@ static void sdc_feedback_capture_post_init(void)
 
 /* 写入点(run_one_test_inner 尾部调用): eff_ratio = (VmHWM − init 后
  * 基线)/(n²·elem·本 slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/
- * threads 取自本 child test_init 里联合求解登记的 sdc_joint_cache ——
- * 显式 knob/未迁移用例无口径则不写。写侧始终记录(±15% 死区、0.7×静态
- * 锚下限与 4×锚上钳都在读侧判断, 见 sdc_joint_dim_slice)。 */
+ * threads 经配置层注册的查询回调取自本 child test_init 里联合求解登记
+ * 的口径(issue #747; 回调未注册 = 未走联合求解/显式 knob, 无口径则
+ * 不写)。写侧始终记录(±15% 死区、0.7×静态锚下限与 4×锚上钳都在读侧
+ * 判断, 见 sdc_joint_dim_slice)。 */
 static void sdc_feedback_write(const struct test *test)
 {
     if (!test || !test->id)
         return;
-    auto it = sdc_joint_cache().find(test->id);
-    if (it == sdc_joint_cache().end())
+    struct s_joint_ctx_view { int n, threads, elem_bytes; } ctx;
+    if (!s_joint_ctx_lookup
+            || !s_joint_ctx_lookup(test->id, &ctx.n, &ctx.threads,
+                                   &ctx.elem_bytes))
         return;
-    const struct sdc_joint_ctx &ctx = it->second;
     if (ctx.n <= 0 || ctx.threads <= 0 || ctx.elem_bytes <= 0)
         return;
     uint64_t hwm = sdc_read_vm_hwm();

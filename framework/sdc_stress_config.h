@@ -1187,6 +1187,24 @@ inline std::map<std::string, struct sdc_joint_ctx> &sdc_joint_cache()
     return cache;
 }
 
+/* issue #747: 联合口径查询回调 —— 配置层把它注册给框架(sdc_numa.h 的
+ * sdc_register_joint_ctx_lookup, 登记处调用), 框架反馈写入点经回调取
+ * 口径, 调度 TU 不再 include 本头。impl 可用 static inline(每 TU 一份
+ * 副本无害: 各副本查的都是同一份外部链接 map, 框架经指针调用不内联);
+ * x86 编译存在但无人注册、无人经指针调用(框架写入点在 arm64 门控内),
+ * 与 inline map 同为「编译存在、无行为」现状。 */
+static inline bool sdc_joint_ctx_lookup_impl(const char *test_id, int *n,
+                                             int *threads, int *elem_bytes)
+{
+    auto it = sdc_joint_cache().find(test_id);
+    if (it == sdc_joint_cache().end())
+        return false;
+    *n = it->second.n;
+    *threads = it->second.threads;
+    *elem_bytes = it->second.elem_bytes;
+    return true;
+}
+
 /* T10 降档路径的反馈口径失效(issue #545; 取代 PR#302 检视 #25 的
  * 『同步分母』修复): init 期 bad_alloc 降档到 kInitRetryLo 重试成功后,
  * run_one_test_inner 尾部的反馈写入点按 ctx.n 折算 eff_ratio
@@ -1633,10 +1651,13 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                 n_mem, n_run, ar, c_bytes, n, (double)node_budget / 1073741824.0);
     /* 口径登记(T7): run_one_test_inner 尾部的反馈写入点据此折算
      * eff_ratio = VmHWM/(n²·elem·threads)。threads 用本 slice 的
-     * thread_count()(child_run 已改写为 slice 口径)。 */
+     * thread_count()(child_run 已改写为 slice 口径)。同步把查询回调
+     * 注册给框架(issue #747, 幂等: 重复登记重注册同一 map 的查询路径),
+     * 框架写入点经回调取数, 不再直接查本账本。 */
     if (test && test->id) {
         struct sdc_joint_ctx ctx = { n, slice_thr, a->bytes_per_elem, c_bytes };
         sdc_joint_cache()[test->id] = ctx;
+        sdc_register_joint_ctx_lookup(sdc_joint_ctx_lookup_impl);
     }
     return n;
 #else
