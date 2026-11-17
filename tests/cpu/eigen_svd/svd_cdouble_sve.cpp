@@ -109,8 +109,10 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
 /* Runtime dimension mode: the template allocates and compares against
  * d->dim, which the CHILD test_init derives (knob/env > joint solver). */
 
-/* Dimension bounds (measurement history: cortex x3b, VL=128 pinned, same
- * compile flags as this TU, 2026-09-19 — plan file
+/* Dimension bounds (measurement history: HiSilicon part 0xd02 SVE1 host
+ * (its `--dump-cpu-info` label "cortex x3b" is a feature-signature
+ * match, not the MIDR identity), VL=128 pinned, same compile flags
+ * as this TU, 2026-09-19 — plan file
  * docs/superpowers/plans/2026-09-19-svd-cdouble-sve-mdim-5800.md):
  *
  *   MDIM_MIN  = 300: the NEON counterpart's parity point; the floor and
@@ -209,7 +211,7 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  *           binds first) and the 5× timeout factor absorbing the
  *           model's own error.
  *   auto:  dur = 0.95 × min(RUN_BUDGET, AR × 2 × t(n_hi)),  t(N) =
- *           243.4s·(N/4400)³ + 1s  (x3b single-solve fit, within ±2% of
+ *           243.4s·(N/4400)³ + 1s  (0xd02 single-solve fit, within ±2% of
  *           the measured points at N>=2400) — the same full-core
  *           single-iteration shape the child's n_run calibrates against
  *           (sdc_joint_dim_slice: run_budget = AR×2×t(n_run); AR from
