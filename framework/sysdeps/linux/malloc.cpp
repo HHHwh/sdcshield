@@ -58,6 +58,16 @@ static void *bzero_block(void *ptr, size_t len)
     return memset(ptr, 0, len);
 }
 
+// Reachability contract with test code (issue #640): this link-level
+// override never returns NULL to callers — a failed allocation terminates
+// the process right here (raise(SIGKILL) below 256 MiB, abort() above).
+// operator new therefore never observes a NULL return and std::bad_alloc
+// is structurally unreachable in production builds: every
+// catch (const std::bad_alloc &) in the tests (e.g. the T10 eigen
+// init down-grade / worker thread-level SKIP paths) fires only in
+// sanitizer builds, where this whole override is compiled out by the
+// __SANITIZE_* guard above. Production OOM always manifests as this
+// crash (framework-reported OutOfMemory), never as a resource SKIP.
 static __attribute__((noinline, noreturn)) void null_pointer_consumption(void *ptr, size_t size)
 {
     static const char msg[] = "Out of memory condition\n";

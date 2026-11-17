@@ -62,7 +62,13 @@
  * malloc.cpp 的链接级 malloc 覆盖, 分配失败被 null_pointer_consumption
  * 拦截直接 raise(SIGKILL), bad_alloc 在生产构建不可达——显式 mdim 内存
  * 不足在生产构建表现为 crash(TestResult::OutOfMemory)而非降档假 PASS;
- * 本 catch 分流在异常可达构建(ASAN/TSAN, 插桩被 __SANITIZE_* 排除)生效。
+ * 本头的 init catch 分流与族内各用例 run() 的同型 bad_alloc→线程级
+ * SKIP catch——double14 与 {double,float,cdouble}_dynamic_square{,_dump}
+ * (include 本头的 7 用例)及 4 个不 include 本头的 per-tier body
+ * (gemm_double_max_arm_body / gemm_{f64,f32}_sve_body / gemm_c128_sve_body,
+ * 由各 dispatcher include)——均只在异常可达构建(ASAN/TSAN, 插桩被
+ * __SANITIZE_* 排除)生效, 生产 run 期分配失败同样表现为 crash(issue
+ * #640: 族级边界自此声明在代码处, 不再只存于已出库的 plan 文档)。
  * dump 变体的冻结回放轮读 d->lhs/rhs/prod——降档后三者与 d->dim 同档
  * 一致(降档路径对 dump 同样成立); 显式 SKIP 路径 run 不执行, 无交互。 */
 template <typename Data>

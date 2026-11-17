@@ -369,7 +369,16 @@ template <typename SVD, int Dim> struct EigenSVDTest
          * 同论证)。比对段(compare_or_fail → memcmp_or_fail →
          * report_fail)恒在 catch 之外——SDC 误配必须打红, 绝不能被资源
          * 性 SKIP 吞掉。worker 期不做降档重试(m2: 改共享 d->dim 有跨
-         * 线程竞态, 且 v1 的重试+FAIL 语义与先例相反, 已撤销)。 */
+         * 线程竞态, 且 v1 的重试+FAIL 语义与先例相反, 已撤销)。
+         *
+         * 可达性边界(issue #640): 生产构建链接 framework/sysdeps/linux/
+         * malloc.cpp 的链接级 malloc 覆盖——分配失败被
+         * null_pointer_consumption 直接 raise(SIGKILL)/abort, 不返回
+         * NULL, bad_alloc 无从抛出, 本 SKIP 在生产不可达(实测 ulimit
+         * 逼 OOM → crash 而非 skip); 生产 OOM 表现为 crash
+         * (OutOfMemory)。catch 分流仅在异常可达构建生效(ASAN/TSAN,
+         * 插桩被 __SANITIZE_* 排除; ASAN 实证 allocator_may_return_null
+         * =1 → result: skip)。 */
         Mat orig, u_gold, v_gold, u, v;
         try {
             orig.resize(d->dim, d->dim);
