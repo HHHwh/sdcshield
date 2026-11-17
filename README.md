@@ -458,7 +458,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 # 形态扫谱：转置组合 + β 读改写路径
 ./builddir/sdcshield -e openblas_zgemm -O openblas_zgemm.transab=3 -O openblas_zgemm.beta_permille=500 -t 15m
 
-# ipsec 载荷 1024B→16MB：AES/3DES/SHA 数据路径从 L1 压到 DRAM（46 个 NEON ipsec 用例同款参数名 .datasize；24 个 SVE 变体为 .data_size，域 1024..约 1900 受 HMAC 组装缓冲约束）
+# ipsec 载荷 1024B→16MB：AES/3DES/SHA 数据路径从 L1 压到 DRAM（46 个 NEON ipsec 用例同款参数名 .datasize；24 个 SVE 变体为 .data_size——7 个 CMAC/XCBC/GCM 变体同域 1024..16MB，17 个 HMAC/SHA2 变体域 1024..1900/1830 受 HMAC 组装缓冲约束）
 ./builddir/sdcshield -e ipsec_aes128_cbc_hmac_sha1_sse -O ipsec_aes128_cbc_hmac_sha1_sse.datasize=16777216 -t 5000
 
 # SLEEF 足迹扩到 6MB（默认内存自适应；显式 262144 元素 ≈ 6MB）
@@ -499,7 +499,8 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `random_access_sweep` | `.size_mb` / `.mode` / `.valmode` | 4..512（MiB，钳制）/ 0\|1 / 0\|1\|2（mode/valmode 域外值静默按 0 处理） | 内存自适应（60% MemAvailable÷线程，8..512MiB）/ 0 / 0 | 大 mmap 随机扫掠区大小（MiB）/ 地址模式（0=随机偏移，1=顺序）/ 值模式（0=随机，1=固定模式，2=边界特殊值） |
 | `low_load_cache_pressure{,_neon}` | `.duty_us` | 500..3000（静默钳制） | 1000 | 低占空比（5-30%）跨 die 存→远端读扫掠的窗口占空时长（µs） |
 | `ipsec_*`（46 个 NEON 变体） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM |
-| `ipsec_*_sve*`（24 个 SVE 变体） | `.data_size`（snake_case） | 1024..约 1900（HMAC 组装缓冲上限，clamp） | 内存自适应（流数=运行时 lane 数） | 多流 HMAC 载荷尺寸 |
+| `ipsec_*_sve*`（17 个 HMAC/SHA2 变体） | `.data_size`（snake_case） | 1024..1900（sha384/512 变体上限 1830；HMAC 组装缓冲上限，clamp） | 内存自适应（流数=运行时 lane 数） | 多流 HMAC 载荷尺寸 |
+| `ipsec_*_sve*`（7 个 CMAC/XCBC/GCM 变体：`*aes_cmac*` / `*xcbc*` / `*gcm*`） | `.data_size`（snake_case） | 1024..16MB（clamp，16B 对齐） | 内存自适应 | 加密/解密/MAC 载荷尺寸（单流 OpenSSL EVP 数据通路） |
 | `sve512_{f32,f64}_chain_{arm,svd}` | `.bounded` | 0\|1 | 1 | 有界/无界操作数值域（SEVI Obs.19：SDC 频率差 245×） |
 | `sve512_nt_reload_arm` | `.distance` | 1..4 | 2 | 栈重装载距离（NUMA3 VA 通路触发指令窗口） |
 | `acl_gemm_sve` | `.dim` | 64..4096（clamp） | 内存自适应 | ACL NEGEMM F32 GEMM 方阵维度 |
