@@ -56,17 +56,26 @@ static int gemm_solve_once(int n)
 // priority chain (see sdc_stress_config.h):
 //   1. -O eigen_gemm_double_dynamic_square_dump.mdim=N (or the same key in
 //      sdc_stress.conf / $SDC_STRESS_CONFIG)
-//   2. legacy GEMM_K_DIM env var (kept for old scripts)
-//   3. environment-adaptive default (arm64: joint memory/time solver; other
+//   2. legacy GEMM_K_DIM env var (kept for old scripts; bare atoi with
+//      silent manual clamp — semantics frozen)
+//   3. SDC_EIGEN_GEMM_DOUBLE_DYNAMIC_SQUARE_DUMP_MDIM env var (the same
+//      channel the non-dump gemm_mdim reads: strict strtoll parse, invalid
+//      or overflowing input counts as unconfigured, silent manual clamp)
+//   4. environment-adaptive default (arm64: joint memory/time solver; other
 //      arches: the legacy 85%-of-RAM memory model)
+// (The arm64 joint solver's T11 knob early-exit in sdc_stress_config.h
+// probes the same SDC_..._MDIM env var as a fallback; with the explicit
+// lookup above it cannot fire here anymore — an env hit returns before the
+// solver is reached, and is_explicit is set, matching the non-dump
+// gemm_mdim contract in sandstone_gemm_common.h.)
 // Nothing else changes: Mat::Random seeding and report_fail behavior are
 // untouched. The dimension is solved ONCE in test_init and cached into
 // eigen_test_data.dim — workers read the cache and never re-solve (T9: the
 // old static-in-function cache existed for run()-side re-entry, which is
 // gone).
 // is_explicit out-param (issue #488): set true when the value came from an
-// explicit channel (knob or the legacy GEMM_K_DIM env), for
-// sdc_gemm_init_shared's bad_alloc split (explicit dims are not downgraded).
+// explicit channel (knob or either env var), for sdc_gemm_init_shared's
+// bad_alloc split (explicit dims are not downgraded).
 static int gemm_k_dim(struct test *test, bool *is_explicit) {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
     if (v == 0) {
@@ -75,8 +84,13 @@ static int gemm_k_dim(struct test *test, bool *is_explicit) {
             if (parsed > 0) v = parsed;
         }
     }
+    if (v == 0) {
+        int64_t envv = 0;
+        if (sdc_env_knob_int(test->id, "mdim", &envv))
+            v = (envv < 16) ? 16 : (envv > 4096 ? 4096 : envv);
+    }
     if (v > 0) {
-        *is_explicit = true;    /* knob (-O/config file) / GEMM_K_DIM env */
+        *is_explicit = true;    /* knob / GEMM_K_DIM / SDC_..._MDIM env */
         return (int)(v < 16 ? 16 : (v > 4096 ? 4096 : v));
     }
 #if defined(__aarch64__) && defined(__linux__)

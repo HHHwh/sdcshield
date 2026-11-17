@@ -54,17 +54,27 @@ static int gemm_solve_once(int n)
 #endif
 
 /* 矩阵维度: 优先级链同 eigen_gemm_cdouble_dynamic_square
- * (-O eigen_gemm_cdouble_dynamic_square_dump.mdim=N / 配置文件 / 自适应)。
+ * (-O eigen_gemm_cdouble_dynamic_square_dump.mdim=N / 配置文件 /
+ * SDC_EIGEN_GEMM_CDOUBLE_DYNAMIC_SQUARE_DUMP_MDIM 环境变量 / 自适应;
+ * env 通道与非 dump 版 gemm_mdim 同口径: strtoll 严格解析, 形态非法/
+ * 溢出按未配置回退, 静默手工 clamp。arm64 联合求解 T11 早退块虽也
+ * 补查同一 env, 但下方显式查询先消费——命中即返回不进联合层, 且
+ * is_explicit 置位, 满足 sandstone_gemm_common.h 的出参契约)。
  * 历史硬编码 221 是刻意的"怪"维度, 显式配置时保留任意值语义。尺寸只
  * 在 test_init 求解一次并缓存进 eigen_test_data.dim——worker 读缓存
  * 不重算(T9, 旧 static 缓存因 run 期重入而存在, 该路径已删除)。
- * is_explicit 出参(issue #488): 显式通道(knob)来源时置 true, 供
+ * is_explicit 出参(issue #488): 显式通道(knob/env)来源时置 true, 供
  * sdc_gemm_init_shared 的 bad_alloc 分流(显式值不可降档)。 */
 static int gemm_mdim(struct test *test, bool *is_explicit)
 {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
+    if (v == 0) {
+        int64_t envv = 0;
+        if (sdc_env_knob_int(test->id, "mdim", &envv))
+            v = (envv < 16) ? 16 : (envv > 4096 ? 4096 : envv);
+    }
     if (v > 0)
-        *is_explicit = true;    /* knob(-O/配置文件) 显式通道 */
+        *is_explicit = true;    /* knob(-O/配置文件)/env 显式通道 */
     if (v <= 0) {
 #if defined(__aarch64__) && defined(__linux__)
         /* 联合求解(T9, 参数依据见 gemm_double_dynamic_square.cpp 同位
