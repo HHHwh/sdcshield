@@ -42,5 +42,12 @@
 L3 尺度窗 + memcmp 全量重读校验），连带其 NEON 孪生
 （memcpy_l3_cache_size_neon，同构合格，含 arm_add 相对包含修复与
 56MB 勘误）。收录判据：工作集 L3 尺度 + 校验点经存储层级重读比对。
-其余 7 件落选原因入目录 README（README 同时登记 mesh read 族六个
-未随迁的合格者）。SVE 孪生不随迁（属 tests/cpu/sve 组织）。
+其余 7 件落选原因入目录 README。SVE 孪生不随迁（属 tests/cpu/sve 组织）。
+
+## 单元 7（2026-11-17 追加）：mesh read 族六件扩收
+
+用户指令：全部扩收。入夹前逐件验明校验逻辑（avx2_read_only 全文 +
+asymm 双件 golden_sum/块级 reload + sse 双件同构）——六件全合格：
+共享 4MB 数组（∈ (L2, 簇 L3)，驻留不随线程数退化）+ sum/golden
+全量重读校验。git mv 迁移 + meson 路径更新（注册面与 x86 SKIP
+语义不变）+ README 收录表扩。
