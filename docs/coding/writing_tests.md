@@ -796,6 +796,29 @@ instead of assuming one tier:
   SKIP, mismatched readback = FAIL, worker tier ≠ init-recorded tier =
   FAIL). Precedents: the 14 Eigen SVE cases (`eigen_svd*_sve`,
   `eigen_gemm_*_sve`, `eigen_gemm_double_max_arm`).
+- **`_sve2` companion of an Eigen SVE case: dual-target the body, mirror
+  the dispatcher** (2026-11-13 pattern, design:
+  `docs/superpowers/specs/2026-11-12-eigen-sve2-companion-design.md`):
+  the same body TU is compiled per tier for BOTH targets —
+  `armv8.2-a+sve` (Eigen ns `EigenSVE<t>`, lib `tests_eigen_<pfx>_vl<t>`)
+  and `armv9-a+sve2` (Eigen ns `EigenSVE2<t>`, lib
+  `tests_eigen_<pfx>_sve2_vl<t>`) — and the `<pfx>_sve2` dispatcher TU is
+  the `_sve` template copied verbatim plus exactly SIX differences:
+  ① test id/env names `_sve2`; ② `<pfx>_sve2` at every call site;
+  ③ an `arm64_cpu_has_sve2()` honest-SKIP gate in init BEFORE
+  `arm64_require_sve_vl`; ④ `.arm64_requires = ARM64_REQUIRES_SVE2`;
+  ⑤ the description string gains "body compiled for the armv9-a+sve2
+  target; counterpart of <the `_sve` case>"; ⑥ the header counterpart
+  reference + the honest-scope note. (Exception to "verbatim",
+  disclosed in the commit: where the `_sve` template's header carried
+  stale build-mechanics claims that would contradict the `_sve2` build,
+  the header is factually corrected — the two known cases:
+  `eigen_svd_cdouble_sve2` ×3, `eigen_gemm_double_max_arm_sve2` ×1.)
+  Honesty boundary: the SVE2 target
+  recompiles the same SVE1-subset bodies (zero SVE2-only instructions,
+  objdump-audited) — the companion is an SVE2-gated entry point and a
+  compile-target declaration, NOT SVE2-only datapath coverage; without
+  SVE2 hardware it registers only via explicit `-e` and skips honestly.
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 
