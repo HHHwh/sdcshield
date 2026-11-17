@@ -6,19 +6,30 @@
 #include "sandstone_p.h"        /* sApp->shmem->device_info: 选中设备表(issue #515) */
 
 #include <dirent.h>
+#include <cctype>
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 
-/* sysfs 目录项名过滤: nodeN 且 N 全数字 */
+/* sysfs 目录项名过滤: 只认内核生成格式 nodeN —— N 为无前导零的纯十进制
+ * 数字串且无损落入 int。strtol 的宽松形态(空串/符号/空白/前导零/溢出
+ * 饱和)一概拒绝: 它们或与真目录解析出同一节点号而双计 nodes_with_mem
+ * ("node"与"node00"→node0, issue #683), 或经 (int) 截断为负/别名索引
+ * 绕过调用方容量上界(超 LONG_MAX 溢出饱和为 LONG_MAX, 截断为 -1 即
+ * per_node[-1] 越界写)。防御口径沿 for_each_cpu_in_list 的 #480 段。 */
 static int parse_node_dir(const char *name, int *out)
 {
     if (strncmp(name, "node", 4) != 0) return 0;
+    const char *digits = name + 4;
+    if (!isdigit((unsigned char)digits[0])) return 0;
+    if (digits[0] == '0' && digits[1] != '\0') return 0;
     char *end;
-    long n = strtol(name + 4, &end, 10);
-    if (*end != '\0' || n < 0) return 0;
+    errno = 0;
+    long n = strtol(digits, &end, 10);
+    if (errno == ERANGE || *end != '\0' || n > INT_MAX) return 0;
     *out = (int)n;
     return 1;
 }
