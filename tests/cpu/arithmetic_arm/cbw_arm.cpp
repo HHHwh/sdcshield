@@ -58,18 +58,16 @@ static int cbw_arm_init(struct test *test) {
     data->dst_data.resize(DATA_SIZE);
     data->golden_copy.resize(DATA_SIZE);
 
-    /* 随机种子：固定种子=单一输入模式，SDC 是 seed 敏感的（fixed-seed 陷阱） */
-    std::mt19937_64 rng(std::random_device{}());
-    std::uniform_int_distribution<int16_t> dist16(INT16_MIN, INT16_MAX);
-    std::uniform_int_distribution<int8_t> dist8(INT8_MIN, INT8_MAX);
-    std::uniform_int_distribution<uint8_t> distu8(0, 255);
-
+    /* 随机输入改用框架 RNG（random64，受 -s 控制可复现）：原先
+     * std::random_device 播种破坏 -s 可复现纪律（AGENTS.md 关键规则：
+     * 随机输入必须全经框架 RNG）。覆盖 int8/int16 全符号域（含正负），
+     * 并预计算 sign-extend 的 int64 golden。 */
     for (size_t i = 0; i < DATA_SIZE; ++i) {
-        data->byte_data[i] = dist8(rng);
-        data->halfword_data[i] = dist16(rng);
+        data->byte_data[i] = static_cast<int8_t>((random64() & 0xFF) - 128);
+        data->halfword_data[i] = static_cast<int16_t>((random64() & 0xFFFF) - 32768);
         data->golden_byte_ext[i] = static_cast<int64_t>(data->byte_data[i]);
         data->golden_half_ext[i] = static_cast<int64_t>(data->halfword_data[i]);
-        data->src_data[i] = distu8(rng);
+        data->src_data[i] = static_cast<uint8_t>(random64() & 0xFF);
         data->golden_copy[i] = data->src_data[i];  // 预期复制结果与原数据相同
     }
 
@@ -85,8 +83,10 @@ static int cbw_arm_run(struct test *test, int cpu) {
 
     do {
         // ----- 1. 使用内联汇编测试 LDRSB / LDRSH -----
+        // 每轮随机索引覆盖整张表（原只校验 [0] 单元素，载荷 SDC 检测力近乎为零）。
+        size_t idx = random64() % DATA_SIZE;
         int64_t ext_byte_val;
-        uint64_t addr = reinterpret_cast<uint64_t>(data->byte_data.data());
+        uint64_t addr = reinterpret_cast<uint64_t>(data->byte_data.data() + idx);
         __asm__ volatile (
             "ldrsb %0, [%1]"
             : "=r"(ext_byte_val)
@@ -95,7 +95,7 @@ static int cbw_arm_run(struct test *test, int cpu) {
         );
 
         int64_t ext_half_val;
-        uint64_t half_addr = reinterpret_cast<uint64_t>(data->halfword_data.data());
+        uint64_t half_addr = reinterpret_cast<uint64_t>(data->halfword_data.data() + idx);
         __asm__ volatile (
             "ldrsh %0, [%1]"
             : "=r"(ext_half_val)
@@ -103,8 +103,8 @@ static int cbw_arm_run(struct test *test, int cpu) {
             : "memory"
         );
 
-        bool byte_ok = (ext_byte_val == data->golden_byte_ext[0]);
-        bool half_ok = (ext_half_val == data->golden_half_ext[0]);
+        bool byte_ok = (ext_byte_val == data->golden_byte_ext[idx]);
+        bool half_ok = (ext_half_val == data->golden_half_ext[idx]);
 
         // ----- 2. 调用 Arm Optimized Routines libstringlib 的 memcpy 作为真实负载 -----
         // 使用 AOR 提供的 __memcpy_aarch64 复制数据，并用 __memcmp_aarch64 验证其正确性
@@ -130,9 +130,9 @@ static int cbw_arm_run(struct test *test, int cpu) {
                      "half_ok=%d (ext=0x%016llX golden=0x%016llX); "
                      "lib_memcpy_ok=%d; consistent=%d",
                      (int)byte_ok, (unsigned long long)ext_byte_val,
-                     (unsigned long long)data->golden_byte_ext[0],
+                     (unsigned long long)data->golden_byte_ext[idx],
                      (int)half_ok, (unsigned long long)ext_half_val,
-                     (unsigned long long)data->golden_half_ext[0],
+                     (unsigned long long)data->golden_half_ext[idx],
                      (int)lib_ok, (int)consistent);
             log_data("cbw_arm input byte_data (signed, 256B)",
                      data->byte_data.data(), DATA_SIZE * sizeof(int8_t));
