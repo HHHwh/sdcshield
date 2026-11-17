@@ -104,8 +104,17 @@
 
 /* Memory-safe dimension bounds: joint-solver lo/hi AND knob clamp.
  * 全部可通过统一配置层覆盖: -O eigen_gemm_double_max_arm.mdim=N /
- * 配置文件 / 环境变量, 见 sdc_stress_config.h。 */
-#define MDIM_MIN 1024
+ * 配置文件 / 环境变量, 见 sdc_stress_config.h。
+ * MDIM_MIN 1024→200 (2026-11-17, 用户决策): CI 全量参数扫描
+ * (scripts/gha/verify-params.py) 对矩阵用例统一 -O 钉 mdim=200 以适配
+ * --timeout=60s 的每测试墙钟预算(run 44011713221: 自适应大维度单迭代即
+ * 超时); 原下限 1024 会把 200 静默钳到 1024。行为面: 自适应路径不变——
+ * n_mem/n_run 在任何真实主机上都远超 1024, 联合层 n = max(lo, min(...))
+ * 的 lo 只是兜底; 变化仅两处兜底/钳位档: probe 失败退守与 quick 模式
+ * 收缩档 1024→200(更保守), 显式 -O/env 200..1023 由"钳到 1024"变为
+ * 原值接受(本变更的目的)。body 对维度无假设(动态 Eigen 矩阵, issue
+ * #410 scatter 形任意 N/NC 均界内)。 */
+#define MDIM_MIN 200
 #define MDIM_MAX 4096
 
 /* Tier recorded at init (from the framework-pinned control thread, whose
