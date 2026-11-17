@@ -20,6 +20,11 @@
 # 不同迭代数,不可比。改用 --max-test-loop-count N 让每个 OS 每个测试跑恰好 N 次 main loop,
 # 工作量一致,只比"完成同样工作量的墙钟"。结果口径是跨 openEuler 版本的相对近似值。
 #
+# --full-log 契约(8b5267a9 起紧凑 YAML 日志为默认): 下方 awk 按 `^- test: <t>` +
+# `^  result:` 多行块提取 RES/RT, 紧凑模式 pass 条目是单行内联 `- { test: t, result: pass }`
+# 且无 test-runtime → RES 落空 → 全部落 fail 行交闸门红(fail-closed)。必须 opt-in
+# --full-log 恢复逐条完整条目; 与 scripts/gha/verify-params.py 的 COMMON 同一契约。
+#
 # SPDX-License-Identifier: Apache-2.0
 set -uo pipefail
 
@@ -94,7 +99,7 @@ for t in "${BENCH_TESTS[@]}"; do
   rm -f "$YAML" "$LOG"
   # 每测试输出留档:进程级失败(loader 错误/被杀/崩溃前的部分输出)不再 >/dev/null 吞掉
   rc=0
-  "$BIN" --max-test-loop-count "$LOOP" --retest-on-failure=0 \
+  "$BIN" --max-test-loop-count "$LOOP" --retest-on-failure=0 --full-log \
           -n 1 -e "$t" -o "$YAML" >"$LOG" 2>&1 || rc=$?
   # 只取目标测试自己的 result/test-runtime:-e 单测运行会附带伴随段(mce_check),
   # 原 grep|head -1 取首个匹配依赖「目标段恰好在前」的隐式顺序。每个 "- test: "
