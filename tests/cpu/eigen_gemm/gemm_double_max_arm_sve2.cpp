@@ -308,7 +308,9 @@ static int eigen_gemm_double_max_arm_sve2_preinit(struct test *test)
     double budget_kb = (double)sdc_budget_bytes(650) / 1024.0;
     /* GEMM_F64 表值引用表函数而非字面量(09c94fc6 遗留项收口): T9 重标定
      * 0.0290→0.0315 后字面量静默陈旧; 引用后 n_hi 随 1/sqrt(c) 收缩 ~4%,
-     * 上界性质不变且更紧(child 同表同预算精算, node0-only 时恰等)。 */
+     * 上界性质不变且更紧(child 同表同预算精算; node0-only 且 VmHWM 反馈
+     * 未采信时恰等——反馈采信时 child c 经 0.7×锚下限可低于表值, n 膨胀
+     * 至 1/sqrt(0.7)≈1.2× n_hi, 即上方 n_hi bullet 第二机制, issue #638)。 */
     double c_kb = sdc_rss_table_c(SDC_RSS_GEMM_F64);
     int workers = sdc_total_threads();
     if (workers < 1)
