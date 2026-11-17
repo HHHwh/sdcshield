@@ -134,7 +134,10 @@ jobs:
           # 云 runner 禁用集与 nightly(verify-params.py)一致:eigen 数值类
           # (ULP flakiness,nightly 以 -n 1 专项覆盖)+ mesh_upi*/memcpy_rewr
           # (需多 NUMA 真实硅)。
-          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 \
+          # --full-log: 8b5267a9 起紧凑 YAML 日志为默认(pass/skip 折叠为单行
+          # 内联且无 runtime/seed 行), report-summary.py 按多行块格式逐条解析,
+          # 矩阵需要完整条目 —— 与 verify-params.py COMMON 同一契约。
+          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 --full-log \
             --disable eigen_svd_double --disable eigen_sparse \
             --disable eigen_svd_cdouble --disable eigen_svd_cdouble_sve \
             --disable 'mesh_upi*' --disable memcpy_rewr \
