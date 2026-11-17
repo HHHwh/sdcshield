@@ -302,9 +302,21 @@ dimension from the raw `GEMM_K_DIM` env) + 14 `_sve2` companions
 templates) — the covered ten unchanged; the fourth bidiag caller was
 retired with its case).
 
-x86-64 keeps the old sizing behavior via the **callers'** `#else` chains
-(e.g. `calibrated_auto_dim`'s legacy two-step memory+2 s-calibration
-chain, `gemm_mdim`'s `sdc_auto_square_dim` path) — rule 5. The `#else`
+x86-64 keeps the old sizing **solvers** via the **callers'** `#else`
+chains (e.g. `calibrated_auto_dim`'s legacy two-step memory+2 s-calibration
+chain, `gemm_mdim`'s `sdc_auto_square_dim` path) — rule 5. "Keeps" scopes
+to the *solver formula* only: the T9 GEMM refactor (2026-10-28,
+`gemm_{double,float,cdouble}_dynamic_square{,_dump}` + `double14`) moved
+the sizing solve out of every worker's `test_run` entry into a single
+`test_init` solve cached in `eigen_test_data::dim` (workers read the
+cache), deliberately ungated so both architectures share the structure
+(the SVD family already solved in init). On x86-64 the dim value itself
+is unchanged — the legacy chain is deterministic (physical-memory model,
+no MemAvailable read) — but the runtime observables did change,
+disclosed here per the rule-5 convention: one solve + one `[压力映射]`
+log per child in init, instead of a solve + log per worker at
+`test_run` entry (pre-T9 init additionally re-solved on every `M_DIM`
+expansion). The `#else`
 branch inside `sdc_joint_dim_slice` itself is the global-arch fallback
 (#482): four-source global budget + power-law time cap via
 `sdc_calibrated_dim` (AR=1, no per-node/AR/VmHWM feedback — x86 has no
