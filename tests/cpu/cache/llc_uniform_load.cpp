@@ -8,10 +8,12 @@
  * user spec 2026-11-02).
  *
  * The uniform-strided sibling of llc_randomized_load: a fixed
- * 128-byte stride walks two 32 MiB per-thread windows (above LLC, so
- * the stride trains the hardware prefetcher — the exact behaviour the
- * 633 #32 description asks to stress) and the walk start rotates by
- * one element per full pass for pattern diversity.
+ * 128-byte stride walks two per-thread windows sized to the PROBED
+ * per-cluster L3 slice (device_info; sysfs-verified 24 MB on Kunpeng
+ * 920 — L3 is distributed 24 MB per 24-core cluster), so the stride
+ * trains the hardware prefetcher at the cache capacity boundary
+ * (the 633 #32 behaviour), and the walk start rotates by one
+ * element per full pass for pattern diversity.
  *
  *   - data[]: strided LOADS only (memset_random-filled once) — the
  *     pure strided-load pressure;
@@ -37,13 +39,32 @@
  */
 
 #include "sandstone.h"
+#include "sandstone_p.h"   /* device_count/device_info: L3 size probe */
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
-static constexpr size_t LLUL_BUFFER_SIZE = 32 * 1024 * 1024;   /* 32 MiB */
-static constexpr size_t LLUL_NUM_WORDS   = LLUL_BUFFER_SIZE / sizeof(uint32_t);
-static constexpr size_t LLUL_STRIDE      = 128 / sizeof(uint32_t);  /* 128B stride */
+/* Per-cluster L3 size in bytes — same probe and same init-time
+ * discipline as llc_randomized_load (device_info -> sysconf -> 8 MB
+ * fallback; MUST be called from test_init, see the sibling's comment
+ * and the memcpy H8' lesson). */
+static size_t llul_l3_size(void) {
+    int ndev = device_count();
+    for (int i = 0; i < ndev; ++i) {
+        int sz = device_info[i].cache[2].cache_data;   /* cache[2] = L3 */
+        if (sz > 0)
+            return static_cast<size_t>(sz);
+    }
+    long size = sysconf(_SC_LEVEL3_CACHE_SIZE);
+    if (size > 0) return static_cast<size_t>(size);
+    return 8 * 1024 * 1024;
+}
+
+/* Per-thread window = the probed slice (capacity-boundary stride
+ * walk); the old 32 MiB constant degenerated into DRAM streaming on
+ * the 920's distributed L3 — see llc_randomized_load's geometry
+ * comment for the arithmetic. */
+static constexpr size_t LLUL_STRIDE = 128 / sizeof(uint32_t);  /* 128B stride */
 
 /* anti-forwarding load: really goes to the LSU, not the register file */
 static inline uint32_t llul_ldr(const uint32_t *addr) {
@@ -53,29 +74,37 @@ static inline uint32_t llul_ldr(const uint32_t *addr) {
 }
 
 static int llc_uniform_load_init(struct test *test) {
-    (void)test;
+    /* probe HERE — topology is filled by now (see llul_l3_size) */
+    auto *block = new size_t(llul_l3_size());
+    if (!block)
+        return EXIT_FAILURE;
+    test->data = block;
     return EXIT_SUCCESS;
 }
 
 static int llc_uniform_load_cleanup(struct test *test) {
-    (void)test;
+    delete static_cast<size_t *>(test->data);
+    test->data = nullptr;
     return EXIT_SUCCESS;
 }
 
 static int llc_uniform_load_run(struct test *test, int cpu) {
     (void)cpu;
 
-    std::vector<uint32_t> data(LLUL_NUM_WORDS);   /* strided load source   */
-    std::vector<uint32_t> check(LLUL_NUM_WORDS);  /* store->load window    */
+    const size_t buffer_bytes = *static_cast<size_t *>(test->data);
+    const size_t num_words = buffer_bytes / sizeof(uint32_t);
 
-    memset_random(data.data(), LLUL_BUFFER_SIZE);
-    memset(check.data(), 0, LLUL_BUFFER_SIZE);
+    std::vector<uint32_t> data(num_words);    /* strided load source   */
+    std::vector<uint32_t> check(num_words);   /* store->load window    */
+
+    memset_random(data.data(), buffer_bytes);
+    memset(check.data(), 0, buffer_bytes);
 
     /* random walk start; rotates by one element each full pass */
     size_t offset = random64() % LLUL_STRIDE;
 
     do {
-        for (size_t idx = offset; idx < LLUL_NUM_WORDS; idx += LLUL_STRIDE) {
+        for (size_t idx = offset; idx < num_words; idx += LLUL_STRIDE) {
             /* uniform strided load — trains/stresses the prefetcher */
             uint32_t original = data[idx];
 
@@ -98,7 +127,7 @@ static int llc_uniform_load_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(llc_uniform_load, "Stress LLC with persistent uniform 128B-strided loads over 32MiB windows (prefetcher stress); store->asm-ldr load-back bit verification on the LSU forwarding path (ARM64)")
+DECLARE_TEST(llc_uniform_load, "Stress LLC with persistent uniform 128B-strided loads over per-thread windows sized to the probed per-cluster L3 (capacity-boundary prefetcher stress); store->asm-ldr load-back bit verification on the LSU forwarding path (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = llc_uniform_load_init,
     .test_run = llc_uniform_load_run,
