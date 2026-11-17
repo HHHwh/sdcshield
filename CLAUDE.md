@@ -72,10 +72,13 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #     are INVISIBLE in every list 口径 on this SVE1 host — spec filter
                                                #     precedes list; explicit -e registers them and skips honestly.
                                                #     SVE2 host: default set +10 PROD, q-1 +14 (4 Jacobi are SKIP-level).
-                                               #   no-SVE 920 主机: 439 PROD / 547 q0 / 551 q-1  (2026-11-02 实测于
-                                               #               那台 no-SVE 920 (not THIS SVE1-256 host);
-                                               #               = 迁移 121 + arm_add 7 + _neon 14 + cache 新 9 PROD 后;
-                                               #               eigen SVE 分支 12 新 + 退役 1 全 ARM64_REQUIRES_SVE, 净变化 0)
+                                               #   no-SVE 920 主机: 458 PROD / 566 q0 / 570 q-1  (2026-11-17 实测于
+                                               #               no-SVE 920 主机 (not THIS SVE1-256 host), vendored 5 库
+                                               #               install/ 全在位口径, 依赖缺位会相应减对应测试组;
+                                               #               = 迁移 111 (arm0102_* 基础 10 项 2026-11-03 退册) +
+                                               #               arm_add 7 + _neon 14 + cache 新 9 PROD;
+                                               #               eigen SVE 12 新/退役 1 + SVE2 配套 14 全
+                                               #               ARM64_REQUIRES_SVE/SVE2 门控, 净变化 0)
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
