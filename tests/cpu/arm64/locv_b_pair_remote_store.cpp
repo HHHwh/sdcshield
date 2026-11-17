@@ -53,7 +53,6 @@
 
 #define LOCV_B_COUNT 1024
 #define LOCV_B_POKE_EVERY 64
-#define LOCV_B_PAIRS 96
 
 enum LocvBMode { B_BASE = 0, B_POKE = 1, B_INTERLEAVE = 2 };
 
@@ -97,9 +96,14 @@ static int locv_b_init(struct test *test) {
     data->srcA = static_cast<uint64_t *>(aligned_alloc(64, LOCV_B_COUNT * sizeof(uint64_t)));
     data->srcB = static_cast<uint64_t *>(aligned_alloc(64, LOCV_B_COUNT * sizeof(uint64_t)));
     data->expected = static_cast<uint64_t *>(aligned_alloc(64, LOCV_B_COUNT * sizeof(uint64_t)));
-    data->poke = static_cast<uint64_t *>(aligned_alloc(64, LOCV_B_PAIRS * 8 * sizeof(uint64_t)));
-    data->pairbuf = static_cast<uint64_t *>(aligned_alloc(64, LOCV_B_PAIRS * 2 * LOCV_B_COUNT * sizeof(uint64_t)));
-    data->ready = static_cast<volatile int *>(calloc(192, sizeof(int)));
+    /* per-cpu 就绪表与 pair 缓冲按实际线程数定尺寸：原硬编码 192 线程
+     * (LOCV_B_PAIRS=96) 在 >192 核主机上 ready[cpu]/qbase 会越界（潜伏 UB）。
+     * cpu 是框架的稠密线程下标 0..thread_count()-1；pair = cpu>>1，partner
+     * = cpu^1（奇线程数时末线程的 partner 落到 2*pairs，故就绪表多留一格）。 */
+    const int pairs = (thread_count() + 1) / 2;
+    data->poke = static_cast<uint64_t *>(aligned_alloc(64, pairs * 8 * sizeof(uint64_t)));
+    data->pairbuf = static_cast<uint64_t *>(aligned_alloc(64, pairs * 2 * LOCV_B_COUNT * sizeof(uint64_t)));
+    data->ready = static_cast<volatile int *>(calloc(2 * pairs, sizeof(int)));
 
     memset_random(data->srcA, LOCV_B_COUNT * sizeof(uint64_t));
     memset_random(data->srcB, LOCV_B_COUNT * sizeof(uint64_t));
