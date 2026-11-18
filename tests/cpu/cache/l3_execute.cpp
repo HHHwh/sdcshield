@@ -4,14 +4,16 @@
  *
  * @test l3_execute
  * @parblock
- * Reads and executes code through the re-fetch path at the same time
- * (633 #30 lineage, user spec 2026-11-02).  Fetch-path honesty
- * (2026-11-17 L3 audit): ic ivau invalidates to the PoU, which on
- * this class of part is the private unified L2 — the 256 B hot
- * worker stays L2-resident, so the forced re-fetch is served from
- * L2 in practice and L3 only participates on an L2 miss.  This is
- * an instruction-fetch-path SDC detector, not an L3 test; the
- * historical l3 name is kept for registry stability.
+ * Reads and executes code from L3 at the same time (633 #30 lineage,
+ * user spec 2026-11-02; 2026-11-17 L3-capability rework, user
+ * directive).  Pre-rework honesty note (kept as provenance): bare
+ * ic ivau invalidates only to the PoU = the private unified L2, so
+ * the 256 B hot worker stayed L2-resident and the re-fetch was
+ * L2-served in practice — the audit finding.  The rework adds a
+ * dc civac pass (clean+invalidate to the PoC) evicting the code
+ * lines from L2 before the ic ivau, so the next fetch misses L1I
+ * AND L2 and is genuinely served by the L3 slice.  The init-snapshot
+ * bit-compare now verifies the L3->ICache instruction path.
  *
  * Mechanism: every iteration the worker function's instruction-cache
  * lines are invalidated (ic ivau per 64B line, then dsb ish + isb —
@@ -77,13 +79,27 @@ struct L3EData {
 };
 }
 
-/* invalidate the I-cache lines covering [start, start+len), then
- * resync fetch (dsb ish + isb) — the ARM-specified sequence */
+/* Force the next execution of [start, start+len) to be RE-FETCHED
+ * FROM L3 (2026-11-17 L3-capability rework, user directive):
+ *   1. dc civac per line — clean+invalidate the D-side view to the
+ *      PoC, EVICTING the lines from the private unified L2.  A plain
+ *      cvau would only reach the PoU = L2 and the refetch would stay
+ *      L2-served (the pre-rework audit finding); civac goes to the
+ *      PoC, so the lines land in the home L3 slice.
+ *   2. ic ivau per line — invalidate the I-side view.
+ *   3. dsb ish + isb — the ARM-specified fetch resync.
+ * The next fetch now misses L1I AND L2 and is served by the L3 slice
+ * (or DRAM on slice miss) — the L3->ICache data path this test is
+ * named for.  civac on clean read-only text lines is a legal EL0
+ * maintenance op (no writeback of unmodified lines). */
 static inline void l3e_flush_icache(const void *start, size_t len) {
-    const char *p = reinterpret_cast<const char *>(
+    const char *base = reinterpret_cast<const char *>(
         reinterpret_cast<uintptr_t>(start) & ~(uintptr_t)(L3E_LINE - 1));
     const char *end = reinterpret_cast<const char *>(start) + len;
-    for (; p < end; p += L3E_LINE)
+    for (const char *p = base; p < end; p += L3E_LINE)
+        __asm__ volatile("dc civac, %0" :: "r"(p) : "memory");
+    __asm__ volatile("dsb ish" ::: "memory");
+    for (const char *p = base; p < end; p += L3E_LINE)
         __asm__ volatile("ic ivau, %0" :: "r"(p) : "memory");
     __asm__ volatile("dsb ish" ::: "memory");
     __asm__ volatile("isb" ::: "memory");
@@ -141,7 +157,7 @@ static int l3_execute_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(l3_execute, "Forces instruction re-fetch (ic-ivau + dsb/isb resync) and bit-compares executed results to the init snapshot (fetch-path SDC; re-fetch served from L2-the-PoU in practice, historical l3 name kept) (ARM64)")
+DECLARE_TEST(l3_execute, "Reads and executes code from L3: dc-civac evicts the code lines from L2 (to PoC) before ic-ivau + dsb/isb resync, so the re-fetch is genuinely L3-served; executed results bit-compared to the init snapshot (L3->ICache fetch-path SDC) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = l3_execute_init,
     .test_run = l3_execute_run,
