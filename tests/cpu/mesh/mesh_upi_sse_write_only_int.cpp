@@ -10,11 +10,13 @@
 #include <cstdlib>
 #include <sys/sysinfo.h>
 
-#define TOTAL_ELEMENTS 1024               // 总元素数（小工作集，保证快速完成）
+#define TOTAL_ELEMENTS (1 << 20)          // 1M 个 int32 = 4MB 共享数组（L3 尺度）
 #define VECTOR_SIZE 4                     // NEON 每次处理 4 个 int32
-// 几何注记（2026-11-17 L3 审计）：工作集 4KB，设计上驻留 L1/L2——描述
-// "stores to L1/L2/L3" 指跨核一致性路径（写者→读者可见性经 L2/簇 L3
-// 切片），非容量意义上的 L3 驻留。
+// 几何注记（2026-11-17 L3 审计 + 能力改造）：原版 1024 元素 = 4KB 纯
+// L1 域，容量上够不着 L3——2026-11-17 按用户指令扩容到 4MB 共享数组
+// (∈ (L2 512KB, 簇 L3 24MB))：读者每轮全量重读经存储层级（跨核一致
+// 性 + 容量驻留双真），sum/golden 校验点落在 L3 路径上。协议（块竞争
+// + 轮屏障 + 读者校验和）逐句保留，仅工作集与自旋节流档距随尺度放大。
 #define BLOCK_ELEMENTS VECTOR_SIZE
 #define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 256
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
@@ -147,7 +149,7 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
              * 之一，见 TestData 注释）。 */
             uint32_t spin = 0;
             while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
-                if ((++spin & 131071u) == 0) {
+                if ((++spin & 1048575u) == 0) {
                     if (!test_time_condition(test)) goto out_of_budget;
                 } else {
                     __asm__ volatile("yield");
@@ -224,7 +226,7 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
             } else {
                 uint32_t spin = 0;
                 while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
-                    if ((++spin & 131071u) == 0) {
+                    if ((++spin & 1048575u) == 0) {
                         if (!test_time_condition(test)) goto out_of_budget;
                     } else {
                         __asm__ volatile("yield");
@@ -261,10 +263,11 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) { (void)t
 static int mesh_upi_sse_write_only_int_finish(struct test *test) { (void)test; return EXIT_SUCCESS; }
 #endif
 DECLARE_TEST(mesh_upi_sse_write_only_int,
-             "Mutual write stress MESH and UPI or Ring Interconnect and QPI or FSB (do int32 NEON stores to L1/L2/L3)")
+             "Mutual write stress MESH and UPI or Ring Interconnect and QPI or FSB (do int32 NEON stores to L1/L2/L3; 4MB L3-scale shared array, reader re-reads via sum/golden — 2026-11-17 rework)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = mesh_upi_sse_write_only_int_init,
     .test_run = mesh_upi_sse_write_only_int_run,
     .test_cleanup = mesh_upi_sse_write_only_int_finish,
+    .fracture_loop_count = -1,   /* never fracture: rework rounds fill/verify 4MB shared, run the full -t */
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

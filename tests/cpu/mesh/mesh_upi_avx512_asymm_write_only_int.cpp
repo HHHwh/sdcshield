@@ -9,14 +9,16 @@
 #include <cstdlib>
 #include <sys/sysinfo.h>
 
-#define TOTAL_ELEMENTS 1024               // 总元素数（小工作集，保证快速完成）
+#define TOTAL_ELEMENTS (1 << 20)          // 1M 个 int32 = 4MB 共享数组（L3 尺度）
 #define NEON_VECTOR_SIZE 4                // NEON 一次处理 4 个 int32
-// 几何注记（2026-11-17 L3 审计）：工作集 4KB，设计上驻留 L1/L2——描述
-// "stores to L1/L2/L3" 指跨核一致性路径（写者→读者可见性经 L2/簇 L3
-// 切片），非容量意义上的 L3 驻留。
+// 几何注记（2026-11-17 L3 审计 + 能力改造）：原版 1024 元素 = 4KB 纯
+// L1 域——按用户指令扩容到 4MB 共享数组 (∈ (L2 512KB, 簇 L3 24MB))：
+// 读者每轮全量重读（B1 屏障后差分 sum 校验）经存储层级，容量驻留+
+// 跨核一致性双真。双屏障协议/静态分区/差分累计逐句保留，仅工作集与
+// 自旋节流档距随尺度放大。
 #define BLOCK_ELEMENTS 16                 // 每个块 16 个 int32（由 4 个 NEON 向量组成）
 #define VECTORS_PER_BLOCK (BLOCK_ELEMENTS / NEON_VECTOR_SIZE)  // = 4
-#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)           // = 64
+#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)           // = 65536
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
 
 /* 2026-10-16 协议重设计（参照 mesh_upi_avx512_symm_int 的 v2 范式
@@ -115,7 +117,7 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
         }
         uint32_t spin = 0;
         while (sen.load(std::memory_order_seq_cst) == s) {
-            if ((++spin & 1023u) == 0) {
+            if ((++spin & 131071u) == 0) {   /* 2026-11-17 扩容后档距随尺度放大：4MB 填充 ms 级 */
                 if (!test_time_condition(test)) return false;
             } else {
                 __asm__ volatile("yield");
@@ -288,10 +290,11 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
 static int mesh_upi_avx512_asymm_write_only_int_finish(struct test *test) { (void)test; return EXIT_SUCCESS; }
 #endif
 DECLARE_TEST(mesh_upi_avx512_asymm_write_only_int,
-             "Mutual write stress MESH and UPI (do NEON stores to L1/L2/L3)")
+             "Mutual write stress MESH and UPI (do NEON stores to L1/L2/L3; 4MB L3-scale shared array, reader differential-sum verify — 2026-11-17 rework)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = mesh_upi_avx512_asymm_write_only_int_init,
     .test_run = mesh_upi_avx512_asymm_write_only_int_run,
     .test_cleanup = mesh_upi_avx512_asymm_write_only_int_finish,
+    .fracture_loop_count = -1,   /* never fracture: rework rounds fill/verify 4MB shared, run the full -t */
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST
