@@ -83,3 +83,19 @@
 
 注册面与测试 ID 不变（mesh 族 x86 走 `#else` 干净 SKIP；退役的 4 件
 FP64 复制体从注册面移除——它们从未提供独立检测面）。
+
+## adaptive_l3_sdc —— 本目录的自适应前门（2026-11-18）
+
+`adaptive_l3_sdc.cpp`（第 31 个文件）：把本目录各件的负载模式装进
+adaptive_mem_sdc 的运行时底盘（shm 槽位轮转/fork 循环/MODE=combat|test/
+VERIFY/COVFILE/ORDER/COMBO，env 前缀 `ADAPTIVE_L3_SDC_`）——**21 组合 =
+7 访问模式 × 3 数据通路**（seq/rand/stride-read、write、copy、rmw、fetch
+× scalar/NEON/FP64），检出报告带组合标签；引擎层校验与父测试同步
+（element-exact，2026-11-18 收口同日传导）。
+
+本机 21 臂锁定标定（600s/臂，掩码 96-189 含 179，2026-11-18）：
+**全部零检出！！！**——core-179 触发域在 L1D/转发紧时序，L3 容量域全负
+空间；kPriorityOrder 表序恒等即本机序。**其他机器各自标定**：他机 L3 域
+组合可能是最快臂（用户实证他机存在 4×ldr+1×str 触发），同法逐臂全扫
+后用 `ADAPTIVE_L3_SDC_ORDER` 覆盖轮转序即可。专档：
+`docs/20261118/adaptive_l3_sweep21/RESULTS.md`。
