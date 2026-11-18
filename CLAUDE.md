@@ -67,7 +67,8 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #   SVE1 host:  486 PROD / 496 q0 / 500 q-1  (2026-11-01 merge-tree,
                                                #               post issue #374 sched_storm×4 PROD→BETA re-measure;
                                                #               +121 迁移后推算 507/517/521, 待该主机重测)
-                                               #   no-SVE 920 (本机): 519 PROD / 628 q0 / 632 q-1  (2026-11-10 实测,+gather 2,
+                                               #   no-SVE 920 (本机): 534 PROD / 643 q0 / 647 q-1  (2026-11-18 实测,+L3_fp64 12
+                                               #               + adaptive_l3_sdc 1 + 2 since 11-10; 11-10 前累积见下),
                                                #               = 2026-11-02 口径 439 + 11-02 后各家族累积 (lock_arm 13 +
                                                #               memory-access 9 + barrier_2 + fp64 家族 39 PROD +
                                                #               fp64_dump + gather 2 + 11-02 口径未列全的历史项, 实测为准)
