@@ -15,6 +15,7 @@
 
 #include <sandstone.h>
 #include "sdc_stress_config.h"
+#include "../eigen_splitmix_lineage.h"
 
 #include <boost/type_traits/is_complex.hpp>
 #include <Eigen/Eigenvalues>
@@ -122,25 +123,22 @@ template <typename SVD, int Dim> struct EigenSVDTest
      * legacy two-step chain VERBATIM below — see the #else branch
      * comment for why.
      *
-     * run_budget_ms deviates from the joint contract value 200000 (= 300 s
-     * hard grace × 0.67): the measured WORST-child slowdown on a
-     * single-memory-node host exceeds the AR table's 1-node mem-bound
-     * entry (25). T5 measured AR≈39 for complex BDCSVD at a ~31 GiB
+     * run_budget_ms keeps the joint contract value 200000 (= 300 s hard
+     * grace × 0.67). The AR table's 1-node mem-bound entry was
+     * re-calibrated to the measured worst-child band (issue #506,
+     * 25→40): T5 measured AR≈39 for complex BDCSVD at a ~31 GiB
      * footprint (eigen_svd_cdouble_sve.cpp run_budget_ms note); T8
-     * re-measured the same class here — at 200000 the solver picked
-     * n=2048 for eigen_svd (float, ~30.5 GiB aggregate) and the
+     * re-measured the same class here — at 200000/table-25 the solver
+     * picked n=2048 for eigen_svd (float, ~30.5 GiB aggregate) and the
      * children on the memory-less NUMA nodes could not finish ONE
      * full-core iteration inside the 300 s grace (SIGQUIT at 321 s
      * elapsed, /tmp/t8_eigen_svd.log, 2026-10-28): effective worst-child
-     * AR ≥ 40 = 1.6× the table row. 140000 sizes the iteration so that
-     * budget × 1.6 + init probes ≈ 232 s stays inside the grace with
-     * ~23% margin (T5's measured outcome: ~225 s wall including init),
-     * while still lifting the memory-bound dims well above the legacy
-     * triple's (eigen_svd_double: 763 → ~1450). The principled fix is
-     * the AR table entry itself (framework/sdc_numa.cpp — T7/T9 scope,
-     * footprint-aware recalibration); this per-family budget is the
-     * in-scope compensation and should be revisited when the table is
-     * re-calibrated. */
+     * AR ≥ 40. With the table at 40 the 140000 private compensation this
+     * family carried since T8 is retired per its own revisit promise:
+     * the worst-child full-core iteration lands at 200×39/40 ≈ 195 s,
+     * +init ≈ 210-240 s, inside the grace with the contract's designed
+     * ~20-25% margin, while the memory-bound dims stay well above the
+     * legacy triple's (eigen_svd_double: 763 → ~1450). */
     static constexpr enum sdc_rss_family rss_family()
     {
         return svd_rss_family_of(static_cast<const SVD *>(nullptr));
@@ -161,28 +159,28 @@ template <typename SVD, int Dim> struct EigenSVDTest
      * 且随维度恶化、BDCSVD<complex> 0.47~0.70×; 对照
      * eigen_sparse 侧同谱系 probe 实测 0.95×)。splitmix 散列
      * [-1,1)(complex 独立 re/im)与随机阵同谱系, 校准计时
-     * 口径与 run 期单解一致。改这里的值域/结构必须与
-     * fill_matrix_random 同步演化。 */
+     * 口径与 run 期单解一致。改填充结构必须与 fill_matrix_random
+     * 同步演化; 魔数/值域档位取自 ../eigen_splitmix_lineage.h 单一
+     * 事实源(与 eigen_gemm 家族的 fill_pair 共享, 检视 #392-R1)——
+     * 改值域只改该头, 勿在此内联魔数。 */
     static int sizing_probe(int n)
     {
+        using sandstone_splitmix::advance;
+        using sandstone_splitmix::coord_finalize;
+        using sandstone_splitmix::to_range;
         Mat m(n, n);
         using Scalar = typename Mat::Scalar;
         for (int r = 0; r < n; ++r)
             for (int c = 0; c < n; ++c) {
-                std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                                ^ (std::uint64_t)c * 0xC2B2AE3D27D4EB4Full;
-                h ^= h >> 32;
-                h *= 0xD6E8FEB86659FD93ull;
-                h ^= h >> 32;
+                std::uint64_t h = coord_finalize((std::uint64_t)r,
+                                                 (std::uint64_t)c);
                 if constexpr (boost::is_complex<Scalar>::value) {
-                    std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                                     + 0x9E3779B97F4A7C15ull;
-                    h2 ^= h2 >> 32;
+                    std::uint64_t h2 = advance(h);
                     m(r, c) = Scalar(
-                        (typename Scalar::value_type)((double)(h % 2000u) / 1000.0 - 1.0),
-                        (typename Scalar::value_type)((double)(h2 % 2000u) / 1000.0 - 1.0));
+                        (typename Scalar::value_type)to_range(h),
+                        (typename Scalar::value_type)to_range(h2));
                 } else {
-                    m(r, c) = (Scalar)((double)(h % 2000u) / 1000.0 - 1.0);
+                    m(r, c) = (Scalar)to_range(h);
                 }
             }
         Mat u, v;
@@ -213,7 +211,7 @@ template <typename SVD, int Dim> struct EigenSVDTest
                                           * primes per-thread state itself */
             .mem_fraction_permille = mem_fraction_permille,
             .ar_fam = SDC_FAM_MEM_BOUND,  /* dense SVD is bandwidth-bound at full core */
-            .run_budget_ms = 140000,      /* 全核单迭代(2解×AR)预算; 见上方块注释 */
+            .run_budget_ms = 200000,      /* 全核单迭代(2解×AR)预算; 见上方块注释 */
         };
         try {
             return sdc_joint_dim_slice(test, "mdim", &ja, sizing_probe);
@@ -229,11 +227,13 @@ template <typename SVD, int Dim> struct EigenSVDTest
         }
 #else
         /* rule 5 (x86-64 untouched): the legacy two-step chain stays
-         * VERBATIM on non-aarch64 — sdc_joint_dim_slice's x86 branch
-         * ignores solve_once/run_budget_ms (its time calibration is the
-         * CALLER's chain by contract), so routing x86 through the joint
-         * solver would silently drop the 2 s single-solve cap and swap
-         * the legacy memory triple for the ARM-measured RSS table. The
+         * VERBATIM on non-aarch64 — the joint solver's x86 branch now
+         * honors solve_once (#482: four-source global budget + power-law
+         * time cap), but routing x86 through it would still swap the
+         * legacy memory triple for the ARM-measured RSS table, the
+         * physical-only budget for the four-source one, and the 2 s
+         * single-solve cap for the run_budget_ms semantics (calibrated
+         * on ARM hosts' AR) — a sizing change rule 5 forbids. The
          * ten template users are the first CROSS-ARCH joint consumers
          * (T4/T5/T6's were ARM-only TUs); this guard is the additive
          * porting pattern.
@@ -369,7 +369,16 @@ template <typename SVD, int Dim> struct EigenSVDTest
          * 同论证)。比对段(compare_or_fail → memcmp_or_fail →
          * report_fail)恒在 catch 之外——SDC 误配必须打红, 绝不能被资源
          * 性 SKIP 吞掉。worker 期不做降档重试(m2: 改共享 d->dim 有跨
-         * 线程竞态, 且 v1 的重试+FAIL 语义与先例相反, 已撤销)。 */
+         * 线程竞态, 且 v1 的重试+FAIL 语义与先例相反, 已撤销)。
+         *
+         * 可达性边界(issue #640): 生产构建链接 framework/sysdeps/linux/
+         * malloc.cpp 的链接级 malloc 覆盖——分配失败被
+         * null_pointer_consumption 直接 raise(SIGKILL)/abort, 不返回
+         * NULL, bad_alloc 无从抛出, 本 SKIP 在生产不可达(实测 ulimit
+         * 逼 OOM → crash 而非 skip); 生产 OOM 表现为 crash
+         * (OutOfMemory)。catch 分流仅在异常可达构建生效(ASAN/TSAN,
+         * 插桩被 __SANITIZE_* 排除; ASAN 实证 allocator_may_return_null
+         * =1 → result: skip)。 */
         Mat orig, u_gold, v_gold, u, v;
         try {
             orig.resize(d->dim, d->dim);

@@ -101,18 +101,25 @@ static int neon_rot_ldr_at_top_rowmajor_k5inter_rand_sve_init(struct test *test)
     memset_random(data->src, 2 * elems * sizeof(uint64_t));
     memset_random(data->scratch, elems * sizeof(uint64_t));
 
-    svbool_t pg = svptrue_b64();
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test, so a persistent SVE datapath fault cannot corrupt golden
+     * and actual identically. Interleaved layout preserved: slot i's
+     * sources are src slots 2i (A) and 2i+1 (B); phase = slot % 4,
+     * matching the run loop's per-slot switch. */
     for (int i = 0; i < data->slots; i++) {
-        svuint64_t a = svld1_u64(pg, data->src + (size_t)(2 * i) * lanes);
-        svuint64_t b = svld1_u64(pg, data->src + (size_t)(2 * i + 1) * lanes);
-        svuint64_t res = svundef_u64();
-        switch (i % 4) {
-            case 0: res = svadd_u64_x(pg, a, b); break;
-            case 1: res = sveor_u64_x(pg, a, b); break;
-            case 2: res = svand_u64_x(pg, a, b); break;
-            case 3: res = svorr_u64_x(pg, a, b); break;
+        const size_t a_base = (size_t)(2 * i)     * (size_t)lanes;
+        const size_t b_base = (size_t)(2 * i + 1) * (size_t)lanes;
+        const size_t e_base = (size_t)i           * (size_t)lanes;
+        for (int l = 0; l < lanes; l++) {
+            const size_t e = e_base + (size_t)l;
+            switch (i % 4) {
+                case 0: data->expected[e] = data->src[a_base + l] + data->src[b_base + l]; break;
+                case 1: data->expected[e] = data->src[a_base + l] ^ data->src[b_base + l]; break;
+                case 2: data->expected[e] = data->src[a_base + l] & data->src[b_base + l]; break;
+                case 3: data->expected[e] = data->src[a_base + l] | data->src[b_base + l]; break;
+            }
         }
-        svst1_u64(pg, data->expected + (size_t)i * lanes, res);
     }
 
     mkdir("movbe_log", 0755);       /* mkdir creates only the last component */

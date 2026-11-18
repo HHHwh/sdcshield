@@ -269,6 +269,21 @@ static int selftest_logs_options_init(struct test *test)
     return EXIT_SUCCESS;
 }
 
+static int selftest_knob_from_run_run(struct test *test, int)
+{
+    /* Negative-path lock for the "test options are init-only" contract:
+     * querying a knob from a worker thread is a test bug and the framework
+     * must abort on it in EVERY build type (release included). The harness
+     * observes the SIGABRT as `result: crash` — that is this test passing.
+     * If the fail-loud check ever stops firing, the getter returns and this
+     * function reports success, so the negative assertion (non-zero exit)
+     * goes red instead of silently accepting the regression. */
+    int64_t v = get_testspecific_knob_value_int(test, "IntValue", -1);
+    log_warning("%s: knob query from a worker thread returned %" PRId64
+                " — the fail-loud check did not fire", test->id, v);
+    return EXIT_SUCCESS;
+}
+
 static int selftest_logs_getcpu_run(struct test *test, int)
 {
     int cpu_number = sched_getcpu();
@@ -1908,6 +1923,14 @@ static struct test selftests_array[] = {
     .groups = DECLARE_TEST_GROUPS(&group_positive),
     .test_init = selftest_logs_options_init,
     .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_knob_from_run",
+    .description = "Queries a test knob from the run function (expected abort)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_knob_from_run_run,
     .desired_duration = -1,
     .quality_level = TEST_QUALITY_PROD,
 },

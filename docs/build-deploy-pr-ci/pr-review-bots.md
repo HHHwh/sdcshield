@@ -279,11 +279,11 @@ Python3 标准库 + `gh`/`claude` 子进程，零第三方依赖；claude 凭据
 
 | 触发线 | 载体 | 说明 |
 | --- | --- | --- |
-| 事件线 | `pr_loop.py wait` 内 `ensure_local_review()`；`ci_triage.py` 车道 B reap 后 | 进入阻塞轮询 / 派发修复 agent 前，先确保该 head 已有第 5 bot 信号（未审则同步跑一次并发布） |
-| 时间线 | cron `*/30 * * * *` 跑 `scripts/pr_local_review.py --all-open` | 枚举全部 open PR，对尚无第 5 bot 信号的 head 跑一次对抗审查并发布，兜底补漏 |
+| 事件线 | `pr_loop.py wait` 内 `ensure_local_review()`；`task_loop.py` 车道 B（泳道3）判定前补信号 | 进入阻塞轮询 / 派发修复 agent 前，先确保该 head 已有第 5 bot 信号（未审则同步跑一次并发布） |
+| 时间线（nightly pipeline 泳道2） | pipeline 窗口循环内检视派发器（`dispatch_review`）：枚举全部 open PR 中尚无第 5 bot 信号的 head，spawn `scripts/pr_local_review.py --pr N` | 旧 cron `*/30 --all-open` 时间线已折进 nightly pipeline 代码（spec 2026-11-12-full-auto-pipeline；旧 cron 行删除随 [task-loop.md](task-loop.md) §3.1 runbook 部署）：**每 head 每晚 ≤2 次**尝试（`REVIEW_PER_HEAD_PER_NIGHT=2`，防 #661 式反复打转）、单次 timeout 5400s；`--pr N` / `--all-open` CLI 保留供会话手动 |
 
 同 head 幂等：`already_reviewed`（body 含标记且 `commit_id` 锚定当前 head）为真即
-跳过——事件线 + 时间线撞车只审一次。第 5 bot 是辅助触发线，**非硬前置**：触发失败
+跳过——事件线 + 泳道2 撞车只审一次。第 5 bot 是辅助触发线，**非硬前置**：触发失败
 （gh 失败 / claude 未装 / agent.env 缺失 / head 未 fetch / 输出非 JSON）仅告警降级，
 不阻塞轮询（等齐五 bot 的等待继续）。
 

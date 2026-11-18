@@ -61,6 +61,21 @@ static void prv_do_add(const uint32_t *a, const uint32_t *b, uint32_t *res, size
                 svst1_u32(pg, res + base, svadd_u32_x(pg, r1, r2));
         }
 }
+
+/* golden (issue #373): scalar independent recomputation — pure C on the
+ * scalar pipeline, never the SVE units under test (prv_do_add stays the
+ * run-side payload; a persistent SVE add fault used to corrupt golden
+ * and actual identically). The plain elementwise add is the canonical
+ * auto-vectorization idiom, so the helper carries no-tree-vectorize —
+ * pinned mechanically by scripts/check-scalar-golden.sh. */
+#pragma GCC push_options
+#pragma GCC optimize("no-tree-vectorize")
+static void prv_scalar_golden_add(const uint32_t *a, const uint32_t *b, uint32_t *res, size_t n)
+{
+        for (size_t i = 0; i < n; i++)
+                res[i] = a[i] + b[i];
+}
+#pragma GCC pop_options
 #endif
 
 static int neon_add_sve_init(struct test *test)
@@ -86,7 +101,7 @@ static int neon_add_sve_init(struct test *test)
 
         memset_random(na->a, buf_size);
         memset_random(na->b, buf_size);
-        prv_do_add(na->a, na->b, na->golden, count);
+        prv_scalar_golden_add(na->a, na->b, na->golden, count);
 
         test->data = na;
 

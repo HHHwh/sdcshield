@@ -89,7 +89,12 @@ function run_sandstone_yaml()
     # bats' "run" function would help, but it fails on older bats...
     local yamlfile=`mktempfile output-XXXXXX.yaml`
     outputfile=`mktempfile output-XXXXXX.yaml`
-    local command="$SANDSTONE -Y -o - \"\$@\" >&3; echo \$?"
+    # --full-log (8b5267a9 起 YAML 日志默认紧凑化): yamltest.py 对每个条目
+    # 强制取 details/test-runtime/time-at-start 等字段, 紧凑条目(pass/skip 折叠为
+    # 单行内联、fail 条目头字段延迟)会 KeyError 'details'。本包装器产出的
+    # YAML 全部交 yamltest.py/dumpyaml.py 逐条校验, 必须恢复完整条目 —— 与
+    # scripts/gha/verify-params.py 的 COMMON 同一契约。
+    local command="$SANDSTONE -Y --full-log -o - \"\$@\" >&3; echo \$?"
     if [[ -n "$TASKSET" ]]; then
         command="taskset ${TASKSET} $command"
     fi

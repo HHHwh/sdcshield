@@ -124,12 +124,30 @@ static int sve_k5ir_init(struct test *test) {
     memset_random(data->src, src_buf);
     memset_random(data->scratch, res_buf);
 
-    for (int i = 0; i < data->vl_slots; i++) {
-        const size_t off_a = ((size_t)2 * i) * data->vl_bytes;
-        const size_t off_b = off_a + data->vl_bytes;
-        const svuint64_t a = load_vec(data->src + off_a);
-        const svuint64_t b = load_vec(data->src + off_b);
-        store_vec(data->expected + (size_t)i * data->vl_bytes, rot_alu(i, a, b));
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test, so a persistent SVE datapath fault cannot corrupt golden
+     * and actual identically. Interleaved layout preserved: slot i's
+     * sources are src slots 2i (A) and 2i+1 (B); phase = slot % 4,
+     * matching rot_alu(i, ...) in the run loop. */
+    {
+        const uint64_t *s  = reinterpret_cast<const uint64_t *>(data->src);
+        uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expected);
+        const size_t lanes_per_slot = data->vl_bytes / sizeof(uint64_t);
+        for (int i = 0; i < data->vl_slots; i++) {
+            const size_t a_base = (size_t)(2 * i)     * lanes_per_slot;
+            const size_t b_base = (size_t)(2 * i + 1) * lanes_per_slot;
+            const size_t e_base = (size_t)i           * lanes_per_slot;
+            for (size_t l = 0; l < lanes_per_slot; l++) {
+                const size_t e = e_base + l;
+                switch (i % 4) {
+                    case 0: ex[e] = s[a_base + l] + s[b_base + l]; break;
+                    case 1: ex[e] = s[a_base + l] ^ s[b_base + l]; break;
+                    case 2: ex[e] = s[a_base + l] & s[b_base + l]; break;
+                    case 3: ex[e] = s[a_base + l] | s[b_base + l]; break;
+                }
+            }
+        }
     }
 
     test->data = data;

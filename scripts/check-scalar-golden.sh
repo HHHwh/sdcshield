@@ -38,9 +38,18 @@ fi
 BIN=$1; shift
 [ -x "$BIN" ] || { echo "error: '$BIN' is not an executable" >&2; exit 1; }
 
-# Vector ALU mnemonics (A64 SIMD): op with a vN.<shape> operand.
-# Data movement (ldr/str q, mov/ins/dup v) is deliberately excluded.
-VALU_RE='[[:space:]](add|sub|eor|and|orr|bic|orn|mul|mla|mls|neg|abs|shl|sshll|ushll|sri|sli|ext|trn|zip|uzp|tbl|tbx|rev)[[:space:]]+v[0-9]+\.'
+# Vector ALU mnemonics (A64 SIMD + SVE): op whose FIRST operand is a NEON
+# vN.<shape>, an SVE zN.<shape>, or an SVE predicate pN.<shape> register
+# (SVE compares write pN directly; fmla/fmad/etc. are predicated with p0/m
+# but lead with zN). SVE additions (issue #373 second baton): fmla/fmad/
+# fmls/fmsb/fnma/fns-family FMA, fneg/neg, not, sel, and the cmp* family —
+# verified against real disassembly of the pre-conversion golden symbols
+# (e.g. `fmad z1.s, p0/m, z3.s, z0.s`, `cmpeq p1.s, p0/z, z0.s, z1.s`).
+# Data movement (ldr/str q, ld1w/st1w, mov/ins/dup v, mov z, p1/z, ptrue,
+# whilelt) is deliberately excluded: it is not golden computation, and the
+# scalar FP pipe (fmadd s0, ... — the fmaf-based independent golden for the
+# arm0102_fma family) is likewise not a vector unit and stays allowed.
+VALU_RE='[[:space:]](add|sub|eor|and|orr|bic|orn|mul|mla|mls|neg|abs|shl|sshll|ushll|sri|sli|ext|trn|zip|uzp|tbl|tbx|rev|fadd|fsub|fmul|fdiv|fmla|fmls|fmad|fmsb|fnma|fnms|fnmul|fneg|fabs|not|sel|cmpeq|cmpne|cmpgt|cmpge|cmplt|cmple)[[:space:]]+(v[0-9]+\.|z[0-9]+\.|p[0-9]+\.)'
 
 fail=0
 for sub in "$@"; do

@@ -100,7 +100,10 @@ static int agu_stress_2src_sve_init(struct test *test) {
     memset_random(data->srcA, data->count * sizeof(uint64_t));
     memset_random(data->srcB, data->count * sizeof(uint64_t));
 
-    /* golden: same rotating composition, computed on the same SVE units */
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test. (Comment fixed by the #373 second baton: this golden was
+     * already scalar — only the "same SVE units" claim was stale.) */
     for (size_t i = 0; i < data->count; i++) {
         switch (i % 4) {
             case 0: data->expected[i] = data->srcA[i] + data->srcB[i]; break;

@@ -57,12 +57,20 @@ count/nelems/arena 类按 1/线程数、mdim 类按 1/√线程数 换算，或�
 ## 4. 参数校验
 
 所有尺寸类旋钮经 `sdc_knob_int_clamped()` 读取；环境变量通道经
-`sdc_env_knob_int_clamped()` 读取（与 `-O`/配置文件完全一致的
-clamp+告警语义）：
+`sdc_env_knob_int_clamped()` 读取（对**可表示**值与 `-O`/配置文件的
+clamp+告警语义一致；超出 long long 表示范围的溢出值两通道处理不同，
+见下）：
 
 - **越界**（任一通道）：报警告并 **clamp 到安全边界**（不中断战役），例：
   `fisttp_arm.num_elements=1` → 警告 + 实际取 1024；
   `SDC_SLEEF_NEON_NELEMS=99999999999` → 警告 + 实际取 67108864。
+- **溢出**（环境变量值超出 long long 表示范围，`strtoll` ERANGE）：告警
+  打出**用户真实输入**后**按未配置处理**，回退默认/内存自适应通道——
+  `strtoll` 饱和值（LLONG_MAX/LLONG_MIN）不是用户输入，不得当"解析成功"
+  送进 clamp 通道（issue #490；修复前实测 23 位输入被打成
+  `n=9223372036854775807` 再 clamp 到区间上端）。`-O`/配置文件通道的
+  同类溢出仍走 clamp（上游 `test_knobs.cpp` 的 `strtoull` 回绕行为，
+  不在该修复范围）。
 - **格式错误**（配置文件行非法）：启动即退出（`EX_USAGE`）。
 - **分组密码对齐**：SM4/AES-CBC 等无填充场景的 data_size 自动向下
   对齐到 16 字节，对齐后小于下限则取下限。
@@ -188,10 +196,9 @@ knob/env 可申请更大足迹（其超时语义见 #357）。quick 模式 16 Mi
 注：symm_f64 由 #323 补齐（#414 当时只改了 sym 对）；f64 块粒度
 32 KiB（4096×double），sym 对为 32 KiB（8192×float）。
 
-### SVE eigen / acl_gemm
+### acl_gemm_sve
 | knob | 含义 | 范围 | 缺省 |
 |---|---|---|---|
-| `eigen_svd_bidiag_sve.mdim` | 双对角化方阵维度 | 64~2048 | 自适应 65% |
 | `acl_gemm_sve.dim` | F32 GEMM 方阵维度 | 64~4096 | 自适应 60% |
 
 ### SVE ipsec（24 个文件，统一）

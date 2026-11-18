@@ -43,3 +43,4 @@ __pycache__/
 # agent 会话工具目录（.entire=运行时状态, .planning=planning-with-files 计划草稿）
 /.entire/
 /.planning/
+docs/superpowers/

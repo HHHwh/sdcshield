@@ -51,6 +51,9 @@ SKIP_OK_RE = re.compile(
 #     rc 不定,不属确定性负路径。
 NEGATIVE_SELFTESTS = [
     "selftest_fail", "selftest_failinit", "selftest_abort", "selftest_abortinit",
+    # knob getters are init-only: a run()-side query must abort in every build
+    # (issue #417 — the fail-loud check is no longer NDEBUG-gated)
+    "selftest_knob_from_run",
     "selftest_sigill", "selftest_sigsegv", "selftest_sigbus",
     "selftest_sigsegv_init", "selftest_sigsegv_instruction",
     "selftest_sigsegv_kernel", "selftest_sigkill", "selftest_reportfail", "selftest_reportfailmsg",
@@ -68,6 +71,73 @@ OPENBLAS_MDIM = ["64", "256", "512"]
 # 是硬件拓扑缺失)。本地/self-hosted kunpeng920 上仍会跑。
 # 注意:--disable 接受通配符,这里用精确前缀 + 通配。
 CLOUD_DISABLE = ["mesh_upi*", "memcpy_rewr"]
+
+# CI 矩阵用例统一钉维(用户决策 2026-11-17, 根因取证见
+# docs/superpowers/plans/2026-11-17-eigen-ci-timeout-fix.md):
+#   --timeout=60s 是每测试整体墙钟预算, 而矩阵用例自适应 sizing 的设计目标是
+#   每迭代 200s(sparse 144s, 按 300s 硬看门狗口径标定) → 4 核 CI runner 上
+#   联合求解选出的大维度单迭代即超 60s(run 44011713221: 5 个 24.03 镜像一致
+#   超时——Jacobi 4 件套时间受限档 n_run≈1019-1934, sparse/float-gemm 被 hi
+#   封顶 8192, cdouble-gemm 封顶 4096; prod_n1 的 openblas d/z/c gemm 同型)。
+#   统一 -O 钉 mdim=200 走 knob 早退完全旁路 sizing 与试解探针, 单迭代毫秒级,
+#   从根上消除该超时类。代价(有意): CI 上这些用例的压测强度降为 smoke 档,
+#   本地/自建 runner 不传 -O 仍自适应; openblas 的参数覆盖由本脚本 mdim 扫谱
+#   阶段(64/256/512, 不经 COMMON)独立承担。[欠压力] 警告是显式 knob 的框架
+#   诚实披露, 属预期日志噪声。
+# 排除(勿加): SVE/SVE2 变体(eigen_*_sve/_sve2)——不钉的原因不是"不在运行集"
+#   (该旧前提已被证伪: N2 runner prod=653-643=+10 个 SVE2 PROD 配套, run
+#   43998000729 prod_n4 实测 10/10 自适应档 pass 未超 60s 预算——SVE 向量化
+#   内核远快于 NEON 基座, 观测到的挂死全集是非 SVE 矩阵基座用例, 已全钉),
+#   而是钉维会把它们在 N2 上的真实自适应压测面降为 smoke 档。
+#   acl_gemm_sve 原先也被旧前提排除——它是真挂死: run 44011713221 的
+#   prod_n4 实测 -n4 超时 61s (adaptive .dim 未配置)。2026-11-17 补钉。
+#   eigen_gemm_double_max_arm 的下限已随 4c6297ab 放开(MDIM_MIN 1024→200),
+#   其值保持 200(=地板, 128 低于下限会被钳)。
+MATRIX_CI_DIM = 128
+MATRIX_DIM_PIN_KEYS = [
+    # Eigen SVD(BDCSVD ×6, knob clamp [64,2048]):
+    "eigen_svd.mdim", "eigen_svd_double.mdim", "eigen_svd_double2.mdim",
+    "eigen_svd_cdouble.mdim", "eigen_svd_cdouble_noavx512.mdim",
+    "eigen_svd_fvectors.mdim",
+    # Eigen SVD(Jacobi ×4, clamp [64,2048]):
+    "eigen_svd_jacobi.mdim", "eigen_svd_jacobi_double.mdim",
+    "eigen_svd_jacobi_cdouble.mdim", "eigen_svd_jacobi_fvectors.mdim",
+    # Eigen GEMM 动态方阵 ×6 + double14(clamp [16,8192]/[16,4096]):
+    "eigen_gemm_double_dynamic_square.mdim",
+    "eigen_gemm_double_dynamic_square_dump.mdim",
+    "eigen_gemm_float_dynamic_square.mdim",
+    "eigen_gemm_float_dynamic_square_dump.mdim",
+    "eigen_gemm_cdouble_dynamic_square.mdim",
+    "eigen_gemm_cdouble_dynamic_square_dump.mdim",
+    "eigen_gemm_double14.mdim",
+    # Eigen max-matrix GEMM(ARM64+SVE, clamp [200,4096] 自 4c6297ab;
+    #   值钉在地板 200, 见上):
+    "eigen_gemm_double_max_arm.mdim",
+    # Eigen 稀疏 Cholesky(knob 名为 n, clamp [64,8192]):
+    "eigen_sparse.n",
+    # ACL SVE GEMM(knob 名为 .dim; CI runner N2 实跑, run 44011713221
+    #   prod_n4 超时 61s 的漏网用例, 2026-11-17 补钉):
+    "acl_gemm_sve.dim",
+    # OpenBLAS GEMM ×4 + LU(knob mdim/n, clamp [16,16384];
+    #   prod 阶段曾同型超时, 参数覆盖由 mdim 扫谱阶段独立承担):
+    "openblas_dgemm.mdim", "openblas_sgemm.mdim", "openblas_zgemm.mdim",
+    "openblas_cgemm.mdim", "openblas_lu.n",
+]
+# 低于全局钉值地板的逐键覆写(值=各 knob 的 clamp 下限或语义地板):
+MATRIX_DIM_PIN_OVERRIDES = {
+    "eigen_gemm_double_max_arm.mdim": 200,
+}
+MATRIX_DIM_PINS = []
+for _k in MATRIX_DIM_PIN_KEYS:
+    MATRIX_DIM_PINS += ["-O", f"{_k}={MATRIX_DIM_PIN_OVERRIDES.get(_k, MATRIX_CI_DIM)}"]
+
+
+# 阶段级 subprocess 超时(run() 默认 900s=15min 的截断事故, run 44011713221:
+#   all-quality 在 879s、prod_n1 在 898.7s 被 subprocess 掐死 → yaml 拦腰截断,
+#   all-quality 实际只跑 242/775 个用例且旧判定不查 rc 照样 (OK))。
+#   60min 覆盖全量阶段实测(~12min 量级)留 5× 余量; 外层另有 workflow job
+#   120min 兜底。
+STAGE_TIMEOUT_SEC = 3600
 
 
 def run(cmd, timeout=900):
@@ -213,8 +283,15 @@ def main():
     #   --timeout=60s:每测试超时防互联类挂死 300s;
     #   --max-messages 0:关掉 per-thread 日志冗余;
     #   --ignore-timeout:把超时当非致命继续,而非整体 exit: invalid。
-    COMMON = ["-vvv", "--retest-on-failure=0", "--max-test-loop-count", "3", "--timeout=60s",
-              "--max-messages", "0", "--ignore-timeout"]
+    #   --full-log: 8b5267a9 起紧凑 YAML 日志为默认(pass/skip 条目折叠为单行内联
+    #      `- { test: x, result: pass }`, 且无 test-runtime/state/seed 行)。本脚本的
+    #      逐条解析(RESULT_RE/RESULT_VAL/SEED_*_RE 只认多行块格式)、F-009 种子链与
+    #      report-summary.py 的耗时矩阵都依赖完整条目 —— CI 消费者必须 opt-in 恢复。
+    #   + MATRIX_DIM_PINS: 全部矩阵用例统一 -O 钉维(值=MATRIX_CI_DIM, 地板限
+    #      例外见 MATRIX_DIM_PIN_OVERRIDES; 根因/清单依据见顶部注释与 plan 文档)
+    #      —— COMMON 同时覆盖 all-quality(-n1) 与 all-PROD n1/4/8 两个超时现场。
+    COMMON = ["-vvv", "--full-log", "--retest-on-failure=0", "--max-test-loop-count", "3",
+              "--timeout=60s", "--max-messages", "0", "--ignore-timeout"] + MATRIX_DIM_PINS
     # 云 runner 拓扑缺失:mesh_upi_*/memcpy_rewr 需多 NUMA 真实硅,单 socket VM 挂死 → 排除
     CLOUD_DIS = []
     for pat in CLOUD_DISABLE:
@@ -231,37 +308,42 @@ def main():
         ]:
             y = os.path.join(out_dir, "allquality.yaml")
             cmd = [bin_path] + extra + ["-o", y]
-            _rc, stdout = run(cmd)
+            stage_rc, stdout = run(cmd, timeout=STAGE_TIMEOUT_SEC)
             tests, crashes, seeds = parse_result_file(y)
             allq_seeds = seeds
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
-            stage_tests.append((label, tests, crashes, npass, nskip, nfail, ncrash, nsoft, len(seeds)))
+            stage_tests.append((label, tests, crashes, npass, nskip, nfail, ncrash, nsoft, len(seeds), stage_rc))
 
-    for label, tests, crashes, npass, nskip, nfail, ncrash, nsoft, nseeds in stage_tests:
+    for label, tests, crashes, npass, nskip, nfail, ncrash, nsoft, nseeds, stage_rc in stage_tests:
         # 运行了测试但未捕获到任何种子(state/seed 行缺失)同样判 FAIL:
         # verbosity<3 或日志被裁时失败将无法按种子复现,证据链缺失不能算通过
-        ok = (nfail == 0 and ncrash == 0 and npass + nskip > 0 and nseeds > 0)
+        # stage_rc==0 硬闸(截断事故教训, run 44011713221): 进程被杀/崩溃/超时
+        #   (124/139/…)时 yaml 是残卷,残卷上的 228 pass 不是全量通过——
+        #   宁红勿假绿。
+        ok = (stage_rc == 0 and nfail == 0 and ncrash == 0 and npass + nskip > 0 and nseeds > 0)
         if not ok:
             fail_total += 1
         crash_total += crashes
-        log.append(f"[{label}] tests={len(tests)} pass={npass} skip={nskip} soft={nsoft} "
+        log.append(f"[{label}] rc={stage_rc} tests={len(tests)} pass={npass} skip={nskip} soft={nsoft} "
                    f"fail={nfail} crash={ncrash} seeds={nseeds} ({ 'OK' if ok else 'FAIL'})")
 
     # ---- 3) 多线程并发档(-n 1/4/8)对全 PROD 各跑一轮(内存/锁/cache 压力面) ----
     if args.smoke:
         for n in [1]:
             y = os.path.join(out_dir, "smoke_zstd19.yaml")
-            # -vvv 与 COMMON 一致: YAML state 里的种子需要 verbosity>=3 才输出(F-009 复现链)
-            cmd = [bin_path, "-n", "1", "-t", "3000", "-vvv", "--max-messages", "0",
+            # -vvv 与 COMMON 一致: YAML state 里的种子需要 verbosity>=3 才输出(F-009 复现链);
+            # --full-log 同 COMMON 契约(见上)——smoke 档不走 COMMON,须单独带上
+            cmd = [bin_path, "-n", "1", "-t", "3000", "-vvv", "--full-log", "--max-messages", "0",
                    "-e", "zstd19", "-o", y]
-            _rc, stdout = run(cmd)
+            stage_rc, stdout = run(cmd, timeout=STAGE_TIMEOUT_SEC)
             tests, crashes, seeds = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
-            ok = nfail == 0 and ncrash == 0 and npass >= 1 and len(seeds) > 0
+            # stage_rc==0 同 all-quality 硬闸(残卷宁红勿假绿)
+            ok = stage_rc == 0 and nfail == 0 and ncrash == 0 and npass >= 1 and len(seeds) > 0
             if not ok:
                 fail_total += 1
             crash_total += crashes
-            log.append(f"[smoke zstd19 -n 1] pass={npass} skip={nskip} fail={nfail} crash={ncrash} "
+            log.append(f"[smoke zstd19 -n 1] rc={stage_rc} pass={npass} skip={nskip} fail={nfail} crash={ncrash} "
                        f"seeds={len(seeds)} ({'OK' if ok else 'FAIL'})")
         print(f"enumerated: prod={total_enum} all-quality={len(all_ql)} selftests={len(selftests)} "
               f"threads={threads} nproc={nproc} (smoke)")
@@ -279,18 +361,20 @@ def main():
             disable_args += ["--disable", eig]
         disable_args += CLOUD_DIS
         cmd = [bin_path, "-n", str(n), "-t", "1000"] + COMMON + disable_args + ["-o", y]
-        _rc, stdout = run(cmd)
+        stage_rc, stdout = run(cmd, timeout=STAGE_TIMEOUT_SEC)
         tests, crashes, seeds = parse_result_file(y)
         npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
         # 与 all-quality/smoke 一致(COMMON 带 -vvv):种子行缺失说明复现证据链断裂,
         # 同判 FAIL(零种子时日志已含 seeds=0 摘要,无需另附信息)
         # 种子证据≠通过证据:若目标测试全部 skip(如 CI runner 不支持某特性),
         # 无 pass 结果同样判 FAIL,防止验证任务错误通过
-        ok = nfail == 0 and ncrash == 0 and npass > 0 and len(seeds) > 0
+        # stage_rc==0 同 all-quality 硬闸(截断事故教训, run 44011713221:
+        #   prod_n1 在 898.7s 被掐死, 残卷 252/642 条照样 (OK))
+        ok = stage_rc == 0 and nfail == 0 and ncrash == 0 and npass > 0 and len(seeds) > 0
         if not ok:
             fail_total += 1
         crash_total += crashes
-        log.append(f"[all-PROD -n {n}] pass={npass} skip={nskip} soft={nsoft} "
+        log.append(f"[all-PROD -n {n}] rc={stage_rc} pass={npass} skip={nskip} soft={nsoft} "
                    f"fail={nfail} crash={ncrash} seeds={len(seeds)} ({'OK' if ok else 'FAIL'})")
 
     # ---- 4) selftests 正向集(@positive) ----
@@ -329,21 +413,23 @@ def main():
             continue
         for m in mdim:
             y = os.path.join(out_dir, f"{t}_mdim{m}.yaml")
-            # 与 COMMON 等效(含 -vvv 种子落盘 + ignore-timeout),mdim 阶段种子同样可复现
-            cmd = [bin_path, "-O", f"{t}.mdim={m}", "-n", "1", "-vvv",
+            # 与 COMMON 等效(含 -vvv 种子落盘 + ignore-timeout + --full-log 逐条解析契约),
+            # mdim 阶段种子同样可复现
+            cmd = [bin_path, "-O", f"{t}.mdim={m}", "-n", "1", "-vvv", "--full-log",
                    "--retest-on-failure=0", "--max-test-loop-count", "3", "-t", "5000",
                    "--max-messages", "0", "--ignore-timeout", "-e", t, "-o", y]
-            _rc, stdout = run(cmd)
+            stage_rc, stdout = run(cmd, timeout=STAGE_TIMEOUT_SEC)
             tests, crashes, seeds = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             # 同 all-PROD:此阶段也带 -vvv 跑,零种子即证据链缺失,同判 FAIL
             # 种子证据≠通过证据:该档(如 openblas 缺某特性时)目标测试全部 skip,
             # 无 pass 结果同样判 FAIL(逐测试×逐档位判定,每档都须有 pass)
-            ok = nfail == 0 and ncrash == 0 and npass > 0 and len(seeds) > 0
+            # stage_rc==0 同 all-quality 硬闸(残卷宁红勿假绿)
+            ok = stage_rc == 0 and nfail == 0 and ncrash == 0 and npass > 0 and len(seeds) > 0
             if not ok:
                 fail_total += 1
             crash_total += crashes
-            log.append(f"[{t} mdim={m}] pass={npass} skip={nskip} fail={nfail} crash={ncrash} "
+            log.append(f"[{t} mdim={m}] rc={stage_rc} pass={npass} skip={nskip} fail={nfail} crash={ncrash} "
                        f"seeds={len(seeds)} ({'OK' if ok else 'FAIL'})")
 
     # ---- 汇总 ----

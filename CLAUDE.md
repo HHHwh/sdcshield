@@ -64,13 +64,23 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
 ./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent:
-                                               #   SVE1 host:  486 PROD / 496 q0 / 500 q-1  (2026-11-01 merge-tree,
-                                               #               post issue #374 sched_storm×4 PROD→BETA re-measure;
-                                               #               +121 迁移后推算 507/517/521, 待该主机重测)
-                                               #   no-SVE 920 (本机): 519 PROD / 628 q0 / 632 q-1  (2026-11-10 实测,+gather 2,
-                                               #               = 2026-11-02 口径 439 + 11-02 后各家族累积 (lock_arm 13 +
-                                               #               memory-access 9 + barrier_2 + fp64 家族 39 PROD +
-                                               #               fp64_dump + gather 2 + 11-02 口径未列全的历史项, 实测为准)
+                                               #   SVE1 host:  565 PROD / 675 q0 / 683 q-1  (2026-11-03 merge 复核:
+                                               #               main #472 迁移/增量 + feat/eigen-sve-unification
+                                               #               +12 SVE eigen cases, − eigen_svd_bidiag_sve;
+                                               #               full chain in README)
+                                               #   14 eigen *_sve2 companions (2026-11-13, feat/eigen-sve2-companion)
+                                               #     are INVISIBLE in every list 口径 on this SVE1 host — spec filter
+                                               #     precedes list; explicit -e registers them and skips honestly.
+                                               #     SVE2 host: default set +10 PROD, q-1 +14 (4 Jacobi are SKIP-level).
+                                               #   no-SVE 920 主机: 458 PROD / 566 q0 / 570 q-1  (2026-11-17 实测于
+                                               #               no-SVE 920 主机 (not THIS SVE1-256 host), vendored 5 库
+                                               #               install/ 全在位口径, 依赖缺位会相应减对应测试组;
+                                               #               = 迁移 111 (arm0102_* 基础 10 项 2026-11-03 退册) +
+                                               #               arm_add 7 + _neon 14 + cache 新 9 PROD;
+                                               #               eigen SVE 12 新/退役 1 + SVE2 配套 14 全
+                                               #               ARM64_REQUIRES_SVE/SVE2 门控, 净变化 0)
+                                               #   PR #814 merge 后（L3_cache_920 统一 + FP64 家族 + 退役 neon_*
+                                               #               复制件）：计数待 merge 树实测复核后落盘（见 README）。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
@@ -130,7 +140,9 @@ END_DECLARE_TEST
   2-core `eigen_svd_double -n 2` pass. Run full-core; `-n 1` is no longer
   required. Adaptive dims are jointly sized (2026-10-27,
   feat/eigen-p0-p3-fix — also cured the full-core auto timeouts
-  `eigen_svd_cdouble_sve` 321s / `eigen_svd_bidiag_sve` 343s):
+  `eigen_svd_cdouble_sve` 321s / `eigen_svd_bidiag_sve` 343s; the
+  latter case — and its `SDC_RSS_BIDIAG` table entry — was retired
+  2026-11-02, historical note only):
   `sdc_joint_dim_slice` = min(n_mem, n_run, clamp) — n_mem from a
   per-NUMA-node four-source budget (phys×‰ / MemAvailable×0.9 / cgroup
   v1+v2 / CommitLimit−Committed_AS×0.9 when vm.overcommit_memory=2 —
@@ -139,7 +151,22 @@ END_DECLARE_TEST
   n_run from a probe power-law fit × the AR all-core-slowdown table
   (family×topology), refined by a VmHWM feedback loop (per-slice EMA,
   median aggregation, 0.7× table floor). Explicit `-O <test>.mdim/n`
-  bypasses sizing with an expected-memory warning. The pre-fix "ULP-level
+  bypasses sizing; the explicit-knob `[内存越界]`/`[欠压力]`
+  expected-memory warning (the T11 block sits inside the
+  aarch64+linux guard — x86-64 prints none for explicit knobs; the
+  tags themselves also fire on x86-64 from the arch-agnostic
+  `sdc_auto_square_dim`/`sdc_auto_linear_count` adaptive paths)
+  fires only for the ten SVD template-family users (knob routed
+  through the joint layer via `calibrated_auto_dim`) —
+  gemm/sparse/sve callers still short-circuit the knob in
+  their own init (before the arch guard), no warning yet (T11b
+  follow-up; 10/47 eigen cases covered — 32 at the 2026-11-03
+  unification docs count + `eigen_gemm_double_ab_split` (migration
+  #472 content, in the same-day unification merge; no -O mdim knob,
+  dimension from the raw `GEMM_K_DIM` env) + 14 `_sve2` companions
+  (2026-11-13, inits short-circuiting the knob like their `_sve`
+  templates) — the covered ten unchanged; the fourth bidiag caller was
+  retired with its case 2026-11-02). The pre-fix "ULP-level
   sporadic failure under full-core multithreading" advice is
   obsolete.
 - **Vector capability (SVE/SVE2/SME, VL/SVL tiers) is per-host — probe it,
@@ -162,9 +189,50 @@ END_DECLARE_TEST
   register and skip honestly). Override the assumed maximum with
   `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` (only lowers; re-probed so an
   unimplemented tier such as 384 falls back to what the kernel grants).
-  The Eigen SVE pair is tier-locked by the language (fixed-width packets) and
-  is built once per tier with a runtime function-pointer dispatch; the
-  complex SVD payload runs all four tiers since the vendored-Eigen ptranspose
+  The 14 Eigen SVE cases (2026-11-03, feat/eigen-sve-unification) are all
+  tier-locked by the language (fixed-width packets) and built once per tier
+  with a runtime function-pointer dispatch, unified on the per-tier body +
+  dispatcher framework in
+  `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h` (2 pre-existing:
+  `eigen_svd_cdouble_sve`/`eigen_gemm_double_max_arm`; 12 new: BDCSVD×4,
+  JacobiSVD×4 — SKIP-level, GEMM×4; `eigen_svd_bidiag_sve` retired
+  2026-11-02, its purpose eliminated by #410). Each of the 14 has an
+  `_sve2` companion (2026-11-13, feat/eigen-sve2-companion, 14+14): the
+  same per-tier bodies are dual-compiled per tier — `armv8.2-a+sve`
+  (Eigen ns `EigenSVE<t>`) vs `armv8.2-a+sve2` (Eigen ns `EigenSVE2<t>`;
+  2026-11-17 前曾用 `armv9-a+sve2`——armv9-a 架构名需 GCC 11+，曾致 Multi-OS
+  Verify 的 20.03/22.03 gcc-10 镜像 Build 全红（PR #661 回归，run 44011713221）；
+  +sve2 在 armv8.x-a base 上 GCC 10 即可编；双 march 40 库 objdump A/B 实测
+  （2026-11-17 干净同源全量构建对比，flags 除 march 外逐项全等）：40/40 库
+  原始反汇编有差异（分支偏移/地址移位 + 标量调度重排，合计 ~10.2k 行），
+  32/40 库助记符多重集逐库全等，余 8/40 库另有 ±1..13 次纯标量计数微差
+  （mov/ldr/str/stp/ldp/ldur/stur/nop/add/lsl/madd/mul/b.*，含一次整数
+  mul↔madd 融合翻转；零 SVE 族、零 FP 族计数变化 → 数值面不变），
+  WHILEWR 逐库计数 A/B 全等（合计 1549 实例分布于 35 库），诚实边界不变) —
+  and each `<pfx>_sve2` dispatcher is the `_sve` template plus exactly six
+  differences (id/env `_sve2`, pfx at every call site, an
+  `arm64_cpu_has_sve2()` honest-SKIP gate before `arm64_require_sve_vl`,
+  `ARM64_REQUIRES_SVE2`, the "SVE2 packet backend … counterpart" description
+  string, header counterpart + honest-scope note). (Exception,
+  disclosed in the commit: where the `_sve` template's header carried
+  stale build-mechanics claims that would contradict the `_sve2` build,
+  the header is factually corrected — the two known cases:
+  `eigen_svd_cdouble_sve2` ×3, `eigen_gemm_double_max_arm_sve2` ×1.)
+  Honesty boundary (corrected 2026-11-17): the stress kernels are an SVE1
+  subset, but GCC idiom-recognizes Eigen's aliasing-checked copy plumbing
+  (call_assignment/gemm_pack_rhs loops) into WHILEWR — an SVE2-only
+  address-overlap instruction, 1549 instances in 35/40 libraries, present
+  since #661 (armv9-a+sve2) and per-library IDENTICAL after the march
+  switch (the earlier "emits ZERO SVE2-only instructions, objdump-audited
+  40/40" claim missed this class; caught by the binutils SVE1-only
+  assembler gate). The companions still provide an SVE2-gated entry
+  point, NOT SVE2-only datapath coverage, and runtime is HWCAP2_SVE2-
+  gated so WHILEWR only ever executes on SVE2 hardware. gem5 evidence:
+  SE pairing matrix 10 body
+  families × 8 legs, per-tier sve2↔sve checksums byte-identical, plus an
+  FS real-binary leg validating the dispatcher path
+  (`eigen_svd_double_sve2 -n 2`, VL=128, pass). Every payload runs all
+  four tiers since the vendored-Eigen ptranspose
   scatter rewrite (issue #410, 2026-11-01: the memory-bridge form read past
   `buf[N][NC]` when NC > N — 1024-bit NC=8; the scatter form is in bounds
   for any N/NC and bit-identical in square shapes, gem5-verified at
@@ -205,7 +273,7 @@ END_DECLARE_TEST
 - **Build/deploy/multi-OS**: README (quick start, 15-version build);
   `docs/build-deploy-pr-ci/` (design + usermanual + offline deps).
 - **Agent full-automation design** (PR-loop lifecycle, bots, CI sentinel,
-  auto-repair PRs, human merge gate): `docs/build-deploy-pr-ci/agent-full-automation.md`.
+  auto-repair PRs, deterministic merge gate): `docs/build-deploy-pr-ci/agent-full-automation.md`.
 - **Session recovery** (machine may die anytime; persist conclusions to
   disk): `docs/research/progress-log.md`; fact card in
   `docs/research/README.md`.
@@ -232,14 +300,25 @@ END_DECLARE_TEST
 - **Theory**: `docs/hypothesis/ARM64-SDC-uArch.md`; **output schema**:
   `docs/sdcshield-cpu.schema.json`; **provenance/compliance**:
   `docs/coding/OPEN_SOURCE_PROVENANCE.md`.
-- **Process artifacts**: `docs/superpowers/` (plans/, specs/, inventory/).
+- **Process artifacts**: `docs/superpowers/plans/` only — specs/ and
+  inventory/ were cleaned out of the repo by 31f6a99e (2026-11-17);
+  recover them from git history at `31f6a99e^`.
 - **PR review-fix loop** (agent-driven: five bots (four external SaaS + the local
   headless claude adversarial reviewer) → subagent critical triage →
-  fix → loop → human merge; never auto-merge): `docs/build-deploy-pr-ci/pr-loop.md`;
+  fix → loop → merge): `docs/build-deploy-pr-ci/pr-loop.md`;
   engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot;
-  unattended orchestration is task_loop's); `/pr-loop` and `/dev-loop` commands
-  (`.claude/commands/`) and Trae rules (`.trae/rules/`) are content-twins.
+  unattended orchestration is task_loop's）. Merge 政策（2026-11-13 红线反转，
+  spec 2026-11-12-full-auto-pipeline）：夜间 pipeline 的 merge 门对引擎 PR
+  （`fix/issue-N|fix/ci-N|fix/revert-prN`）六门槛全过自动 squash merge；全
+  docs-only PR 走快道（标题 `WIP:` 前缀 = 草稿闸，去掉 = 当夜可合）；用户非
+  docs PR 永不自动 merge；自动 resolve review threads 仍然禁止。`/pr-loop`
+  and `/dev-loop` commands (`.claude/commands/`) and Trae rules
+  (`.trae/rules/`) are content-twins.
 - **task-loop 无人值守任务闭环**（统一编排引擎: CI 红/main 审查/会话/手建
-  issue → agent → PR 闭环;ci_triage 的泛化后继,含迁移说明）:
-  `docs/build-deploy-pr-ci/task-loop.md`;引擎 `scripts/task_loop.py`;
+  issue → agent → PR 闭环;ci_triage 的泛化后继,含迁移说明。2026-11-13 起
+  调度为 nightly pipeline: cron `0 23 * * *` 拉起 `task_loop.py pipeline`
+  （23:00–09:00 窗口三泳道并行 + merge 门 + 09:00 软停，`@reboot` 落窗
+  自愈）；旧 scan/audit/第5bot 三行旧 cron 将随 task-loop.md §3.1 runbook
+  部署删除，`scan` 降级为会话手动单轮
+  薄壳）: `docs/build-deploy-pr-ci/task-loop.md`;引擎 `scripts/task_loop.py`;
   会话命令 `/dev-loop`。

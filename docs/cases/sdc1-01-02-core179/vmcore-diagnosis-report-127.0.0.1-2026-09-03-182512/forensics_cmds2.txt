@@ -1,8 +1,0 @@
-sys
-vtop -k 00ffc99ebbaad120
-vtop -k 00ffc99ebbaad000
-rd -64 ffffc9e8a40d59a9 2
-px __per_cpu_offset[123]
-px __per_cpu_offset[124]
-p &((struct rq *)0)->cfs.avg.load_avg
-quit

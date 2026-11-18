@@ -117,12 +117,30 @@ static int sve_rot_rowmajor_init(struct test *test) {
     memset_random(data->srcB, buf);
     memset_random(data->scratch, buf);
 
-    /* golden: same rotating composition, computed on the same SVE units */
-    for (int i = 0; i < data->vl_slots; i++) {
-        const size_t off = (size_t)i * data->vl_bytes;
-        const svuint64_t a = load_vec(data->srcA + off);
-        const svuint64_t b = load_vec(data->srcB + off);
-        store_vec(data->expected + off, rot_alu(i, a, b));
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test, so a persistent SVE datapath fault cannot corrupt golden
+     * and actual identically. Phase = slot index % 4 (all lanes of a
+     * slot share the phase, matching rot_alu(i, ...) in the run loop);
+     * the sweep order is irrelevant to the golden — every slot is
+     * written exactly once per body either way. */
+    {
+        const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
+        const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB);
+        uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expected);
+        const size_t lanes_per_slot = data->vl_bytes / sizeof(uint64_t);
+        for (int i = 0; i < data->vl_slots; i++) {
+            const size_t base = (size_t)i * lanes_per_slot;
+            for (size_t l = 0; l < lanes_per_slot; l++) {
+                const size_t e = base + l;
+                switch (i % 4) {
+                    case 0: ex[e] = sa[e] + sb[e]; break;
+                    case 1: ex[e] = sa[e] ^ sb[e]; break;
+                    case 2: ex[e] = sa[e] & sb[e]; break;
+                    case 3: ex[e] = sa[e] | sb[e]; break;
+                }
+            }
+        }
     }
 
     test->data = data;

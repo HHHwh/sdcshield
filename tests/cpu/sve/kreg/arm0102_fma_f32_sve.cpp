@@ -16,9 +16,19 @@
  *   fms  — vfmsq(c, a, b)          = c - a*b   -> svmsb_f32_x(c, a, b)
  *   fnma — vneg(vfms(vneg(c),a,b)) = c + a*b   (nested, kept verbatim)
  *   fnms — vneg(vfma(vneg(c),a,b)) = c - a*b   (nested, kept verbatim)
- * The fnma/fnms cases are numerically equal to fma/fms but traverse a
- * different instruction sequence (neg + fma + neg) — that is the
- * original's datapath-probing design, preserved.
+ * NOTE (measured 2026-11-08, issue #373 scalar-golden migration): the
+ * NEON column is the ORIGINAL's semantics; the SVE intrinsics the port
+ * emits do NOT all preserve them. On-hardware probe (GCC 12.3 / this
+ * SVE host, 8/8 lanes): svmla_f32_x(pg, c, a, b) = c + a*b, but
+ * svmsb_f32_x(pg, c, a, b) = b - c*a (FMSB writes the subtractor, not
+ * the vfmsq shape), making the four SVE payloads
+ *   c + a*b,  b - c*a,  -(b + c*a),  c - a*b.
+ * The hot loop is the ORIGINAL ARM-0102 instruction-sequence stress —
+ * the actual computed values are the payload, not a promise; the golden
+ * replicates the measured SVE behavior (see the init comment).
+ * The fnma/fnms cases traverse a different instruction sequence
+ * (neg + fma + neg) — that is the original's datapath-probing design,
+ * preserved.
  *
  * pg4 sub-block predicates preserve the 4-lane NEON semantics;
  * svcntw() elements (runtime VL) of buffer slack cover the asm full-VL
@@ -34,6 +44,7 @@
 
 #include "sandstone.h"
 #include "sdc_stress_config.h"
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -88,7 +99,8 @@ static inline svfloat32_t load_vec_sve(const void *addr) {
     return res;
 }
 
-/* 旋转 FMA 载荷 (相位 i%4); vfmaq(d,a,b)=d+a*b, vfmsq=d-a*b, vnegq 取反 */
+/* 旋转 FMA 载荷 (相位 i%4); 实测 SVE 语义: svmla(c,a,b)=c+a*b,
+ * svmsb(c,a,b)=b-c*a (FMSB 写被减数, 非 vfmsq 形), vneg 取反——见文件头 NOTE */
 static inline svfloat32_t fma_rotating_sve(svbool_t pg, svfloat32_t a, svfloat32_t b,
                                            svfloat32_t c, int phase)
 {
@@ -134,27 +146,33 @@ static int arm0102_fma_f32_sve_init(struct test *test) {
         data->srcC[i] = frandomf_scale(100.0f);
     }
 
-    /* golden: 与 run 相同的子块结构 + 相位 = 子块序号
-     * (base+sub)/FMA_SVE_SUBLANES, 同 SVE 单元; 原式 (base+sub)%4 恒为 0
-     * (base 是 svcntw() 倍数、sub 是 4 的倍数), 旋转失效 */
-    /* lanes 已由上方门控 svl 换算 (f32 lanes = SVL bytes / 4) */
-    svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)FMA_SVE_SUBLANES);
-    for (int base = 0; base < count; base += lanes) {
-        const int n = (count - base < lanes)
-                          ? count - base : lanes;
-        for (int sub = 0; sub < n; sub += FMA_SVE_SUBLANES) {
-            const int phase = (base + sub) / FMA_SVE_SUBLANES;
-            float av[8], bv[8], cv[8], ov[8];
-            for (int k = 0; k < FMA_SVE_SUBLANES && sub + k < n; ++k) {
-                av[k] = data->srcA[base + sub + k];
-                bv[k] = data->srcB[base + sub + k];
-                cv[k] = data->srcC[base + sub + k];
-            }
-            svfloat32_t va = svld1_f32(pg4, av), vb = svld1_f32(pg4, bv), vc = svld1_f32(pg4, cv);
-            svfloat32_t res = fma_rotating_sve(pg4, va, vb, vc, phase);
-            svst1_f32(pg4, ov, res);
-            for (int k = 0; k < FMA_SVE_SUBLANES && sub + k < n; ++k)
-                data->expected[base + sub + k] = ov[k];
+    /* golden (issue #373): scalar independent recomputation — bit-exact
+     * scalar FMA on the scalar FP pipe (fmaf lowers to scalar fmadd sN),
+     * never the SVE vector FMA units under test, so a persistent SVE
+     * FMA/lane fault cannot corrupt golden and actual identically.
+     * Phase = 4-element sub-block index (i/4)%4 — identical to the run
+     * loop's (base+sub)/SUBLANES group rotation (base is a multiple of
+     * lanes, lanes a multiple of 4).
+     *
+     * SVE op semantics (measured on-hardware with a lane-exact probe,
+     * 2026-11-08 — the docblock's NEON equivalences do NOT hold for the
+     * SVE instructions the port actually emits):
+     *   svmla_f32_x(pg, c, a, b) = c + a*b          (matches vfmaq)
+     *   svmsb_f32_x(pg, c, a, b) = b - c*a          (NOT c - a*b; FMSB
+     *       writes the subtractor — the docblock's vfmsq equivalence is
+     *       wrong; the old same-code golden masked this forever, the
+     *       scalar golden exposed it on first run)
+     * The scalar replicas below are single-rounding fmaf compositions
+     * with exact negations, bit-identical to the SVE sequences incl.
+     * the sign of zero (verified on probe lanes with a*b == ±0 and
+     * c == ∓0); do NOT algebraically simplify them. */
+    for (int i = 0; i < count; i++) {
+        const float a = data->srcA[i], b = data->srcB[i], c = data->srcC[i];
+        switch ((i / FMA_SVE_SUBLANES) % 4) {
+            case 0: data->expected[i] =  fmaf(a, b, c); break;   /* fma  = c + a*b          */
+            case 1: data->expected[i] =  fmaf(-c, a, b); break;  /* fms  = b - c*a          */
+            case 2: data->expected[i] = -fmaf(c, a, b); break;   /* fnma = -( b + c*a )     */
+            case 3: data->expected[i] = -fmaf(a, b, -c); break;  /* fnms = c - a*b          */
         }
     }
 

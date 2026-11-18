@@ -86,9 +86,9 @@ static constexpr double kDiagBase = 0.05;       /* generate: |x|+base ∈ [0.05,
  *      全局内存模型 + sdc_calibrated_dim 2s 单解上限)统一迁移到
  *      sdc_joint_dim_slice —— 内存侧按 NUMA 节点预算×RSS 表
  *      SDC_RSS_SPARSE(实测差分口径 0.0091 KB/n²/线程, 下方三元组降
- *      为表失效时的防御性 fallback), 时间侧 90s 全核单迭代预算
+ *      为表失效时的防御性 fallback), 时间侧 144s 全核单迭代预算
  *      (2 解×AR; 偏离契约值 200000 的实测论证见函数内 run_budget_ms
- *      注释), clamp [64, 8192]。其余架构(x86-64 参考)原样保留旧
+ *      注释——#506 表重标定后的保压重锚), clamp [64, 8192]。其余架构(x86-64 参考)原样保留旧
  *      两步链(rule 5, 见函数内 #else 分支)。历史硬编码 256。
  */
 static size_t sparse_n(struct test *test)
@@ -146,22 +146,27 @@ static size_t sparse_n(struct test *test)
         .shared_bytes_per_slice = 0,   /* init 无共享矩阵 */
         .mem_fraction_permille = 700,
         .ar_fam = SDC_FAM_MEM_BOUND,   /* Cholesky fill-in ~稠密, 满核带宽受限 */
-        .run_budget_ms = 90000,        /* 全核单迭代(2解×AR)预算, 偏离契约值
-                                        * 200000——本宿主类(单内存节点+3 个
-                                        * 无内存节点)最坏 child 有效 AR 远超
-                                        * 表值 25, 且稀疏 Cholesky 的 fill-in
-                                        * 指针追逐局部性差, 远程 DRAM 惩罚
-                                        * 比 SVD 族更重(T8 实测: 140000 →
-                                        * n≈2747, 最坏 child ~320s 仍无一轮
-                                        * 迭代完成 → SIGQUIT, 有效 AR≈50 =
-                                        * 表值 2×; 显式 n=2400 实测最坏
-                                        * child 247s 通过)。90000 → n≈2384,
-                                        * 预计最坏 ~244s, 留 ~19% 裕度(含
-                                        * probe 噪声 ±8%)。旧两步链长期运行
-                                        * 在 n≈2200(时间校准档), 此值仍较其
-                                        * +8%。表值/工作负载感知重标定
-                                        * (T7/T9)后应回调——见
-                                        * sandstone_eigen_common.h 块注释 */
+        .run_budget_ms = 144000,       /* 全核单迭代(2解×AR)预算, 偏离契约值
+                                        * 200000——#506 把 mem 族表行重标定为
+                                        * 40(SVD 实测最坏 child AR≈39-40 取
+                                        * 上界)后, 稀疏 Cholesky 仍是族内
+                                        * 例外: fill-in 指针追逐局部性差,
+                                        * 远程 DRAM 惩罚比 SVD 族更重(T8
+                                        * 实测: 140000/表25 → n≈2747, 最坏
+                                        * child ~320s 仍无一轮迭代完成 →
+                                        * SIGQUIT, 有效 AR≈50 = 旧表 2×, 亦
+                                        * 超新族行 40 达 1.25×; 显式 n=2400
+                                        * 实测最坏 child 247s 通过)。
+                                        * 144000 保压重锚: per_solve =
+                                        * 144000/(40×2) = 1800ms = 旧
+                                        * 90000/(25×2), n_run 与最坏真实迭代
+                                        * (144×50/40 = 180s, 含 init ~244s
+                                        * wall、~19% 裕度含 probe 噪声 ±8%)
+                                        * 与 T8 校准包络逐位一致——表行上
+                                        * 调后不回调则 per_solve 缩至
+                                        * 1125ms, n_run 静默欠压 ~17.5%。
+                                        * 族行若未来按工作负载分档(AR≈50
+                                        * 入表), 本值应回调契约 200000。 */
     };
     try {
         return (size_t)sdc_joint_dim_slice(test, "n", &ja, probe);
@@ -180,8 +185,10 @@ static size_t sparse_n(struct test *test)
 #else
     /* rule 5 (x86-64 untouched): 旧两步链原样保留——理由同
      * sandstone_eigen_common.h 的 #else 分支(sdc_joint_dim_slice 的
-     * x86 分支忽略 solve_once/run_budget_ms, 无条件迁移会静默丢掉
-     * 2s 单解时间校准并把内存三元组换成 ARM 实测的 RSS 表)。 */
+     * x86 分支已补齐时间校准与四源预算(#482), 但迁移仍会把内存
+     * 三元组换成 ARM 实测的 RSS 表、把 2s 单解上限换成按 ARM 宿主
+     * AR 校准的 run_budget_ms 口径——sizing 数值变化, rule 5 保持
+     * 旧链)。 */
     int mem_dim = sdc_auto_square_dim(8, 4, 4.0, 700, thread_count(), 64, 8192,
                                       test->id, "n");
     /* P2 time calibration: one full Cholesky solve at the memory-adaptive

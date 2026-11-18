@@ -1,8 +1,0 @@
-- test: eigen_svd_cdouble_sve
-  result: pass
-  test-runtime: 3075.969
-    - { level: info, text: 'I> eigen_svd_cdouble_sve: Eigen SVE svd variant = 256-bit' }
-    - { level: info, text: 'I> eigen_svd_cdouble_sve: Eigen SVE svd variant = 256-bit' }
-    - { level: info, text: 'I> eigen_svd_cdouble_sve: Eigen SVE svd variant = 256-bit' }
-    - { level: info, text: 'I> eigen_svd_cdouble_sve: Eigen SVE svd variant = 256-bit' }
-    - { level: info, text: 'I> eigen_svd_cdouble_sve: Eigen SVE svd variant = 256-bit' }

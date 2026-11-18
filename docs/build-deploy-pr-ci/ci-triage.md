@@ -3,12 +3,19 @@
 > **已由 task-loop 取代（2026-10-29，PR #317）**：ci_triage.py 的编排职责已并入
 > 统一任务引擎 `scripts/task_loop.py`（经模块别名薄壳过渡）。本文保留为历史
 > 手册；现行运维见 [task-loop.md](task-loop.md)。cron 部署行以 task-loop.md 为准。
+> **2026-11-13 起调度被 nightly pipeline 取代**（`task_loop.py pipeline`，
+> 23:00–09:00 三泳道 + merge 门；scan/audit/第 5 bot 三条 cron 行将随
+> [task-loop.md](task-loop.md) §3.1 runbook 部署删除），
+> 本文全部 cron 表述均为历史语义；「merge 由人执行」旧红线同步被引擎 PR
+> 六门槛自动 squash merge 政策取代（[task-loop.md](task-loop.md) §7）。
 
 **定位**：cron 每 30 分钟驱动 `scripts/ci_triage.py scan`——main 分支 CI 红 run
 自动开跟踪 issue → 派 headless claude agent 在**独立克隆**里修复 → push
 `fix/ci-<runid>` 分支 → `auto-pr.yml` 自动开 PR → 复用
-[pr-loop](pr-loop.md) 四 bot 检视闭环 → READY_TO_MERGE 时 @人工 merge。
-**merge 永远在人**；`fix/ci-*` 之外的用户在研 PR 完全不碰（spec D6）。
+[pr-loop](pr-loop.md) 四 bot 检视闭环 → READY_TO_MERGE 时 @人工 merge
+（历史语义——现行政策引擎 PR 由 pipeline merge 门自动 squash merge）。
+merge 当时由人执行（2026-11-13 红线反转，现行见 task-loop.md §7）；
+`fix/ci-*` 之外的用户在研 PR 完全不碰（spec D6）。
 
 - 引擎：[`scripts/ci_triage.py`](../../scripts/ci_triage.py)（Python 3.11
   标准库 + `gh` CLI，零第三方依赖；`import pr_loop` 复用 PR 判定）
@@ -250,7 +257,8 @@ EOF
 `ci_triage.py` 是 pr_loop 的上游姊妹件：pr_loop 管"已存在 PR 的检视-修复
 循环"（车道 B 复用其 `fetch_pr`/`classify_state`/`render_collect` 与四 bot
 判据，零重复实现）；ci-triage 管"CI 失败 → 修复 PR 的自动产生"。
-两工具共用 `gh` 认证与四 bot 生态；merge 永远在人。
+两工具共用 `gh` 认证与四 bot 生态；merge 由人执行（历史语义——2026-11-13
+起现行政策见 [task-loop.md](task-loop.md) §7）。
 
 ## 8. 部署与验收记录（2026-10-14/15，A1–A8）
 

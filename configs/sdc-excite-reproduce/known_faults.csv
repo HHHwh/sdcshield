@@ -1,6 +1,0 @@
-source,type,description,whitelist_action
-# 已知环境故障白名单（v5 §6.4：known_faults 之外断言即告警）。
-# source = SEL事件ID | 传感器名 | 内核关键字；whitelist_action = ignore | log_only
-# 本机（TaiShan 2280 SN 2102312YVY10M6000038）暂无已知故障行——首次发现经用户定案后追加。
-# 81 机（TG225 B1）预填模板见同目录 known_faults.tg225b1.csv（FAN3 0rpm + SEL #0x84
-# 周期断言两行 log_only）——deploy_81machine.sh 打包注入 tarball deploy/，入役装数据根。

@@ -103,25 +103,23 @@ static int neon_rot_ldr_at_top_mla_sve_init(struct test *test) {
     memset_random(data->srcB, elems * sizeof(uint32_t));
     memset_random(data->scratch, elems * sizeof(uint32_t));
 
-    /* 收窄持久化 + golden: mul / mla式(a+a*b) / mls式(b-a*b) / eor, 同 SVE 单元 */
-    svbool_t pg = svptrue_b32();
-    svuint32_t vmask = svdup_u32(0x00007fffu);
-    for (int i = 0; i < data->slots; i++) {
-        const size_t off = (size_t)i * lanes;
-        svuint32_t a = svand_u32_x(pg, svld1_u32(pg, data->srcA + off), vmask);
-        svuint32_t b = svand_u32_x(pg, svld1_u32(pg, data->srcB + off), vmask);
-        svst1_u32(pg, data->srcA + off, a);   /* persist narrowed sources */
-        svst1_u32(pg, data->srcB + off, b);
-        svint32_t sa = svreinterpret_s32_u32(a);
-        svint32_t sb = svreinterpret_s32_u32(b);
-        svuint32_t res = svundef_u32();
-        switch (i % 4) {
-            case 0: res = svreinterpret_u32_s32(svmul_s32_x(pg, sa, sb)); break;
-            case 1: res = svreinterpret_u32_s32(svadd_s32_x(pg, svmul_s32_x(pg, sa, sb), sa)); break;
-            case 2: res = svreinterpret_u32_s32(svsub_s32_x(pg, sb, svmul_s32_x(pg, sa, sb))); break;
-            case 3: res = sveor_u32_x(pg, a, b); break;
+    /* 收窄持久化 + golden (issue #373): 0x7fff 收窄在标量侧原地持久化
+     * （run 读同一字节）；golden 用纯 C 标量复算 mul / mla式(a+a*b) /
+     * mls式(b-a*b) / eor——uint32 模 2^32 运算与 s32 向量运算低 32 位
+     * 位精确（积/和/差的低 32 位与符号解释无关；int32_t 改写会是 UB，
+     * 勿改）。相位 = 槽序号 % 4（一槽 = `lanes` 个连续元素，与 run 的
+     * 按槽 switch 一致），标量管线计算，永不上被测 SVE 单元。 */
+    for (size_t e = 0; e < elems; e++) {
+        const uint32_t a = data->srcA[e] & 0x00007fffu;   /* narrow_for_mul, scalar */
+        const uint32_t b = data->srcB[e] & 0x00007fffu;
+        data->srcA[e] = a;   /* persist narrowed sources; run reads the same bytes */
+        data->srcB[e] = b;
+        switch ((e / (size_t)lanes) % 4) {
+            case 0: data->expected[e] = a * b;     break;
+            case 1: data->expected[e] = a * b + a; break;
+            case 2: data->expected[e] = b - a * b; break;
+            case 3: data->expected[e] = a ^ b;     break;
         }
-        svst1_u32(pg, data->expected + off, res);
     }
 
     test->data = data;

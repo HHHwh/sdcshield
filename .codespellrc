@@ -3,7 +3,9 @@
 # 后续如需治理 docs 另立专项。构建产物与 vendored 树同样跳过。
 # framework/device/{gpu,idxd}、tests/gpu:x86-only 遗留设备目录(arm64-only 项目不构建,
 # 遵循 x86-64 untouched 不动其内容)。
-skip = .git,third-party,builddir*,compile_commands.json,*.tsv,docs,campaign_*,*device/gpu*,*device/idxd*,*tests/gpu*
+# fp64_rowmajor_ko/verify.log:checked-in 运行时验证日志工件(内核 modinfo `parm:` 字段名),
+# 非源码拼写域;日志本身是证据,禁止编辑——只在此排除该文件,不排整个 tools/ 目录(内有真源码)。
+skip = .git,third-party,builddir*,compile_commands.json,*.tsv,docs,campaign_*,*device/gpu*,*device/idxd*,*tests/gpu*,*fp64_rowmajor_ko/verify.log
 # 术语/标识符白名单:sme=ARM SME;UE/ue=EDAC uncorrected error;AER=PCIe Advanced
 # Error Reporting;VAs=virtual addresses 复数;vor/adn=SVE 结果变量名;padd=SVE/NEON
 # 指令名风格;addin=NIST SP800-90 additional input;ist=德语;unx=URL 片段;

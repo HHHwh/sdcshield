@@ -116,9 +116,29 @@ static int acl_gemm_sve_run(struct test *test, int cpu)
         return EXIT_FAILURE;
     }
 
-    TEST_LOOP(test, 64) {
+    /* 迭代内截止检查 (issue #445; enumeration.md §5.3 杠杆 (c)):
+     * 自适应 dim 是纯内存模型 (600‰ RAM, 见 init), 而一次完整 GEMM 是
+     * O(dim³) —— 大内存 SVE 主机上 dim=3113 时单体 body > 300 s
+     * (campaign 实测 SIGQUIT timed out / exit invalid(2), triage-256
+     * §4), 而 TEST_LOOP 只在 body 之间查 -t 截止线
+     * (framework/sandstone.h), 单体 body 永远到不了检查点, 撞
+     * test_timeout() 的 300 s 耐心地板 (framework/sandstone.cpp)。
+     * 解法: body 从"整个矩阵"缩为 16 行的行块, 行块游标跨 body 环回
+     * 推进; 每块算完立即与 golden 做块内 memcmp —— C 的第 i 行只依赖
+     * A 的第 i 行与整个 B (行独立), 块内比较与整趟比较逐字节同义,
+     * svmla 行内数学逐字未动, 位级输出不变。N=4 (#360 家族标准粒度)
+     * 使截止线间隔 = 4 块 = 64 行 = 整趟的 64/N: dim≤4096 时每块
+     * 秒级(全核), 检查点恒在耐心地板内, -t 在任意主机/任意 dim 都能
+     * 兑现。单趟总指令流不变(只是按 16 行切片), 600‰ 内存几何不动。 */
+    constexpr int kRowBlock = 16;
+    int next_row = 0;
+    TEST_LOOP(test, 4) {
+        const int ibase = next_row;
+        int iend = ibase + kRowBlock;
+        if (iend > N)
+            iend = N;
         /* SVE GEMM: 每 i 行的累加器向量按 j-lane 展开, K 步进 svmla */
-        for (int i = 0; i < N; ++i) {
+        for (int i = ibase; i < iend; ++i) {
             for (size_t jbase = 0; jbase < (size_t)N; jbase += lanes) {
                 int n = (N - (int)jbase < lanes) ? N - (int)jbase : lanes;
                 svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)n);
@@ -135,27 +155,32 @@ static int acl_gemm_sve_run(struct test *test, int cpu)
                 svst1_f32(pg, C.data() + (size_t)i * N + jbase, acc);
             }
         }
-        if (memcmp(C.data(), d->golden.data(), C.size() * sizeof(float)) != 0) {
+        next_row = (iend >= N) ? 0 : iend;
+        const size_t block_elems = (size_t)(iend - ibase) * (size_t)N;
+        const float *g = d->golden.data() + (size_t)ibase * N;
+        float *cbase = C.data() + (size_t)ibase * N;
+        if (memcmp(cbase, g, block_elems * sizeof(float)) != 0) {
             /* cold path: locate mismatches, record bit-level evidence (bit pattern + float) */
             {
                 size_t _dump_bad = 0;
                 int _dump_shown = 0;
-                for (size_t _dump_j = 0; _dump_j < C.size(); ++_dump_j) {
+                for (size_t _dump_j = 0; _dump_j < block_elems; ++_dump_j) {
                     uint32_t _dump_g, _dump_a;
-                    memcpy(&_dump_g, &d->golden[_dump_j], 4);
-                    memcpy(&_dump_a, &C[_dump_j], 4);
+                    memcpy(&_dump_g, &g[_dump_j], 4);
+                    memcpy(&_dump_a, &cbase[_dump_j], 4);
                     if (_dump_g != _dump_a) {
                         ++_dump_bad;
                         if (_dump_shown < 8) {
                             log_error("acl_gemm_sve: mismatch at index %zu: golden=0x%08x (%g) actual=0x%08x (%g) xor=0x%08x",
-                                      _dump_j, _dump_g, d->golden[_dump_j], _dump_a, C[_dump_j],
+                                      (size_t)ibase * N + _dump_j, _dump_g,
+                                      g[_dump_j], _dump_a, cbase[_dump_j],
                                       _dump_g ^ _dump_a);
                             ++_dump_shown;
                         }
                     }
                 }
                 log_error("acl_gemm_sve: total mismatched elements: %zu / %d",
-                          _dump_bad, (int)C.size());
+                          _dump_bad, (int)block_elems);
             }
             free(brow); /* heap brow: 释放后再 report_fail_msg (noreturn) */
             report_fail_msg("acl_gemm_sve: GEMM output miscompare (SVE svmla path)");

@@ -12,12 +12,12 @@ SDCShield 的检测结论必须可信，因此仓库把「质量保障」做成�
 
 四层机制（工程细节见「质量保障与 CI 基础设施」一节）：
 
-1. **PR 检视-修复闭环（六阶段，绝不自动 merge）**——push 到特性分支自动开 PR；五路检视：四个外部 SaaS bot（Codex / CodeRabbit / PR-Agent / Greptile）+ 本地无头 claude 对抗检视；`scripts/pr_loop.py` 驱动 Status → Wait → Collect → subagent 批判性处置（逐条拒绝或修复并说明）→ 修复提交触发新一轮检视 → 循环至 READY_TO_MERGE → **人工 merge**。合入权永远在维护者手中。
-2. **无人值守任务闭环（task-loop）**——main CI 红 / main 增量审查 / 会话 / issue 统一进入 `agent-task` 队列，headless agent 修复后开 PR，走同一条检视闭环，最终仍由人工 merge（`scripts/task_loop.py`）。
+1. **PR 检视-修复闭环（六阶段）**——push 到特性分支自动开 PR；五路检视：四个外部 SaaS bot（Codex / CodeRabbit / PR-Agent / Greptile）+ 本地无头 claude 对抗检视；`scripts/pr_loop.py` 驱动 Status → Wait → Collect → subagent 批判性处置（逐条拒绝或修复并说明）→ 修复提交触发新一轮检视 → 循环至 READY_TO_MERGE → merge。合入政策（2026-11-13 红线反转）：夜间 pipeline merge 门对引擎修复 PR 六门槛全过自动 squash merge，docs-only PR 走快道（`WIP:` 标题前缀 = 草稿闸）；用户非 docs PR 永不自动 merge、由维护者合入；自动 resolve review threads 仍禁止。
+2. **无人值守任务闭环（task-loop）**——main CI 红 / main 增量审查 / 会话 / issue 统一进入 `agent-task` 队列，headless agent 修复后开 PR，走同一条检视闭环；引擎修复 PR 由夜间 pipeline merge 门自动 squash merge，用户非 docs PR 由人工合入（`scripts/task_loop.py`）。
 3. **CI 哨兵与发布闸门**——每日 cron 在 15 个 openEuler 版本容器内全量构建 + 全用例 × 全参数验证（`multi-os-verify.yml`）；PR 级 lint / DCO / 随机性门禁 / 多版本构建；发布链 `release-all.sh` 以 15 × `RESULT: PASS` 为硬闸。
 4. **安全与稳定性扫描**——CodeQL / Gitleaks / osv-scanner / zizmor（每周全量 + PR 增量）；ASan+UBSan 夜巡；本地 15 镜像 × 29 条严格选项矩阵（`scripts/lts-stability/`）。
 
-架构设计、PR 状态机与分阶段路线图见 [agent-full-automation.md](docs/build-deploy-pr-ci/agent-full-automation.md)、[PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)、[task-loop 手册](docs/build-deploy-pr-ci/task-loop.md)。
+架构设计、PR 状态机与分阶段路线图见 [agent-full-automation.md](docs/build-deploy-pr-ci/agent-full-automation.md)（[中文版](docs/build-deploy-pr-ci/agent-full-automation_CN.md)）、[PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)、[task-loop 手册](docs/build-deploy-pr-ci/task-loop.md)。
 
 ## 一行命令检测 CPU SDC
 
@@ -47,7 +47,7 @@ bash scripts/run/sdc_detect.sh
 
 | 优先级 | 负载域（分桶正则实测口径） | 依据 |
 |---|---|---|
-| P1 | 向量 FMA/矩阵（`openblas_*gemm`/`eigen_gemm`/`eigen_svd`/`eigen_sparse`/`sleef_*`/`pocketfft_fft`/`fma*`/`sve512_f*`）+ `arm64_sdc`、`acl_gemm`、`neon_add` | SEVI(ASPLOS'26)：>92% SDC 事故由 FMA 指令贡献 |
+| P1 | 向量 FMA/矩阵（`openblas_*gemm`/`openblas_lu`/`eigen_gemm`/`eigen_svd`/`eigen_sparse`/`sleef_*`/`pocketfft_fft`/`fma*`/`sve512_f*`）+ `arm64_sdc`、`acl_gemm`、`neon_add` | SEVI(ASPLOS'26)：>92% SDC 事故由 FMA 指令贡献 |
 | P2 | ARM64 SDC 专项（`sve512_*`、`power_virus_dit`、`lsu_store_forward`、`l2c_cross_cache_line`、`mmu_split_tlb`、`fisttp`、`libomp_ctx`、`sme_za` 等） | 本仓库为已知鲲鹏故障签名定向编写 |
 | P3 | memcpy/store→reload 访存通路 | CPU179 实证触发判别条件 |
 | P4 | 位扩散（压缩/哈希/CRC/加密） | From Gates to SDCs(DATE'25)：sha 类位掩蔽最少 |
@@ -123,7 +123,7 @@ run 模式需 root（sudo）、幂等可重入（已安装/活跃服务自动跳
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
-预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（487 全量上界），少的是镜像内未含的 vendored 计算库测试组；用例计数口径见「用例质量分级」。
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（PROD 源码全量上界，随源码演进、现值 499），少的是镜像内未含的 vendored 计算库测试组；用例计数口径见「用例质量分级」。
 
 > **旧二进制判读警示**：2026-09-12 预构建二进制是 eigen 满核假阳修复（2026-10-24）**之前**的构建——其上 `eigen_svd_double`/`eigen_sparse` 的满核 FAIL 按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；"满核挂 = SDC 嫌疑"的判读规则仅适用于含修复的构建。用旧二进制跑 24h 战役脚本须显式恢复旧白名单（含修复的源码构建不需要、也不应设置）：
 >
@@ -166,6 +166,15 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ./builddir/sdcshield --list-tests        # 列出默认 PROD 用例——数量随芯片能力过滤（见「测试用例与检测能力」）
 ```
 
+> **openEuler 22.03/20.03 宿主机直编**（GCC 10 的 libstdc++ 缺 `<barrier>` 等 C++23 符号）：meson 会用 `cpp.has_header('barrier')` 探测并自动注入 `framework/compat/` 的 polyfill（与容器构建同一套注入，24.03+ 不注入、构建结果不变）；旧编译器不支持 `gnu++23`，setup 时显式指定 `-Dcpp_std=gnu++20` 即可：
+>
+> ```bash
+> PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release -Dcpp_std=gnu++20
+> ./scripts/build.sh
+> ```
+>
+> 完整的多版本/SP 验证仍走容器路径（`./container-build.sh 22.03 SP3`），两者互不影响。
+>
 > 构建统一走 `./scripts/build.sh`：默认 `-j` = `nproc`/2（共享服务器保护），`SDC_BUILD_JOBS` 可覆盖（见 `scripts/build.sh` 头注释）。ARM64 要求 Eigen 5.0+（系统 3.3.x 在 GCC 12+ 编译失败）；仓库自带 `third-party/eigen5/`（5.0.1），aarch64 直接 `include_directories` 指向它、无需系统安装，`PKG_CONFIG_PATH` 仅为兼容 x86 路径保留。
 >
 > 五个 `build.sh` 均可选：任一 `install/` 缺失时 meson 打提示并跳过对应测试组或回退系统库（isa-l 缺失回退系统 `libisal`，两者皆无才剔除 `isal_*`；acl 缺失时 `acl_gemm`/`fisttp_arm` 不构建，SVE 变体不受影响）——不阻断构建。选型依据（向量 FMA GEMM > 哈希/加密 > 压缩 > SVE 超越函数）见 [SDC_RESEARCH_for_SDCShield-负载设计.md](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md)（31 篇文献综合）。
@@ -223,7 +232,7 @@ PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ 新增�
 
 ### task-loop：无人值守任务闭环（issue 驱动开发闭环）
 
-`scripts/task_loop.py`（统一任务编排引擎，`ci_triage.py` 的泛化后继；cron 每 30 分钟驱动 `scan`、每 6 小时驱动 `audit`）：四类触发源——main 分支 CI 红 run、main 增量对抗审查、会话 enqueue（`/dev-loop`）、GitHub 手建 issue——统一进入 `agent-task` 队列，单飞 headless agent 在独立克隆里修复/实现 → push `fix|feat/issue-<N>` 分支 → 自开 PR（`Closes #N`）→ 复用 pr-loop 五 bot 检视闭环 → READY_TO_MERGE 时 @人工 merge。**merge 永远在人**；标签协议/单飞/熔断/kill switch 等运维细节见 [task-loop.md](docs/build-deploy-pr-ci/task-loop.md)（前代手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)，历史保留）。
+`scripts/task_loop.py`（统一任务编排引擎，`ci_triage.py` 的泛化后继；2026-11-13 起调度为 nightly pipeline——cron `0 23` 拉起 `pipeline` 子命令，23:00–09:00 窗口三泳道并行 + merge 门 + 09:00 软停，audit 与第 5 bot 检视折进 pipeline，`@reboot` 落窗自愈，部署 runbook 见 task-loop.md §3.1）：四类触发源——main 分支 CI 红 run、main 增量对抗审查、会话 enqueue（`/dev-loop`）、GitHub 手建 issue——统一进入 `agent-task` 队列，headless agent 在独立 worktree 里修复/实现 → push `fix|feat/issue-<N>` 分支 → 自开 PR（`Closes #N`）→ 复用 pr-loop 五 bot 检视闭环 → READY_TO_MERGE 过 merge 门：引擎 PR 六门槛全过自动 squash merge，用户非 docs PR 由人合入。标签协议/泳道槽位/熔断/kill switch 等运维细节见 [task-loop.md](docs/build-deploy-pr-ci/task-loop.md)（前代手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)，历史保留）。
 
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
@@ -336,7 +345,7 @@ bash scripts/run/sdc_machine_scan.sh                         # 无 root 降级�
 
 ### ARM64 spec 策略与默认用例集（2026-10-27 起）
 
-sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `arm64_requires` 与 `arm64_min_vl_bits`（`framework/sandstone.h`）过滤，只保留芯片能执行的用例——默认用例数 **host-dependent**：SVE1 主机实测 486 PROD（`--quality=0` 496、`--quality=-1` 500；2026-11-02 迁移 +21 PROD 后待重测，推算 507/517/521）；无 SVE 鲲鹏 920 **本机 2026-11-10 实测 519 PROD（`--quality=0` 628、`--quality=-1` 632（含 gather 家族 FP64 变体 2）；= 2026-11-02 口径 439 + 11-02 后各家族累积（lock_arm 13 + memory-access 尾访问对族 9 + barrier_2 判别器 1 + `tests/cpu/fp64/` FP64 数据通路变体家族 39 PROD（A 类 ALU 消费端换 fadd/fsub/fmul/fsub-rev 四槽轮转 + B 类载荷 GPR→FP 寄存器通路，49 个改造候选（A 类 22 + B 类 27）中 9 个 B 类 q 通路纯搬运复审为伪改造如实跳过）+ gather 2 + fp64_dump + 11-02 口径未列全的历史项，实测为准）；完整时序链见「用例质量分级」footnote）**。
+sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `arm64_requires` 与 `arm64_min_vl_bits`（`framework/sandstone.h`）过滤，只保留芯片能执行的用例——默认用例数 **host-dependent**：SVE1 主机实测 565 PROD（2026-11-03 merge 复核；`--quality=0` 675、`--quality=-1` 683；= main `#472` 迁移/增量 + feat/eigen-sve-unification +12 SVE eigen − bidiag）；无 SVE 鲲鹏 920 **主机 2026-11-17 实测 458 PROD（`--quality=0` 566、`--quality=-1` 570，含 111 迁移用例（`arm0102_*` 基础 10 项 2026-11-03 退役）+ 7 arm_add 新探针 + 14 个 _neon 变体 + 9 个 633 cache 族新测试的口径，vendored 5 库 install/ 全在位——依赖缺位会相应减对应测试组；eigen SVE 分支 12 新 + 退役 bidiag 与 SVE2 配套 14 全部 `ARM64_REQUIRES_SVE/SVE2` 门控，无 SVE 主机净变化 0；完整时序链见「用例质量分级」footnote）**。PR #814 merge 后（L3_cache_920 统一目录 + FP64/L3 家族 + 退役 main 侧 neon_*/cache 重复件）的计数变化见「用例质量分级」footnote 的 2026-11-18 实测记录。
 
 - `-e` / `--test-list-file` **旁路过滤**：显式请求的用例仍会注册，能力不足时诚实 SKIP（附理由）。
 - **控制线程**在 `test_init` 前 pin 到芯片最大档（aux 线程与 worker 继承，init golden 与 run lane 档位一致）；每个 SVE/SVE2 worker 重新 pin 并校验读回——pin 被拒 = SKIP，读回不符 = FAIL。
@@ -345,7 +354,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 
 ### SVE 用例全 VL 验证矩阵（2026-10-30 收口）
 
-190 个 SVE 用例（tag∪name 枚举口径）× 128/256/512-bit 三档真实证据矩阵（570 格）：**560 pass（469 直绿 + 91 有界几何）+ 1 合法 SKIP + 9 gem5 边界格 + 0 FAIL**，本轮运动零测试代码缺陷（冻结基线上另有 5 个测试携带 PR #316 检视事后修复的越界缺陷，其 pass 是弱证据，见 matrix.md §4 † 脚注）。三档采集：128 = `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 进程内降档、256 = 原生（各 2 seeds）、512 = gem5 SE 跑真二进制（功能正确性语义，压力维度由 native 腿承担）。边界注记：① 唯一 SKIP = `sve512_fmmla_arm@128`——F64MM 在 VL<256 架构性 UNDEFINED（实测 SIGILL）；② 9 个 gem5 边界格（2×PMULL64 GCM + 3×DC-CIVAC + 4×仿真速超时）native 两档全绿。证据钉在冻结基线 `12ccda540fd4`：[matrix.md](docs/superpowers/inventory/sve-all-vl-campaign/matrix.md)（机械生成，重跑即复现）+ 逐腿分诊 `triage-{128,256,512}.md`（同目录）。
+190 个 SVE 用例（tag∪name 枚举口径）× 128/256/512-bit 三档真实证据矩阵（570 格）：**560 pass（469 直绿 + 91 有界几何）+ 1 合法 SKIP + 9 gem5 边界格 + 0 FAIL**，本轮运动零测试代码缺陷（冻结基线上另有 5 个测试携带 PR #316 检视事后修复的越界缺陷，其 pass 是弱证据，见 matrix.md §4 † 脚注）。范围限定（audit #395 口径，triage-256 §7/环境事件 2）：2026-10-29 256 腿 seed2 首跑期间 ~09:01 整机重启一次——未做 SEL（ipmitool）/pstore/journalctl 取证、原因未决，按本仓 SDC 检出使命列候选稳定性信号，不属「零测试代码缺陷」覆盖面；该腿进程层结局亦未证（尸体被重跑覆盖，框架崩溃候选未排除）；seed2 数据全部来自重启后 23 分钟同机的有界重跑（含 `mem_disambig_alu_sve.buffer_bytes=4096`，不再进入超时杀灭路径），若重启根因为硬件/内核故障，其「全绿」排除性证据力相应折损（SEL/journal 为跨重启持久取证面，是否仍可及未实测）。三档采集：128 = `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 进程内降档、256 = 原生（各 2 seeds；其中 25 个超时格以 **clamp 下限最小激发几何**取证（128 腿逐字拷贝同值的 26 项 baked = 此 25 项 clamp 下限 + 1 项 `acl_gemm_sve.dim=512` Ruling B 标定，同为远小于自适应值的有界几何）——clamp 下限 = 最小激发强度，功能正确性成立、**不构成满强度激发证据**，量化与限定见 triage-256 §5「证据强度限定」；两 seed 在此 25 格的证据不对称（audit #624）：seed2 腿内有界绿有机械证据（`native-256-LCG1002.summary.txt` 逐格 pass/迭代/runtime 行，git 历史 `31f6a99e^` 可取回），seed1 的绿只来自腿外单测重跑——其 25 份日志按协议写易失 `/tmp/bounded1001/`、从未入库，无任何工件可复核（git 历史亦无；`native-256-LCG1001.summary.txt` 同格仅记录 `timed out`），逐格数字仅存 triage-256 §5 的 markdown 转写，「各 2 seeds」链的 seed1 半边为纯叙述）、512 = gem5 SE 跑真二进制（功能正确性语义，压力维度由 native 腿承担）。边界注记：① 唯一 SKIP = `sve512_fmmla_arm@128`——F64MM 在 VL<256 架构性 UNDEFINED（实测 SIGILL）；② 9 个 gem5 边界格（2×PMULL64 GCM + 3×DC-CIVAC + 4×仿真速超时）native 两档全绿。证据钉在冻结基线 `12ccda540fd4`：`matrix.md`（机械生成，重跑即复现——前提为 #376 之后的树，冻结基线树上引文锚 FATAL，见 matrix.md §0.1）+ 逐腿分诊 `triage-{128,256,512}.md`（同目录）——该组证据文件原位于 `docs/superpowers/inventory/sve-all-vl-campaign/`，已随 31f6a99e（2026-11-17）清理出库，git 历史 `31f6a99e^` 可取回。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
@@ -357,7 +366,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | 算术 / 大整数 | `adcx`、`adox`、`adcxlong`、`adcx_arm`、`bigint_mulx_arm`、`gmp_big*` | 进位/溢出链、GMP 大整数乘加、高汉明距离操作数压满加法器 |
 | CRC / 校验 | `crc32`、`isal_crc{32,64}_*`、`zpclmul*` | `crc32` 指令、isa-l CRC32/CRC64 各标准、zlib PCLMUL 折叠 |
 | 压缩 | `zlib*`、`zstd*`、`zfuzz`、`isal_igzip` | zlib/zstd 压缩-解压往返、各级别、fuzz、isa-l deflate/inflate 往返（`-O isal_igzip.level=0..3` 扫四套 match-finder 数据结构） |
-| 线性代数（Eigen） | `eigen_gemm_*`、`eigen_sparse`、`eigen_svd*`（含 `_cdouble_sve`） | GEMM、稀疏 Cholesky、SVD（BDCSVD/Jacobi）施压 FMA/向量 |
+| 线性代数（Eigen） | `eigen_gemm_*`、`eigen_sparse`、`eigen_svd*`（含 `_cdouble_sve`；14 个 SVE 用例各有 `_sve2` 配套——armv8.2-a+sve2 编译目标（GCC 10+ 可编；2026-11-17 前曾用 armv9-a+sve2，该架构名需 GCC 11+，曾致 20.03/22.03 gcc-10 镜像 Build 红），门控 SVE2，见「用例质量分级」footnote） | GEMM、稀疏 Cholesky、SVD（BDCSVD/Jacobi）施压 FMA/向量 |
 | 线性代数（OpenBLAS） | `openblas_dgemm`、`openblas_sgemm`、`openblas_zgemm`、`openblas_cgemm`、`openblas_lu` | NEON FMA 微内核 GEMM 四种 lane 组织，每迭代 copy/compute/verify；`openblas_lu` = LAPACK dgesv 主元分支 + 三重 golden 比对；knob 语义见「Test knob」总表 |
 | 超越函数（SLEEF） | `sleef_neon`、`sleef_sve` | 多项式 FMA 依赖链 × 宽向量，逐字节 golden 比对；u10 + u35 双精度档 + asin/atan/cbrt/log10/sinh/tanh/pow 函数族；`sleef_sve` 需 SVE 硬件（无则干净 skip），all-VL 128..1024-bit 真 VLA；足迹旋钮见「Test knob」总表 |
 | FFT（pocketfft） | `pocketfft_fft` | 复数 FFT + 实数 rfft 前向 golden 比对：位反转抽取重排 + 旋转因子 FMA 蝶形链；`-O pocketfft_fft.n=N` 扫因子谱系（pow2 / Bluestein 质数 / 混合 radix） |
@@ -368,24 +377,24 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`、`sve512_stencil_axis_arm`、`sve512_xlswave_ctx_arm`、`sve512_f64_chain_svd`、`sve512_f64_special_svd`、`sve512_f32_chain_svd`、`sve512_gather_scatter_svd`、`libomp_ctx_arm`、`sme_za_tileview_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长 f64/f32 FMLA 串行链与特殊值链（NaN/Inf 类别比对）、SVE gather/scatter 间接索引数据通路、stencil 轴核与 XLSDFT 复合上下文触发配方复现器（三阶段字节精确 memcmp + VA[63:48] 地址金丝雀）、SVD 尺度工作集变体、libomp fork/join 上下文仿真（三层校验）、SME ZA tile 语义压力（需 clang +sme 工具链）。SVE/SME 类按真实能力门控：无 SVE 诚实 SKIP，all-VL 128..1024-bit 自适应；无 HWCAP2_SME 或超范围 SVL 诚实 SKIP |
 | SDC 激发增强套件（2026-09-17 研究落地，2026-10-12 合并） | `sve512_nt_reload_arm`、`sve512_fmmla_arm`、`sve2_cross_precision_arm`、`sve512_fcmla_arm`、`sve512_pred_ops_arm`、`sve_fpcr_cartesian_arm`、`fpcr_rounding_cartesian_arm`、`power_virus_dit_sve_arm`、`mesh_upi_avx512_symm_f64`、`sme_fmopa_za_arm` + 既有测试增强 | 针对已知鲲鹏故障签名与 SEVI(ASPLOS'26)/ITHICA 研究结论定向编写：**nt_reload** = NUMA3 VA 通路非时间访存（ld1rd/ldnt1d/stnt1d）；**FMMLA/跨精度/FCMLA/谓词** = 此前零指令级覆盖的 SVE2 数据通路（矩阵外积、FP16/BF16 加宽乘加、复数 FMA 全旋转、谓词网络）；**FPCR 笛卡尔** = 舍入模式 × FZ 8 配档全扫；**power_virus SVE** = 全宽 di/dt 病毒；**mesh f64** = 首个 FP mesh 变体；**SME FMOPA** = 纯 inline asm 的 ZA 外积链。既有增强：sve512 链族值域旋钮 `-O <test>.bounded=0\|1`（SEVI Obs.19 有界/无界域 SDC 频率差 245×）。SVE/SME 类在 920 上干净 skip，byte-exact golden 真机首验在 cn23154（SVE512 故障机） |
 | ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别、ldr_at_top 扫描顺序变体（升/降序交替）、core-179 字节交换往返触发探针组 |
-| opendcdiag 研究仓迁移组（2026-11-02，121 用例） | `spinlock_stale_read{,_xchg}`、`locv_a{1,2,3}_mrn_*`、`locv_b{0,1,2}_mrn_pair_*`、`arm0102_*`（10）、`eigen_gemm_double_ab_split`、`aor_{math,string}`、`cbw_arm`、`sdc_fuzz_000`–`sdc_fuzz_099` | core179 读路径缺陷类差分探针（CAS vs xchg 臂定位故障层）；LOCv 战役 A/B 六臂（bypass-gap / split-consumer / pair 假共享）；arm-0102 触发配方变体（fma/ins_ext/kreg×6/swizzle）；Eigen GEMM 内外校验判别；Arm Optimized Routines sincospi/memcpy vs golden（vendored `third-party/arm-opt` 静态链入）；L1 fuzzing 生成的 core179 复现器方阵（Eigen 稀疏 Cholesky，BETA 级 + 配套生成器 `scripts/generate_sdc_fuzz_cases.py`） |
+| opendcdiag 研究仓迁移组（2026-11-02，111 用例） | `spinlock_stale_read{,_xchg}`、`locv_a{1,2,3}_mrn_*`、`locv_b{0,1,2}_mrn_pair_*`、`eigen_gemm_double_ab_split`、`aor_{math,string}`、`cbw_arm`、`sdc_fuzz_000`–`sdc_fuzz_099` | core179 读路径缺陷类差分探针（CAS vs xchg 臂定位故障层）；LOCv 战役 A/B 六臂（bypass-gap / split-consumer / pair 假共享）；Eigen GEMM 内外校验判别；Arm Optimized Routines sincospi/memcpy vs golden（vendored `third-party/arm-opt` 静态链入）；L1 fuzzing 生成的 core179 复现器方阵（Eigen 稀疏 Cholesky，BETA 级 + 配套生成器 `scripts/generate_sdc_fuzz_cases.py`）。原组内 `arm0102_*` 基础 10 项（fma/ins_ext/kreg×6/swizzle）已于 2026-11-03 退役（`ff74f226` 删源、`418e4e09` 清 meson 引用；`_sve` 变体仍在 `sve/kreg/` 注册） |
 | arm_add 写可见性探针组（2026-11-02，7 用例） | `store_visibility_cross_class`、`store_lost_write_detect`、`barrier_after_lock_store`、`low_load_cache_pressure`、`str_instruction_stress`、`cache_stress_clflush`、`cache_stress_memcpy` | str 失效故障报告五维探针：跨一致性域写可见性（屏障前后双读）、哨兵三层回读丢写阶梯（同核→跨核→dsb 后）、锁+屏障路径丢写（真 ldaxr/stxr 接力）、低占空比跨核扫（5-30% knob `duty_us`，补 633 无低负载覆盖的空缺）、四宽度 str 密写+完成态快照校验（seqlock 式防撕裂）；633 #210/#211 ARM64 等价对照对（DC CIVAC 冲刷干扰复制 vs 纯复制）。全部注入反验实证（模拟丢写 7/7 FAIL 检出） |
-| SVE 版 avx53 套件（`tests/cpu/sve/` 中 53 个 avx 命名移植；该目录共 172 个 SVE 用例） | `fma_tail_sve{,_wide}`、`fmatail_sve{,_wide}`×4 对、`fma_patterns_sve_wide_{ps,pd}`、`mesh_upi_sve_*` 18 个、`eigen_svd_bidiag_sve`、`ipsec_*_sve{,_wide}` 24 个 | 53 个 avx 命名 NEON 测试的 SVE1 移植（负载环境与 golden 模式全保留；命名 `_avx/_avx2→_sve`、`_avx512→_sve_wide`）。FMA 10 + Mesh 18 = 纯指令替换（SVE 谓词访存）；eigen 1 = 自写 Householder 双对角化 SVE 负载；ipsec 17 = EVP 加密 + 多流 SVE HMAC（SHA 内核与 OpenSSL 全向量比对）+ 7 个 EVP-only（GCM/CMAC/XCBC）如实标注。构建于 `tests_sve_avx53*` 库（`-march=armv8.2-a+sve`，init 探 HWCAP_SVE 干净 skip） |
+| SVE 版 avx53 套件（`tests/cpu/sve/` 中 52 个 avx 命名移植；该目录共 171 个 SVE 用例） | `fma_tail_sve{,_wide}`、`fmatail_sve{,_wide}`×4 对、`fma_patterns_sve_wide_{ps,pd}`、`mesh_upi_sve_*` 18 个、`ipsec_*_sve{,_wide}` 24 个 | 52 个 avx 命名 NEON 测试的 SVE1 移植（负载环境与 golden 模式全保留；命名 `_avx/_avx2→_sve`、`_avx512→_sve_wide`）。FMA 10 + Mesh 18 = 纯指令替换（SVE 谓词访存）；ipsec 17 = EVP 加密 + 多流 SVE HMAC（SHA 内核与 OpenSSL 全向量比对）+ 7 个 EVP-only（GCM/CMAC/XCBC）如实标注。构建于 `tests_sve_avx53*` 库（`-march=armv8.2-a+sve`，init 探 HWCAP_SVE 干净 skip）。原先同目录的 eigen 1 = 自写 Householder 双对角化 SVE 负载（`eigen_svd_bidiag_sve`）已退役（2026-11-02，issue #410 后存在理由消失，dense SVE FMA 场景由 eigen_svd_double_sve 承接）——本目录 eigen 子目录已空 |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
 
 ### 用例质量分级
 
-| 级别 | 名称 | 运行条件 | 实有数量（源码全量，选择期过滤前） |
+| 级别 | 名称 | 运行条件 | 实有数量（0xd02 SVE1 主机实测，选择期过滤后） |
 |---|---|---|---|
-| -1 | SKIP | `quality >= -1` | 4 |
+| -1 | SKIP | `quality >= -1` | 8 |
 | 0 | BETA | `quality >= 0` | 110 |
-| 2 | PROD（默认）| `quality >= 2` | 538 |
-| | **合计** | | **652** |
+| 2 | PROD（默认）| `quality >= 2` | 569 |
+| | **合计** | | **687** |
 
-> 上表为 ARM64 gcc 构建的源码全量口径，含 2026-11-02 opendcdiag 研究仓迁移增量 +121（21 PROD + 100 BETA `sdc_fuzz_*`）+ 同日 arm_add 新探针 +7 PROD + _neon 变体 +14 PROD + 633 cache 族新测试 +9 PROD（2026-11-01 复核口径 501 = 487 PROD + 10 BETA + 4 SKIP 基础上叠加）。运行时实际数量随芯片 spec 过滤：SVE1 主机 2026-11-01 实测 490 PROD（q0/q-1 = 496/500），同日 issue #374 将 `sched_storm×4`（内核调度刺激/负对照，无 SDC 检出语义）自 PROD 降级 BETA 后复核 **486 PROD**（q0/q-1 集合不变；迁移后推算 507/517/521，待该主机重测）；无 SVE 鲲鹏 920 **2026-11-02 本机实测 439 PROD / 547 q0 / 551 q-1**（= 同日迁移后 409/517/521 + arm_add 7 + _neon 14 + cache 族 9 PROD；旧推算 299 已过时——2026-10-31 bulk 注册 +71 等未计入，这正是此前"待无 SVE 主机实测复核"的兑现）。cn23154 复现分支（clang/libc++，含 SME 用例）2026-09-28 实测：默认 322，`--quality=-1` 全量 333。
+> 上表为 ARM64 gcc 构建的源码全量口径（2026-11-03 merge 复核，口径为构建出的 sdcshield 二进制 `tests` section 实例机械计数——含 SME/SVE2 组 4 个 PROD 用例 `sme_fmopa_stress_arm`/`sme_fmopa_za_arm`/`sme_za_tileview_arm`/`sve2_cross_precision_arm`，它们仅在相应硬件可执行。本 merge = main 侧 2026-11-02 opendcdiag 研究仓迁移增量 +121（21 PROD + 100 BETA `sdc_fuzz_*`）+ 同日 arm_add 新探针 +7 PROD + _neon 变体 +14 PROD + 633 cache 族新测试 +9 PROD，叠加 feat/eigen-sve-unification 分支 +12 SVE eigen 用例（8 PROD + 4 SKIP）− 退役 `eigen_svd_bidiag_sve`（1 PROD，dense SVE FMA 场景由 `eigen_svd_double_sve` 承接）；main 侧 2026-11-02 对迁移后全量的推算表 652（基于 2026-11-01 旧表 501 叠加——该 501 经 feat/eigen-sve-unification 考古为 SVE1 过滤后集合且较同日实测虚高 1，推算链不可精确拼接）与本 merge 机判 687 的差异未逐例考古，以实测为准）。运行时实际数量随芯片 spec 过滤：SVE1 主机 2026-11-03 merge 后实测 **565 PROD**（q0/q-1 = **675/683**）；无 SVE 鲲鹏 920 **2026-11-02 实测 439 PROD / 547 q0 / 551 q-1**（main 侧迁移/arm_add/_neon/cache 增量后口径；eigen SVE 分支 12 新用例 + 退役 bidiag 全部 `ARM64_REQUIRES_SVE` 门控，无 SVE 主机净变化 0）。无 SVE 鲲鹏 920 **2026-11-17 实测（main `d50ceee0`，vendored 5 库 install/ 全在位）458 PROD / 566 q0 / 570 q-1**（`arm0102_*` 基础 10 项 2026-11-03 退册、迁移组现存 111；`418e4e09`→`d50ceee0` no-SVE 可见集 diff 为空——eigen SVE 12 新/退役 1 与 SVE2 配套 14 全 SVE/SVE2 门控，净变化 0；439→458 的中间推算链不可精确拼接，以实测为准）。cn23154 复现分支（clang/libc++，含 SME 用例）2026-09-28 实测：默认 322，`--quality=-1` 全量 333。2026-11-13 feat/eigen-sve2-companion 批次追加 **14 个 SVE2 配套用例**（SVE 系 14 个的逐一镜像：BDCSVD×5 + JacobiSVD×4——SKIP 级跟随 Jacobi + GEMM×5；门控 `ARM64_REQUIRES_SVE2`，**本机（SVE1）所有 list 口径不可见——spec 过滤先于 list，仅 `-e` 显式注册并诚实 SKIP**；SVE2 主机默认集将 +10 PROD、`--quality=-1` 口径 +14，机判 `tests` section 实例计数 687 → **701**）；诚实边界（2026-11-17 修正）：配套用例压力内核 = SVE1 子集在 SVE2 硬件向后兼容执行；但 GCC 在 +sve2 下把 Eigen 拷贝管线（call_assignment/gemm_pack_rhs 别名检查环路）惯用化为 WHILEWR——SVE2-only 地址重叠测试指令（主仓 40 个 `_sve2` 目标库共 1549 实例分布于其中 35 库；旧「零 SVE2-only」审计清单遗漏此类，binutils SVE1-only 汇编门实测修正；系拷贝管线而非压力内核，#661 时代即已存在，armv8.2-a+sve2 降级后逐库计数不变；用例 HWCAP2_SVE2 门控，仅 SVE2 硬件执行，运行面无影响），功能验证 = gem5 SE 配对矩阵 10 body 族 × 8 腿（同档 sve2↔sve checksum 逐字节一致）+ FS 真二进制腿（dispatcher 路径：`eigen_svd_double_sve2 -n 2`，VL=128，pass）。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`、`sched_storm×4`、`sdc_fuzz_000`–`sdc_fuzz_099`（100 个 core179 复现器，2026-11-02 迁移）
-- **SKIP（`--quality=-1`）**：`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
+- **SKIP（`--quality=-1`）**：`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`、`eigen_svd_jacobi_sve`、`eigen_svd_jacobi_cdouble_sve`、`eigen_svd_jacobi_double_sve`、`eigen_svd_jacobi_fvectors_sve`、`eigen_svd_jacobi_sve2`、`eigen_svd_jacobi_cdouble_sve2`、`eigen_svd_jacobi_double_sve2`、`eigen_svd_jacobi_fvectors_sve2`
 
 ### 占位用例的诚实跳过
 
@@ -449,7 +458,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 # 形态扫谱：转置组合 + β 读改写路径
 ./builddir/sdcshield -e openblas_zgemm -O openblas_zgemm.transab=3 -O openblas_zgemm.beta_permille=500 -t 15m
 
-# ipsec 载荷 1024B→16MB：AES/3DES/SHA 数据路径从 L1 压到 DRAM（46 个 NEON ipsec 用例同款参数名 .datasize；24 个 SVE 变体为 .data_size，域 1024..约 1900 受 HMAC 组装缓冲约束）
+# ipsec 载荷 1024B→16MB：AES/3DES/SHA 数据路径从 L1 压到 DRAM（46 个 NEON ipsec 用例同款参数名 .datasize；24 个 SVE 变体为 .data_size——7 个 CMAC/XCBC/GCM 变体同域 1024..16MB，17 个 HMAC/SHA2 变体域 1024..1900/1830 受 HMAC 组装缓冲约束）
 ./builddir/sdcshield -e ipsec_aes128_cbc_hmac_sha1_sse -O ipsec_aes128_cbc_hmac_sha1_sse.datasize=16777216 -t 5000
 
 # SLEEF 足迹扩到 6MB（默认内存自适应；显式 262144 元素 ≈ 6MB）
@@ -475,23 +484,61 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `zstd` / `zstd_aaa` | `.level` / `.maxbuffersize` | 1..22 / 4096.. | 按变体 | 压缩级别 / 每迭代缓冲上限 |
 | `zstd1` / `zstd19` | `.maxbuffersize` | 4096.. | 按变体 | 每迭代缓冲上限（level 固定 1 / 19，无 level knob） |
 | `zlib*`（NEON 家族） | `.level` / `.maxbuffersize` | 1..9 / 按变体 | 按变体 | zlib 压缩级别 / 缓冲上限（`zfuzz` 为随机 level 的 fuzz 往返、无 knob） |
-| `eigen_gemm_*`（NEON 家族） | `.mdim` | 16..4096（按变体，clamp） | 内存自适应 | 矩阵维度（覆盖自适应选择） |
+| `eigen_gemm_*`（NEON 家族，含 `_dump` 变体；`eigen_gemm_double_ab_split` 例外——该用例未注册任何 knob，显式 `-O …mdim` 会被静默忽略） | `.mdim` | 16..4096（float 变体 8192；clamp） | 内存自适应 | 矩阵维度（覆盖自适应选择） |
 | `eigen_gemm_double_max_arm` | `.mdim` | 1024..4096（clamp） | **按内存×时间联合自适应** | SVE GEMM 逐档变体的矩阵维度 |
 | `eigen_svd_cdouble_sve` | `.mdim` | 300..6000（clamp） | **按内存×时间联合自适应** | 强制矩阵维度（预期内存警告目前覆盖 SVD 模板族，本用例显式路径暂无警告——T11b 将统一路由） |
-| `eigen_svd_bidiag_sve` | `.mdim` | 64..2048（clamp） | 自适应 | 自写 Householder 双对角化负载维度 |
+| `eigen_svd{,_double,_double2,_fvectors}_sve` | `.mdim` | 64..2048（clamp） | **按内存×时间联合自适应** | SVE BDCSVD 系方阵维度（镜像各 NEON 原用例联合层参数口径） |
+| `eigen_svd_jacobi{,_double,_fvectors,_cdouble}_sve` | `.mdim` | 64..2048（clamp） | **按内存×时间联合自适应** | SVE JacobiSVD 系方阵维度（SKIP 级，`--quality=-1` 显式运行） |
+| `eigen_gemm_{float,double,cdouble}_dynamic_square_sve` / `eigen_gemm_double14_sve` | `.mdim` | 16..8192（float 8192，余 4096；clamp） | **按内存×时间联合自适应** | SVE GEMM 系方阵维度（镜像各 NEON 原用例） |
+| `eigen_svd{,_double,_double2,_fvectors,_cdouble,_cdouble_noavx512}`（NEON 家族） | `.mdim` | 64..2048（clamp） | **按内存×时间联合自适应** | NEON 后端 BDCSVD 系方阵维度（`_cdouble_noavx512` 为同负载的门控变体，x86 命名沿用） |
+| `eigen_svd_jacobi{,_double,_fvectors,_cdouble}`（NEON 家族） | `.mdim` | 64..2048（clamp） | **按内存×时间联合自适应** | NEON 后端 JacobiSVD 系方阵维度（SKIP 级，`--quality=-1` 显式运行） |
 | `eigen_sparse` | `.n` | 64..8192（clamp） | 自适应 | 稀疏 Cholesky 规模 |
 | `openssl_sha` / `openssl_sha3` | `.arena_bytes` | 1MiB..4GiB（clamp） | 内存自适应 | 哈希数据竞技场字节数（SHA-2 加法链 / Keccak 置换的工作集） |
 | `openssl_sm3sm4` | `.data_size` | 1024..（自适应上限，clamp） | 自适应 | SM3/SM4 载荷尺寸 |
 | `gather*` / `gatherscatter*` | `.data_size` | 按变体 | 自适应 | gather/scatter 工作集 |
+| `random_access_sweep` | `.size_mb` / `.mode` / `.valmode` | 4..512（MiB，钳制）/ 0\|1 / 0\|1\|2（mode/valmode 域外值静默按 0 处理） | 内存自适应（60% MemAvailable÷线程，8..512MiB）/ 0 / 0 | 大 mmap 随机扫掠区大小（MiB）/ 地址模式（0=随机偏移，1=顺序）/ 值模式（0=随机，1=固定模式，2=边界特殊值） |
+| `low_load_cache_pressure{,_neon}` | `.duty_us` | 500..3000（静默钳制） | 1000 | 低占空比（5-30%）跨 die 存→远端读扫掠的窗口占空时长（µs） |
 | `ipsec_*`（46 个 NEON 变体） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM |
-| `ipsec_*_sve*`（24 个 SVE 变体） | `.data_size`（snake_case） | 1024..约 1900（HMAC 组装缓冲上限，clamp） | 内存自适应（流数=运行时 lane 数） | 多流 HMAC 载荷尺寸 |
+| `ipsec_*_sve*`（17 个 HMAC/SHA2 变体） | `.data_size`（snake_case） | 1024..1900（sha384/512 变体上限 1830；HMAC 组装缓冲上限，clamp） | 内存自适应（流数=运行时 lane 数） | 多流 HMAC 载荷尺寸 |
+| `ipsec_*_sve*`（7 个 CMAC/XCBC/GCM 变体：`*aes_cmac*` / `*xcbc*` / `*gcm*`） | `.data_size`（snake_case） | 1024..16MB（clamp，16B 对齐） | 内存自适应 | 加密/解密/MAC 载荷尺寸（单流 OpenSSL EVP 数据通路） |
 | `sve512_{f32,f64}_chain_{arm,svd}` | `.bounded` | 0\|1 | 1 | 有界/无界操作数值域（SEVI Obs.19：SDC 频率差 245×） |
 | `sve512_nt_reload_arm` | `.distance` | 1..4 | 2 | 栈重装载距离（NUMA3 VA 通路触发指令窗口） |
-| `memcpy_rewr` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
+| `acl_gemm_sve` | `.dim` | 64..4096（clamp） | 内存自适应 | ACL NEGEMM F32 GEMM 方阵维度 |
+| `adcx_sve` / `adcx_arm_sve` / `adox_sve` / `adox_arm_sve` / `adcx_adox_interleaved{,_arm}_sve` | `.count` | 1024..64M（clamp） | 内存自适应 | ADCX/ADOX 进位/借位链元素数 |
+| `adcxlong{,_arm}_sve` | `.count` | 4096..64M（clamp） | 内存自适应 | 长进位链元素数 |
+| `agu_stress_2src_sve` / `agu_stress_store_only_sve` | `.count` | 1024..32M（clamp） | 内存自适应 | AGU 吞吐压力（2-src ldr + 旋转 ALU / 纯 store）元素数 |
+| `arm0102_{fma_f32,kreg_logic,kreg_mask,kreg_not,kreg_select}_sve` | `.count` | 1024..64M（clamp） | 内存自适应 | ARM0102 案例复现族（3-src ldr + 旋转 FMA/逻辑/掩码/选择）元素数 |
+| `arm64_sdc_sve` | `.buffer_bytes` | 64KiB..1TiB（clamp） | 内存自适应 | CRC32/CRC64 向量扫掠工作集字节 |
+| `crt_builtins_sve` | `.count` | 4096..64M（clamp） | 内存自适应 | compiler-rt 软浮点内建（__addsf3 等）操作数对数 |
+| `gmp_bigadd_sve` | `.limbs` | 256..1M（clamp） | 内存自适应 | SVE 进位链大数加法操作数宽度（64-bit limb 数，256=2048-bit） |
+| `iex_operand_combo_sve` | `.steps` | 1024..1M（clamp） | 内存自适应 | IEX 操作码组合链步数 |
+| `operand_space_sve` | `.num_pairs` | 80..1M（clamp） | 内存自适应 | 操作数空间探针的操作数对数 |
+| `mem_disambig_alu_sve` | `.buffer_bytes` | 4096..1TiB（clamp） | 内存自适应 | 内存消歧探针的地址跨度字节 |
+| `mmu_split_tlb_sve` | `.pressure_pages` | 8192..1M（clamp） | 内存自适应 | 页色别名 TLB 压力跨度页数（4KiB/页） |
+| `ooo_dep_chain_sve` | `.chain_len` / `.rob_depth` | 4096..16M / 2048..4M（clamp） | 内存自适应 | OoO 指针追逐依赖链长 / RW-hazard 槽深（兼作长 ALU 链深） |
+| `fisttp_sve` | `.num_elements` | 1024..16M（clamp，上限随内存预算放开） | 内存自适应 | FCVTZS 截断转换元素数 |
+| `fisttp_arm`（ACL 后端） | `.num_elements` | 1024..2×10⁹（clamp，上限随内存预算放开） | 内存自适应 | FCVTZS 截断转换元素数（需 third-party/acl 构建产物） |
+| `movdq2q_sve` / `movq2dq_sve` / `movmskpspd_sve` / `neon_add_sve` | `.count` | 1024..64M（clamp） | 内存自适应 | z 寄存器↔GPR 搬运 / 符号位掩码提取 / SVE 加法的元素数 |
+| `power_virus_dit_sve` | `.scale` | 1..256（clamp） | 1 | di/t 电压瞬态病毒 burst/stall 等比缩放（保持 1:1 占空比） |
+| `mesh_upi_avx_sym` / `mesh_upi_avx512_sym` / `mesh_upi_avx512_symm_f64`（NEON/FP 变体，x86 命名沿用） | `.buffer_bytes` | 1MiB..16TiB（clamp） | 内存自适应 | mesh 互连对称压力工作集字节 |
+| `mesh_upi_sve_*`（18 个 SVE 变体） | `.buffer_bytes` | 1MiB..16TiB（clamp） | 内存自适应 | SVE mesh 变体工作集字节 |
+| `mite_sve` | `.count` | 1024..1M（非 16 倍数告警取整） | 1024 | add/eor/sub 常量链 + 谓词分支逻辑探针的缓冲元素数（诊断探针，默认固定设计几何） |
+| `movbe_sve` / `movbe_l1d_sve` / `movbe_l2_sve` | `.count` | 16384..4M（非 16 倍数告警取整） | 16384 | 字节交换往返探针缓冲元素数（l1d/l2 = L1D 命中 / L2 重载足迹变体） |
+| `movbe_slf_sweep_sve` | `.buffer_bytes` | 64KiB..256MiB（非 16 倍数告警取整） | 64KiB | 多宽度（16/32/64-bit）SLF 转发扫掠缓冲字节 |
+| `mrn_{flags,nuke,nuke_2src_alu,nuke_3src_alu,nuke_4src_alu,pairs,pairs_2src_alu,reloaded,reloaded_2src_alu,rmw,rmw_dump,rmw_fwd,rmw_l1d,rmw_diff}_sve` | `.count` | 1024..4M（`mrn_reloaded_sve` 为 256..4M；非 8 倍数告警取整） | 1024（`mrn_reloaded_sve` 256） | 内存重命名/RMW 探针族缓冲元素数（u64，CPU179 触发配方，默认固定设计几何） |
+| `mrn_nuke_dense_sve` | `.count` | 16384..4M（非 8 倍数告警取整） | 16384 | MRN 密集变体元素数 |
+| `mrn_rmw_diff_{64k,1m}_sve` | `.base_count` | 8192..4M（非 8 倍数告警取整） | 8192 | RMW 足迹差分基计数（×16 得 64KB/1MB 跨度） |
+| `mrn_rmw_nop{,1,4,8,16,64}_sve` | `.count` | 1024..4M（非 8 倍数告警取整） | 1024 | RMW 时序探针（nop 间隔变体）元素数 |
+| `neon_rot_2src_sve` / `neon_rot_store_only_sve` | `.count` | 1024..4M（clamp） | 1024 | CPU179 触发配方（2-src ldr + 旋转 ALU / 纯 store）元素数 |
+| `neon_rot_u8x16_sve` | `.buffer_bytes` | 16384..256MiB（clamp） | 16384 | 全 VL 字节 lane rotate 缓冲字节 |
+| `neon_rot_ldr_at_top*_sve`（18 个变体；同名无 `_sve` 后缀的 NEON 版无 knob） | `.slots` | 1024..1M（k3res 变体 4096..4M；clamp） | 1024（k3res 4096） | 「顶部第 3 ldr z」位置探针槽位数（CPU179 LSU 触发配方族，默认固定设计几何） |
+| `sve_rot_ldr_at_top*`（8 个变体） | `.slots` | 1024..1M（k3res 变体 4096 起；clamp） | 内存自适应 | SVE 版位置探针槽位数 |
+| `spinlock_add_neon` | `.logverif` / `.logverif_retain` / `.selftest` | 0\|1 / 0\|1 / off\|stall\|data（错值 fail-loudly） | 0 / 0 / off | 逐次验证日志开关 / 绿跑日志保留 / 部署自检注入（stall=看门狗停顿，data=数据通路） |
+| `memcpy_rewr` / `memcpy_rewr_neon` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
 
 仍无 knob 的测试（`isal_crc*`×10 等）参数为编译期常量——参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态。
 
-**Eigen SVD**：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑在 SVE 向量后端（vendored Eigen 5.0.1 已补 `PacketXd`/`PacketXcd` double 与 complex<double> packet 全套）。Eigen packet 定宽、VLA 语言级不可编译，故两个走 Eigen 库的 SVE 用例——`eigen_gemm_double_max_arm`（GEMM）与 `eigen_svd_cdouble_sve`（SVD）——改为**逐档各编一份 payload**（均 128/256/512/1024 四档，独立 Eigen 命名空间 + `-msve-vector-bits=n`），运行时按框架 pin 后的**实际**档位函数指针分派；pin 不可用诚实 SKIP，读回不符 FAIL（`eigen_svd_bidiag_sve` 为自写 Householder 真 VLA 负载，不属此分派）。复数 SVD 的 1024 档自 2026-11-01（issue #410）启用：vendored Eigen 的 SVE 复数 `ptranspose` 原实现（memory-bridge）在 NC>N 时越界读，已改写为 scatter 形状（任意 N/NC 界内、方阵形状与原置换位级相同）；gem5-fi 四档（128/256/512/1024）同源双 kernel 实测 `SDCSHIELD_FAILS=0`，512 档 checksum 与修复前逐字节一致（位级非回归），1024 档为首次真实执行（证据链 `docs/superpowers/inventory/issue410-eigen-complex-1024/`）。
+**Eigen SVD**：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑在 SVE 向量后端（vendored Eigen 5.0.1 已补 `PacketXd`/`PacketXcd` double 与 complex<double> packet 全套）。Eigen packet 定宽、VLA 语言级不可编译，故全部 14 个走 Eigen 库的 SVE 用例——既有 2 个（`eigen_gemm_double_max_arm` GEMM 与 `eigen_svd_cdouble_sve` SVD）+ 2026-11-03 `feat/eigen-sve-unification` 新增 12 个（BDCSVD×4、JacobiSVD×4、GEMM×4，per-tier body 样板统一收敛于 `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h` dispatcher 框架）——payload 均**逐档各编一份**（128/256/512/1024 四档，独立 Eigen 命名空间 + `-msve-vector-bits=n`），dispatcher 运行时按框架 pin 后的**实际**档位函数指针分派；pin 不可用诚实 SKIP，读回不符 FAIL（`eigen_svd_bidiag_sve` 为自写 Householder 真 VLA 负载、不属此分派，已 2026-11-02 退役）。复数 SVD 的 1024 档自 2026-11-01（issue #410）启用：vendored Eigen 的 SVE 复数 `ptranspose` 原实现（memory-bridge）在 NC>N 时越界读，已改写为 scatter 形状（任意 N/NC 界内、方阵形状与原置换位级相同）；gem5-fi 四档（128/256/512/1024）同源双 kernel 实测 `SDCSHIELD_FAILS=0`，512 档 checksum 与修复前逐字节一致（位级非回归），1024 档为首次真实执行（证据链 `docs/superpowers/inventory/issue410-eigen-complex-1024/`，该目录已随 31f6a99e 清理出库，git 历史 `31f6a99e^` 可取回）。
 
 ## 架构支持
 
@@ -508,8 +555,8 @@ SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite
 
 ## 延伸
 
-- [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md) — 会话内 agent 自动化：push 自动开 PR → 五 bot 检视（四外部 SaaS + 本地无头 claude）→ subagent 批判性处置修复 → 循环闭环 → 人工 merge（引擎 `scripts/pr_loop.py` + `scripts/pr_local_review.py`，双端入口 `/pr-loop` 与 `.trae/rules/pr-loop.md`）
-- [task-loop 无人值守任务闭环手册](docs/build-deploy-pr-ci/task-loop.md) — CI 红/main 审查/会话/手建 issue → agent-task 队列 → headless agent 修复/实现 → PR → 检视闭环 → 人工 merge（引擎 `scripts/task_loop.py`，cron scan */30 + audit 每 6h，标签协议/单飞/熔断/kill switch；会话命令 `/dev-loop`；`ci_triage.py` 为过渡薄壳，历史手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)）
+- [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md) — 会话内 agent 自动化：push 自动开 PR → 五 bot 检视（四外部 SaaS + 本地无头 claude）→ subagent 批判性处置修复 → 循环闭环 → merge 交接（引擎 PR 由夜间 pipeline merge 门自动 squash；用户非 docs PR 人工；引擎 `scripts/pr_loop.py` + `scripts/pr_local_review.py`，双端入口 `/pr-loop` 与 `.trae/rules/pr-loop.md`）
+- [task-loop 无人值守任务闭环手册](docs/build-deploy-pr-ci/task-loop.md) — CI 红/main 审查/会话/手建 issue → agent-task 队列 → headless agent 修复/实现 → PR → 检视闭环 → merge 门（引擎 PR 六门槛自动 squash；用户非 docs PR 人工）（引擎 `scripts/task_loop.py`，nightly pipeline cron `0 23`、23:00–09:00 三泳道 + merge 门 + 软停，标签协议/泳道槽位/熔断/kill switch/部署 runbook；会话命令 `/dev-loop`；`ci_triage.py` 为过渡薄壳，历史手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)）
 - [编写测试指南](docs/coding/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
 - [离线构建依赖与排坑](docs/build-deploy-pr-ci/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
 - [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据

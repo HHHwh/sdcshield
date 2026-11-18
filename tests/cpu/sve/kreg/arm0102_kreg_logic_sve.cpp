@@ -117,25 +117,20 @@ static int arm0102_kreg_logic_sve_init(struct test *test) {
     memset_random(data->srcA, total);
     memset_random(data->srcB, total);
 
-    /* lanes 已由上方门控 svl 换算 (f32 lanes = SVL bytes / 4) */
-    svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)KLOGIC_SVE_SUBLANES);
-    for (int base = 0; base < count; base += lanes) {
-        const int n = (count - base < lanes)
-                          ? count - base : lanes;
-        for (int sub = 0; sub < n; sub += KLOGIC_SVE_SUBLANES) {
-            /* 相位 = 子块序号 (base+sub)/KLOGIC_SVE_SUBLANES, 按子块旋转;
-             * 原式 (base+sub)%4 恒为 0 (base 是 svcntw() 倍数、sub 是 4 的倍数) */
-            const int phase = (base + sub) / KLOGIC_SVE_SUBLANES;
-            uint32_t av[8], bv[8], ov[8];
-            for (int k = 0; k < KLOGIC_SVE_SUBLANES && sub + k < n; ++k) {
-                av[k] = data->srcA[base + sub + k];
-                bv[k] = data->srcB[base + sub + k];
-            }
-            svuint32_t va = svld1_u32(pg4, av), vb = svld1_u32(pg4, bv);
-            svuint32_t res = logic_rotating_sve(pg4, va, vb, phase);
-            svst1_u32(pg4, ov, res);
-            for (int k = 0; k < KLOGIC_SVE_SUBLANES && sub + k < n; ++k)
-                data->expected[base + sub + k] = ov[k];
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test, so a persistent SVE datapath fault cannot corrupt golden
+     * and actual identically. Phase = 4-element sub-block index
+     * (i/4)%4 — identical to the run loop's (base+sub)/SUBLANES group
+     * rotation (base is a multiple of lanes, lanes a multiple of 4).
+     * and/orr/eor/bic map bit-exactly to uint32_t & | ^ & ~. */
+    for (int i = 0; i < count; i++) {
+        const uint32_t a = data->srcA[i], b = data->srcB[i];
+        switch ((i / KLOGIC_SVE_SUBLANES) % 4) {
+            case 0: data->expected[i] = a & b;  break;
+            case 1: data->expected[i] = a | b;  break;
+            case 2: data->expected[i] = a ^ b;  break;
+            case 3: data->expected[i] = a & ~b; break;
         }
     }
 

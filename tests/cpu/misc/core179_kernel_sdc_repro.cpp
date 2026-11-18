@@ -109,23 +109,40 @@ static int core179_kernel_sdc_repro_init(struct test *test) {
     memset_random(data->srcA32,    CORE179_REPRO_COUNT * sizeof(uint32x4_t));
     memset_random(data->srcB32,    CORE179_REPRO_COUNT * sizeof(uint32x4_t));
 
-    /* goldens: same rotating compositions, computed on the same NEON units */
-    for (int i = 0; i < CORE179_REPRO_COUNT; i++) {
-        switch (i % 4) {
-            case 0: data->expectedA[i] = vaddq_u64(data->srcA64[i], data->srcB64[i]); break;
-            case 1: data->expectedA[i] = veorq_u64(data->srcA64[i], data->srcB64[i]); break;
-            case 2: data->expectedA[i] = vandq_u64(data->srcA64[i], data->srcB64[i]); break;
-            case 3: data->expectedA[i] = vorrq_u64(data->srcA64[i], data->srcB64[i]); break;
+    /* goldens (issue #373): scalar independent recomputation — pure C
+     * integer/compare ops on the scalar pipeline, never the NEON units
+     * under test, so a persistent NEON datapath fault cannot corrupt
+     * golden and actual identically (the run side keeps both hot-loop
+     * skeletons untouched — this test is the environment reproducer,
+     * and its user-space miscompare channel now also sees persistent
+     * NEON faults). Skeleton A: phase = vector index %4 (2 u64 lanes
+     * per vector); skeleton B: phase = vector index %4 (4 u32 lanes per
+     * vector); eq(s)/eq-u reduce to bit equality, gt is signed, tst is
+     * (a & b) != 0. */
+    {
+        const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA64);
+        const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB64);
+        uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expectedA);
+        for (int e = 0; e < 2 * CORE179_REPRO_COUNT; e++) {
+            switch ((e / 2) % 4) {
+                case 0: ex[e] = sa[e] + sb[e]; break;
+                case 1: ex[e] = sa[e] ^ sb[e]; break;
+                case 2: ex[e] = sa[e] & sb[e]; break;
+                case 3: ex[e] = sa[e] | sb[e]; break;
+            }
         }
     }
-    for (int i = 0; i < CORE179_REPRO_COUNT; i++) {
-        switch (i % 4) {
-            case 0: data->expectedB[i] = vceqq_s32(vreinterpretq_s32_u32(data->srcA32[i]),
-                                                   vreinterpretq_s32_u32(data->srcB32[i])); break;
-            case 1: data->expectedB[i] = vcgtq_s32(vreinterpretq_s32_u32(data->srcA32[i]),
-                                                   vreinterpretq_s32_u32(data->srcB32[i])); break;
-            case 2: data->expectedB[i] = vceqq_u32(data->srcA32[i], data->srcB32[i]); break;
-            case 3: data->expectedB[i] = vtstq_u32(data->srcA32[i], data->srcB32[i]); break;
+    {
+        const uint32_t *sa = reinterpret_cast<const uint32_t *>(data->srcA32);
+        const uint32_t *sb = reinterpret_cast<const uint32_t *>(data->srcB32);
+        uint32_t       *ex = reinterpret_cast<uint32_t *>(data->expectedB);
+        for (int e = 0; e < 4 * CORE179_REPRO_COUNT; e++) {
+            switch ((e / 4) % 4) {
+                case 0: ex[e] = (sa[e] == sb[e]) ? 0xFFFFFFFFu : 0u; break;
+                case 1: ex[e] = ((int32_t)sa[e] > (int32_t)sb[e]) ? 0xFFFFFFFFu : 0u; break;
+                case 2: ex[e] = (sa[e] == sb[e]) ? 0xFFFFFFFFu : 0u; break;
+                case 3: ex[e] = ((sa[e] & sb[e]) != 0u) ? 0xFFFFFFFFu : 0u; break;
+            }
         }
     }
 

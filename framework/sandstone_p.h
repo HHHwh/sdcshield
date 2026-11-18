@@ -19,6 +19,19 @@
 #include <fcntl.h>
 #include <limits.h>
 
+/* unistd.h: Windows 下经 framework_incdir 解析到仓库自带 sysdeps/windows
+ * shim(getpagesize 声明,#include_next 链到 mingw 的 unistd.h——两者均无
+ * sysconf);其余平台为系统 unistd.h(sysconf)。sandstone_page_size() 的
+ * 两个实现都由它供给,不再引入 windows.h(零宏面注入)。 */
+#include <unistd.h>
+
+/* Page-size helpers (ROUND_UP_TO / sandstone_page_size / ROUND_UP_TO_PAGE):
+ * shared single implementation, see sandstone_page.h.  Keep this include
+ * OUTSIDE the extern "C" block below -- the header's own #include <stdlib.h>
+ * resolves (in C++) to the C++ <stdlib.h> wrapper, whose first inclusion
+ * must not sit inside a linkage specification (issue #590). */
+#include "sandstone_page.h"
+
 #ifdef __cplusplus
 #include <span>
 #include <vector>
@@ -67,33 +80,6 @@ extern "C" {
         ret = stmt;                         \
     } while (ret == -1 && errno == EINTR)
 #endif
-
-/* align to a power of 2 */
-#define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
-#include <unistd.h>
-
-/*
- * Page size used for mmap/mprotect alignment.  MUST match the kernel's actual
- * page size, otherwise mprotect() will round to the kernel's page boundary and
- * may make adjacent data read-only (causing SIGSEGV on kernels with >4 KB
- * pages, e.g. ARM64 16 KB / 64 KB configurations).  Resolve once via
- * sysconf(_SC_PAGESIZE) and cache it.
- */
-#ifdef __cplusplus
-extern "C++"
-{
-#endif
-static inline unsigned sandstone_page_size(void)
-{
-    static long cached = 0;
-    if (!cached)
-        cached = sysconf(_SC_PAGESIZE);
-    return (unsigned)cached;
-}
-#ifdef __cplusplus
-}
-#endif
-#define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, sandstone_page_size())
 
 extern char *program_invocation_name;       // also in glibc's <errno.h>
 
@@ -282,6 +268,7 @@ struct TestConfig
     OutputFormat output_format = DefaultOutputFormat;
     uint8_t output_yaml_indent = 0;
     bool log_test_knobs = false;
+    bool compact_log = true;        // default on: lossless YAML log compaction (--full-log disables)
 };
 
 // Isolate variables set during opts parsing into a separate struct.
@@ -692,6 +679,8 @@ void logging_init_child_preexec();
 void logging_finish();
 TestResult logging_print_results(std::span<const ChildExitStatus> status, const struct test *test);
 int log_skip_or_print(SkipCategory cat, const char *fmt, ...) ATTRIBUTE_PRINTF(2, 3);
+void compact_log_set_progress_total(int total);
+void compact_log_update_progress(int distinct_done, int iteration);
 
 /* random.cpp */
 void random_init_global(const char *argument);

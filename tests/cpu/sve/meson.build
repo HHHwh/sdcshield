@@ -1,8 +1,8 @@
 # Copyright 2025 Intel Corporation.
 # SPDX-License-Identifier: Apache-2.0
 #
-# SVE ports of the 53 avx-named tests (tests/cpu/fma, mesh, eigen_svd, ipsec
-# families). The originals are NEON 128-bit implementations written on SVE-less
+# SVE ports of the 52 avx-named tests (tests/cpu/fma, mesh, ipsec families).
+# The originals are NEON 128-bit implementations written on SVE-less
 # silicon (see docs/docs_xu/2026-09-19-avx-named-tests-audit.md); these ports
 # keep the workload environments byte-for-byte (vector width, random ranges,
 # special-value injection, block/stride structure, atomic synchronization,
@@ -13,8 +13,10 @@
 # (original avx2=256-bit vs avx512=512-bit), NOT the SVE2 instruction set —
 # no SVE2 instructions are used (Kunpeng 920 (0xd01) has NO SVE — these
 # tests skip cleanly there; the historical "VL=256" records are from the
-# cortex x3b machine, docs/architecture.md; the tests themselves are
-# all-VL 128..1024-bit since all-VL Phase 2).
+# other lab host, HiSilicon part 0xd02 (its `--dump-cpu-info` label
+# "cortex x3b" is a feature-signature match, not the MIDR identity),
+# docs/architecture.md; the tests themselves are all-VL 128..1024-bit
+# since all-VL Phase 2).
 #
 # Build discipline mirrors tests/cpu/arm64/meson.build: the whole subdir is
 # entered only under the aarch64 guard (x86-64 untouched), and the SVE object
@@ -75,15 +77,6 @@ if host_machine.cpu_family() == 'aarch64'
         'mesh/mesh_upi_sve_wide_asymm_read_only_int.cpp',
         'mesh/mesh_upi_sve_wide_asymm_read_L3_int.cpp',
         'mesh/mesh_upi_sve_wide_asymm_write_only_int.cpp',
-        # Eigen domain (1): SVD-family workload without the Eigen library.
-        # The SVE-backend sibling eigen_svd_cdouble_sve currently crashes
-        # (vendored Eigen5 SVE double packet SIGSEGV on the BDCSVD
-        # workload), so this port is a self-written deterministic
-        # Householder bidiagonalization — the same FMA-dense SVD first
-        # phase — with SVE-vectorized inner loops and the EigenSVDTest
-        # golden pattern (init computes once, run recomputes and
-        # byte-compares). n=128 calibrated at ~0.92ms/iter.
-        'eigen/eigen_svd_bidiag_sve.cpp',
         # kreg batch (7 ports of the 64-batch plan): software simulations of
         # x86 AVX-512 k-register ops upgraded to REAL SVE predicate
         # instructions — the only true k-register equivalent on ARM.

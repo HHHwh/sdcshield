@@ -299,8 +299,9 @@ tests_set_base.add(
 # neon_rot_ldr_rand_thread: issue #339 fix — the board-local wangxu draft
 # carved ALL buffers from one pool with independent random offsets (false-SDC
 # overlap); this variant partitions the pool into disjoint init/thread zones.
-# The arm-0102/ subdir holds trigger-format variants of existing test files
-# (kreg7/8, etc.) applying the verified core-179 trigger recipe.
+# The arm-0102/ subdir (trigger-format variants, kreg7/8 etc.) was retired
+# 2026-11-03 ("delete old") — its 10 base files are gone; the _sve variants
+# under sve/kreg/ stay registered in their own block.
 # The 2026-10-31 bulk registration (71 files) imports the remaining
 # core-179-family research probes that arrived with the d61b7de1 source drop:
 #   - misc/neon_rot_* (1src/fwd_probe/nop_gap/stale_reload/store_only/
@@ -334,16 +335,6 @@ tests_set_base.add(
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
-            'arm-0102/arm0102_kreg_mask.cpp',
-            'arm-0102/arm0102_fma_f32.cpp',
-            'arm-0102/arm0102_fma_f64.cpp',
-            'arm-0102/arm0102_ins_ext.cpp',
-            'arm-0102/arm0102_kreg_logic.cpp',
-            'arm-0102/arm0102_kreg_mask_dump.cpp',
-            'arm-0102/arm0102_kreg_mask_vceq.cpp',
-            'arm-0102/arm0102_kreg_not.cpp',
-            'arm-0102/arm0102_kreg_select.cpp',
-            'arm-0102/arm0102_swizzle.cpp',
             'misc/adaptive_mem_sdc.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
@@ -589,28 +580,59 @@ tests_set_skx.add(
     )
 )
 
-# ARM64 SVE-backed Eigen pair (gemm + the SVD counterpart of
-# eigen_svd_cdouble); only built on aarch64 (see the SVE build block
-# below). These two files are the DISPATCH TUs — the only members of
-# tests_sve — and are deliberately vector-length agnostic: they hold no
+# ARM64 SVE-backed Eigen cases (the SVE counterparts of the NEON
+# eigen_svd/eigen_svd_jacobi/eigen_gemm families; 2 pre-existing + 12
+# added 2026-11-03 by the eigen SVE unification, each joined 2026-11-13
+# by an _sve2 companion from feat/eigen-sve2-companion); only built on
+# aarch64 (see the SVE build block below). These 28 files are the
+# DISPATCH TUs (14 SVE-family + 14 _sve2 companions) —
+# the only members of tests_sve from this block — and are deliberately
+# vector-length agnostic: they hold no
 # Eigen SVE types, so tests_sve compiles them with march_sve_dispatch
 # (-march=armv8.2-a+sve, NO -msve-vector-bits). Eigen's SVE packet
 # backend is compile-time fixed-width (arm_sve_vector_bits(
 # EIGEN_ARM64_SVE_VL)) and VLA is un-compilable at the C++ language level
 # (sizeless struct members / NumTraits sizeof, twice-confirmed spike), so
-# the PAYLOAD is not built here: the `foreach spec : [['gemm','128'], ...]`
-# loop in the ARM64 SVE build block below instantiates it once per tier as
-# tests_eigen_{gemm,svd}_vl<N> static libraries (Eigen namespace and test
-# symbol namespace renamed per tier). The dispatcher reads the worker's
-# pinned VL and calls into the matching tier variant at run time; the
-# complex SVD payload has no 1024-bit variant (upstream Eigen ptranspose
-# out-of-bounds read — see the loop's comment). VL plumbing:
+# the PAYLOAD is not built here: the eigen_sve_body_specs table +
+# `foreach tier` loop in the ARM64 SVE build block below instantiate it
+# once per tier as tests_eigen_<pfx>_vl<N> static libraries (Eigen
+# namespace and test symbol namespace renamed per tier). The dispatcher
+# reads the worker's pinned VL and calls into the matching tier variant
+# at run time; every payload — complex ones included — is built at all
+# four tiers (128/256/512/1024) since the issue #410 ptranspose scatter
+# rewrite (see the loop's comment). VL plumbing:
 # framework/device/cpu/arm64/arm64_vl.h.
 tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
         'eigen_gemm/gemm_double_max_arm.cpp',
+        'eigen_gemm/gemm_double_max_arm_sve2.cpp',
+        'eigen_gemm/gemm_double_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_double_dynamic_square_sve2.cpp',
+        'eigen_gemm/gemm_float_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_float_dynamic_square_sve2.cpp',
+        'eigen_gemm/gemm_cdouble_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_cdouble_dynamic_square_sve2.cpp',
+        'eigen_gemm/gemm_double14_sve.cpp',
+        'eigen_gemm/gemm_double14_sve2.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
+        'eigen_svd/svd_cdouble_sve2.cpp',
+        'eigen_svd/svd_double_sve.cpp',
+        'eigen_svd/svd_double_sve2.cpp',
+        'eigen_svd/svd_double2_sve.cpp',
+        'eigen_svd/svd_double2_sve2.cpp',
+        'eigen_svd/svd_float_sve.cpp',
+        'eigen_svd/svd_float_sve2.cpp',
+        'eigen_svd/svd_fvectors_sve.cpp',
+        'eigen_svd/svd_fvectors_sve2.cpp',
+        'eigen_svd_jacobi/svd_cdouble_sve.cpp',
+        'eigen_svd_jacobi/svd_cdouble_sve2.cpp',
+        'eigen_svd_jacobi/svd_double_sve.cpp',
+        'eigen_svd_jacobi/svd_double_sve2.cpp',
+        'eigen_svd_jacobi/svd_float_sve.cpp',
+        'eigen_svd_jacobi/svd_float_sve2.cpp',
+        'eigen_svd_jacobi/svd_fvectors_sve.cpp',
+        'eigen_svd_jacobi/svd_fvectors_sve2.cpp',
     )
 )
 
@@ -1378,25 +1400,46 @@ if host_machine.cpu_family() == 'x86_64'
 endif
 
 # ARM64 SVE build block: mirror of the x86 SKX/HSW blocks above. Compiles the
-# Eigen SVE pair (gemm_double_max_arm + svd_cdouble_sve) against Eigen's SVE
-# packet backend (-DEIGEN_ARM64_USE_SVE) with a fixed vector length, and
-# renames the Eigen namespace so it links beside the NEON baseline without
-# symbol clashes. All-VL Phase 2 P5: these two are the library's ONLY
-# members — the fixed 128-bit lock stays because Eigen's SVE packets are
-# compile-time fixed-width (VLA is un-compilable at the C++ language level,
+# per-tier payloads of the 14 Eigen SVE cases and their 14 _sve2 companions
+# (28 dispatch TUs in tests_sve above — the 14 SVE cases are 2 pre-existing
+# + 12 added 2026-11-03 by the eigen SVE unification, the 14 _sve2
+# companions were added 2026-11-13 by feat/eigen-sve2-companion; both
+# families share these 10 body sources) against Eigen's SVE packet backend
+# (-DEIGEN_ARM64_USE_SVE) with a fixed vector length, renaming the Eigen
+# namespace per tier so the variants link beside each other and the NEON
+# baseline without symbol clashes. Eigen's SVE packets are compile-time
+# fixed-width (VLA is un-compilable at the C++ language level,
 # twice-confirmed spike). All-VL Phase 2 (design 2026-10-27 §4.7) turned that
-# limitation into a per-tier instantiation: the payload is built once per
-# width (128/256/512/1024) and a vector-length-agnostic dispatcher picks the
-# variant that matches the worker's pinned tier at run time.
+# limitation into a per-tier instantiation: the eigen_sve_body_specs table
+# below (10 body families) is built once per width (128/256/512/1024) as
+# tests_eigen_<pfx>_vl<N> static libraries, and the vector-length-agnostic
+# dispatchers pick the variant that matches the worker's pinned tier at run
+# time.
+# Dual-target extension (2026-11-12, SVE2 companion design): the same table
+# is additionally compiled for the armv8.2-a+sve2 target as
+# tests_eigen_<pfx>_sve2_vl<N> libraries (Eigen namespace EigenSVE2<N>, body
+# symbol namespace <pfx>_sve2_vl<N>) for the _sve2 companion cases; the sve
+# rows keep their library names and args byte-identical. Honesty boundary
+# (corrected 2026-11-17): the sve2 libraries recompile the same SVE1-subset
+# stress bodies for backward-compatible execution on SVE2 hardware — but
+# GCC idiom-recognizes the Eigen copy plumbing (call_assignment/
+# gemm_pack_rhs aliasing-checked copy loops) into WHILEWR, an SVE2-only
+# address-overlap instruction: 1549 instances in 35/40 libraries, present
+# since #661 (armv9-a+sve2) and per-library identical after the
+# armv8.2-a+sve2 switch (the earlier "objdump-audited: zero SVE2-only"
+# claim missed this class; caught by the binutils SVE1-only assembler
+# gate). Runtime is unaffected (HWCAP2_SVE2-gated, executes only on SVE2
+# hardware). The libraries still provide an SVE2-gated entry point, a
+# compile-target declaration and the future hook for an Eigen SVE2
+# backend — NOT SVE2-only datapath coverage.
 if host_machine.cpu_family() == 'aarch64'
-    # --- Eigen payload: one instantiation per VL tier (design §4.7) --------
+    # --- Eigen payload: one instantiation per VL tier, table-driven --------
     # Eigen's SVE packet types are compile-time fixed-width and appear as
     # struct members, so a single VLA TU is impossible at the C++ language
     # level (twice-confirmed spike). Build the payload sources once per tier,
     # each under its own Eigen namespace and its own symbol namespace; the
     # dispatch TUs below pick the matching one at run time.
     # Real-packet payloads are valid at every tier we build.
-    eigen_gemm_body_sources = files('eigen_gemm/gemm_double_max_arm_body.cpp')
     # Complex payloads are valid at every tier since the ptranspose scatter
     # rewrite (issue #410): the earlier memory-bridge form indexed buf[N][NC]
     # with i < NC — out of bounds at 1024-bit (NC = 8 > N = 4 in the GEBP
@@ -1404,48 +1447,104 @@ if host_machine.cpu_family() == 'aarch64'
     # (third-party/eigen5/Eigen/src/Core/arch/SVE/Complex.h) is in bounds for
     # any N/NC and is bit-identical to the old permutation in every square
     # shape, so all four tiers are built.
-    eigen_svd_body_sources = files('eigen_svd/svd_cdouble_sve_body.cpp')
-
-    foreach spec : [['gemm', '128'], ['gemm', '256'], ['gemm', '512'], ['gemm', '1024'],
-                    ['svd', '128'], ['svd', '256'], ['svd', '512'], ['svd', '1024']]
-        kind = spec[0]
-        tier = spec[1]
-        eigen_tier_args = [
-            '-march=armv8.2-a+sve',
-            '-msve-vector-bits=' + tier,
-            '-DEIGEN_ARM64_SVE_VL=' + tier,
-            '-DEigen=EigenSVE' + tier,
-        ]
-        if kind == 'gemm'
-            eigen_tier_args += '-DGEMM_TEST_NAMESPACE=gemm_vl' + tier
-            eigen_srcs = eigen_gemm_body_sources
-        else
-            eigen_tier_args += '-DSVD_TEST_NAMESPACE=svd_vl' + tier
-            eigen_srcs = eigen_svd_body_sources
-        endif
-        eigen_vl_a = static_library(
-            'tests_eigen_' + kind + '_vl' + tier,
-            sources : eigen_srcs,
-            dependencies: [
-                eigen3_dep,
-                boost_dep,
-            ],
-            build_by_default: false,
-            include_directories: [
-                tests_common_incdirs,
-            ],
-            c_args : [
-                tests_common_c_args,
-                eigen_tier_args,
-            ],
-            cpp_args : [
-                tests_common_cpp_args,
-                eigen_tier_args,
-                '-DEIGEN_ARM64_USE_SVE',
-                sve_bitpattern_exempt,
-            ],
-        )
-        sandstone_tests += [eigen_vl_a]
+    # Table-driven (2026-11-02 eigen SVE unification, design §3):
+    #   [body-source, namespace-prefix, eigen_stack_limit_1024]
+    #   — library name = tests_eigen_<pfx>[_sve2]_vl<t>
+    # The existing svd/gemm prefixes keep their library names; the per-tier
+    # symbol namespace is now injected uniformly as
+    # -DEIGEN_SVE_BODY_NS=<pfx>_vl<t> (the body TUs' old
+    # SVD_TEST_NAMESPACE/GEMM_TEST_NAMESPACE macros are unified into the one
+    # body contract: make_data/solve_once/run_body(test,cpu)/cleanup — see
+    # tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h).
+    #
+    # eigen_stack_limit_1024 (issue #520): EIGEN_STACK_ALLOCATION_LIMIT
+    # override applied ONLY to that spec's tier=='1024' compilation
+    # (0 = no override). At VL=1024 the f32 SVD bodies (BDCSVD via
+    # HouseholderQR/copyUV, JacobiSVD via qr_preconditioner_impl) instantiate
+    # Eigen's triangular product kernel, whose fixed panel buffer
+    # Matrix<float, SmallPanelWidth = 2*max(mr,nr) = 192, 192> = 147456 B
+    # exceeds Eigen's default 131072 B sentinel. Without NDEBUG (CI's
+    # debugoptimized buildtype) that sentinel is a hard static_assert
+    # (OBJECT_ALLOCATED_ON_STACK_IS_TOO_BIG, DenseStorage.h:61); with NDEBUG
+    # (release) it compiles away — which is why only CI saw it. The f64/c128
+    # bodies and every 128/256/512 tier stay under the default sentinel
+    # (per-TU verified) and are NOT overridden, keeping them bit-identical
+    # to main. 262144 = smallest power-of-two budget over 147456. Known
+    # side effect (same macro also gates the alloca/malloc switch,
+    # Memory.h:803-810): run-time buffers in the 128 KiB..256 KiB window
+    # switch from aligned_malloc to alloca in these two TUs only —
+    # computation stays value-identical, worker stacks are 8 MiB
+    # (THREAD_STACK_SIZE, framework/sandstone.h).
+    eigen_sve_body_specs = [
+        ['eigen_svd/svd_cdouble_sve_body.cpp',         'svd',        0],
+        ['eigen_gemm/gemm_double_max_arm_body.cpp',    'gemm',       0],
+        ['eigen_gemm/gemm_f64_sve_body.cpp',          'gemm_f64',   0],
+        ['eigen_gemm/gemm_f32_sve_body.cpp',          'gemm_f32',   0],
+        ['eigen_gemm/gemm_c128_sve_body.cpp',         'gemm_c128',  0],
+        ['eigen_svd/svd_double_sve_body.cpp',         'svd_f64',    0],
+        ['eigen_svd/svd_float_sve_body.cpp',          'svd_f32',    262144],
+        ['eigen_svd_jacobi/svd_cdouble_sve_body.cpp', 'svd_j_c128', 0],
+        ['eigen_svd_jacobi/svd_double_sve_body.cpp',   'svd_j_f64',  0],
+        ['eigen_svd_jacobi/svd_float_sve_body.cpp',    'svd_j_f32',  262144],
+    ]
+    foreach spec : eigen_sve_body_specs
+        body_src = spec[0]
+        pfx = spec[1]
+        stack_limit_1024 = spec[2]
+        # [suffix, march, Eigen-ns-prefix]: sve keeps the existing
+        # names/args byte-identical; sve2 adds the armv8.2-a+sve2 target
+        # (NOT armv9-a+sve2: the armv9-a base name needs GCC 11+, which
+        # broke the GCC-10 Multi-OS Verify images 2026-11-10..17
+        # — cc1plus "unknown value 'armv9-a+sve2' for '-march'",
+        # run 44011713221. SVE2 has been a plain -march extension on
+        # the armv8.x-a base since GCC 10; the gcc-12 objdump A/B audit
+        # (2026-11-17, same-source full builds, compile flags verified
+        # identical modulo march) shows all 40 libraries differ in raw
+        # disassembly (branch-offset/address shifts + scalar
+        # scheduling reorder, ~10.2k lines total); 32/40 keep an
+        # identical mnemonic multiset, the remaining 8/40 (gemm_c128
+        # vl256/vl1024, svd_j_c128 vl256/vl1024, f32-svd vl128-1024)
+        # add ±1..13 scalar-only count deltas (mov/ldr/str/stp/ldp/
+        # ldur/stur/nop/add/lsl/madd/mul/b.*; one integer mul↔madd
+        # fusion flip) — ZERO SVE- or FP-family mnemonic count changed
+        # anywhere, so the numeric datapath is untouched; and the
+        # SVE2-only WHILEWR footprint (GCC's aliasing-checked
+        # copy-loop idiom — see the honesty note in the block header
+        # above) is per-library IDENTICAL under both marches (1549
+        # instances across 35/40 libraries), so the SVE2-gated entry
+        # point is unaffected).
+        foreach tgt : [['',   'armv8.2-a+sve', 'EigenSVE'],
+                       ['_sve2', 'armv8.2-a+sve2', 'EigenSVE2']]
+            foreach tier : ['128', '256', '512', '1024']
+                eigen_tier_args = [
+                    '-march=' + tgt[1],
+                    '-msve-vector-bits=' + tier,
+                    '-DEIGEN_ARM64_SVE_VL=' + tier,
+                    '-DEigen=' + tgt[2] + tier,
+                    '-DEIGEN_SVE_BODY_NS=' + pfx + tgt[0] + '_vl' + tier,
+                ]
+                # issue #520: only the f32 SVD bodies exceed Eigen's 128 KiB
+                # stack sentinel at VL=1024 (see the table comment above);
+                # applies to both targets — the sve2 compilation
+                # instantiates the same Eigen kernels.
+                if tier == '1024' and stack_limit_1024 != 0
+                    eigen_tier_args += [
+                        '-DEIGEN_STACK_ALLOCATION_LIMIT=' + stack_limit_1024.to_string(),
+                    ]
+                endif
+                eigen_vl_a = static_library(
+                    'tests_eigen_' + pfx + tgt[0] + '_vl' + tier,
+                    sources : body_src,
+                    dependencies: [ eigen3_dep, boost_dep ],
+                    build_by_default: false,
+                    include_directories: [ tests_common_incdirs ],
+                    c_args : [ tests_common_c_args, eigen_tier_args ],
+                    cpp_args : [ tests_common_cpp_args, eigen_tier_args,
+                                 '-DEIGEN_ARM64_USE_SVE', sve_bitpattern_exempt ],
+                )
+                sandstone_tests += [eigen_vl_a]
+            endforeach
+        endforeach
     endforeach
 
     # --- Dispatch TUs: deliberately vector-length agnostic ---------------
@@ -1574,11 +1673,7 @@ subdir('arm64')
 # scripts/generate_sdc_fuzz_cases.py (do not edit by hand — regenerate).
 # Self-gated on aarch64 and on eigen3_dep, so x86-64 is untouched and a
 # missing Eigen simply drops the fleet.
-
-
 subdir('arm64/sdc_fuzzing')
-
-
 # SVE ports of the 53 avx-named tests (fma/mesh/eigen/ipsec). Same
 # self-gating pattern as arm64/ above: the subdir's own meson.build wraps
 # everything in the aarch64 guard, so x86-64 is untouched.

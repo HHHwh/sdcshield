@@ -95,19 +95,25 @@ static int neon_rot_ldr_at_top_offdiag_sve_init(struct test *test) {
     memset_random(data->interleaved, 3 * elems * sizeof(uint64_t));
     memset_random(data->scratch, elems * sizeof(uint64_t));
 
-    /* golden: 源对 [3i+1]/[3i+2], 父系旋转 add/eor/and/orr, 同 SVE 单元 */
-    svbool_t pg = svptrue_b64();
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test, so a persistent SVE datapath fault cannot corrupt golden
+     * and actual identically. Off-diagonal source pair preserved:
+     * slot i reads interleaved slots 3i+1 (a) and 3i+2 (b); phase =
+     * slot index % 4, matching the run loop's per-slot switch. */
     for (int i = 0; i < data->slots; i++) {
-        svuint64_t a = svld1_u64(pg, data->interleaved + (size_t)(3 * i + 1) * lanes);
-        svuint64_t b = svld1_u64(pg, data->interleaved + (size_t)(3 * i + 2) * lanes);
-        svuint64_t res = svundef_u64();
-        switch (i % 4) {
-            case 0: res = svadd_u64_x(pg, a, b); break;
-            case 1: res = sveor_u64_x(pg, a, b); break;
-            case 2: res = svand_u64_x(pg, a, b); break;
-            case 3: res = svorr_u64_x(pg, a, b); break;
+        const size_t a_base = (size_t)(3 * i + 1) * (size_t)lanes;
+        const size_t b_base = (size_t)(3 * i + 2) * (size_t)lanes;
+        const size_t e_base = (size_t)i           * (size_t)lanes;
+        for (int l = 0; l < lanes; l++) {
+            const size_t e = e_base + (size_t)l;
+            switch (i % 4) {
+                case 0: data->expected[e] = data->interleaved[a_base + l] + data->interleaved[b_base + l]; break;
+                case 1: data->expected[e] = data->interleaved[a_base + l] ^ data->interleaved[b_base + l]; break;
+                case 2: data->expected[e] = data->interleaved[a_base + l] & data->interleaved[b_base + l]; break;
+                case 3: data->expected[e] = data->interleaved[a_base + l] | data->interleaved[b_base + l]; break;
+            }
         }
-        svst1_u64(pg, data->expected + (size_t)i * lanes, res);
     }
 
     test->data = data;

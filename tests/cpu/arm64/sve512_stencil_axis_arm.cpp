@@ -263,7 +263,9 @@ static int sve512_stencil_axis_arm_init(struct test *test)
      * runs remain future hardware validation. (Erratum, PR #294 review
      * round 3: an earlier note claimed "this host (Kunpeng 920, VL=256)
      * can run the C++ test at its native VL" — that record belongs to a
-     * different machine, the cortex x3b; see CLAUDE.md's SVE runtime-VL
+     * different machine, the HiSilicon part 0xd02 SVE1 host (its
+     * `--dump-cpu-info` label "cortex x3b" is a feature-signature
+     * match, not the MIDR identity); see CLAUDE.md's SVE runtime-VL
      * rule.) */
     const size_t bt = 2 * svcntd();
     if (bt < 4 || bt > kTileMax) {

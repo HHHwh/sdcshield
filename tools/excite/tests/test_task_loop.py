@@ -550,15 +550,25 @@ def test_dispatch_writes_prompt_file_and_wip_label(tmp_path, monkeypatch):
     labels = []
     monkeypatch.setattr(tl, "gh_label_add",
                         lambda n, lb: labels.append((n, lb)))
+    # Task 4 槽位化派发的引擎缝: 内存闸放行 + worktree 建桩(离线)
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
     captured = {}
     def fake_run_background(cmd, cwd, log):
         captured["cmd"] = cmd
+        captured["cwd"] = cwd
         return 4321
     monkeypatch.setattr(tl, "run_background", fake_run_background)
     e = _task_entry()
     pid = tl.dispatch_agent(e, state)
     assert pid == 4321 and e.status == "DISPATCHED" and e.fix_branch == "fix/issue-33"
     assert labels == [(33, "agent-wip")]
+    # Task 4: cwd 是 per-entry worktree(槽位记账 lane/worktree 同步落条目)
+    assert captured["cwd"] == f"{tmp_path}/cl/.worktrees/issue-33"
+    assert e.lane == "issue_fix" and e.worktree == \
+        f"{tmp_path}/cl/.worktrees/issue-33"
     # stdin 化: 命令里不再出现被引用的超长 prompt,而是 < prompt 文件
     assert "< " in captured["cmd"] and "claude -p" in captured["cmd"]
     prompt_files = list(tmp_path.glob("prompt-*"))
@@ -571,6 +581,10 @@ def test_dispatch_refuses_when_agent_env_missing(tmp_path, monkeypatch, capsys):
     state = {"entries": [], "auth_failure_streak": 0}
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    # Task 4: 闸门前移(内存闸在凭据检查之前),桩放行以锚定本用例的
+    # 凭据拒绝路径(满槽/内存不足是各自独立用例的断言面)
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
     spawned = []
     monkeypatch.setattr(tl, "run_background",
                         lambda *a, **k: spawned.append(a) or 1111)
@@ -646,6 +660,19 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
     monkeypatch.setattr(tl.pr_loop, "ensure_local_review",
                         lambda num, sha: None)
     monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    # Task 5 引擎缝: 轮次上限判定的文件清单拉取打桩(非 docs-only →
+    # 复杂=3;PRData 无 additions/deletions 字段 → rounds=0 恒可派),离线
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["src/a.c"])
+    # fix-round 1: PRData 替身无 additions/deletions → max_rounds_for 的
+    # gh pr view 兜底也会触发,同样打桩(复杂形状 500+200 → 上限 3)
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None:
+                        {"additions": 500, "deletions": 200})
+    # Task 4 引擎缝: 内存闸放行 + worktree 建桩(离线)
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
     monkeypatch.setattr(tl, "run_background",
                         lambda cmd, cwd, log: os.getpid())
     entry = _task_entry(status="PR_OPEN", pr_number=88, rounds=0,
@@ -656,6 +683,68 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
     assert e["status"] == "BOT_FIX" and e["agent_pid"] == os.getpid(), \
         "车道 B 派发记账未即时落盘"
     assert e["rounds"] == 1 and e["last_dispatched_head"] == "b" * 40
+    # Task 4: pr 泳道记账(pr_repair 槽位账本 + lane/worktree 落条目)
+    assert e["lane"] == "pr_repair" and \
+        e["worktree"] == f"{tmp_path}/cl/.worktrees/pr-88"
+
+
+def test_lane_b_immediate_save_preserves_audit_advances(tmp_path, monkeypatch):
+    """T13 归位(检视#6 半边): lane_b 派发即时落盘必须走
+    _pipeline_save(scan.lock 内 merge-save),不得裸 save——cycle_once 整夜
+    持内存 state,audit 子进程同窗在 scan.lock 下推进 cursor/seen/streak;
+    裸 save 把内存陈旧快照整份覆写回磁盘,竞态窗口内丢 audit 记账。T10 推迟
+    理由「cmd_scan 整段持 scan.lock 时同进程二次 flock 自死锁」已随 scan
+    薄壳化(pipeline.lock)消解,归位生效。"""
+    from types import SimpleNamespace
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
+    monkeypatch.setenv("TASKLOOP_REPO", "selftest/local")
+    pr = SimpleNamespace(number=89, head_sha="c" * 40, url="https://x/89",
+                         bot_done={"local-claude": "t"})
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr", lambda slug, num: pr)
+    monkeypatch.setattr(tl.pr_loop, "classify_state",
+                        lambda p, quiet, now: "READY_TO_FIX")
+    monkeypatch.setattr(tl.pr_loop, "render_collect",
+                        lambda p, slug, quiet: "# collect(fake)\n")
+    monkeypatch.setattr(tl.pr_loop, "ensure_local_review",
+                        lambda num, sha: None)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["src/a.c"])
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None:
+                        {"additions": 500, "deletions": 200})
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: os.getpid())
+    # 磁盘侧 = audit 子进程锁下推进后的最新值(cursor/seen 前进、streak=2)
+    tl.StateStore(str(tmp_path)).save(
+        {"entries": [], "auth_failure_streak": 2,
+         "auth_failure_at": "2026-11-13T01:00:00Z",
+         "audit_cursor": {"sha": "audit-advanced", "at": "t1"},
+         "audit_seen": ["h1", "h2"]})
+    # 内存侧 = pipeline 窗口启动时装载的陈旧快照(cursor 旧、streak=0)
+    entry = _task_entry(status="PR_OPEN", pr_number=89, rounds=0,
+                        last_dispatched_head=None)
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0,
+             "audit_cursor": {"sha": "stale-window-start", "at": "t0"},
+             "audit_seen": []}
+    tl.lane_b_advance(state, dry_run=False)     # 调用方不 save,直接看磁盘
+    disk = tl.StateStore(str(tmp_path)).load()
+    e = disk["entries"][0]
+    assert e["status"] == "BOT_FIX" and e["agent_pid"] == os.getpid(), \
+        "车道 B 派发记账未即时落盘(归位不得破坏检视#6 原语义)"
+    assert disk["audit_cursor"] == {"sha": "audit-advanced", "at": "t1"}, \
+        "lane_b 落盘把 audit 子进程的 cursor 推进写回旧值(裸 save 竞态)"
+    assert disk["audit_seen"] == ["h1", "h2"], "audit_seen 磁盘权威被抹"
+    assert disk["auth_failure_streak"] == 2, "streak 双写者键未取 max 合并"
+    assert disk["auth_failure_at"] == "2026-11-13T01:00:00Z", \
+        "auth_failure_at 未取两侧较新"
+    # 合并结果同步回内存对象——下一轮 bump 从合并值起步,不再被磁盘旧值抹掉
+    assert state["auth_failure_streak"] == 2
+    assert state["audit_cursor"]["sha"] == "audit-advanced"
 
 
 # ============ PR#317 检视#11: paused 横幅与闸门同口径(双路径) ============
@@ -857,20 +946,17 @@ def test_dry_run_audit_zero_local_writes(tmp_path, monkeypatch):
 
 # ============ Task 8: scan 编排接入 + status ============
 
-def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatch):
-    """两个 QUEUED 任务,单飞 → 只派 FIFO 首个(issue 号小者)。"""
-    state = {"entries": [
-        dict(workflow="", run_id=0, status="QUEUED", issue_number=9,
-             fix_branch="", pr_number=None, attempts=0, rounds=0,
-             agent_pid=None, agent_started_at=None, agent_log=None,
-             last_dispatched_head=None, extra_runs=[], created_at="t",
-             updated_at="t", source="session", kind="bug", audit_hash=None),
-        dict(workflow="", run_id=0, status="QUEUED", issue_number=5,
-             fix_branch="", pr_number=None, attempts=0, rounds=0,
-             agent_pid=None, agent_started_at=None, agent_log=None,
-             last_dispatched_head=None, extra_runs=[], created_at="t",
-             updated_at="t", source="manual", kind="bug", audit_hash=None)],
-        "auth_failure_streak": 0}
+def test_scan_dispatches_task_fifo_respecting_issue_slots(tmp_path, monkeypatch):
+    """三个 QUEUED 任务,issue 泳道 2 槽(Task 4 槽位语义取代全局单飞):
+    只派 FIFO 前两个(issue 号小者),第三个满槽被拒、保持 QUEUED。"""
+    def _q(n, src):
+        return dict(workflow="", run_id=0, status="QUEUED", issue_number=n,
+                    fix_branch="", pr_number=None, attempts=0, rounds=0,
+                    agent_pid=None, agent_started_at=None, agent_log=None,
+                    last_dispatched_head=None, extra_runs=[], created_at="t",
+                    updated_at="t", source=src, kind="bug", audit_hash=None)
+    state = {"entries": [_q(9, "session"), _q(5, "manual"), _q(7, "audit")],
+             "auth_failure_streak": 0}
     # 编排从 StateStore 装 state(brief 的用例只构造了局部 dict,从未注入)
     # ——先落盘进 tmp;env 重定向让 StateStore/scan.lock/落盘全在 tmp,
     # 绝不碰真实默认目录(夹具真设置,非注释括注)。
@@ -881,24 +967,34 @@ def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatc
     # 自愈/车道 B。
     monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
     monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    import task_loop_pipeline as tp
     dispatched = []
     def fake_dispatch(entry, state, dry_run=False, prompt_override=None,
                       increment_rounds=False):
-        # Ruling 5: fake 自身镜像真实单飞契约(单飞属 dispatch_agent,不属
-        # 编排层),且派成的 agent 用 os.getpid()(确定性真活 PID,探活必真;
-        # 伪 PID 如 99 探活不确定,ci_triage 用例 12 同款手法)。
-        if tl.has_running_agent(state):
+        # Ruling 5: fake 自身镜像真实槽位契约(闸门属 dispatch_agent,不属
+        # 编排层): 满槽拒/同 key 互斥,派成即占槽记账;派成的 agent 用
+        # os.getpid()(确定性真活 PID,探活必真)。
+        kind = "pr_repair" if increment_rounds else "issue_fix"
+        key = (f"issue-{entry.issue_number or entry.run_id}" if kind == "issue_fix"
+               else f"pr-{entry.pr_number}")
+        if tp.free_slot_count(state, kind) <= 0:
+            return None
+        pid = os.getpid()
+        if not tp.slot_acquire(state, kind, key, pid, pid, "/l", "/w", "t", "b"):
             return None
         dispatched.append(entry.issue_number)
-        entry.status = "DISPATCHED"; entry.agent_pid = os.getpid()
-        return os.getpid()
+        entry.status = "DISPATCHED"; entry.agent_pid = pid
+        return pid
     monkeypatch.setattr(tl, "dispatch_agent", fake_dispatch)
     monkeypatch.setattr(tl, "reconcile_issues", lambda s, dry_run: None)
     monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
     monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run: None)
     monkeypatch.setattr(tl, "lane_b_advance", lambda s, dry_run: None)
     rc = tl._run_scan_orchestration(dry_run=False)
-    assert rc == 0 and dispatched == [5]        # FIFO issue 号,单飞拦下第二个
+    assert rc == 0 and dispatched == [5, 7]     # FIFO issue 号,2 槽拦下第三个
+    saved = tl.StateStore(str(tmp_path)).load()
+    by_n = {e["issue_number"]: e["status"] for e in saved["entries"]}
+    assert by_n == {5: "DISPATCHED", 7: "DISPATCHED", 9: "QUEUED"}
 
 
 def test_cmd_status_prints_queue_and_entries(tmp_path, monkeypatch, capsys):
@@ -1456,6 +1552,11 @@ def test_dispatch_command_uses_setsid(tmp_path, monkeypatch):
     (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
     monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    # Task 4 引擎缝: 内存闸放行 + worktree 建桩(离线)
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
     captured = {}
     monkeypatch.setattr(tl, "run_background",
                         lambda cmd, cwd, log: captured.update(cmd=cmd) or 99)
@@ -1543,3 +1644,54 @@ def test_audit_non_dry_ensures_labels(monkeypatch, tmp_path):
     monkeypatch.setattr(tl, "_paused", lambda: True)   # PAUSED 早退前已确保
     assert tl.run_audit(dry_run=False) == 0
     assert called == ["m", 1]                # 迁移后、PAUSED 闸前已确保标签
+
+
+# ============ issue #811 worktree_cleanup 回归(检视#5/#6/#7/#8) ============
+
+def test_worktree_cleanup_no_dangling_registration(tmp_path):
+    """#811 检视#8 回归(真实 git): 清理后同 key 重加必须成功——unlock→
+    remove→prune→rmtree 顺序正确,否则残留 .git/worktrees/<key> 注册令
+    同 key 下次 `git worktree add` exit 128「丢失但已注册」炸派发。"""
+    import subprocess as sp
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    g = lambda *a: sp.run(["git", "-C", str(repo), *a],
+                          capture_output=True, text=True, check=True)
+    g("init", "-q")
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (repo / "f").write_text("x")
+    g("add", "f")
+    g("commit", "-q", "-m", "init")
+    # 生产布局恒是 <clone>/.worktrees/<key>: worktree_cleanup 以
+    # dirname(dirname(path)) 反推主仓,路径不对会打错仓库(测试自证)。
+    wt = str(repo / ".worktrees" / "k")
+    g("worktree", "add", "--detach", wt, "HEAD")
+    assert os.path.exists(os.path.join(wt, "f"))
+    tl.worktree_cleanup(wt)                       # 不得抛异常
+    assert not os.path.exists(wt)                 # 目录已删
+    r = sp.run(["git", "-C", str(repo), "worktree", "add",
+                "--detach", wt, "HEAD"],
+               capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr            # 同 key 重加成功,不 exit 128
+
+
+def test_worktree_cleanup_remove_timeout_swallowed_and_prunes(
+        tmp_path, monkeypatch):
+    """#811 检视#5/#6/#7 回归: remove 挂死/超时不外抛,prune/rmtree 保底仍
+    执行——软停/派发路径不能被 cleanup 一次失败掀翻(否则夜报丢失复现)。"""
+    wt = tmp_path / "k"
+    wt.mkdir()
+    calls = []
+    def fake_run(args, **kw):
+        calls.append(tuple(args))
+        if "remove" in args:
+            raise tl.subprocess.TimeoutExpired(args, kw.get("timeout", 0))
+        return None
+    monkeypatch.setattr(tl.subprocess, "run", fake_run)
+    tl.worktree_cleanup(str(wt))                  # 不得抛异常
+    flat = [a for call in calls for a in call]
+    assert "unlock" in flat                       # unlock 前置仍在
+    assert "remove" in flat                       # remove 确实被调(且抛超时)
+    assert "prune" in flat                        # remove 抛超时后 prune 仍执行
+    assert not wt.exists()                        # rmtree 兜底仍删目录

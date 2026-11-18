@@ -689,12 +689,36 @@ instead of assuming one tier:
   `scripts/check-scalar-golden.sh <binary> <init-symbol>...` (resolves the
   C++-mangled name itself; an unresolvable symbol or empty disassembly is a
   FAIL, not a pass — a plain `objdump --disassemble=<plain name>` silently
-  returns nothing and greps to a hollow PASS). Precedents:
+  returns nothing and greps to a hollow PASS; matches both NEON `vN.` and
+  SVE `zN.`/`pN.` instruction forms — the SVE half verified against real
+  disassembly of the pre-conversion golden symbols, e.g. `fmad z1.s, p0/m,
+  z3.s, z0.s` and `cmpeq p1.s, p0/z, z0.s, z1.s`). Precedents:
   `tests/cpu/sve/case/neon_rot_2src_sve.cpp`,
   `neon_rot_store_only_sve.cpp`, `neon_rot_u8x16_sve.cpp`; migrated family:
   `tests/cpu/misc/neon_rot_*.cpp` (except `rowmajor_scalar64` — already
-  fully scalar, a separate scalar-vs-scalar same-code gap) +
-  `tests/cpu/arm64/neon_rot_2src.cpp`.
+  fully scalar, a separate scalar-vs-scalar same-code gap, see below) +
+  `tests/cpu/arm64/neon_rot_2src.cpp` + the issue #373 second baton:
+  `tests/cpu/sve/sve_rot_*.cpp` (5 files / 8 tests), the 15
+  `tests/cpu/sve/case/neon_rot_*_sve.cpp` VLA variants,
+  `tests/cpu/sve/kreg/arm0102_*_sve.cpp` (5 files; the fma_f32 member uses
+  a bit-exact `fmaf` scalar replica on the scalar FP pipe — the independent
+  path for an FMA-vector test. Probe-measure the actual SVE semantics
+  first: `svmsb_f32_x(pg, c, a, b)` computes `b - c*a` (FMSB writes the
+  subtractor), NOT the NEON `vfmsq` shape `c - a*b` the old docblocks
+  claimed — replicate the measured per-case compositions with exact
+  negations, never an algebraically-simplified form; the divergences
+  include the sign of zero when a product is ±0), `core179_kernel_sdc_repro.cpp`,
+  `arm64/neon_test.cpp`, `sve/fma2/neon_add_sve.cpp`,
+  `misc/neon_rot_ldr_rand{,_thread}.cpp` (a PR #412 leftover found by the
+  second baton's marker sweep). The scalar64 gap ruling (2026-11-08, second
+  baton): left as-is by design — its tested datapath IS the scalar ALU, the
+  paradigm's fix direction inverts (a NEON-computed golden), which needs
+  phase-strided pairing with no tree precedent, opts out of the mechanical
+  gate (which asserts zero vector ALU in the golden), and would make a
+  persistent NEON fault FAIL a test whose name declares the scalar chassis
+  (cross-attribution noise in the core-179 campaign); a persistent scalar
+  ALU fault therefore remains undetectable by that one test — recorded, and
+  deferred to an explicit owner decision.
 - **A self-inverse transform's intermediate must be verified against an
   independent golden** (issue #374 paradigm, template:
   `docs/superpowers/plans/2026-11-01-issue374-movbe-roundtrip-golden.md`):
@@ -751,6 +775,59 @@ instead of assuming one tier:
   propagate to the end). gem5-fi CHAOS acceptance pattern (single-bit
   injection, final-only vs segmented A/B): see
   `docs/superpowers/inventory/issue376-chain-checkpoints/verdicts.md`.)
+- **Fixed-width SVE packet backends (Eigen): compile per tier, dispatch at
+  run time** (2026-11-03 pattern, template:
+  `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h`): Eigen's SVE
+  packet backend is compile-time fixed-width
+  (`arm_sve_vector_bits(EIGEN_ARM64_SVE_VL)`), and sizeless VLA packets
+  cannot be struct members at the C++ language level (twice-confirmed
+  spike) — a single VLA payload TU is impossible. Split the case into a
+  BODY TU compiled once per tier (`-DEIGEN_ARM64_SVE_VL=<t>
+  -msve-vector-bits=<t>`, namespace per tier via
+  `-DEIGEN_SVE_BODY_NS=<pfx>_vl<t>`, exporting four functions:
+  `make_data(int)` / `solve_once(int)` / `run_body(test, cpu)` /
+  `cleanup(test)`; library `tests_eigen_<pfx>_vl<t>`) and a VL-agnostic
+  DISPATCHER TU in `tests_sve` (no `-msve-vector-bits`) that declares the
+  four namespaces (`EIGEN_SVE_DECLARE_BODY_NS(pfx)`), defines the
+  dispatchers (`EIGEN_SVE_DEFINE_DISPATCHERS(pfx)`), gates with
+  `arm64_require_sve_vl`, solves the dim (knob/env > joint sizing), and
+  forwards `run`/`cleanup` to the tier the framework pinned — the
+  dispatcher re-pins and verifies the readback at run time (refused pin =
+  SKIP, mismatched readback = FAIL, worker tier ≠ init-recorded tier =
+  FAIL). Precedents: the 14 Eigen SVE cases (`eigen_svd*_sve`,
+  `eigen_gemm_*_sve`, `eigen_gemm_double_max_arm`).
+- **`_sve2` companion of an Eigen SVE case: dual-target the body, mirror
+  the dispatcher** (2026-11-13 pattern, design:
+  `docs/superpowers/specs/2026-11-12-eigen-sve2-companion-design.md`):
+  the same body TU is compiled per tier for BOTH targets —
+  `armv8.2-a+sve` (Eigen ns `EigenSVE<t>`, lib `tests_eigen_<pfx>_vl<t>`)
+  and `armv8.2-a+sve2` (Eigen ns `EigenSVE2<t>`, lib
+  `tests_eigen_<pfx>_sve2_vl<t>`; NOT `armv9-a+sve2` — the armv9-a base
+  name needs GCC 11+ and broke the GCC-10 Multi-OS Verify images
+  2026-11-17, while `+sve2` on the armv8.x-a base is accepted since
+  GCC 10) — and the `<pfx>_sve2` dispatcher TU is
+  the `_sve` template copied verbatim plus exactly SIX differences:
+  ① test id/env names `_sve2`; ② `<pfx>_sve2` at every call site;
+  ③ an `arm64_cpu_has_sve2()` honest-SKIP gate in init BEFORE
+  `arm64_require_sve_vl`; ④ `.arm64_requires = ARM64_REQUIRES_SVE2`;
+  ⑤ the description string gains "body compiled for the armv8.2-a+sve2
+  target; counterpart of <the `_sve` case>"; ⑥ the header counterpart
+  reference + the honest-scope note. (Exception to "verbatim",
+  disclosed in the commit: where the `_sve` template's header carried
+  stale build-mechanics claims that would contradict the `_sve2` build,
+  the header is factually corrected — the two known cases:
+  `eigen_svd_cdouble_sve2` ×3, `eigen_gemm_double_max_arm_sve2` ×1.)
+  Honesty boundary (corrected 2026-11-17): the SVE2 target
+  recompiles the same SVE1-subset stress bodies — but GCC idiom-recognizes
+  the Eigen copy plumbing (call_assignment/gemm_pack_rhs aliasing-checked
+  copy loops) into WHILEWR, an SVE2-only address-overlap instruction
+  (1549 instances in 35/40 libraries; the earlier "zero SVE2-only,
+  objdump-audited" claim missed this class, caught by the binutils
+  SVE1-only assembler gate; counts are per-library identical between
+  armv9-a+sve2 and armv8.2-a+sve2) — the companion is an SVE2-gated
+  entry point and a compile-target declaration, NOT SVE2-only datapath
+  coverage; without SVE2 hardware it registers only via explicit `-e`
+  and skips honestly.
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 

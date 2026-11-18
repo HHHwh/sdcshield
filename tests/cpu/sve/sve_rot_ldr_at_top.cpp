@@ -33,8 +33,9 @@
  *     (predicated with svptrue_b64()), which compiles to a single
  *     add/eor/and/orr z-register instruction — the direct SVE
  *     analogue of vaddq/veorq/vandq/vorrq_u64;
- *   - golden is computed in init with the SAME intrinsics on the same
- *     SVE units, so a healthy core reproduces it bit-exactly.
+ *   - golden is recomputed in init with scalar C integer ops on the
+ *     scalar pipeline (issue #373 paradigm), independent of the SVE
+ *     units under test.
  *
  * Runs only on SVE hardware; the framework skips it elsewhere with
  * "test compiled with sve" (compiler_minimum_device gating).
@@ -129,12 +130,30 @@ static int sve_rot_ldr_at_top_init(struct test *test) {
     memset_random(data->srcB, buf);
     memset_random(data->scratch, buf);
 
-    /* golden: same rotating composition, computed on the same SVE units */
-    for (int i = 0; i < data->vl_slots; i++) {
-        const size_t off = (size_t)i * data->vl_bytes;
-        const svuint64_t a = load_vec(data->srcA + off);
-        const svuint64_t b = load_vec(data->srcB + off);
-        store_vec(data->expected + off, rot_alu(i, a, b));
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test, so a persistent SVE datapath fault (stuck lane / unit
+     * computing deterministic wrong bits) can no longer corrupt golden
+     * and actual identically; it surfaces as a byte difference at the
+     * run-side memcmp. Phase = slot index % 4 — all lanes of a slot
+     * share the phase, matching rot_alu(i, ...) in the run loop. */
+    {
+        const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
+        const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB);
+        uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expected);
+        const size_t lanes_per_slot = data->vl_bytes / sizeof(uint64_t);
+        for (int i = 0; i < data->vl_slots; i++) {
+            const size_t base = (size_t)i * lanes_per_slot;
+            for (size_t l = 0; l < lanes_per_slot; l++) {
+                const size_t e = base + l;
+                switch (i % 4) {
+                    case 0: ex[e] = sa[e] + sb[e]; break;
+                    case 1: ex[e] = sa[e] ^ sb[e]; break;
+                    case 2: ex[e] = sa[e] & sb[e]; break;
+                    case 3: ex[e] = sa[e] | sb[e]; break;
+                }
+            }
+        }
     }
 
     test->data = data;

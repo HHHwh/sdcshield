@@ -116,8 +116,6 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
     const int count = (int)arm0102_kreg_mask_sve_count(test);
     data->count = count;
 
-    /* golden: 同一旋转组合, 在相同 SVE 单元上预计算 */
-    [[maybe_unused]] svbool_t pg = svptrue_b32();
     const int lanes = (int)(svl / 4);   /* f32 lanes = SVL bytes / 4 */
     /* arm64_vl.h unit convention: release-effective range check catches
      * a wrong-divisor drift (e.g. svl/8 here would compile silently). */
@@ -140,28 +138,21 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
     memset_random(data->srcA, total);
     memset_random(data->srcB, total);
 
-    for (int base = 0; base < count; base += lanes) {
-        int n = (count - base < lanes) ? (count - base) : lanes;
-        [[maybe_unused]] svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
-        /* 与 run 完全相同的 4 元素子块结构 + 相位按子块旋转 */
-        for (int sub = 0; sub < n; sub += 4) {
-            /* 相位 = 子块序号 (base+sub)/KREG_SVE_SUBLANES, 按子块旋转;
-             * 原式 (base+sub)%4 恒为 0 (base 是 svcntw() 倍数、sub 是 4
-             * 的倍数) —— 4 谓词路径只覆盖 eq, gt/eq-u/tst 全部死代码
-             * (426dc5c6 家族同款修法, kreg_logic/not/select/fma 均已改)。 */
-            const int phase = (base + sub) / KREG_SVE_SUBLANES;
-            /* 单 lane 组: 用标量嵌入向量 */
-            uint32_t av[8], bv[8], ov[8];
-            for (int k = 0; k < 4 && sub + k < n; ++k) {
-                av[k] = data->srcA[base + sub + k];
-                bv[k] = data->srcB[base + sub + k];
-            }
-            svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)4);
-            svuint32_t va = svld1_u32(pg4, av), vb = svld1_u32(pg4, bv);
-            svuint32_t res = kreg_expand_rotating(pg4, va, vb, phase);
-            svst1_u32(pg4, ov, res);
-            for (int k = 0; k < 4 && sub + k < n; ++k)
-                data->expected[base + sub + k] = ov[k];
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer/compare ops on the scalar pipeline, never the SVE units
+     * under test, so a persistent SVE datapath fault cannot corrupt
+     * golden and actual identically. Phase = 4-element sub-block index
+     * (i/4)%4 — identical to the run loop's (base+sub)/SUBLANES group
+     * rotation (base is a multiple of lanes, lanes a multiple of 4).
+     * eq (signed reinterpret) and eq-u reduce to the same bit equality;
+     * gt is signed; tst is (a & b) != 0 — all-ones/all-zeros expand. */
+    for (int i = 0; i < count; i++) {
+        const uint32_t a = data->srcA[i], b = data->srcB[i];
+        switch ((i / KREG_SVE_SUBLANES) % 4) {
+            case 0: data->expected[i] = (a == b) ? 0xFFFFFFFFu : 0u; break;
+            case 1: data->expected[i] = ((int32_t)a > (int32_t)b) ? 0xFFFFFFFFu : 0u; break;
+            case 2: data->expected[i] = (a == b) ? 0xFFFFFFFFu : 0u; break;
+            case 3: data->expected[i] = ((a & b) != 0u) ? 0xFFFFFFFFu : 0u; break;
         }
     }
 

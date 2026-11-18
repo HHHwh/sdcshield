@@ -38,6 +38,32 @@ if cpp.get_linker_id() != 'ld.bfd' or cc.get_linker_id() != 'ld.bfd'
     )
 endif
 
+# Host-native builds on an older libstdc++ (openEuler 22.03/20.03, GCC 10)
+# lack <barrier> and a few C++23 symbols. The container build injects
+# $CXXFLAGS for this (scripts/offline-build/container-build.sh); detect the
+# same condition here so the documented `meson setup` path works on a
+# host-native old-toolchain machine too. Probe-based: on libstdc++ >= 11
+# (24.03 reference) and any toolchain that provides <barrier>, no argument
+# is added, so those builds are byte-identical to before. The compat header
+# itself is feature-macro guarded (__cpp_lib_barrier etc.), so even a false
+# positive cannot redefine symbols a newer library already provides.
+if not cpp.has_header('barrier', args: ['-std=gnu++20'])
+    host_compat_dir = meson.current_source_dir() / 'framework' / 'compat'
+    host_compat_polyfill = host_compat_dir / 'cpp23_polyfill.h'
+    if run_command('test', '-f', host_compat_polyfill, check: false).returncode() == 0
+        add_project_arguments(
+            '-DSDCSHIELD_COMPAT_LIBSTDCXX',
+            '-include', host_compat_polyfill,
+            '-include', 'unistd.h',
+            '-isystem', host_compat_dir,
+            language: 'cpp',
+        )
+        message('libstdc++ has no <barrier>: injecting framework/compat C++23 polyfill (host-native old-toolchain build)')
+    else
+        warning('libstdc++ has no <barrier> and framework/compat/cpp23_polyfill.h is missing')
+    endif
+endif
+
 generated_short_ids = configure_file(
     input: 'scripts/generate-short-ids.pl',
     output: 'sandstone_short_ids.h',

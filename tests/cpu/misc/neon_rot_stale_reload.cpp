@@ -53,10 +53,25 @@ static inline uint64x2_t load_vec(const void *addr) {
 
 static int neon_rot_stale_reload_init(struct test *test) {
     auto *data = static_cast<NeonRotStaleReloadData *>(malloc(sizeof(NeonRotStaleReloadData)));
-    data->srcA = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
-    data->srcB = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
-    data->srcref = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
-    data->expected = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
+    if (!data) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_stale_reload: data alloc failed");
+        return EXIT_SKIP;
+    }
+    data->srcA = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
+    data->srcB = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
+    data->srcref = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
+    data->expected = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
+    if (!data->srcA || !data->srcB || !data->srcref || !data->expected) {
+        free(data->srcA);
+        free(data->srcB);
+        free(data->srcref);
+        free(data->expected);
+        free(data);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_stale_reload: buffer alloc failed");
+        return EXIT_SKIP;
+    }
 
     memset_random(data->srcA, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t));
     memset_random(data->srcB, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t));
@@ -101,10 +116,20 @@ static int neon_rot_stale_reload_init(struct test *test) {
 static int neon_rot_stale_reload_run(struct test *test, int cpu) {
     auto *data = static_cast<NeonRotStaleReloadData *>(test->data);
 
-    /* one leading element so &temp[-1] is valid for i=0 */
-    uint64x2_t *temp_buf = static_cast<uint64x2_t *>(aligned_alloc(64, (NEON_ROT_STALE_RELOAD_COUNT + 1) * sizeof(uint64x2_t)));
+    /* one leading element so &temp[-1] is valid for i=0; aligned_alloc_safe
+     * rounds the (COUNT+1)*16 = 16400-byte request up to a 64-byte multiple —
+     * C11 requires size to be a multiple of alignment (glibc tolerates a
+     * violation, ASan aborts on it) */
+    uint64x2_t *temp_buf = static_cast<uint64x2_t *>(aligned_alloc_safe(64, (NEON_ROT_STALE_RELOAD_COUNT + 1) * sizeof(uint64x2_t)));
+    uint64x2_t *dst = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
+    if (!temp_buf || !dst) {
+        free(temp_buf);
+        free(dst);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_stale_reload: run buffer alloc failed");
+        return EXIT_SKIP;
+    }
     uint64x2_t *temp = temp_buf + 1;
-    uint64x2_t *dst = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
 
     /* prefill: first-pass loads read valid data; res always rewrites the
      * same values, so every pass is self-consistent */

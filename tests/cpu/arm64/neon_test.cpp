@@ -25,6 +25,21 @@ static void prv_do_add(const uint32_t *a, const uint32_t *b, uint32_t *res)
                 vst1q_u32(&res[i*4], r3);
         }
 }
+
+/* golden (issue #373): scalar independent recomputation — pure C on the
+ * scalar pipeline, never the NEON units under test (prv_do_add stays the
+ * run-side payload; a persistent NEON add fault used to corrupt golden
+ * and actual identically). The plain elementwise add is the canonical
+ * auto-vectorization idiom, so the helper carries no-tree-vectorize —
+ * pinned mechanically by scripts/check-scalar-golden.sh. */
+#pragma GCC push_options
+#pragma GCC optimize("no-tree-vectorize")
+static void prv_scalar_golden_add(const uint32_t *a, const uint32_t *b, uint32_t *res)
+{
+        for (size_t i = 0; i < NEON_ADD_ELEMENTS; i++)
+                res[i] = a[i] + b[i];
+}
+#pragma GCC pop_options
 #endif
 
 static int neon_add_init(struct test *test)
@@ -38,7 +53,7 @@ static int neon_add_init(struct test *test)
 
         memset_random(na->a, NEON_ADD_BUF_SIZE);
         memset_random(na->b, NEON_ADD_BUF_SIZE);
-        prv_do_add(na->a, na->b, na->golden);
+        prv_scalar_golden_add(na->a, na->b, na->golden);
 
         test->data = na;
 

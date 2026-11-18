@@ -1,9 +1,11 @@
 # gem5 SE-mode validation for the SVE double/complex Eigen packets
 
-The host (cortex x3b) has a 256-bit SVE vector length, so binaries compiled
-with `-msve-vector-bits=512` cannot run natively (size-specific SVE code
-requires the runtime VL to equal the compile-time VL). Those binaries are
-validated functionally in gem5 syscall-emulation mode instead.
+The host (HiSilicon part 0xd02; the `--dump-cpu-info` label "cortex x3b" is
+a feature-signature match from `simd-arm.conf`, not the MIDR identity) has a
+256-bit SVE vector length, so binaries compiled with `-msve-vector-bits=512`
+cannot run natively (size-specific SVE code requires the runtime VL to equal
+the compile-time VL). Those binaries are validated functionally in gem5
+syscall-emulation mode instead.
 
 ## One-time setup (this host, no-root environment)
 

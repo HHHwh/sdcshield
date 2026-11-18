@@ -1,0 +1,109 @@
+/**
+ * @file
+ *
+ * @copyright
+ * Copyright 2026.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * @test @b eigen_svd_jacobi_fvectors_sve
+ * @parblock
+ * ARM64 SVE-backed counterpart of @ref eigen_svd_jacobi_fvectors。
+ *
+ * 同一 Eigen JacobiSVD(float)负载,payload 以 SVE packet 后端按档编译
+ * (128/256/512/1024),dispatcher 按框架 pin 的 VL 分派(模式同
+ * @ref eigen_svd_cdouble_sve;样板收敛于
+ * eigen_svd/sandstone_eigen_sve_dispatch.h;body 与 @ref eigen_svd_jacobi_sve
+ * 共享 svd_j_f32 per-tier 套件)。Jacobi SVD 经 QR 预条件
+ * + 双侧平面旋转迭代对角化——区别于 BDCSVD 的 Householder 双对角化
+ * + 分治路径的另一 dense SVE FMA 场景。历史注:fvectors 与 float 版自
+ * 随机化改造后已是同一计算(H11' 删 init-time interesting-vector),SVE 版
+ * 维持镜像对称——本 dispatcher 与 eigen_svd_jacobi_sve 仅 test id/env 名/
+ * 描述串/文件头注差异。
+ *
+ * 级别:TEST_QUALITY_SKIP,镜像原用例 eigen_svd_jacobi_fvectors(级别继承
+ * 上游,issue #322;晋升另案)——默认集不含本用例,显式运行:
+ * --quality=-1 -e eigen_svd_jacobi_fvectors_sve。
+ *
+ * 维度:knob/env > 联合求解,镜像 eigen_svd_jacobi_fvectors 的
+ * calibrated_auto_dim(test, 4, 6, 8.0, 650, 64, 2048) 参数口径
+ * (Jacobi 族 rss_ratio 原值 8,低于 BDCSVD 的 12);
+ * override: -O eigen_svd_jacobi_fvectors_sve.mdim=N (64..2048)。
+ * @endparblock
+ */
+
+#include "eigen_svd/sandstone_eigen_common.h"
+#include "eigen_svd/sandstone_eigen_sve_dispatch.h"
+#include "sdc_stress_config.h"
+
+/* 既有先例 svd_cdouble_sve.cpp:全 TU 在 aarch64 guard 内,无 #else——
+ * dispatcher TU 只在 aarch64 编进 tests_sve,x86-64 零注册(rule 5)。 */
+#if defined(__aarch64__)
+
+#include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
+
+EIGEN_SVE_DECLARE_BODY_NS(svd_j_f32)
+EIGEN_SVE_DEFINE_DISPATCHERS(svd_j_f32)
+
+#define MDIM_MIN 64
+#define MDIM_MAX 2048
+
+static int eigen_svd_jacobi_fvectors_sve_init(struct test *test)
+{
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
+        return EXIT_SKIP;
+    if (!svd_j_f32_tier_select(test, svl))
+        return EXIT_SKIP;
+
+    int dim;
+    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
+    if (knob == 0)
+        sdc_env_knob_int_clamped("eigen_svd_jacobi_fvectors_sve", "mdim", &knob,
+                                 MDIM_MIN, MDIM_MAX);
+    if (knob > 0) {
+        dim = (int)knob;
+    } else {
+        struct sdc_joint_args ja = {
+            .lo = MDIM_MIN, .hi = MDIM_MAX,
+            .fam = SDC_RSS_JACOBI_F32,  /* RSS 表项与 NEON 版共用(同算法同矩阵数) */
+            .bytes_per_elem = 4, .matrices_per_thread = 6, .rss_ratio = 8.0,
+            .shared_bytes_per_slice = 0,   /* make_data holds no matrices */
+            .mem_fraction_permille = 650,
+            .ar_fam = SDC_FAM_MEM_BOUND,
+            .run_budget_ms = 200000,   /* 镜像 eigen_svd/sandstone_eigen_common.h 联合层值 */
+        };
+        try {
+            dim = sdc_joint_dim_slice(test, "mdim", &ja, svd_j_f32_solve_once);
+        } catch (...) {
+            log_warning("[联合求解] %s: mdim 探针异常 → 退守下限 %d",
+                        test->id, MDIM_MIN);
+            dim = MDIM_MIN;
+        }
+    }
+    test->data = svd_j_f32_make_data(dim);
+    return EXIT_SUCCESS;
+}
+
+/* DECLARE_TEST 需要普通函数符号——一行 wrapper(DECLARE_TEST 之前定义)。 */
+static int eigen_svd_jacobi_fvectors_sve_run(struct test *test, int cpu)
+{
+    return svd_j_f32_run(test, cpu);
+}
+
+static int eigen_svd_jacobi_fvectors_sve_cleanup(struct test *test)
+{
+    svd_j_f32_cleanup(test);
+    return EXIT_SUCCESS;
+}
+
+DECLARE_TEST(eigen_svd_jacobi_fvectors_sve, "Eigen SVD (Singular Value Decomposition, Jacobi algorithm) solving payload on the ARM64 SVE packet backend (per-tier 128/256/512/1024-bit variants selected at the framework-pinned VL); SKIP-level following the NEON counterpart (issue #322), run explicitly with --quality=-1; counterpart of eigen_svd_jacobi_fvectors")
+  .groups = DECLARE_TEST_GROUPS(&group_math),
+  .test_init = eigen_svd_jacobi_fvectors_sve_init,
+  .test_run = eigen_svd_jacobi_fvectors_sve_run,
+  .test_cleanup = eigen_svd_jacobi_fvectors_sve_cleanup,
+  .quality_level = TEST_QUALITY_SKIP,   /* 镜像原用例 eigen_svd_jacobi_fvectors(issue #322):显式运行 --quality=-1 */
+  .arm64_requires = ARM64_REQUIRES_SVE,
+END_DECLARE_TEST
+
+#endif // __aarch64__

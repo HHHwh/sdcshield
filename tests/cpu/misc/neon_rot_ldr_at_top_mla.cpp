@@ -12,14 +12,20 @@
  * eor-as-control) to test whether the SDC trigger tolerates the different
  * ALU latency/throughput structure of the Kunpeng 920 SIMD MAC pipe, and
  * whether corruption signatures change under accumulation chains:
- *   case 0: mulq_s32 then reinterpret   (pure multiply, long latency)
- *   case 1: mla-style: acc = add(mul)   (accumulate via explicit add)
+ *   case 0: mulq then reinterpret         (pure multiply, long latency)
+ *   case 1: mla: acc = vmlaq(a, a, b)   (single mla v.4s — accumulate
+ *                                      chain pinned against refolding)
  *   case 2: mls-style: acc = sub(mul)
  *   case 3: veor (parent control op, unchanged semantics)
- * 32-bit lanes chosen because mla/mls are s32-only on this ISA; sources
- * are masked to 16-bit magnitudes (products can still reach the s32 sign
+ * 32-bit lanes (the mul/mla/mls family is 32-bit-lane-only on this ISA;
+ * historically spelled s32, now u32 — see below); sources
+ * are masked to 16-bit magnitudes (products can still reach the sign
  * bit — bit-exactness comes from uint32_t mod-2^32 arithmetic), golden
  * precomputed in init via scalar independent recomputation (issue #373).
+ * Run-side builtins are u32-typed (bit-identical mul/add/sub v.4s
+ * instructions, well-defined wrapping) so the deliberate sign-bit-setting
+ * products stay UBSan-clean — the s32-typed spelling is signed-overflow
+ * UB under GCC's elementwise builtin lowering (issue #390).
  * Same skeleton otherwise: 3rd ldr at top + 2-src loads + rotating ALU +
  * back-to-back str/str; memcmp in cold path.
  * @endparblock
@@ -55,7 +61,7 @@ static inline uint32x4_t load_vec(const void *addr) {
 }
 
 /* keep every lane a 16-bit magnitude (0x0000ffff mask) so products stay
- * small — note they CAN still set the s32 sign bit (0xffff*0xffff =
+ * small — note they CAN still set the sign bit (0xffff*0xffff =
  * 0xFFFE0001); the golden below is bit-exact via uint32_t mod-2^32
  * arithmetic, not via no-overflow. Narrowing lives in the scalar golden
  * loop (issue #373) — masked values are bit-identical either way. */
@@ -63,10 +69,25 @@ static inline uint32x4_t load_vec(const void *addr) {
 
 static int neon_rot_ldr_at_top_mla_init(struct test *test) {
     auto *data = static_cast<NeonRotLdrAtTopMlaData *>(malloc(sizeof(NeonRotLdrAtTopMlaData)));
-    data->srcA = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
-    data->srcB = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
-    data->scratch = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
-    data->expected = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    if (!data) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_mla: data alloc failed");
+        return EXIT_SKIP;
+    }
+    data->srcA = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    data->srcB = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    data->scratch = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    data->expected = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    if (!data->srcA || !data->srcB || !data->scratch || !data->expected) {
+        free(data->srcA);
+        free(data->srcB);
+        free(data->scratch);
+        free(data->expected);
+        free(data);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_mla: buffer alloc failed");
+        return EXIT_SKIP;
+    }
 
     memset_random(data->srcA, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t));
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t));
@@ -74,8 +95,8 @@ static int neon_rot_ldr_at_top_mla_init(struct test *test) {
 
     /* golden (issue #373): scalar independent recomputation — narrowing +
      * mul/add/sub/eor in pure C integer ops on the scalar pipeline, never the
-     * NEON units under test. uint32_t arithmetic is bit-exact with the s32
-     * vector ops because both reduce mod 2^32 — NOT because products stay in
+     * NEON units under test. uint32_t arithmetic is bit-exact with the
+     * u32 vector ops because both reduce mod 2^32 — NOT because products stay in
      * s32 range (0xffff*0xffff = 0xFFFE0001 does set the sign bit; ~600
      * lanes per run overflow). Keep uint32_t here: an int32_t rewrite of
      * a*b+a would be signed-overflow UB.
@@ -107,8 +128,15 @@ static int neon_rot_ldr_at_top_mla_init(struct test *test) {
 static int neon_rot_ldr_at_top_mla_run(struct test *test, int cpu) {
     auto *data = static_cast<NeonRotLdrAtTopMlaData *>(test->data);
 
-    uint32x4_t *temp = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
-    uint32x4_t *dst  = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    uint32x4_t *temp = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    uint32x4_t *dst  = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    if (!temp || !dst) {
+        free(temp);
+        free(dst);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_mla: run buffer alloc failed");
+        return EXIT_SKIP;
+    }
 
     TEST_LOOP(test, 1 << 13) {
         for (int i = 0; i < NEON_ROT_LDR_AT_TOP_MLA_COUNT; i++) {
@@ -119,12 +147,42 @@ static int neon_rot_ldr_at_top_mla_run(struct test *test, int cpu) {
             uint32x4_t b = load_vec(&data->srcB[i]);
             uint32x4_t res;
 
-            int32x4_t sa = vreinterpretq_s32_u32(a);
-            int32x4_t sb = vreinterpretq_s32_u32(b);
+            /* u32-typed builtins: bit-identical to the s32 spelling (two's
+             * complement mul/add/sub — same mul/mla/sub v.4s instructions),
+             * but wrapping is well-defined. GCC lowers these vector
+             * builtins elementwise, so under -fsanitize=undefined the s32
+             * spelling turns every sign-bit-setting product (~600
+             * lanes/run, the deliberate 16-bit operand domain of issue
+             * #373) into scalar signed-overflow UB that halts the nightly
+             * sanitizer CI (issue #390: '60669 * 52334 cannot be
+             * represented in type int'). The uint32_t scalar golden
+             * (issue #373) matches the u32 vector ops mod 2^32 exactly.
+             * case 2's empty asm forces the product to materialize so GCC
+             * cannot refold a*b-b into (a-1)*b — a rewrite GCC 12 applies
+             * only to the u32 spelling: without the barrier the sub, this
+             * case's whole "mls-style" identity, vanishes from the -O2/-O3
+             * binary (verified: with it, the per-case mul/mla/mul+sub/eor
+             * sequence matches the s32 original).
+             * case 1 spells vmlaq_u32 directly instead of
+             * vaddq_u32(vmulq_u32(a,b),a). The bare chain's mla is a
+             * compiler fusion choice, not a guarantee: GCC 12.3 fuses
+             * it to the same single mla at -O2/-O3 and under UBSan
+             * (verified — the u32 chain carries no overflow checks to
+             * inhibit fusion), but nothing pins that, and the refold
+             * class is real on this compiler — it rewrites unbarriered
+             * case 2's a*b-b into (a-1)*b, sub gone. a*b+a -> a*(b+1)
+             * would likewise be bit-identical mod 2^32 (golden green,
+             * chain gone), though not observed for the add form. vmlaq
+             * is one intrinsic with no expression surface to refold: a
+             * single mla v.4s in every build config (PR #393 r2/r4). */
             switch (i % 4) {
-                case 0: res = vreinterpretq_u32_s32(vmulq_s32(sa, sb)); break;
-                case 1: res = vreinterpretq_u32_s32(vaddq_s32(vmulq_s32(sa, sb), sa)); break;
-                case 2: res = vreinterpretq_u32_s32(vsubq_s32(vmulq_s32(sa, sb), sb)); break;
+                case 0: res = vmulq_u32(a, b); break;
+                case 1: res = vmlaq_u32(a, a, b); break;
+                case 2: {
+                    uint32x4_t p = vmulq_u32(a, b);
+                    __asm__ volatile ("" : "+w" (p));
+                    res = vsubq_u32(p, b);
+                } break;
                 case 3: res = veorq_u32(a, b); break;
             }
 
@@ -154,7 +212,7 @@ static int neon_rot_ldr_at_top_mla_cleanup(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(neon_rot_ldr_at_top_mla, "Algebraic variant of ldr_at_top: rotation mul/mla-style/mls-style/eor in s32 lanes (MAC pipe + accumulate chain signature test)")
+DECLARE_TEST(neon_rot_ldr_at_top_mla, "Algebraic variant of ldr_at_top: rotation mul/mla-style/mls-style/eor in 32-bit lanes, u32-typed (MAC pipe + accumulate chain signature test)")
     .test_init    = neon_rot_ldr_at_top_mla_init,
     .test_run     = neon_rot_ldr_at_top_mla_run,
     .test_cleanup = neon_rot_ldr_at_top_mla_cleanup,

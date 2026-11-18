@@ -1,0 +1,73 @@
+================================================================
+ fp64 row-major ldp/stp 内核模块 — 完整验证流程
+ kernel=6.6.0-145.3.23.154.oe2403sp3.aarch64  arch=aarch64  gcc=12
+ seed=0x12345678DEADBEEF  time=2026-11-10 20:26:02  user=root
+================================================================
+
+---- [1/5] 用户态参考实现 (原始 ldr q / str q 路径) ----
+[PASS] userspace_ref 编译 (gcc -O2 -Wall -Wextra, 无告警无报错)
+[PASS] userspace_ref 运行 (exit 0 = 256 sweep 自检通过)
+用户态参考输出:
+    HASH srcA=4c76f205a5bdb413 srcB=3f4cc72924c30848 scratch=8c9cd1011309703f expected=d400ff32f227d179 temp=d400ff32f227d179 dst=d400ff32f227d179
+    PASS cpu=181 sweeps=256 seed=0x12345678deadbeef
+[PASS] 获取用户态 HASH 行 (六个缓冲)
+
+---- [2/5] 内核模块编译 (kbuild 外部模块) ----
+make: Entering directory '/home/sdc/test/fp64_rowmajor_ko'
+make -C /lib/modules/6.6.0-145.3.23.154.oe2403sp3.aarch64/build M=/home/sdc/test/fp64_rowmajor_ko ARCH=arm64 clean
+make[1]: Entering directory '/usr/src/kernels/6.6.0-145.3.23.154.oe2403sp3.aarch64'
+  CLEAN   /home/sdc/test/fp64_rowmajor_ko/Module.symvers
+make[1]: Leaving directory '/usr/src/kernels/6.6.0-145.3.23.154.oe2403sp3.aarch64'
+rm -f userspace_ref ref.out ref.err
+make: Leaving directory '/home/sdc/test/fp64_rowmajor_ko'
+make: Entering directory '/home/sdc/test/fp64_rowmajor_ko'
+make -C /lib/modules/6.6.0-145.3.23.154.oe2403sp3.aarch64/build M=/home/sdc/test/fp64_rowmajor_ko ARCH=arm64 modules
+make[1]: Entering directory '/usr/src/kernels/6.6.0-145.3.23.154.oe2403sp3.aarch64'
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: gcc_old (GCC) 12.3.1 (openEuler 12.3.1-110.oe2403sp3)
+  You are using:           gcc (GCC) 12.3.1 (openEuler 12.3.1-105.oe2403sp3)
+  CC [M]  /home/sdc/test/fp64_rowmajor_ko/fp64_rowmajor_ldp_stp.o
+  MODPOST /home/sdc/test/fp64_rowmajor_ko/Module.symvers
+  CC [M]  /home/sdc/test/fp64_rowmajor_ko/fp64_rowmajor_ldp_stp.mod.o
+  LD [M]  /home/sdc/test/fp64_rowmajor_ko/fp64_rowmajor_ldp_stp.ko
+make[1]: Leaving directory '/usr/src/kernels/6.6.0-145.3.23.154.oe2403sp3.aarch64'
+make: Leaving directory '/home/sdc/test/fp64_rowmajor_ko'
+[PASS] 内核模块编译 (make, 无报错)
+[PASS] 生成 fp64_rowmajor_ldp_stp.ko
+模块元数据 (modinfo):
+    filename:       /home/sdc/test/fp64_rowmajor_ko/fp64_rowmajor_ldp_stp.ko
+    version:        1.0
+    description:    ldp/stp variant of neon_rot_ldr_at_top_rowmajor_fp64 (fp64 row-major rotating add/sub/mul/max), kernel-module form with dmesg miscompare reporting
+    author:         sdc
+    license:        GPL
+    srcversion:     7270B1C76A5D2B06B387876
+    depends:        
+    name:           fp64_rowmajor_ldp_stp
+    vermagic:       6.6.0-145.3.23.154.oe2403sp3.aarch64 SMP mod_unload modversions aarch64
+    parm:           seed:xorshift64* seed for srcA/srcB/scratch (same value as userspace_ref argv[1]) (ullong)
+反汇编统计: ldr q=0  str q=0  ldp x=21  stp x=23
+[PASS] 指令替换完整 (数据通路无 ldr q/str q, 已用 ldp/stp)
+
+---- [3/5] insmod 加载 ----
+[PASS] insmod 加载成功 (无报错)
+[PASS] lsmod 确认模块在内核中
+模块 dmesg 输出:
+    [315499.917843] fp64_rowmajor_ldp_stp: init: kernel=6.6.0-145.3.23.154.oe2403sp3.aarch64 cpu=52 count=1024 sweeps=256 seed=0x12345678deadbeef
+    [315499.919435] fp64_rowmajor_ldp_stp: HASH srcA=4c76f205a5bdb413 srcB=3f4cc72924c30848 scratch=8c9cd1011309703f expected=d400ff32f227d179 temp=d400ff32f227d179 dst=d400ff32f227d179
+    [315499.919439] fp64_rowmajor_ldp_stp: PASS cpu=52 sweeps=256 seed=0x12345678deadbeef
+[PASS] 无内核 Oops/BUG/Call trace
+
+---- [4/5] 计算结果一致性 (内核 ldp/stp vs 用户态 ldr/str) ----
+[PASS] 获取内核 HASH 行 (六个缓冲)
+[PASS] 六缓冲 FNV-1a 哈希完全一致 (srcA/srcB/scratch/expected/temp/dst)
+[PASS] 模块内自检: 256 sweep dst==expected (PASS)
+
+---- [5/5] rmmod 卸载 ----
+[PASS] rmmod 卸载成功 (无报错)
+[PASS] 模块已从内核移除
+[PASS] 全程 (加载-运行-卸载) 无内核异常
+[PASS] 卸载日志确认 (fp64_rowmajor_ldp_stp: unloaded)
+
+================================================================
+ 验证汇总: PASS=16  FAIL=0   (详细日志: /home/sdc/test/fp64_rowmajor_ko/verify.log)
+================================================================

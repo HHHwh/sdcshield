@@ -141,7 +141,7 @@ tap_negative_check() {
     fi
 
     # not all tests
-    local -a crashtests=(selftest_abortinit selftest_abort selftest_sigsegv)
+    local -a crashtests=(selftest_abortinit selftest_abort selftest_knob_from_run selftest_sigsegv)
     if $is_windows; then
         crashtests+=(selftest_fastfail)
     fi
@@ -1862,6 +1862,13 @@ selftest_crash_common() {
 
 @test "selftest_abort" {
     selftest_crash_common selftest_abort SIGABRT '0xC0000602 || value == 0xC0000409' \
+                          "Aborted|Program self-triggered abnormal termination"
+}
+
+@test "selftest_knob_from_run" {
+    # knob getters are init-only; a worker-thread query must abort in every
+    # build type (the fail-loud check is not NDEBUG-gated — issue #417)
+    selftest_crash_common selftest_knob_from_run SIGABRT '0xC0000602 || value == 0xC0000409' \
                           "Aborted|Program self-triggered abnormal termination"
 }
 

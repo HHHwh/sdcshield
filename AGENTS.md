@@ -92,6 +92,6 @@ SDC 检视的独特之处在于——不仅看代码「对不对」，更看它*
 - [`docs/coding/writing_tests.md`](docs/coding/writing_tests.md) — 测试编写指南。
 - [`docs/coding/coding_style_guide.md`](docs/coding/coding_style_guide.md) — 代码风格（C++20/C17，无警告）。
 - [`README.md`](README.md) — 快速上手、构建与部署。
-- [`docs/build-deploy-pr-ci/pr-loop.md`](docs/build-deploy-pr-ci/pr-loop.md) — PR 检视-修复闭环手册（五 bot 检视——四外部 SaaS bot + 本地 claude 对抗检视 → subagent 批判性处置 → 修复 → 循环 → 人工 merge，绝不自动 merge）；引擎 [`scripts/pr_loop.py`](scripts/pr_loop.py)（第 5 bot 引擎 [`scripts/pr_local_review.py`](scripts/pr_local_review.py)），入口 Claude Code `/pr-loop` 命令（`.claude/commands/pr-loop.md`）与 Trae 规则（`.trae/rules/pr-loop.md`，双份同源）。
-- [`docs/build-deploy-pr-ci/task-loop.md`](docs/build-deploy-pr-ci/task-loop.md) — 无人值守任务闭环手册（CI 红 / main 审查 / 会话 / 手建 issue → agent-task 队列 → headless agent → PR → 同一检视闭环 → 人工 merge）。
-- [`docs/build-deploy-pr-ci/agent-full-automation.md`](docs/build-deploy-pr-ci/agent-full-automation.md) — Agent 全流程自动化总体架构（事件源 → 编排 → agent 执行面 → 验证门禁 → 人工 merge 终门；含 v3 架构图 `agent-full-automation.png`）。
+- [`docs/build-deploy-pr-ci/pr-loop.md`](docs/build-deploy-pr-ci/pr-loop.md) — PR 检视-修复闭环手册（五 bot 检视——四外部 SaaS bot + 本地 claude 对抗检视 → subagent 批判性处置 → 修复 → 循环 → merge 交接：引擎 PR 由夜间 pipeline merge 门自动 squash，用户非 docs PR 人工；自动 resolve review threads 仍禁止）；引擎 [`scripts/pr_loop.py`](scripts/pr_loop.py)（第 5 bot 引擎 [`scripts/pr_local_review.py`](scripts/pr_local_review.py)），入口 Claude Code `/pr-loop` 命令（`.claude/commands/pr-loop.md`）与 Trae 规则（`.trae/rules/pr-loop.md`，双份同源）。
+- [`docs/build-deploy-pr-ci/task-loop.md`](docs/build-deploy-pr-ci/task-loop.md) — 无人值守任务闭环手册（CI 红 / main 审查 / 会话 / 手建 issue → agent-task 队列 → headless agent → PR → 同一检视闭环 → merge 门：引擎 PR 六门槛自动 squash，用户非 docs PR 人工）。
+- [`docs/build-deploy-pr-ci/agent-full-automation.md`](docs/build-deploy-pr-ci/agent-full-automation.md) — Agent 全流程自动化总体架构（事件源 → 编排 → agent 执行面 → 验证门禁 → 确定性 merge 终门（引擎/docs PR 门槛化自动 squash；用户非 docs PR 人工）；含 v3 架构图 `agent-full-automation.png`）。

@@ -23,6 +23,8 @@
 
 #include <exception>
 #include <limits>
+#include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <typeinfo>
@@ -104,6 +106,26 @@ static int tty = -1;
 static int stderr_fd = -1;
 static bool delete_log_on_success;
 static uint8_t progress_bar_needs_flush = false;
+
+// Compact logging (default on; --full-log disables) overall run progress:
+// how many distinct tests the enabled
+// set contains (per pass), how many distinct ones have been started so far,
+// and which pass the run is on (set iterations loop the whole set). Updated
+// from sandstone.cpp where test_set / the iteration count are visible.
+static int compact_progress_total = 0;
+static int compact_progress_done = 0;
+static int compact_progress_iteration = 1;
+
+void compact_log_update_progress(int distinct_done, int iteration)
+{
+    compact_progress_done = distinct_done;
+    compact_progress_iteration = iteration;
+}
+
+void compact_log_set_progress_total(int total)
+{
+    compact_progress_total = total;
+}
 
 static constexpr auto UsedKnobValueLoggingLevel = LOG_LEVEL_VERBOSE(1);
 
@@ -583,6 +605,11 @@ int logging_close_global(int exitcode)
                 return "invalid";
             }
         }();
+        // Compact logging: write out any buffered pass run, then summarize the
+        // folded repeating failing entries before the final 'exit:' line, so
+        // the counts are not lost
+        YamlLogger::flush_compact_pass_run();
+        YamlLogger::emit_compact_failure_summary();
         if (exitline)
             logging_printf(LOG_LEVEL_QUIET, "exit: %s\n", exitline);
     }
@@ -1056,6 +1083,38 @@ void logging_init(const struct test *test)
         break;
     case SandstoneApplication::OutputFormat::yaml:
         YamlLogger::print_tests_header(YamlLogger::AtStart);
+        if (YamlLogger::compact_log_enabled()) {
+            // Compact mode: show progress on stdout only; the log file
+            // entry is emitted in one shot from print() once the outcome
+            // is known (pass/skip collapse to a single line). Only announce
+            // each distinct test once so fracturing short tests does not
+            // reflood the terminal, and prefix an overall [done/total]
+            // counter so the user sees run progress instead of a bare name.
+            static std::string_view last_announced;
+            static int last_announced_iteration = 0;
+            bool new_iteration = compact_progress_iteration != last_announced_iteration;
+            if (sApp->shmem->cfg.verbosity >= 1
+                    && AbstractLogger::file_log_fd != AbstractLogger::real_stdout_fd
+                    && (new_iteration || last_announced != test->id)) {
+                last_announced = test->id;
+                last_announced_iteration = compact_progress_iteration;
+                progress_bar_flush();
+                if (compact_progress_iteration > 1 && new_iteration)
+                    dprintf(AbstractLogger::real_stdout_fd,
+                            "%s# -- test set iteration %d --\n",
+                            AbstractLogger::indent_spaces().data(), compact_progress_iteration);
+                if (compact_progress_total > 0)
+                    dprintf(AbstractLogger::real_stdout_fd,
+                            "%s- test: %s [%d/%d %d%%]\n",
+                            AbstractLogger::indent_spaces().data(), test->id,
+                            compact_progress_done, compact_progress_total,
+                            compact_progress_done * 100 / compact_progress_total);
+                else
+                    dprintf(AbstractLogger::real_stdout_fd, "%s- test: %s\n",
+                            AbstractLogger::indent_spaces().data(), test->id);
+            }
+            break;
+        }
         logging_printf(LOG_LEVEL_VERBOSE(1), "- test: %s\n", test->id);
         logging_printf(LOG_LEVEL_VERBOSE(3), "  details: { quality: %s, description: \"%s\" }\n",
                        YamlLogger::quality_string(test), test->description);
@@ -1473,16 +1532,24 @@ void log_yaml(char levelchar, std::string_view description,
 
 void logging_mark_knob_used(std::string_view key, YamlFormatter::SimpleValue value, KnobOrigin origin)
 {
-    if (current_output_format() == SandstoneApplication::OutputFormat::no_output)
-        return;             // short-circuit
-
-#ifndef NDEBUG
+    // Test options may only be queried from test_init() (thread_num == -1).
+    // A worker-thread query is a test bug, not a logging condition, so the
+    // check must hold in every build type: it used to sit inside #ifndef
+    // NDEBUG, which b_ndebug=if-release compiled away for release builds —
+    // the structural reason #183 was green on release/nightly and aborted
+    // only on debugoptimized CI. Cost on the normal path is one TLS compare;
+    // abort() runs only on misuse. Keep it ahead of the no_output
+    // short-circuit so a quiet output format cannot mask the bug.
     if (thread_num != -1) {
         fprintf(stderr, "### Internal error: get_test_knob_value_xxx() called from outside the main thread!\n"
                         "### Fix this test! Test option values are only allowed in the init() function.\n");
         abort();
     }
 
+    if (current_output_format() == SandstoneApplication::OutputFormat::no_output)
+        return;             // short-circuit
+
+#ifndef NDEBUG
     // ensure the key requires no escaping
     if (key.find_first_not_of(".-_0123456789"
                               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -2202,6 +2269,234 @@ void YamlLogger::print_result_line(int &init_skip_message_bytes)
                    booleanstr(crashed), booleanstr(coredumped), code, reason.c_str());
 }
 
+// =========================================================================
+// YAML log compaction: lossless, on by default (--full-log disables it;
+// YAML format only)
+//
+// Five mechanisms, none of which drops diagnostic evidence:
+//  1. pass/skip entries collapse to a minimal entry (skip keeps its
+//     category and reason);
+//  2. consecutive pass entries of the same test (a short test fracturing
+//     into many back-to-back iterations) are buffered and emitted as a
+//     single line with an "iterations" count;
+//  3. failing entries are keyed by a failure signature -- (test, result,
+//     cpu-mask, aggregated message set). Seeds and timings are excluded
+//     on purpose: jittered retries of the same incident fold together,
+//     while genuinely distinct incidents (e.g. a rotating failing CPU)
+//     keep full entries;
+//  4. repeated failing entries become a one-line marker and the repeat
+//     counts are summarized before the final 'exit:' line;
+//  5. inside a kept failing entry, consecutive worker threads whose
+//     message payload is byte-identical are folded into a thread-range
+//     line rendered once. This is the systemic-failure valve: an all-core
+//     timeout would otherwise repeat the same 'thread is stuck' message
+//     once per CPU. No evidence is lost -- the cpu-mask on the result
+//     line keeps the failing-CPU set and the topology of every logical
+//     processor is in the cpu-info header. Failed threads and main
+//     threads are never folded (per-thread failing-CPU, time-to-fail and
+//     resource-usage fields are preserved verbatim).
+// Compact output goes to the log file only; stdout progress behavior is
+// unchanged.
+// =========================================================================
+
+namespace {
+
+struct CompactFailureEntry {
+    size_t occurrences = 1;
+};
+
+std::map<std::string, CompactFailureEntry> &compact_failures()
+{
+    static std::map<std::string, CompactFailureEntry> map;
+    return map;
+}
+
+// Run-length state for consecutive same-test pass entries: short tests
+// fracture into many back-to-back iterations, each of which would
+// otherwise emit a byte-identical one-line entry. The run is buffered
+// here and written out as a single line (with an iterations count) when
+// a different entry or the end of the log arrives.
+struct CompactPassRun {
+    std::string testname;
+    size_t count = 0;
+};
+
+CompactPassRun &compact_pass_run()
+{
+    static CompactPassRun run;
+    return run;
+}
+
+const char *compact_result_string(TestResult result)
+{
+    switch (result) {
+    case TestResult::Skipped:               return "skip";
+    case TestResult::Passed:                return "pass";
+    case TestResult::Failed:                return "fail";
+    case TestResult::TimedOut:              return "timed out";
+    case TestResult::Interrupted:           return "interrupted";
+    case TestResult::OperatingSystemError:  return "operating system error";
+    case TestResult::CoreDumped:
+    case TestResult::Killed:
+    case TestResult::OutOfMemory:           return "crash";
+    }
+    return "unknown";
+}
+
+/// formats a sorted list of thread ids as compressed ranges: "0-3,7,9-11"
+std::string format_thread_ranges(const std::vector<int> &threads)
+{
+    std::string out;
+    auto emit = [&out](int a, int b) {
+        if (!out.empty())
+            out += ',';
+        out += std::to_string(a);
+        if (b != a) {
+            out += '-';
+            out += std::to_string(b);
+        }
+    };
+    int start = threads[0], prev = start;
+    for (size_t i = 1; i < threads.size(); ++i) {
+        if (threads[i] == prev + 1) {
+            prev = threads[i];
+            continue;
+        }
+        emit(start, prev);
+        start = prev = threads[i];
+    }
+    emit(start, prev);
+    return out;
+}
+
+} // anonymous namespace
+
+bool YamlLogger::compact_log_enabled()
+{
+    return sApp->shmem->cfg.compact_log
+        && current_output_format() == SandstoneApplication::OutputFormat::yaml;
+}
+
+std::string YamlLogger::failure_signature(const struct test *test, TestResult result)
+{
+    std::string sig;
+    sig += test->id;
+    sig += '|';
+    sig += compact_result_string(result);
+    sig += '|';
+    sig += build_failure_mask_for_topology(test);
+
+    // aggregate the message payload of every thread that recorded any; a
+    // set makes the signature independent of thread enumeration order and
+    // of duplicated messages
+    std::set<std::string> msgset;
+    auto collect = [&msgset](PerThreadData::Common *data, int) {
+        LogMessagesFile msgs = maybe_mmap_log(data);
+        if (msgs.empty())
+            return;
+        for (const LogMessage &msg : msgs) {
+            if (msg.type != LogTypes::UserMessages)
+                continue;
+            msgset.emplace(std::string(static_cast<std::string_view>(msg)));
+        }
+        msgs.unmap();
+    };
+    for_each_main_thread(collect);
+    for_each_test_thread(collect);
+    for (const std::string &m : msgset) {
+        sig += '|';
+        sig += m;
+    }
+    return sig;
+}
+
+bool YamlLogger::register_and_check_repeated_failure(const std::string &signature)
+{
+    auto [it, inserted] = compact_failures().try_emplace(signature);
+    if (!inserted)
+        ++it->second.occurrences;
+    return !inserted;
+}
+
+void YamlLogger::print_compact_failure_repeat(const struct test *test, TestResult result)
+{
+    print_tests_header(OnFirstFail);
+    writeln(file_log_fd, indent_spaces(), "- { test: ", std::string_view(test->id),
+            ", result: ", compact_result_string(result), ", repeats-of: earlier entry }");
+}
+
+void YamlLogger::flush_compact_pass_run()
+{
+    if (!compact_log_enabled())
+        return;
+
+    CompactPassRun &run = compact_pass_run();
+    if (run.count == 0)
+        return;
+
+    print_tests_header(OnFirstFail);
+    if (run.count == 1) {
+        writeln(file_log_fd, indent_spaces(), "- { test: ",
+                std::string_view(run.testname), ", result: pass }");
+    } else {
+        // fracturing short test: N back-to-back iterations collapsed to one
+        writeln(file_log_fd, indent_spaces(), "- { test: ",
+                std::string_view(run.testname), ", result: pass, iterations: ",
+                std::to_string(run.count), " }");
+    }
+    run.testname.clear();
+    run.count = 0;
+    logging_flush();
+}
+
+void YamlLogger::print_compact_pass_summary(const struct test *test)
+{
+    CompactPassRun &run = compact_pass_run();
+    if (run.count > 0 && run.testname == test->id) {
+        ++run.count;
+        return;
+    }
+    flush_compact_pass_run();
+    run.testname = test->id;
+    run.count = 1;
+}
+
+void YamlLogger::emit_compact_failure_summary()
+{
+    if (!compact_log_enabled())
+        return;
+
+    size_t collapsed = 0;
+    for (const auto &[sig, entry] : compact_failures()) {
+        if (entry.occurrences > 1)
+            collapsed += entry.occurrences - 1;
+    }
+    if (collapsed == 0)
+        return;
+
+    logging_printf(LOG_LEVEL_QUIET,
+                   "# log compaction: %zu repeated failing entries collapsed to one-line markers:\n",
+                   collapsed);
+    for (const auto &[sig, entry] : compact_failures()) {
+        if (entry.occurrences <= 1)
+            continue;
+        // signature layout: "test|result|mask|msg..." -- the first two
+        // fields are enough for the summary
+        std::string_view s(sig);
+        size_t p1 = s.find('|');
+        size_t p2 = (p1 == std::string_view::npos) ? std::string_view::npos
+                                                   : s.find('|', p1 + 1);
+        std::string testname(s.substr(0, p1));
+        std::string result;
+        if (p1 != std::string_view::npos) {
+            size_t end = (p2 == std::string_view::npos) ? s.size() : p2;
+            result = std::string(s.substr(p1 + 1, end - p1 - 1));
+        }
+        logging_printf(LOG_LEVEL_QUIET, "# - { test: %s, result: %s, repeats: %zu }\n",
+                       testname.c_str(), result.c_str(), entry.occurrences - 1);
+    }
+}
+
 std::string YamlLogger::get_current_time()
 {
     // write only to the log file
@@ -2293,10 +2588,263 @@ void YamlLogger::print_thread_messages()
     for_each_test_thread(doprint, slices.size());
 }
 
+/// Compact logging safety valve 2: inside a kept failing entry, fold
+/// consecutive worker threads whose message payload is byte-identical into
+/// one "threads: <ranges>" block whose body is rendered a single time.
+///
+/// Only threads that did not report their own failure are foldable
+/// (thread_state != thread_failed). Self-reported failures keep their
+/// per-thread failing-CPU, time-to-fail, loop-count and frequency fields
+/// verbatim: that is first-class SDC evidence. Stuck threads (the
+/// systemic-timeout shape) are still in thread_running state at this point
+/// -- they are marked failed only post-mortem by the parent's "Thread is
+/// stuck" message, so their fail_time is a print-time stamp, not evidence.
+/// Folding them loses nothing: the cpu-mask on the result line keeps the
+/// failing-CPU set and the cpu-info header keeps every logical processor's
+/// topology, so the thread-to-CPU mapping remains resolvable.
+void YamlLogger::print_thread_messages_compact()
+{
+    // default device value lets this lambda serve for_each_main_thread()
+    // (2-arg call) as well as for_each_test_thread() (3-arg call)
+    auto print_verbatim = [this](PerThreadData::Common *data, int s_tid, int device = -1) {
+        LogMessagesFile r = maybe_mmap_log(data);
+        bool want_print = data->has_failed() || sApp->shmem->cfg.verbosity >= 3;
+        ssize_t min_size = 0;
+
+        /* for main threads (negative ids) adjust the message size to
+         * account for skip message and slice resource usage, mirroring the
+         * non-compact path */
+        if (s_tid < 0 && !want_print) {
+            min_size = init_skip_message_bytes;
+            want_print = want_slice_resource_usage(~s_tid);
+        }
+        if (r.size_bytes() <= min_size && !want_print) {
+            munmap_and_truncate_log(data, r);
+            return;             /* nothing to be printed, on any level */
+        }
+
+        print_thread_header(file_log_fd, data, s_tid, device, LogLevelVerbosity::Max);
+        print_one_thread_messages(file_log_fd, r, LogLevelVerbosity::Max);
+        munmap_and_truncate_log(data, r);
+    };
+
+    // main threads carry slice resource usage and init/skip evidence and
+    // are few in number: always render them verbatim
+    for_each_main_thread(print_verbatim, slices.size());
+
+    std::string group_key;
+    std::vector<int> group_threads;
+    std::vector<PerThreadData::Common *> group_data;
+    int group_device = -1;
+
+    auto flush_group = [&]() {
+        if (group_threads.empty())
+            return;
+
+        // render the shared payload once, from the first group member
+        LogMessagesFile body = maybe_mmap_log(group_data[0]);
+        if (group_threads.size() == 1) {
+            // a singleton is not a fold: keep its full header
+            print_thread_header(file_log_fd, group_data[0], group_threads[0],
+                                group_device, LogLevelVerbosity::Max);
+        } else {
+            maybe_print_messages_header(file_log_fd);
+            writeln(file_log_fd, indent_spaces(), "  - threads: ",
+                    format_thread_ranges(group_threads));
+        }
+        print_one_thread_messages(file_log_fd, body, LogLevelVerbosity::Max);
+        body.unmap();
+
+        for (PerThreadData::Common *data : group_data)
+            truncate_log(data);
+        group_key.clear();
+        group_threads.clear();
+        group_data.clear();
+        group_device = -1;
+    };
+
+    auto process_worker = [&](PerThreadData::Common *data, int s_tid, int device) {
+        ThreadState state = data->thread_state.load(std::memory_order_relaxed);
+        if (state == thread_failed) {
+            // self-reported failure: per-thread fields are evidence
+            flush_group();
+            print_verbatim(data, s_tid, device);
+            return;
+        }
+
+        LogMessagesFile r = maybe_mmap_log(data);
+        bool want_print = data->has_failed() || sApp->shmem->cfg.verbosity >= 3;
+        if (r.size_bytes() == 0 && !want_print) {
+            munmap_and_truncate_log(data, r);
+            return;             // silent thread: hidden, like the non-compact path
+        }
+
+        // fold key: length-prefixed raw serialization of every message.
+        // Note: only unmap here; truncation is deferred to flush_group()
+        // because the shared body is re-read from the first group member.
+        std::string key;
+        key.reserve(r.size_bytes());
+        for (const LogMessage &msg : r) {
+            uint32_t len = msg.msglen;
+            key.append(reinterpret_cast<const char *>(&len), sizeof(len));
+            key += char(std::to_underlying(msg.type));
+            key += char(std::to_underlying(msg.verbosity));
+            key += std::string_view(msg);
+        }
+
+        if (key.empty()) {
+            // only a partial trailing message: nothing to fold on, render
+            // the (possibly empty) block verbatim from the live mapping
+            flush_group();
+            print_thread_header(file_log_fd, data, s_tid, device, LogLevelVerbosity::Max);
+            print_one_thread_messages(file_log_fd, r, LogLevelVerbosity::Max);
+            munmap_and_truncate_log(data, r);
+            return;
+        }
+
+        r.unmap();
+
+        if (!group_threads.empty() && key == group_key) {
+            group_threads.push_back(s_tid);
+            group_data.push_back(data);
+            return;
+        }
+
+        flush_group();
+        group_key = std::move(key);
+        group_threads.push_back(s_tid);
+        group_data.push_back(data);
+        group_device = device;
+    };
+
+    for_each_test_thread(process_worker, slices.size());
+    flush_group();
+}
+
 void YamlLogger::print()
 {
+    if (compact_log_enabled()) {
+        print_compact();
+        return;
+    }
+
     print_fixed();
     print_thread_messages();
+    print_child_stderr_common([](int fd) {
+        writeln(fd, indent_spaces(), "  stderr messages: |");
+    });
+    logging_flush();
+}
+
+/// Emits the header fields logging_init() deferred in compact mode, so the
+/// entry of a first failing test stays self-contained. The result line
+/// itself is emitted later by print_fixed(), mirroring the normal layout.
+void YamlLogger::emit_compact_entry_header()
+{
+    logging_printf(LOG_LEVEL_VERBOSE(1), "  time-at-start: %s\n", get_current_time().c_str());
+    logging_printf(LOG_LEVEL_VERBOSE(3), "  state: { seed: '%s', iteration: %d, retry: %s }\n",
+                   random_format_seed().c_str(), abs(sApp->current_iteration_count),
+                   sApp->current_iteration_count < 0 ? "true" : "false");
+}
+
+void YamlLogger::print_compact()
+{
+    // the one-line paths below bypass the full print path that normally
+    // consumes the thread logs, so they must truncate them themselves
+    auto cleanup_logs = [this]() {
+        auto cleanup = [](PerThreadData::Common *data, int) {
+            LogMessagesFile r = AbstractLogger::maybe_mmap_log(data);
+            AbstractLogger::munmap_and_truncate_log(data, r);
+        };
+        for_each_main_thread(cleanup, slices.size());
+        for_each_test_thread(cleanup, slices.size());
+        if (stderr_fd != -1)
+            truncate_log_internal(stderr_fd);
+    };
+
+    switch (testResult) {
+    case TestResult::Passed:
+        // collapses to a single line; nothing else is diagnostic
+        cleanup_logs();
+        print_compact_pass_summary(test);
+        logging_flush();
+        return;
+
+    case TestResult::Skipped: {
+        // collapses to a single line, but the skip category and reason are
+        // preserved: they are the only diagnostic a skip carries
+        flush_compact_pass_run();
+        print_tests_header(OnFirstFail);
+        std::string category = "Runtime";
+        std::string_view reason;
+        std::string init_skip_message;      // keep the storage alive
+        if (skipInMainThread) {
+            // FIXME: multiple main threads
+            init_skip_message = get_skip_message(-1);
+            if (init_skip_message.size() > 0) {
+                category = char_to_skip_category(init_skip_message[0]);
+                reason = std::string_view(&init_skip_message[1], init_skip_message.size() - 1);
+            } else {
+                category = "Unknown";
+                reason = "Unknown, check main thread message for details or use -vv "
+                         "for more information";
+            }
+        }
+        cleanup_logs();
+        if (reason.empty()) {
+            writeln(file_log_fd, indent_spaces(), "- { test: ", std::string_view(test->id),
+                    ", result: skip, skip-category: ", category, " }");
+        } else {
+            std::string storage;
+            std::string_view escaped = escape_for_single_line(reason, storage);
+            writeln(file_log_fd, indent_spaces(), "- { test: ", std::string_view(test->id),
+                    ", result: skip, skip-category: ", category,
+                    ", skip-reason: '", escaped, "' }");
+        }
+        logging_flush();
+        return;
+    }
+
+    default:
+        break;
+    }
+
+    // any failing outcome breaks a buffered consecutive pass run
+    flush_compact_pass_run();
+
+    // failing outcome: key the entry by its failure signature before any
+    // log content is consumed
+    std::string signature = failure_signature(test, testResult);
+    if (register_and_check_repeated_failure(signature)) {
+        // identical incident already logged in full: one-line marker only.
+        print_compact_failure_repeat(test, testResult);
+        cleanup_logs();
+        logging_flush();
+        return;
+    }
+
+    // first occurrence of this incident: emit the full entry. The
+    // "- test:" line was deferred by logging_init() in compact mode.
+    // Note: print_tests_header() is called exactly once, inside
+    // print_fixed() -> print_result_line(); calling it here too would
+    // repeat the "tests:" line on stdout once per first failing entry.
+    if (loglevel() == LOG_LEVEL_QUIET && file_log_fd != real_stdout_fd
+            && sApp->shmem->cfg.verbosity < 1) {
+        // logging_init won't have printed "- test:" to stdout, so do it now
+        progress_bar_flush();
+        writeln(real_stdout_fd, indent_spaces(), "- test: ", test->id);
+    }
+    writeln(file_log_fd, indent_spaces(), "- test: ", test->id);
+    emit_compact_entry_header();
+
+    // the full print path consumes the thread logs itself
+    print_fixed();
+
+    // render the thread section: self-reported failures stay verbatim,
+    // while consecutive workers with byte-identical message payloads fold
+    // into one "threads: <ranges>" block (safety valve 2). Cross-entry
+    // folding already happened at the signature level above.
+    print_thread_messages_compact();
     print_child_stderr_common([](int fd) {
         writeln(fd, indent_spaces(), "  stderr messages: |");
     });

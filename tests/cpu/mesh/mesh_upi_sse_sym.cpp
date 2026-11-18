@@ -40,17 +40,20 @@ struct TestData {
 // 本用例全线程并行认领填充(while(true),循环体无任何
 // test_time_condition)——整轮时长既不受 -t 约束也不受迭代预算约束;
 // 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。R6 勘误(意见25):R5 版
-// 「(block_ok/ok → FAIL)是唯一的真检出」与本文件代码不符——写侧立即
-// 回读算出 ok 后在空体 if 中被丢弃,不产生任何 FAIL(姊妹 PR #331 commit
-// f1c23a65 已在其分支把 avx_sym/sse_sym 的 !ok 接通为 report_fail,本分支
-// 未含该修复)。本用例 FAIL 能力的数据校验只在读阶段:聚合和
+// 「(block_ok/ok → FAIL)是唯一的真检出」与彼时本分支代码不符(写侧
+// 立即回读的 ok 曾在空体 if 中被丢弃)——该修复已随 PR #331(b8149b84)
+// 并入 main:写侧立即读回逐 lane 失配 → report_fail 硬 FAIL(同线程紧随
+// own store 的字节级内容校验)。#324 勘误:读阶段校验能力记账为「聚合和
 // read_sum == expected_sum(写侧累加 vs 读侧全量重读——非逐字节,补偿性
-// 双错等和保持型损坏不可见)+ store_buf 自一致性(读路径 store/reload
-// 自比较,不对照写入值);等待每自旋查预算(耐心 ~40 自旋)→ 预算耗尽
-// 即 break 跳过读阶段,该轮零校验。默认 ≈27.7 GB(61 GiB 主机)本机实测
-// 首轮 26.7 s(超 -t 3 s 预算 ~9 倍;R4 检视轮同配置 53.9 s、18 倍)后
-// 空转 pass;更慢负载下撞宽限悬崖 → timed out/exit: invalid——两态
-// 结局的该轮均零校验。
+// 双错等和保持型损坏不可见)+ store_ok 私有通路自检(读路径 store/reload
+// 自比较,不对照写入值,对共享缓冲内容零检出;旧名 consistent 恒真且
+// 误导为数据校验,本 issue 改名)」——族级 per-element golden 由 #332
+// 跟踪;等待每自旋查预算(耐心 ~40 自旋)→ 预算耗尽即 break 跳过读
+// 阶段,该轮零校验。默认 ≈27.7 GB(61 GiB 主机)本机实测首轮 26.7 s
+// (超 -t 3 s 预算 ~9 倍;R4 检视轮同配置 53.9 s、18 倍)后空转 pass
+// (修复前口径;#331 的 validated_any 并入后,未完成任何校验轮的结局
+// 已改为诚实 SKIP,不再空转 pass);更慢负载下撞宽限悬崖 → timed out/
+// exit: invalid——两态结局的该轮均零校验。
 // merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
 // 引入。
 static size_t mesh_target_bytes() {
@@ -199,8 +202,8 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
              * 二轮意见 #22）。avx512_sym 同款语义先例（其 135-148 行注释）。
              * 块为本线程独占认领，写后立即回读失配 = 真实 store/load 损坏。 */
             if (!ok) {
-                fprintf(stderr, "mesh_upi_sse_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
-                        id, block,
+                fprintf(stderr, "mesh_upi_sse_sym: Thread %d, block %llu immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, (unsigned long long)block,
                         vals[0], vals[1], vals[2], vals[3],
                         offset,
                         td->data[offset], td->data[offset + 1],
@@ -237,7 +240,15 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
         // overwritten by the next iteration's writes).
         double expected_sum = td->global_sum.load(std::memory_order_seq_cst);
         double read_sum = 0.0;
-        bool consistent = true;
+        /* store_ok 检私有 store/reload 通路自一致(store_buf 是本线程栈上
+         * 缓冲,store 后立即 reload 自比较)——两臂消费同一份刚载入的
+         * 数据,不对照写入值,对共享缓冲区内容损坏零检出(作为数据校验
+         * 恒真),不是数据校验(#324:旧名 consistent 的恒真记账正是本
+         * issue 立案项;#323 在 avx512_symm_f64 已把同款检查改名去误导)。
+         * 读阶段真正的数据校验只有聚合和 read_sum == expected_sum——族级
+         * per-element golden 由 #332 立案重构,勿以为本阶段有逐字节内容
+         * 校验(avx_sym/avx512_sym 读阶段头注同款声明)。 */
+        bool store_ok = true;
         alignas(16) float store_buf[VECTOR_SIZE];
 
         for (size_t i = 0; i < td->total_elements; i += VECTOR_SIZE) {
@@ -246,7 +257,7 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
             vst1q_f32(vals, v);
             for (int j = 0; j < VECTOR_SIZE; ++j) read_sum += (double)vals[j];
 
-            // 一致性测试：Store/Load 回读比较
+            // 私有通路自检：Store/Load 回读自比较（#324 改名，检出边界见声明处注释）
             vst1q_f32(store_buf, v);
             float32x4_t reload = vld1q_f32(store_buf);
             uint32x4_t cmp = vceqq_f32(v, reload);
@@ -255,24 +266,26 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
                   vgetq_lane_u32(cmp, 1) == 0xFFFFFFFF &&
                   vgetq_lane_u32(cmp, 2) == 0xFFFFFFFF &&
                   vgetq_lane_u32(cmp, 3) == 0xFFFFFFFF)) {
-                consistent = false;
+                store_ok = false;
             }
         }
 
-        bool passed = (read_sum == expected_sum) && consistent;
-
-        // 输出结果（每个线程输出一次）
-        fprintf(stderr, "mesh_upi_sse_sym: Thread %d, data[0..3]=(%.4f,%.4f,%.4f,%.4f), read_sum=%f, expected_sum=%f, consistent=%d, result=%s%s%s\n",
-                id,
-                td->data[0], td->data[1], td->data[2], td->data[3],
-                read_sum, expected_sum, consistent,
-                passed ? GREEN : RED,
-                passed ? "PASS" : "FAIL",
-                RESET);
-        fflush(stderr);
+        bool passed = (read_sum == expected_sum) && store_ok;
 
         if (!passed) {
-            report_fail_msg("mesh_upi_sse_sym: Sum mismatch or consistency failure");
+            /* 失败证据(原先每轮每线程都打印 PASS 行——子进程 stderr 被框架
+             * 重定向进 memfd(logging.cpp open_memfd),轮次 × 全线程的输出
+             * 全程驻留内存,额外增加 memfd 压力;#324 立案项,收口为仅
+             * 失败时输出——avx_sym/avx512_sym 先例(PR #414,#325)。 */
+            fprintf(stderr, "mesh_upi_sse_sym: Thread %d, data[0..3]=(%.4f,%.4f,%.4f,%.4f), read_sum=%f, expected_sum=%f, store_ok=%d, result=%s%s%s\n",
+                    id,
+                    td->data[0], td->data[1], td->data[2], td->data[3],
+                    read_sum, expected_sum, store_ok,
+                    passed ? GREEN : RED,
+                    passed ? "PASS" : "FAIL",
+                    RESET);
+            fflush(stderr);
+            report_fail_msg("mesh_upi_sse_sym: Sum mismatch or private store/reload self-consistency failure");
             return EXIT_FAILURE;
         }
         validated_any = true;   // 本轮全量读取校验已通过

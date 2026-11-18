@@ -139,26 +139,22 @@ static int arm0102_kreg_select_sve_init(struct test *test) {
     memset_random(data->srcA, total);
     memset_random(data->srcB, total);
 
-    /* golden: 与 run 完全相同的 4 元素子块结构 + 相位 = 子块序号
-     * (base+sub)/KSEL_SVE_SUBLANES, 按子块旋转 op; 原式 (base+sub)%4
-     * 恒为 0 (base 是 svcntw() 倍数、sub 是 4 的倍数), 旋转失效 */
-    /* lanes 已由上方门控 svl 换算 (f32 lanes = SVL bytes / 4) */
-    svbool_t pg4 = svwhilelt_b32((uint64_t)0, (uint64_t)KSEL_SVE_SUBLANES);
-    for (int base = 0; base < count; base += lanes) {
-        const int n = (count - base < lanes)
-                          ? count - base : lanes;
-        for (int sub = 0; sub < n; sub += KSEL_SVE_SUBLANES) {
-            const int phase = (base + sub) / KSEL_SVE_SUBLANES;
-            uint32_t av[8], bv[8], ov[8];
-            for (int k = 0; k < KSEL_SVE_SUBLANES && sub + k < n; ++k) {
-                av[k] = data->srcA[base + sub + k];
-                bv[k] = data->srcB[base + sub + k];
-            }
-            svuint32_t va = svld1_u32(pg4, av), vb = svld1_u32(pg4, bv);
-            svuint32_t res = select_rotating_sve(pg4, va, vb, phase);
-            svst1_u32(pg4, ov, res);
-            for (int k = 0; k < KSEL_SVE_SUBLANES && sub + k < n; ++k)
-                data->expected[base + sub + k] = ov[k];
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test, so a persistent SVE datapath fault cannot corrupt golden
+     * and actual identically. Phase = 4-element sub-block index
+     * (i/4)%4 — identical to the run loop's (base+sub)/SUBLANES group
+     * rotation (base is a multiple of lanes, lanes a multiple of 4).
+     * BSL(a, b, c) = (a & b) | (~a & c); the four cases replicate the
+     * run side's operand substitutions formula-verbatim (bit-exact by
+     * construction, incl. the degenerate ~a & a == 0 term in bif). */
+    for (int i = 0; i < count; i++) {
+        const uint32_t a = data->srcA[i], b = data->srcB[i];
+        switch ((i / KSEL_SVE_SUBLANES) % 4) {
+            case 0: data->expected[i] = (a & b) | (~a & (b ^ a)); break;   /* sel by A */
+            case 1: data->expected[i] = (a & a) | (~a & b);       break;   /* bit insert */
+            case 2: data->expected[i] = (a & b) | (~a & a);       break;   /* bif keep */
+            case 3: data->expected[i] = (a & (a & b)) | (~a & (a ^ b)); break; /* sel mixed */
         }
     }
 

@@ -1,3 +1,0 @@
-sys
-rd -64 ffff604003ed3540 4
-quit

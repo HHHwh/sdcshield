@@ -22,6 +22,8 @@
 
 #include <sandstone.h>
 #include "sdc_stress_config.h"
+#include "gemm_solve_probe.h"
+#include "sandstone_gemm_common.h"
 
 #include <Eigen/Core>
 #include <cstdint>
@@ -31,29 +33,14 @@ using namespace Eigen;
 typedef Matrix < double, Dynamic, Dynamic > Mat;
 
 #if defined(__aarch64__) && defined(__linux__)
-/* 联合求解 sizing 探针(T9): 填充与 run() 的 fill_rand 同谱系(均匀随机
- * [-1,1), 检视 #51)——splitmix 确定性哈希满足该契约, 且不依赖 init aux
- * 线程上未定义的 per-thread RNG 状态。GEMM 计时对数值不敏感(无 SVD 式
- * deflation 路径), 谱系由分布一致性满足; 填充 O(n²) 相对乘法 O(n³) 已
- * 计入探针计时(保守方向)。同 T6 gemm_double_max_arm_body 的 solve_once。 */
+/* 联合求解 sizing 探针(T9): 谱系契约(检视 #51: 填充与 run() 的
+ * fill_rand 同谱系, 均匀随机 [-1,1))已单点收口至 gemm_solve_probe.h
+ * (issue #389, 含 T6 gemm_double_max_arm_body 源头共 8→1)——填充唯一定义, 探针副本间
+ * 漂移在编译期不可能; probe↔run() 谱系契约仍需与 fill_rand 手工
+ * 同步演化(无编译期绑定, 检视 #392-R3)。 */
 static int gemm_solve_once(int n)
 {
-    Mat a(n, n), b(n, n), c;
-    for (int r = 0; r < n; ++r)
-        for (int col = 0; col < n; ++col) {
-            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
-            h ^= h >> 32;
-            h *= 0xD6E8FEB86659FD93ull;
-            h ^= h >> 32;
-            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h2 ^= h2 >> 32;
-            a(r, col) = (double)(h % 2000u) / 1000.0 - 1.0;
-            b(r, col) = (double)(h2 % 2000u) / 1000.0 - 1.0;
-        }
-    c = a * b;
-    return 0;
+    return gemm_probe::solve_once<Mat>(n);
 }
 #endif
 
@@ -68,8 +55,10 @@ static int gemm_solve_once(int n)
  * 尺寸只在 test_init 求解一次并缓存进 eigen_test_data.dim——worker
  * 读缓存, 不再重算(T9: 联合求解的探针与口径登记不能在 worker 上下文
  * 重入, 旧链的 run 期重跑自适应路径已删除)。
+ * is_explicit 出参(issue #488): 显式通道(knob/env)来源时置 true,
+ * 供 sdc_gemm_init_shared 的 bad_alloc 分流(显式值不可降档)。
  */
-static int gemm_mdim(struct test *test)
+static int gemm_mdim(struct test *test, bool *is_explicit)
 {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
     if (v == 0) {
@@ -77,8 +66,10 @@ static int gemm_mdim(struct test *test)
         if (sdc_env_knob_int("eigen_gemm_double_dynamic_square", "mdim", &envv))
             v = (envv < 16) ? 16 : (envv > 4096 ? 4096 : envv);
     }
-    if (v > 0)
+    if (v > 0) {
+        *is_explicit = true;    /* knob(-O/配置文件)/env 显式通道 */
         return (int)v;
+    }
 #if defined(__aarch64__) && defined(__linux__)
     /* 联合求解(T9, 同 T6 gemm_double_max_arm / T8 SVD 族模式): 一次
      * sdc_joint_dim_slice 同时约束内存(per-NUMA-node 四源预算 vs RSS
@@ -87,15 +78,23 @@ static int gemm_mdim(struct test *test)
      *     fam 命中 RSS 表后忽略;
      *   - shared_bytes_per_slice=0: init 持有 3 个共享矩阵 lhs/rhs/
      *     prod(3×8×n², n=4096 天花板时 403MB)——单 slice 相对节点预算 <1%
-     *     (聚合全节点约 3%, 在反馈收敛半径内), 一阶忽略(T4 同款近似);
+     *     (聚合全节点约 3%), n_mem 预算口径一阶忽略(T4 同款近似); 该项
+     *     不随 slice 线程数缩放, 在 VmHWM 反馈 eff 口径里曾被整摊进
+     *     per-thread 项(-n 1 部署 eff +74%), 现由 issue #766 框架侧统一
+     *     扣除(反馈分子基线推进到 init 后), 调用方无需登记;
      *   - run_budget_ms=200000 保持契约值(GEMM 族, T6 同款无补偿)。
-     *     已知边界(T6 审查实测): compute 族 AR 表值(单节点 5.0)低估
-     *     天花板足迹的 GEMM——N=3364 全核单乘实测 ~55-60s vs 静默模型
-     *     ~4.0s, 有效 AR≈15(3× 表值); 本宿主类内存侧先绑定
-     *     (n_mem < n_run)故该边界不暴露, 时间侧绑定的主机会把 200s
-     *     迭代实际跑成 ~600s——AR 表足迹感知重标定的已知输入。
-     * x86-64(rule 5): #else 保留旧链原样——joint 的 x86 分支按契约
-     * 忽略 solve_once/run_budget_ms(时间校准是调用方链的职责)。 */
+     *     旧已知边界(T6 审查实测)已由 #506 AR 表重标定收口(3c022449,
+     *     2026-11-08; issue #689 审计复核): 旧表 compute 族单节点 5.0
+     *     低估天花板足迹的 GEMM——N=3364 全核单乘实测 ~55-60s vs 静默
+     *     模型 ~4.0s, 有效 AR≈15(3× 旧表值), 时间侧绑定的主机会把 200s
+     *     迭代实际跑成 ~600s(超 300s 硬宽限 SIGQUIT); 表行1 comp 现为
+     *     该实测上界 15.0(sdc_numa.cpp 表注: 中足迹 4.4/256-bit 档
+     *     11.2/天花板 ~15, 取上界), 时侧 binding 主机单迭代回到
+     *     ~200s ≤ 300s 宽限。本宿主类内存侧先绑定(n_mem < n_run),
+     *     该路径本机不暴露。
+     * x86-64(rule 5): #else 保留旧链原样——joint 的 x86 分支已补齐
+     * 时间校准与四源预算(#482), 但迁移仍会把内存三元组换成 ARM 实测
+     * 的 RSS 表/四源全局预算, sizing 数值变化, rule 5 保持旧链。 */
     struct sdc_joint_args ja = {
         .lo = 16, .hi = 4096,
         .fam = SDC_RSS_GEMM_F64,    /* 0.0315 KB/n²/线程, T9 重标定后 */
@@ -134,39 +133,7 @@ struct eigen_test_data {
 
 static int eigen_gemm_double_dynamic_square_init(struct test *test) {
     test->data = new(eigen_test_data);
-    auto d = CAST(test->data);
-    int dim = 0;
-    try {
-        dim = gemm_mdim(test);   /* knob > env > 自适应, 只解一次 */
-        d->dim = dim;
-        d->lhs = Mat::Random(dim, dim);
-        d->rhs = Mat::Random(dim, dim);
-        d->prod = d->lhs * d->rhs;
-    } catch (const std::bad_alloc &) {
-        /* T10 init 降级(m2, 对齐 eigen_sparse 先例): init 期分配失败是
-         * 资源性而非 SDC——降 mdim 到 lo(=16, 与 gemm_mdim 的联合求解
-         * lo/clamp 下限同值)重分配一次, 仍失败才资源性 SKIP。原
-         * catch(...)->report_fail 对 bad_alloc 打红撤销(其余异常保留)。 */
-        constexpr int kInitRetryLo = 16;
-        log_warning("[init 降级] %s: 共享矩阵分配失败 mdim=%d → 降档 mdim=%d 重试一次",
-                    test->id, dim, kInitRetryLo);
-        try {
-            d->dim = kInitRetryLo;
-            d->lhs = Mat::Random(kInitRetryLo, kInitRetryLo);
-            d->rhs = Mat::Random(kInitRetryLo, kInitRetryLo);
-            d->prod = d->lhs * d->rhs;
-        } catch (const std::bad_alloc &) {
-            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
-                     test->id, kInitRetryLo);
-            return EXIT_SKIP;
-        }
-        /* 降档成功 → 同步反馈记账口径(PR#302 检视 #25): 否则 [反馈] 按
-         * 求解 n 折算 eff, c 被压向 0.7× 下限, 后续 n 向 OOM 膨胀。 */
-        sdc_joint_cache_note_dim(test, kInitRetryLo);
-    } catch (...) {
-        report_fail_msg("Exception on Eigen code, most probably OOM");
-    }
-    return EXIT_SUCCESS;
+    return sdc_gemm_init_shared(test, CAST(test->data), gemm_mdim);
 }
 
 static int eigen_gemm_double_dynamic_square_run(struct test *test, int cpu) {

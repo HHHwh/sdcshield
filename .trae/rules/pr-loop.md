@@ -3,9 +3,9 @@
 当用户提到「pr-loop / 走 pr 流程 / 检视修复循环」，或要求处理 PR 检视意见、推进 PR
 闭环时，按下述六阶段流程执行。
 
-目标：在会话内端到端完成「实现 push → 五 bot 检视 → 批判性处置修复 → 循环 → 人工
-merge」，全程不切换工具；所有依赖均在仓库内（自闭环）。**所有流程最大程度由 agent
-自动化完成，必要时才由人介入（最终 merge 除外）。**
+目标：在会话内端到端完成「实现 push → 五 bot 检视 → 批判性处置修复 → 循环 →
+merge 交接」，全程不切换工具；所有依赖均在仓库内（自闭环）。**所有流程最大程度由
+agent 自动化完成，必要时才由人介入（最终 merge 交接除外；merge 政策见阶段 6）。**
 
 本文件与 `.claude/commands/pr-loop.md` 内容同源，双份维护——修改任一处须同步另一处。
 
@@ -47,12 +47,12 @@ merge」，全程不切换工具；所有依赖均在仓库内（自闭环）。
 ### 阶段 5 — 循环
 
 - push 后新 head 自动触发新一轮五 bot 检视 → 回到阶段 2（wait）→ 阶段 3（collect）→ 阶段 4（处置），直到 `status` 报 **READY_TO_MERGE**（五 bot 完成 + 当前 head 零意见）。
-- **停止条件**：建议 4 轮上限；超过后仍有未闭环意见时停止并转人工，如实报告残留项与依据。
+- **停止条件**：动态 2–3 轮上限（docs-only 或简单 diff——总增删 ≤100 行 ∧ 变更文件 ≤5 → 2 轮，其余 → 3 轮；spec 2026-11-12-full-auto-pipeline 决策表 #10）；超过后仍有未闭环意见时停止并转人工，如实报告残留项与依据。
 
-### 阶段 6 — 人工 merge 提醒
+### 阶段 6 — merge 交接
 
-- 动作：向用户报告 READY_TO_MERGE——PR 链接、五 bot 完成时间线、各轮意见闭环情况，请用户人工 merge。
-- **红线：绝不自动 merge、绝不自动 resolve review threads——merge 权永远在人。**
+- 动作：向用户报告 READY_TO_MERGE——PR 链接、五 bot 完成时间线、各轮意见闭环情况，并交接 merge：引擎分支（`fix/issue-N|fix/ci-N|fix/revert-prN`）PR 由夜间 pipeline merge 门自动 squash merge（六门槛，无需本会话动作）；用户非 docs PR 请用户人工 merge。
+- **红线：merge 执行权在 pipeline 门槛代码（编排器）；本命令（会话内）绝不 merge、绝不自动 resolve review threads（该红线不变）。**
 
 ## CLI 参考（scripts/pr_loop.py）
 
@@ -68,7 +68,7 @@ python3 scripts/pr_loop.py [--repo owner/repo] collect <PR>           # 导出�
 - 瞬态容错：gh 调用对超时 / HTTP 5xx / 网络抖动短退避重试——总尝试 ≤ 3 次（含首次，即首次失败后最多再重试 2 次，退避 1s / 2s）；HTTP 4xx（权限 / 不存在 / 参数）与响应非 JSON 是确定性错误，首次即抛不重试；status 总览中单 PR 数据拉取失败仅标注「数据拉取失败，已跳过」并继续其余 PR（全部 PR 均失败才 exit 2；2026-10-14 PR#242 偶发 HTTP 500 实证）。
 - 状态机：DRAFT / FORK / CLOSED / WAITING_BOTS / QUIET_WINDOW / READY_TO_FIX / READY_TO_MERGE（annotations 拉取失败时数据不完整、或存在超容差疑似误杀的可行动意见 `pending_skew_opinions`，均不给 READY_TO_MERGE——无法确认「零意见」时不提示合并）。
 - 五 bot 判据：前四 bot 与 `.github/workflows/bot-coverage.yml` 一致（同步维护——codex = `chatgpt-codex-connector[bot]`；coderabbit = `coderabbitai[bot]` 作者或 `CodeRabbit` check；pr-agent = `pr-agent` check，或 `github-actions[bot]` 作者 + 正文 `<!-- pr-agent:review:full -->` 标记的检视评论；greptile = `greptile-apps[bot]` 作者或 check-run app slug `greptile-apps`）；local-claude = 作者 `wangxumarshall(claude and glm)`（GitHub 账号 `wangxumarshall`，claude+glm 双模型）且正文含 `<!-- local-claude-review -->` 标记（双条件，避免把用户本人普通评论误判为第 5 bot）；可见正文带 claude 标识（body 一行引语 `> 🤖 claude 检视…`、行级评论结论行 `[claude]` 前缀），机器判据仍是「作者 + HTML 注释 marker」双条件。
-- head 锚定：时间锚（≥ 当前 head 的 push 时间——events 的 PushEvent `created_at`，commit→push 窗口内旧 head 意见不计入；不可得时回退 head committer date）+ commit 锚（review `commit_id` / 行级评论 `original_commit_id` / pr-agent 评论 `last_run.head_sha` 须匹配当前 head）；issue 评论仅时间锚（无 commit 绑定字段；timeline committed 事件无 `created_at`，PushEvent 是唯一可得的普通 push 边界，实证）。时钟偏差容差（±300s）仅限回退锚：push 时间可得时锚定保持严格（与条目时间同属服务器钟，防同 SHA 强推回退）；仅回退 committer date（本机钟盖戳）时，commit 锚严格匹配（字段存在且 `== head`，缺失不算）的条目在锚前 300s 内计入。pr-agent issue 评论是唯一例外（`last_run.head_sha` 严格命中才放宽）；无绑定字段的 issue 评论不放宽。锚定推导由 `anchor_and_skew()` 单一真源提供，计入/超容差分类（counted, over）由 `classify_anchor()` 单一真源提供（kind→ts_key/sha_keys 映射集中一处）；严格锚命中却落在锚前 >容差 的条目记 `skew_suspects` 诊断告警（status 总览/详情/wait/collect 各出口），其中可行动意见（判据与计数同口径）计入 `pending_skew_opinions` 阻断 READY_TO_MERGE——collect 明细标「当前 head(超容差待处置)」并纳入 reply 完整性校验，处置/答复口径同常规意见（采纳修复 push 新 head 后 pending 自然清零；纯驳回轮次 head 不变则维持阻断，按阶段 5 四轮上限转人工）。
+- head 锚定：时间锚（≥ 当前 head 的 push 时间——events 的 PushEvent `created_at`，commit→push 窗口内旧 head 意见不计入；不可得时回退 head committer date）+ commit 锚（review `commit_id` / 行级评论 `original_commit_id` / pr-agent 评论 `last_run.head_sha` 须匹配当前 head）；issue 评论仅时间锚（无 commit 绑定字段；timeline committed 事件无 `created_at`，PushEvent 是唯一可得的普通 push 边界，实证）。时钟偏差容差（±300s）仅限回退锚：push 时间可得时锚定保持严格（与条目时间同属服务器钟，防同 SHA 强推回退）；仅回退 committer date（本机钟盖戳）时，commit 锚严格匹配（字段存在且 `== head`，缺失不算）的条目在锚前 300s 内计入。pr-agent issue 评论是唯一例外（`last_run.head_sha` 严格命中才放宽）；无绑定字段的 issue 评论不放宽。锚定推导由 `anchor_and_skew()` 单一真源提供，计入/超容差分类（counted, over）由 `classify_anchor()` 单一真源提供（kind→ts_key/sha_keys 映射集中一处）；严格锚命中却落在锚前 >容差 的条目记 `skew_suspects` 诊断告警（status 总览/详情/wait/collect 各出口），其中可行动意见（判据与计数同口径）计入 `pending_skew_opinions` 阻断 READY_TO_MERGE——collect 明细标「当前 head(超容差待处置)」并纳入 reply 完整性校验，处置/答复口径同常规意见（采纳修复 push 新 head 后 pending 自然清零；纯驳回轮次 head 不变则维持阻断，按阶段 5 动态 2–3 轮上限转人工）。
 - 意见计数：双锚定后的待处置意见（摘要/LGTM 类不计：APPROVED/DISMISSED review、coderabbit walkthrough/汇总、bot-coverage 报告；pr-agent 按 findings `ACTIVE` 计数；check annotations 仅计 failure/warning 级——notice 是信息性提示）；collect 全量导出并标注「摘要/报告类」「非当前 head」（annotations 导出含 notice 级）；「当前 head / 历史轮次」标注直接复用计入判定的锚定结果（与计数同源，容差窗口内被排除的条目标「历史轮次」；超容差待处置意见标「当前 head(超容差待处置)」，处置口径见 head 锚定条）；status 总览行意见数含「(+M 超带)」pending 提示。
-- 前置：gh 已认证（`gh auth status` 通过，或 `export GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"`）；前四 bot 已在 GitHub 使能（见 `docs/build-deploy-pr-ci/pr-review-bots.md`），第 5 bot（本地 claude）由 wait/cron 本地触发（`source ~/.local/state/sdcshield-ci-triage/agent.env` 跑 claude）、无需 GitHub 使能。
+- 前置：gh 已认证（`gh auth status` 通过，或 `export GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"`）；前四 bot 已在 GitHub 使能（见 `docs/build-deploy-pr-ci/pr-review-bots.md`），第 5 bot（本地 claude）由 `wait`/夜间 pipeline 泳道2 本地触发（凭据 `source ~/.local/state/sdcshield-task-loop/agent.env`，旧 `sdcshield-ci-triage/` 目录回退）、无需 GitHub 使能。
 - 端到端手册：`docs/build-deploy-pr-ci/pr-loop.md`。

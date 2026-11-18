@@ -9,7 +9,10 @@
  * members, so one vector-length-agnostic TU cannot exist at the C++ language
  * level. meson compiles this source once per tier with its own Eigen
  * namespace (-DEigen=EigenSVEn) and its own symbol namespace
- * (-DSVD_TEST_NAMESPACE=svd_vln); the dispatch TU selects at run time.
+ * (-DEIGEN_SVE_BODY_NS=svd_vln — macro unified across all Eigen SVE body
+ * TUs 2026-11-02, was -DSVD_TEST_NAMESPACE; the build now derives it from
+ * the [body-source, namespace-prefix] table in tests/cpu/meson.build);
+ * the dispatch TU selects at run time.
  *
  * The EigenSVDTest template's data type is itself Eigen-parameterised, so
  * allocation and cleanup live here too — the dispatcher only ever handles an
@@ -23,11 +26,11 @@
 #include <unistd.h>
 #include <cmath>
 
-#ifndef SVD_TEST_NAMESPACE
-#  error "SVD_TEST_NAMESPACE must be defined by the build (one namespace per VL tier)"
+#ifndef EIGEN_SVE_BODY_NS
+#  error "EIGEN_SVE_BODY_NS must be defined by the build (one namespace per VL tier)"
 #endif
 
-namespace SVD_TEST_NAMESPACE {
+namespace EIGEN_SVE_BODY_NS {
 
 using namespace Eigen;
 
@@ -74,4 +77,4 @@ int run_body(struct test *test, int cpu)
     return test_type::run(test, cpu);
 }
 
-}  // namespace SVD_TEST_NAMESPACE
+}  // namespace EIGEN_SVE_BODY_NS

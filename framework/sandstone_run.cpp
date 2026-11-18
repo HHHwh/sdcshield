@@ -58,10 +58,11 @@
 #include <device/cpu/arm64/arm64_spec_prepare.h>
 
 #if defined(__aarch64__) && defined(__linux__)
-/* T7 VmHWM 反馈闭环(spec §4.4): sdc_joint_cache(联合求解口径登记) +
- * sdc_read_vm_hwm。仅 arm64 门控 —— x86 的 Main::mem_feedback 字段编译
- * 存在但无写入/读取者(rule 5, 见 test_data.h)。 */
-# include "sdc_stress_config.h"
+/* T7 VmHWM 反馈闭环(spec §4.4): 联合口径经配置层注册的查询回调获取
+ * (sdc_register_joint_ctx_lookup, issue #747)+ sdc_read_vm_hwm。调度
+ * TU 不再 include 配置层头 sdc_stress_config.h(依赖倒置修复, #747)。
+ * 仅 arm64 门控 —— x86 的 Main::mem_feedback 字段编译存在但无写入/
+ * 读取者(rule 5, 见 test_data.h)。 */
 # include "sdc_numa.h"
 # include <algorithm>
 #endif
@@ -193,10 +194,19 @@ static void __attribute__((noreturn)) report_fail_common()
     /* does not call the cleanup handlers */
     _endthread();
 #else
-    /* does call the cleanup handalers */
-    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, nullptr);
-    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, nullptr);
-    pthread_cancel(pthread_self());
+    /* glibc's pthread_exit() runs the same forced stack unwind as a
+     * cancellation — pthread cleanup handlers AND C++ scope destructors
+     * (thread_runner's scopeExit cleanup relies on this) — but initiated
+     * from this precisely-defined call site. The old form asked for
+     * PTHREAD_CANCEL_ASYNCHRONOUS + pthread_cancel(self), whose signal can
+     * force the unwind at an ARBITRARY instruction boundary: interrupting
+     * a syscall stub left the unwinder restoring garbage frames/registers
+     * and the cleanup lambda then read sApp->shmem through a bad base,
+     * degrading a clean fail into SIGSEGV (issue #345). No cancellation
+     * state is touched: pthread_exit() terminates the thread regardless of
+     * it (workers run at the POSIX default ENABLE/DEFERRED anyway — glibc
+     * does NOT inherit the creator's DISABLE; verified glibc 2.38 aarch64). */
+    pthread_exit(nullptr);
 #endif
     __builtin_unreachable();
 }
@@ -889,7 +899,7 @@ static void run_threads_in_parallel(const struct test *test)
 static void run_threads_sequentially(const struct test *test)
 {
     // we still start one thread, in case the test uses report_fail_msg()
-    // (which uses pthread_cancel())
+    // (which terminates the thread via pthread_exit())
     SandstoneTestThread thread;
     thread.start([](int t) {
         for ( ; t != sApp->thread_count; thread_num = ++t)
@@ -1211,18 +1221,30 @@ static void finish_test_common(struct test *test)
 #if defined(__aarch64__) && defined(__linux__)
 /* ---- VmHWM 反馈闭环 (T7, spec §4.4) ---------------------------------- */
 
-/* test->id 的 FNV-1a 64 位哈希。写入点与读侧聚合共用同一实现; 0 保留为
- * "空槽"哨兵(fresh memfd 零页)。 */
+/* test->id 的 FNV-1a 64 位哈希(规范 offset basis 14695981039346656037 =
+ * 0xcbf29ce484222325, 曾掉尾位 7——写读同 TU 且槽在 per-invocation
+ * memfd 上无跨运行记忆(test_data.h M5), 故修正无失配窗口, #538)。
+ * 写入点与读侧聚合共用同一实现; 0 保留为 "空槽"哨兵(fresh memfd 零页)。 */
 static uint64_t sdc_test_id_hash(const char *s)
 {
     if (!s)
         return 0;
-    uint64_t h = 1469598103934665603ull;
+    uint64_t h = 14695981039346656037ull;
     while (*s) {
         h ^= (uint8_t)*s++;
         h *= 1099511628211ull;
     }
     return h;
+}
+
+/* 联合口径查询回调(sdc_numa.h 声明的注册点, #747): 配置层在登记口径时
+ * 注册, 本 TU 的反馈写入点经回调取数 —— 调度器不再 include 配置层头、
+ * 不再直接持有对测试 sizing 账本的知识。 */
+static sdc_joint_ctx_lookup_fn s_joint_ctx_lookup;
+
+void sdc_register_joint_ctx_lookup(sdc_joint_ctx_lookup_fn fn)
+{
+    s_joint_ctx_lookup = fn;
 }
 
 /* 读侧聚合(sdc_stress_config.h 声明, 仅 arm64 联合求解分支调用): 遍历
@@ -1241,16 +1263,22 @@ double sdc_feedback_eff_median(const char *test_id)
     for (int i = 0; i < sApp->shmem->main_thread_count; ++i) {
         const PerThreadData::MemFeedback *fb =
                 &sApp->raw_main_thread_data(i)->mem_feedback;
-        /* seqlock 读侧(PR#302 检视 #13/#26): 前后 acquire 各读一次 seq,
-         * 序号一致且为偶才采纳快照; 奇数(兄弟 child 正在写)/序号变动
-         * (读取期间发生过写)的槽丢弃——共享字段的重排混合态不再可能
-         * 进入 median。空槽 seq=0 恒为偶, 走既有 samples==0 无效判据。 */
+        /* seqlock 读侧(PR#302 检视 #13/#26; #486 补读侧 fence): 前后
+         * acquire 各读一次 seq, 序号一致且为偶才采纳快照; 奇数(兄弟
+         * child 正在写)/序号变动(读取期间发生过写)的槽丢弃。字段读必须
+         * 钉死在 [s1, s2] 窗口内: s2 的 acquire 只单向往后钉(其后的访问
+         * 不能前移), 不阻止其前的字段读下沉越过复读——下沉即读到窗口外
+         * 的任意世代值, s1==s2 判据形同虚设(#486 读侧缺口; 独立探针复刻
+         * 本协议实测, 2s 压力 3 轮 7/15/22 次混合态采纳)。复读前的全序
+         * fence(dmb ish)补上该方向; s1 的 acquire 已钉住上沿。空槽
+         * seq=0 恒为偶, 走既有 samples==0 无效判据。 */
         uint32_t s1 = __atomic_load_n(&fb->seq, __ATOMIC_ACQUIRE);
         if (s1 & 1)
             continue;
         uint64_t h = fb->test_id_hash;
         uint32_t samples = fb->samples;
         double eff = fb->eff_ratio;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
         uint32_t s2 = __atomic_load_n(&fb->seq, __ATOMIC_ACQUIRE);
         if (s1 != s2)
             continue;
@@ -1264,45 +1292,129 @@ double sdc_feedback_eff_median(const char *test_id)
     return (m & 1) ? vals[m / 2] : 0.5 * (vals[m / 2 - 1] + vals[m / 2]);
 }
 
-/* 写入点(run_one_test_inner 尾部调用): eff_ratio = VmHWM/(n²·elem·本
- * slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/threads 取自本
- * child test_init 里联合求解登记的 sdc_joint_cache —— 显式 knob/未迁移
- * 用例无口径则不写。写侧始终记录(±15% 死区与 0.7×静态锚下限都在读侧
- * 判断, 见 sdc_joint_dim_slice)。基线污染口径: fork child 的 VmHWM 起点
- * = 父进程当时 RSS(实测 ~8.3MB, eigen 家族 <1%); 联合求解探针的高水位
- * 同样计入(探针远小于正式工作集)—— 记录为已知口径。 */
+/* issue #385: 反馈写入的 fork 基线。VmHWM 只增不减, fork child 的起点 =
+ * 父进程当时 RSS(实测 ~8.3MB)。此前写入点直接用整个 VmHWM 作分子, 基线
+ * 项 8.3e6/(n²·threads) 在 n 小/线程少时压过真实工作集: 按自证数据复算,
+ * n=16×1 线程时基线贡献 32422 B/n²/线程, 对 GEMM_F64 表值 32.256 B 放大
+ * ~1000×, 且 EMA 半衰、向下修正的 15% 死区 + 0.7×锚下限都护着膨胀值,
+ * 读侧向上无死区无上钳全额采纳 → c 被锁死、n 压向 lo、压力静默塌缩。
+ * 修法(本侧): 在 run_one_test_inner 入口、任何测试分配之前采样本 child
+ * 的起始 VmHWM 作基线, 写入时 eff_ratio = (VmHWM − baseline)/(n²·elem·
+ * threads), 结果 clamp ≥ 0。读取失败(baseline=0)退化为原口径并告警一次;
+ * hwm ≤ baseline(增量不可测)则不发布样本, 不写零/负值。联合求解探针的
+ * 高水位仍在分子内(探针远小于 n_mem 路径的正式工作集; n_run 受限的小 n
+ * 路径由读侧 4× 锚上钳兜底, 见 sdc_stress_config.h)。
+ *
+ * issue #766: fork 基线只扣到 child 起点, init 期驻留仍在分子: 联合求解
+ * 探针的高水位(上段末句披露)与 test_init 分配的共享数据(GEMM 族
+ * lhs/rhs/prod 3 个 n² 矩阵, 24·n² B)都不随 slice 线程数缩放, 而分母
+ * n²·elem·threads 全按 T 缩放——模型把它们整摊进 per-thread 项:
+ * eff = c/elem + fixed/(n²·elem·T), 偏置 ∝ 1/T。GEMM_F64 口径
+ * eff=(24+32.256·T)/(8T)=4.032+3/T: 全核 +0.6%(T9 表值重标定 0.0290→
+ * 0.0315 已吸收该口径), -n 1 部署 +74% → c_fb≈56 B vs 真值 32.256 B,
+ * 读侧向上修正无死区全额采纳(4× 锚上钳不触发), EMA α=0.5 对该系统
+ * 偏置(非噪声)整 run 锁定 → n_mem-bound 部署 n 被压到 ~0.76n。
+ * 修法(本侧): 基线推进到 init 成功之后(见 sdc_feedback_capture_
+ * post_init), 分子 = VmHWM − init 后基线 = worker 期增量, 与分母
+ * per-thread 口径对齐, 探针/init 共享数据/父 RSS 全部自然扣除(fork
+ * 基线降级为 init 后采样失败时的兜底)。
+ * 残差如实记录(低估方向): 探针跑完释放的页可能被 worker 分配复用,
+ * VmHWM(峰值)不抬升 → 低 T 小 n 下增量低估甚至 ≤0; ≤0 走既有"增量
+ * 不可测不发布"判据, 低估由读侧 0.7×静态锚下限钳制(n 至多膨胀
+ * 1/√0.7≈1.2×), 生产构建另有 T10 bad_alloc 降档/线程级 SKIP 兜底
+ * (与 T10 worker 期 bad_alloc 残差同口径)。全核主路径: 修后分子口径
+ * 与表值(T9 重标定, 含探针高水位 ~4.7% 口径)差 ~5%, 落向下 15% 死区
+ * 维持表值, 零行为变化。 */
+static uint64_t s_feedback_vm_hwm_baseline;
+
+static void sdc_feedback_capture_baseline(void)
+{
+    s_feedback_vm_hwm_baseline = sdc_read_vm_hwm();
+}
+
+/* issue #766: init 成功后基线(在 run_one_test_inner 里 init 状态判定
+ * 通过之后、at_run_threads_start(纯计时钩子, 无分配)之前采样): 此后
+ * 进 child VmHWM 的只剩 worker 期驻留, 反馈分子从 #385 的 fork 口径
+ * 换成纯 worker 增量口径(动机/残差见上方注释块)。 */
+static uint64_t s_feedback_vm_hwm_post_init;
+
+static void sdc_feedback_capture_post_init(void)
+{
+    s_feedback_vm_hwm_post_init = sdc_read_vm_hwm();
+}
+
+/* 写入点(run_one_test_inner 尾部调用): eff_ratio = (VmHWM − init 后
+ * 基线)/(n²·elem·本 slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/
+ * threads 经配置层注册的查询回调取自本 child test_init 里联合求解登记
+ * 的口径(issue #747; 回调未注册 = 未走联合求解/显式 knob, 无口径则
+ * 不写)。写侧始终记录(±15% 死区、0.7×静态锚下限与 4×锚上钳都在读侧
+ * 判断, 见 sdc_joint_dim_slice)。 */
 static void sdc_feedback_write(const struct test *test)
 {
     if (!test || !test->id)
         return;
-    auto it = sdc_joint_cache().find(test->id);
-    if (it == sdc_joint_cache().end())
+    struct s_joint_ctx_view { int n, threads, elem_bytes; } ctx;
+    if (!s_joint_ctx_lookup
+            || !s_joint_ctx_lookup(test->id, &ctx.n, &ctx.threads,
+                                   &ctx.elem_bytes))
         return;
-    const struct sdc_joint_ctx &ctx = it->second;
     if (ctx.n <= 0 || ctx.threads <= 0 || ctx.elem_bytes <= 0)
         return;
     uint64_t hwm = sdc_read_vm_hwm();
     if (hwm == 0)
         return;
+    /* 基线扣除: #766 优先用 init 后 VmHWM(探针高水位/init 共享数据/
+     * #385 的父 RSS 全部归基线), init 后采样失败(0)退 fork 基线
+     * (#385 口径)。 */
+    uint64_t baseline = s_feedback_vm_hwm_post_init
+                        ? s_feedback_vm_hwm_post_init
+                        : s_feedback_vm_hwm_baseline;
+    uint64_t used;
+    if (baseline == 0) {
+        used = hwm;                     /* 基线读取失败 → 退原口径(告警) */
+        log_warning("[反馈] %s: 基线读取失败(fork 与 init 后均失败) → "
+                    "本样本未扣除基线 (VmHWM=%.1f MiB, issue #385/#766)",
+                    test->id, (double)hwm / 1048576.0);
+    } else if (hwm <= baseline) {
+        /* 工作集增量小于 /proc 的 1 KiB 粒度、测试根本未增长 RSS, 或
+         * (#766 init 后基线下)探针释放页被 worker 复用使峰值不再抬升:
+         * 样本不含有效信息, 不发布(写 0 会把 c 压向 0.7×锚下限)。 */
+        log_warning("[反馈] %s: VmHWM=%.1f MiB 未超过基线 %.1f MiB → "
+                    "无有效增量, 本 child 不发布样本", test->id,
+                    (double)hwm / 1048576.0, (double)baseline / 1048576.0);
+        return;
+    } else {
+        used = hwm - baseline;
+    }
     double denom = (double)ctx.n * (double)ctx.n
                  * (double)ctx.elem_bytes * (double)ctx.threads;
     if (!(denom > 0.0))
         return;
-    double eff = (double)hwm / denom;
+    double eff = (double)used / denom;
 
     PerThreadData::MemFeedback *fb = &sApp->main_thread_data()->mem_feedback;
     uint64_t hash = sdc_test_id_hash(test->id);
-    /* seqlock 发布(PR#302 检视 #13/#26, 收口 T9 注释自认的已知边界):
+    /* seqlock 发布(PR#302 检视 #13/#26; #486 补写侧 fence, 并更正
+     * 77a705a2 注释中『首次置奇用 relaxed 即可、语义无损』的错误论证):
      * 本槽是 MAP_SHARED 上的单写者(本 slice 的当前 child)/多读者(兄弟
-     * slice child 的 test_init 读侧)共享字段, 普通非原子 store/RMW 的
-     * 编译器/架构重排可使读者见到混合态(新 hash 配旧 eff_ratio——异常
-     * 偏大的旧 eff 经读侧无上钳的向上修正直接放大 n_mem)。写序:
-     *   [seq→奇(relaxed)] → 复位+EMA 字段更新 → [seq+1→偶(release)]
-     * release 保证字段 store 不下沉到偶数发布之后; 首次置奇用 relaxed
-     * 即可——字段 store 被提前到置奇之前时, 读者见到的仍是完整
-     * (新或旧)快照, 语义无损。T9 的『先清 samples 再发布 hash』源序
-     * 保留(双保险: 复位期间读者见奇数丢弃或见稳定偶数且 samples==0
-     * 判无效)。
+     * slice child 的 test_init 读侧)共享字段。写序(三道排序缺一不可):
+     *   [seq→奇(relaxed)] → 全序 fence(dmb ish) → 复位+EMA 字段更新
+     *   → [s1+1→偶(release)]
+     *   - 置奇后的 fence: relaxed 置奇不约束其后字段 store 的前移、亦
+     *     不约束置奇自身的后移(arm64 弱序, seq 与字段异址)——字段(含
+     *     复位的 test_id_hash)先于奇数标记可见时, 读者 s1==s2==旧偶
+     *     双读一致判据完全失效, 「新 hash + 旧 samples/eff」混合态通过
+     *     有效性检查, 上一测试的 eff_ratio 污染本测试 median(即 #486
+     *     窗口; 异常偏大的旧 eff 经读侧无上钳的向上修正直接放大
+     *     n_mem)。fence 钉死「任一字段值可见 ⟹ 奇数已可见」: 读者要么
+     *     见奇数丢弃, 要么 s2 复读 ≥ 奇数而丢弃。内核 seqlock 等价物:
+     *     write_seqcount_begin 置奇后的 smp_wmb。
+     *   - 偶数发布用 release: 字段 store 不下沉到偶数发布之后。
+     *   - 读侧对称(见 sdc_feedback_eff_median): 字段读与 s2 复读之间
+     *     加同款 fence——s2 的 acquire 单向, 不阻止其前字段读下沉越过
+     *     复读。
+     * T9 的『先清 samples 再发布 hash』复位源序保留: 正确性已由
+     * fence+release 承担, 源序不再必要但无害(历史口径)。
      * 被杀写者恢复(置奇用 s1 = seq0|1 而非 seq0+1 的原因): 上代 child
      * 可在两次 seq store 之间被杀(超时 SIGQUIT/OOM), seq 停在奇数。
      * 若用 seq0+1: 奇数+1=偶——半写字段被当"稳定态"发布一次, 且
@@ -1311,12 +1423,13 @@ static void sdc_feedback_write(const struct test *test)
      * 完整重写字段后发布 s1+1=偶, 不变式单次写入即恢复; 正常路径
      * (seq0 偶)与 +1 完全同值。序号单调不减, 2^32 回绕需 40 亿次
      * 写入(每 test 每 fracture 一次)——不可达。
-     * 上一测试的 eff_ratio 被采进本测试 median 的窗口由 seq 一致性
-     * 判据关闭: 复位期间读者要么见奇数丢弃, 要么见稳定偶数且
-     * samples==0 判无效。 */
+     * 已知边界(如实记录): 字段仍是普通非原子访问(与 T7 既有 pragmatic
+     * 口径一致)——aarch64 对齐 ≤8B 单指令访问无撕裂, 排序由 fence 封住;
+     * C++ 抽象机的形式 data-race UB 不在本修复范围内。 */
     uint32_t seq0 = __atomic_load_n(&fb->seq, __ATOMIC_RELAXED);
     uint32_t s1 = seq0 | 1;                 /* 奇数=写入中(被杀写者恢复) */
     __atomic_store_n(&fb->seq, s1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);   /* 字段钉在奇数标记之后 */
     if (fb->test_id_hash != hash) {         /* 槽被上一测试占用 → 重置 */
         fb->samples = 0;
         fb->test_id_hash = hash;
@@ -1328,15 +1441,20 @@ static void sdc_feedback_write(const struct test *test)
         fb->eff_ratio = 0.5 * fb->eff_ratio + 0.5 * eff;   /* EMA α=0.5 */
     ++fb->samples;
     __atomic_store_n(&fb->seq, s1 + 1, __ATOMIC_RELEASE);   /* 偶数=稳定 */
-    log_warning("[反馈] %s: VmHWM=%.1f MiB / (n=%d²×%dB×%d线程) → "
-                "eff_ratio=%.3f (EMA α=0.5, 样本=%u)",
-                test->id, (double)hwm / 1048576.0, ctx.n, ctx.elem_bytes,
+    log_warning("[反馈] %s: VmHWM=%.1f MiB − 基线 %.1f MiB = 净 %.1f MiB / "
+                "(n=%d²×%dB×%d线程) → eff_ratio=%.3f (EMA α=0.5, 样本=%u)",
+                test->id, (double)hwm / 1048576.0, (double)baseline / 1048576.0,
+                (double)used / 1048576.0, ctx.n, ctx.elem_bytes,
                 ctx.threads, fb->eff_ratio, (unsigned)fb->samples);
 }
 #endif /* __aarch64__ && __linux__ */
 
 static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread = false)
 {
+#if defined(__aarch64__) && defined(__linux__)
+    /* #385: 在任何测试分配之前采样 fork 基线(见 sdc_feedback_write)。 */
+    sdc_feedback_capture_baseline();
+#endif
     s_current_test = test;
     auto resetCurrentTest = scopeExit([&] { s_current_test = nullptr; });
 
@@ -1406,6 +1524,11 @@ static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread 
             return TestResult::Skipped;
         }
 
+#if defined(__aarch64__) && defined(__linux__)
+        /* #766: init 成功后、worker 启动前采 init 后基线(反馈分子只计
+         * worker 期增量, 见 sdc_feedback_write 上方注释块)。 */
+        sdc_feedback_capture_post_init();
+#endif
         sApp->at_run_threads_start(test);
         run_threads(test);
 

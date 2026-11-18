@@ -12,6 +12,9 @@
 //       预处理器输出与未 -include 本文件时逐字节一致 → 24.03 源码字节一致得以保证。
 //   * 守卫还加了 OPENEULER_22_03 / OPENEULER_20_03 双保险:即使误在 24.03 构建里
 //     -include 了本文件,只要没定义这两个宏,polyfill 体仍不生效。
+//   * 宿主机(非容器)构建时,meson.build 用 `cpp.has_header('barrier')` 探测旧 libstdc++,
+//     命中即以 -DSDCSHIELD_COMPAT_LIBSTDCXX 注入同一组标志(见 meson.build 顶部);
+//     容器路径仍用 OPENEULER_* 宏,两者等价且可叠加。
 //
 // 宏命名说明:
 //   目标要求适配宏名为 "OPENEULER_22.03" / "OPENEULER_20.03",但 C 预处理器的
@@ -34,7 +37,8 @@
 #pragma once
 
 // 只在确实命中旧编译器 + 适配宏时才动 std 命名空间。
-#if (defined(OPENEULER_22_03) || defined(OPENEULER_20_03)) && defined(__cplusplus)
+#if (defined(OPENEULER_22_03) || defined(OPENEULER_20_03) || \
+     defined(SDCSHIELD_COMPAT_LIBSTDCXX)) && defined(__cplusplus)
 
 #include <version>      // __cpp_lib_* 特性宏( libstdc++ 10 起提供)
 #include <type_traits>   // underlying_type_t

@@ -18,22 +18,13 @@
 #ifndef SANDSTONE_TEST_UTILS_H
 #define SANDSTONE_TEST_UTILS_H
 #include <sys/mman.h>
-#include <unistd.h>
 #include <cstdint>
 #include <map>
 
-// These macros have been copied from sandstone_p.h because sandstone_p.h creates
-// too many dependencies to get under unit-test.  Eventually we should refactor
-// simple macros like this out of sandstone_p.h to  break these dependencies
-#define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
-static inline unsigned sandstone_page_size()
-{
-    static long cached = 0;
-    if (!cached)
-        cached = sysconf(_SC_PAGESIZE);
-    return unsigned(cached);
-}
-#define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, sandstone_page_size())
+// Page-size helpers (ROUND_UP_TO / sandstone_page_size / ROUND_UP_TO_PAGE)
+// come from sandstone_page.h -- the shared, unit-testable single
+// implementation that sandstone_p.h also includes.
+#include "sandstone_page.h"
 
 
 /* ManagedCodeBuffer

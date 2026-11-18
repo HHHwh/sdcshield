@@ -3,20 +3,33 @@
 #if defined(__aarch64__) && defined(__linux__)
 
 #include "sdc_stress_config.h"   /* sdc_budget_bytes(四源 min, spec §4.2 + #310) */
+#include "sandstone_p.h"        /* sApp->shmem->device_info: 选中设备表(issue #515) */
 
 #include <dirent.h>
+#include <cctype>
+#include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 
-/* sysfs 目录项名过滤: nodeN 且 N 全数字 */
+/* sysfs 目录项名过滤: 只认内核生成格式 nodeN —— N 为无前导零的纯十进制
+ * 数字串且无损落入 int。strtol 的宽松形态(空串/符号/空白/前导零/溢出
+ * 饱和)一概拒绝: 它们或与真目录解析出同一节点号而双计 nodes_with_mem
+ * ("node"与"node00"→node0, issue #683), 或经 (int) 截断为负/别名索引
+ * 绕过调用方容量上界(超 LONG_MAX 溢出饱和为 LONG_MAX, 截断为 -1 即
+ * per_node[-1] 越界写)。防御口径沿 for_each_cpu_in_list 的 #480 段。 */
 static int parse_node_dir(const char *name, int *out)
 {
     if (strncmp(name, "node", 4) != 0) return 0;
+    const char *digits = name + 4;
+    if (!isdigit((unsigned char)digits[0])) return 0;
+    if (digits[0] == '0' && digits[1] != '\0') return 0;
     char *end;
-    long n = strtol(name + 4, &end, 10);
-    if (*end != '\0' || n < 0) return 0;
+    errno = 0;
+    long n = strtol(digits, &end, 10);
+    if (errno == ERANGE || *end != '\0' || n > INT_MAX) return 0;
     *out = (int)n;
     return 1;
 }
@@ -28,18 +41,30 @@ static int parse_node_dir(const char *name, int *out)
 static int s_cpu_node[SDC_NUMA_MAX_CPUS];    /* -1 = 未归属; 0 是合法节点号 */
 
 /* 遍历 CPU 区间串 "0-31,64,96-121,123-127" 的每个 CPU, 逐个回调 visit。
- * 内核 cpulist 语义; 非数字处停止; 倒挂段 "5-3" 按单 CPU 计。 */
+ * 内核 cpulist 语义; 非数字处停止; 倒挂段 "5-3" 按单 CPU 计。
+ * 防御(issue #480): strtol 溢出段(errno==ERANGE)与负号段是损坏
+ * 输入, 停止解析 —— 宁可低估, 绝不失控; 区间上端钳到
+ * SDC_NUMA_MAX_CPUS-1, 与归属表 "c 越界忽略" 的既有语义一致(arm64
+ * 内核 NR_CPUS 上限 4096, 真实编号不会越界), 使每段循环次数有界,
+ * count_cpu_list 的 int 计数与 (int)c 截断均不可能。 */
 template <typename Visit>
 static void for_each_cpu_in_list(const char *list, Visit visit)
 {
     const char *p = list;
     while (*p) {
         char *end;
+        errno = 0;
         long a = strtol(p, &end, 10);
-        if (end == p) break;
+        if (end == p || errno == ERANGE || a < 0) break;
         long b = a;
-        if (*end == '-') b = strtol(end + 1, &end, 10);
+        if (*end == '-') {
+            errno = 0;
+            b = strtol(end + 1, &end, 10);
+            if (errno == ERANGE) break;
+        }
         if (b < a) b = a;
+        if (b >= SDC_NUMA_MAX_CPUS)
+            b = SDC_NUMA_MAX_CPUS - 1;
         for (long c = a; c <= b; ++c)
             visit((int)c);
         if (*end != ',') break;
@@ -80,6 +105,24 @@ static void node_mem_read(int node, uint64_t *total_bytes, uint64_t *free_bytes)
     fclose(f);
 }
 
+/* 全量读取单行 sysfs 文件(issue #480: 固定缓冲对稀疏编号超长列表会截断
+ * 低估 —— cpu/online 的 256 字节实测把 1945 字节/500-CPU 列表数成 78)。
+ * getline 动态扩容, 不受缓冲上限约束; 返回 malloc 行(含换行, 解析在
+ * 非数字处自然停止), 调用方 free; 不可读/空文件返回 nullptr。 */
+static char *read_sysfs_line(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return nullptr;
+    char *line = nullptr;
+    size_t cap = 0;
+    if (getline(&line, &cap, f) < 0) {
+        free(line);                 /* POSIX: 失败时 line 可 free */
+        line = nullptr;
+    }
+    fclose(f);
+    return line;
+}
+
 /* 一次性探测; 由 sdc_numa_probe 的静态初始化保证只跑一遍 */
 static struct sdc_numa_topology probe_uncached(void)
 {
@@ -99,30 +142,26 @@ static struct sdc_numa_topology probe_uncached(void)
             if (pn->memtotal_bytes > 0)
                 ++topo.nodes_with_mem;
             /* cpulist: 计数 + 登记 cpu→node 归属表(一次解析, 之后查表) */
-            char path[128], buf[1024];
+            char path[128];
             snprintf(path, sizeof path, "/sys/devices/system/node/node%d/cpulist", node);
-            FILE *f = fopen(path, "r");
-            if (f) {
-                if (fgets(buf, sizeof buf, f)) {
-                    int n = 0;
-                    for_each_cpu_in_list(buf, [&](int c) {
-                        ++n;
-                        if (c >= 0 && c < SDC_NUMA_MAX_CPUS)
-                            s_cpu_node[c] = node;
-                    });
-                    pn->ncpus = n;
-                }
-                fclose(f);
+            char *cpulist = read_sysfs_line(path);
+            if (cpulist) {
+                int n = 0;
+                for_each_cpu_in_list(cpulist, [&](int c) {
+                    ++n;
+                    if (c >= 0 && c < SDC_NUMA_MAX_CPUS)
+                        s_cpu_node[c] = node;
+                });
+                pn->ncpus = n;
+                free(cpulist);
             }
         }
         closedir(d);
     }
-    FILE *online = fopen("/sys/devices/system/cpu/online", "r");
+    char *online = read_sysfs_line("/sys/devices/system/cpu/online");
     if (online) {
-        char buf[256] = "";
-        if (fgets(buf, sizeof buf, online))
-            topo.total_cpus = count_cpu_list(buf);
-        fclose(online);
+        topo.total_cpus = count_cpu_list(online);
+        free(online);
     }
     return topo;
 }
@@ -141,13 +180,19 @@ double sdc_ar_factor(enum sdc_mem_family fam, const struct sdc_numa_topology *t)
      * 探测失败(nodes_with_mem==0)一律最差档; 中间档向下取整(取
      * nodes<=n 的最大行)——表值宁高估, 永不向上猜。 */
     static const struct { int nodes; double mem, comp; } tbl[] = {
-        { 1, 25.0, 5.0 },   /* 单节点内存: SVD 实测带 18-25 取上界; GEMM 4.4+余量 */
+        { 1, 40.0, 15.0 },  /* 单节点内存(#506 重标定): worst-child 实测带
+                             * 39-40 取上界——T5 复数 BDCSVD AR≈39(2026-10-27,
+                             * 127 线程 n=1100, 远程 child SIGQUIT 304-314s×2)、
+                             * T8 eigen_svd float AR≥40(SIGQUIT@321s); 旧 25 系
+                             * 本地/平均 child 口径, 未覆盖无内存节点的远程 DRAM
+                             * worst-child。GEMM: 天花板足迹(时侧 binding 档)
+                             * 实测 ~15(中足迹 4.4、256-bit 档 11.2, 取上界)。 */
         { 2, 10.0, 4.0 },   /* 保守估计, TODO(实测): 无真 2 节点内存机器 */
         { 4,  5.0, 3.0 },   /* 同上 */
         { 8,  4.0, 2.5 },   /* >=8 节点 */
     };
     int n = t->nodes_with_mem;
-    if (n <= 0) return fam == SDC_FAM_MEM_BOUND ? 25.0 : 5.0;
+    if (n <= 0) return fam == SDC_FAM_MEM_BOUND ? 40.0 : 15.0;
     /* 表按 nodes 升序; 取最大的 r.nodes <= n 的行。
      * n>=1 必命中首行; n 超过所有行仍取 >=8 档(最后一行)。 */
     const auto *row = &tbl[0];
@@ -255,6 +300,44 @@ int sdc_numa_effective_threads(int cpu)
     }
     return n > 0 ? n : (t->total_cpus > 0 ? t->total_cpus
                                           : sdc_online_cpus_fallback());
+}
+
+int sdc_numa_effective_threads_selected(int cpu, int *total_selected)
+{
+    if (total_selected)
+        *total_selected = 0;
+    const struct sdc_numa_topology *t = sdc_numa_probe();
+    if (t->nodes_with_mem <= 0)
+        return -1;              /* 探测失败: 调用方退全机口径 */
+    /* 选中设备集 = shmem->device_info[0..total_device_count): 启动时由
+     * ambient sched_getaffinity(taskset 生效) ∩ --cpuset/--deviceset
+     * 过滤而来, 即 worker 真实分布域——不用 test_init 线程自身的
+     * sched_getaffinity: fork 路径下 init 跑在被 pin 到单 CPU 的辅助
+     * 线程(sandstone_run.cpp init_thread_runner), 亲和集退化为 1 CPU。
+     * child 内 restrict_topology 只重指本地 device_info 指针, shmem
+     * 全量表不动; commit_shmem() 先于 test_preinit(gemm 头注记载),
+     * preinit(父)/test_init(child)两口径恒可读。 */
+    if (!sApp->shmem || sApp->shmem->total_device_count <= 0)
+        return -1;
+    int anchor = sdc_effective_node(t, cpu);
+    if (anchor < 0)
+        return -1;
+    int total = sApp->shmem->total_device_count;
+    int n = 0;
+    for (int i = 0; i < total; ++i) {
+        int c = sApp->shmem->device_info[i].cpu_number;
+        /* 越界编号(热插残影/异常表项)跳过: 查表得 -1 会被 C1 记到
+         * fallback 节点头上, 虚增该节点 worker 数。 */
+        if (c < 0 || c >= SDC_NUMA_MAX_CPUS)
+            continue;
+        if (sdc_effective_node(t, c) == anchor)
+            ++n;
+    }
+    if (n <= 0)
+        return -1;              /* anchor 节点无任何选中设备: 退全机口径 */
+    if (total_selected)
+        *total_selected = total;
+    return n;
 }
 
 /* T7 (spec §4.4): VmHWM(kB→字节), 读不到 0。行形如 "VmHWM:  123456 kB"。 */

@@ -23,6 +23,8 @@
 
 #include <sandstone.h>
 #include "sdc_stress_config.h"
+#include "gemm_solve_probe.h"
+#include "sandstone_gemm_common.h"
 
 #include <Eigen/Core>
 #include <cstdint>
@@ -32,30 +34,15 @@ using namespace Eigen;
 typedef Matrix < float, Dynamic, Dynamic > Mat;
 
 #if defined(__aarch64__) && defined(__linux__)
-/* 联合求解 sizing 探针(T9): 填充与 run() 的 fill_rand 同谱系(均匀随机
- * [-1,1), 检视 #51)——splitmix 确定性哈希满足该契约, 且不依赖 init aux
- * 线程上未定义的 per-thread RNG 状态。GEMM 计时对数值不敏感(无 SVD 式
- * deflation 路径), 谱系由分布一致性满足; 填充 O(n²) 相对乘法 O(n³) 已
- * 计入探针计时(保守方向)。同 T6 gemm_double_max_arm_body 的 solve_once
- * (float 标量转型)。 */
+/* 联合求解 sizing 探针(T9): 谱系契约(检视 #51: 填充与 run() 的
+ * fill_rand 同谱系, 均匀随机 [-1,1))已单点收口至 gemm_solve_probe.h
+ * (issue #389, 含 T6 gemm_double_max_arm_body 源头共 8→1)——填充唯一定义, 探针副本间
+ * 漂移在编译期不可能; probe↔run() 谱系契约仍需与 fill_rand 手工
+ * 同步演化(无编译期绑定, 检视 #392-R3; float 经 (Scalar) 先算 double 再收窄,
+ * 与原 (float)((double)…) 逐位同)。 */
 static int gemm_solve_once(int n)
 {
-    Mat a(n, n), b(n, n), c;
-    for (int r = 0; r < n; ++r)
-        for (int col = 0; col < n; ++col) {
-            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
-            h ^= h >> 32;
-            h *= 0xD6E8FEB86659FD93ull;
-            h ^= h >> 32;
-            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h2 ^= h2 >> 32;
-            a(r, col) = (float)((double)(h % 2000u) / 1000.0 - 1.0);
-            b(r, col) = (float)((double)(h2 % 2000u) / 1000.0 - 1.0);
-        }
-    c = a * b;
-    return 0;
+    return gemm_probe::solve_once<Mat>(n);
 }
 #endif
 
@@ -65,8 +52,10 @@ static int gemm_solve_once(int n)
  * 自适应)。float 元素 4 字节, 相同内存预算下可容纳更大 N, clamp
  * [16, 8192]。尺寸只在 test_init 求解一次并缓存进 eigen_test_data.dim
  * ——worker 读缓存不重算(T9, 旧链的 run 期重跑自适应路径已删除)。
+ * is_explicit 出参(issue #488): 显式通道(knob/env)来源时置 true,
+ * 供 sdc_gemm_init_shared 的 bad_alloc 分流(显式值不可降档)。
  */
-static int gemm_mdim(struct test *test)
+static int gemm_mdim(struct test *test, bool *is_explicit)
 {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 8192);
     if (v == 0) {
@@ -74,8 +63,10 @@ static int gemm_mdim(struct test *test)
         if (sdc_env_knob_int("eigen_gemm_float_dynamic_square", "mdim", &envv))
             v = (envv < 16) ? 16 : (envv > 8192 ? 8192 : envv);
     }
-    if (v > 0)
+    if (v > 0) {
+        *is_explicit = true;    /* knob(-O/配置文件)/env 显式通道 */
         return (int)v;
+    }
 #if defined(__aarch64__) && defined(__linux__)
     /* 联合求解(T9, 参数依据见 gemm_double_dynamic_square.cpp 同位注释;
      * 本文件差异仅 clamp [16,8192] 与 fam GEMM_F32)。 */
@@ -115,39 +106,7 @@ struct eigen_test_data {
 
 static int eigen_gemm_float_dynamic_square_init(struct test *test) {
     test->data = new(eigen_test_data);
-    auto d = CAST(test->data);
-    int dim = 0;
-    try {
-        dim = gemm_mdim(test);   /* knob > env > 自适应, 只解一次 */
-        d->dim = dim;
-        d->lhs = Mat::Random(dim, dim);
-        d->rhs = Mat::Random(dim, dim);
-        d->prod = d->lhs * d->rhs;
-    } catch (const std::bad_alloc &) {
-        /* T10 init 降级(m2, 对齐 eigen_sparse 先例): init 期分配失败是
-         * 资源性而非 SDC——降 mdim 到 lo(=16, 与 gemm_mdim 的联合求解
-         * lo/clamp 下限同值)重分配一次, 仍失败才资源性 SKIP。原
-         * catch(...)->report_fail 对 bad_alloc 打红撤销(其余异常保留)。 */
-        constexpr int kInitRetryLo = 16;
-        log_warning("[init 降级] %s: 共享矩阵分配失败 mdim=%d → 降档 mdim=%d 重试一次",
-                    test->id, dim, kInitRetryLo);
-        try {
-            d->dim = kInitRetryLo;
-            d->lhs = Mat::Random(kInitRetryLo, kInitRetryLo);
-            d->rhs = Mat::Random(kInitRetryLo, kInitRetryLo);
-            d->prod = d->lhs * d->rhs;
-        } catch (const std::bad_alloc &) {
-            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
-                     test->id, kInitRetryLo);
-            return EXIT_SKIP;
-        }
-        /* 降档成功 → 同步反馈记账口径(PR#302 检视 #25): 否则 [反馈] 按
-         * 求解 n 折算 eff, c 被压向 0.7× 下限, 后续 n 向 OOM 膨胀。 */
-        sdc_joint_cache_note_dim(test, kInitRetryLo);
-    } catch (...) {
-        report_fail_msg("Exception on Eigen code, most probably OOM");
-    }
-    return EXIT_SUCCESS;
+    return sdc_gemm_init_shared(test, CAST(test->data), gemm_mdim);
 }
 
 static int eigen_gemm_float_dynamic_square_run(struct test *test, int cpu) {

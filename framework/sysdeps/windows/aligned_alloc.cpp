@@ -50,7 +50,7 @@ int posix_memalign(void **newptr, size_t alignment, size_t size)
 
 void *valloc(size_t size)
 {
-    return aligned_alloc(4096, size);
+    return aligned_alloc(sandstone_page_size(), size);
 }
 
 // pvalloc is valloc rounding up to the actual page size

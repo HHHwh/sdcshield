@@ -126,6 +126,35 @@ static inline uint64_t sve_k3res_gps_tag(uint64_t magic, uint64_t byte_off, uint
          |  (gen             & 0xFFFFULL);
 }
 
+/* golden (issue #373): scalar independent recomputation — pure C integer
+ * ops on the scalar pipeline, never the SVE units under test, so a
+ * persistent SVE datapath fault cannot corrupt golden and actual
+ * identically. noinline keeps this a separately gateable symbol: the
+ * init's GPS tag fill is INPUT generation and GCC auto-vectorizes it
+ * (pre-existing codegen, bit-identical values) — an input-fill fault
+ * corrupts golden and run input identically and is undetectable by any
+ * output-compare golden, outside this paradigm (PR #412 k7pattern
+ * ruling). scripts/check-scalar-golden.sh checks THIS symbol. */
+__attribute__((noinline))
+static void sve_k3res_golden_scalar(struct SveK3ResData *data) {
+    const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
+    const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB);
+    uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expected);
+    const size_t lanes_per_slot = data->vl_bytes / sizeof(uint64_t);
+    for (int i = 0; i < data->vl_slots; i++) {
+        const size_t base = (size_t)i * lanes_per_slot;
+        for (size_t l = 0; l < lanes_per_slot; l++) {
+            const size_t e = base + l;
+            switch (i % 4) {
+                case 0: ex[e] = sa[e] + sb[e]; break;
+                case 1: ex[e] = sa[e] ^ sb[e]; break;
+                case 2: ex[e] = sa[e] & sb[e]; break;
+                case 3: ex[e] = sa[e] | sb[e]; break;
+            }
+        }
+    }
+}
+
 static int sve_k3res_init(struct test *test) {
     /* All-VL Phase 2 P5: framework-layer capability + 128..1024-bit range
      * gate in one call (framework/device/cpu/arm64/arm64_vl.h) — the
@@ -164,12 +193,7 @@ static int sve_k3res_init(struct test *test) {
         }
     }
 
-    for (int i = 0; i < data->vl_slots; i++) {
-        const size_t off = (size_t)i * data->vl_bytes;
-        const svuint64_t a = load_vec(data->srcA + off);
-        const svuint64_t b = load_vec(data->srcB + off);
-        store_vec(data->expected + off, rot_alu(i, a, b));
-    }
+    sve_k3res_golden_scalar(data);
 
     test->data = data;
     return EXIT_SUCCESS;

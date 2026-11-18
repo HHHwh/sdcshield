@@ -1,1 +1,0 @@
-simTicks                                    844368500                       # Number of ticks simulated (Tick)

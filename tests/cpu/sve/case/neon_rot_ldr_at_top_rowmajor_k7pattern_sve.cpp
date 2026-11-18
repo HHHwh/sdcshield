@@ -152,18 +152,22 @@ static int k7p_sve_init_common(struct test *test, K7pSvePattern pattern, long sv
         data->scratch[j] = k7p_sve_pattern_word(pattern, 2, boff);
     }
 
-    svbool_t pg = svptrue_b64();
-    for (int i = 0; i < data->slots; i++) {
-        svuint64_t a = svld1_u64(pg, data->srcA + (size_t)i * lanes);
-        svuint64_t b = svld1_u64(pg, data->srcB + (size_t)i * lanes);
-        svuint64_t res = svundef_u64();
-        switch (i % 4) {
-            case 0: res = svadd_u64_x(pg, a, b); break;
-            case 1: res = sveor_u64_x(pg, a, b); break;
-            case 2: res = svand_u64_x(pg, a, b); break;
-            case 3: res = svorr_u64_x(pg, a, b); break;
+    /* golden (issue #373): scalar independent recomputation — pure C
+     * integer ops on the scalar pipeline, never the SVE units under
+     * test, so a persistent SVE datapath fault cannot corrupt golden
+     * and actual identically. Phase = slot index % 4 (slot = `lanes`
+     * consecutive elements, matching the run loop's per-slot switch);
+     * the pattern fill above is INPUT generation with a switch of its
+     * own (not auto-vectorized), same boundary as the NEON k7pattern
+     * parent (PR #412). One common-init change covers all four
+     * battery cells. */
+    for (size_t e = 0; e < elems; e++) {
+        switch ((e / (size_t)lanes) % 4) {
+            case 0: data->expected[e] = data->srcA[e] + data->srcB[e]; break;
+            case 1: data->expected[e] = data->srcA[e] ^ data->srcB[e]; break;
+            case 2: data->expected[e] = data->srcA[e] & data->srcB[e]; break;
+            case 3: data->expected[e] = data->srcA[e] | data->srcB[e]; break;
         }
-        svst1_u64(pg, data->expected + (size_t)i * lanes, res);
     }
 
     mkdir("movbe_log", 0755);        /* mkdir creates only the last component */

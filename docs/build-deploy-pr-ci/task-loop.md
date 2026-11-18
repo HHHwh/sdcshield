@@ -2,12 +2,18 @@
 
 **定位**：统一任务编排引擎——**GitHub issues（`agent-task` 标签）是唯一任务队列**。
 四类触发源（CI 红 run / main 定期对抗审查 audit / 会话 enqueue / GitHub 手建
-issue）统一入队 → scan tick 按标签资格 FIFO 出队 → **单飞** headless claude
-agent 在独立克隆里修复/实现/验证/push → `fix|feat/issue-<N>` 分支 → agent
+issue）统一入队 → 按标签资格 FIFO 出队 → headless claude agent 在独立
+worktree 里修复/实现/验证/push → `fix|feat/issue-<N>` 分支 → agent
 自开 PR（`Closes #N`）→ 复用 [pr-loop](pr-loop.md) 五 bot 检视闭环 →
-READY_TO_MERGE 时 @人工 merge。取代 `ci_triage.py` 的编排职责（经模块别名
-薄壳过渡，PR-5 删除）；CI 红从唯一触发源降级为四分之一。**人工点仅两类：
-merge 永远人工；feature 类需求确认（`agent-approved`）**。
+READY_TO_MERGE 时过 merge 门。取代 `ci_triage.py` 的编排职责（经模块别名
+薄壳过渡，PR-5 删除）；CI 红从唯一触发源降级为四分之一。**2026-11-13 起
+调度为 nightly pipeline**（spec 2026-11-12-full-auto-pipeline，§1/§3.1）：
+cron `0 23 * * *` 拉起 `pipeline` 子命令，23:00–09:00 窗口内三泳道并行 +
+merge 门每 ~5min 一轮，09:00 软停、`@reboot` 落窗自愈。**人工保留点**：
+feature 类需求确认（`agent-approved`）、紧急停机（`PAUSED` /
+`NO_AUTO_MERGE` 熔断）、ESCALATED 回流、用户非 docs PR 的 merge——
+**merge 红线已反转**：引擎 PR（`fix/issue-N|fix/ci-N|fix/revert-prN`）与
+全 docs-only PR 由 merge 门六门槛全过后自动 squash merge（§7）。
 
 - 引擎：[`scripts/task_loop.py`](../../scripts/task_loop.py)（Python 3.11
   标准库 + `gh` CLI，零第三方运行时依赖；`import pr_loop` 复用 PR 判定，
@@ -16,72 +22,96 @@ merge 永远人工；feature 类需求确认（`agent-approved`）**。
   熔断语义的搬移来源，本文是其泛化后继
 - 测试：`tools/excite/tests/test_task_loop.py` +
   `tools/excite/tests/test_ci_triage.py`（经薄壳，锚定搬移零语义变化），
-  共 111 用例离线锚定全部关键语义；全套 `tools/excite/tests/` 238 passed
+  离线锚定全部关键语义；全套 `tools/excite/tests/` 372 passed（2026-11-13
+  实测，含 pipeline 泳道/merge 门/轮次/软增补/终审修复波用例——C1 跨模块
+  集成、revert 吸收/主查重、冲突夜计数、检视超时锚）
 - 设计规格（会话产物，不入库）：主仓
-  `docs/superpowers/specs/2026-10-29-task-loop-design.md`
+  `docs/superpowers/specs/2026-10-29-task-loop-design.md`（初代）、
+  `docs/superpowers/specs/2026-11-12-full-auto-pipeline-design.md`
+  （nightly pipeline 红线反转）
 
 | # | 触发源 | 自动/手动 | 触发机制 | 人工点 |
 |---|---|---|---|---|
-| 1 | CI 红 run | 自动 | cron 每 30min `scan` → `gh run list` 扫 main 红 run（回看 3 天） | 0（除 merge） |
-| 2 | main 定期对抗审查 | 自动 | cron 每 6h `audit` → main 增量 commit → 对抗审查 → findings 建 bug issue | 0（除 merge） |
-| 3 | 会话内 review 发现 | 手动发起，入队后全自动 | 会话 findings JSON → `enqueue-bug`（`/dev-loop`） | 0（除 merge） |
+| 1 | CI 红 run | 自动 | nightly pipeline intake（窗口内每轮循环）：`gh run list` 扫 main 红 run（回看 3 天）→ 幂等建 issue | 0 |
+| 2 | main 定期对抗审查 | 自动 | pipeline 内 spawn 的 audit 后台线（并发 1）：main 增量 commit → 对抗审查 → findings 建 bug issue | 0 |
+| 3 | 会话内 review 发现 | 手动发起，入队后全自动 | 会话 findings JSON → `enqueue-bug`（`/dev-loop`） | 0 |
 | 4 | 用户新功能需求 | 手动发起 | 会话起草 issue 正文给用户过目 → `enqueue-task` → `approve` | 1：需求确认 |
 | 5 | GitHub 手建 issue | 手动 | 模板建 issue + 打 `agent-task`（bug 即入队；feature 再打 `agent-approved`） | 1（feature） |
 
-## 1. 架构一览
+## 1. 架构一览（nightly pipeline，2026-11-13 起）
 
 ```
-cron */30                          cron 每 6h(17 分)
-  └─ task_loop.py scan               └─ task_loop.py audit(audit.lock 独立)
-       ├─ flock scan.lock(单实例;          ├─ cursor(上次审到的 SHA;首跑回看 24h)
-       │  拿不到锁本轮退出)                ├─ git fetch + log cursor..origin/main
-       ├─ 首启动迁移(旧 state 目录→新,§3)   │  无新 commit → 退出
-       ├─ 标签渠道就位(幂等补 agent-*)      ├─ 复用 pr_local_review 对抗审查引擎
-       ├─ PAUSED 检查(存在→派发全停)        │  (即用即弃 worktree,不占单飞槽)
-       ├─ intake_ci: main 红 run →         ├─ findings hash 双源查重
-       │  幂等建 issue → QUEUED             │  (state audit_seen + gh body marker)
-       ├─ 收割 reap_or_advance             └─ 未见过 → 建 bug issue(入队)
-       ├─ reconcile(队列对账): GitHub open
-       │  +agent-task 且资格达成 ∖ state → QUEUED;
-       │  条目 issue 被人工关闭 → HUMAN_CLOSED
-       ├─ heal: 恢复干净的 main(单树基线)
-       ├─ ci 重派扫(DISPATCHED 无 PID)
-       ├─ 任务 FIFO 派发扫(QUEUED 全部 source,按 issue 号)
-       │    → 单飞派发 headless claude(60 min 预算,prompt 经 stdin)
-       │    → fix/ci-<runid> 或 fix|feat/issue-<N> 分支
-       └─ 车道 B: PR_OPEN/BOT_FIX → pr_loop.classify_state(五 bot 判据)
-            WAITING_BOTS/QUIET_WINDOW → 不动;READY_TO_FIX → collect 导出+派
-            bot 处置 agent(rounds≤4,同 head 只派一次);判定前补第 5 bot 信号;
-            READY_TO_MERGE/CLOSED → @人工 merge + 关 issue + DONE
+cron 0 23(timeout 39600)                    @reboot scripts/pipeline_selfheal.sh
+  └─ task_loop.py pipeline                     （重启落在 23:00–09:00 窗口内
+       ├─ flock pipeline.lock(单实例;            则重新拉起 pipeline,锁双保险)
+       │  拿不到锁本轮退出)
+       ├─ heal_clone: reset --hard origin/main
+       │    (自举:昨晚合入的新引擎代码今晚生效;agent 全在独立
+       │     worktree 跑,主克隆每轮无条件 heal)
+       ├─ 前奏: 首启动迁移(§3.2)/标签渠道就位/清检视每晚计数/启动对账
+       └─ 窗口循环: 23:00–09:00 每 PIPELINE_CYCLE_SEC=300s 一轮(cycle_once)
+            ├ intake: scan_red_runs(main 红 run,回看 3 天)
+            │    → revert 归因(merged_sha 集命中 → revert issue;命中 run
+            │      吸收——不再前向修复,防双 agent 互踩)
+            │    → triage_new_red_runs(吸收后的红 run 幂等建 issue →
+            │      QUEUED;同根因收敛)
+            ├ 槽位 janitor(超时判死回收;boot_id 变化期死亡不计 attempts)
+            ├ 收割 reap_or_advance / 队列对账 reconcile_issues
+            ├ 泳道1 issue-agent ×2 空槽: QUEUED FIFO(资格公式 §2)
+            │    → worktree 切分支 → 修复 → 推分支 → 开 PR → PR_OPEN
+            ├ 泳道2 pr-review-agent ×2 空槽: 无第 5 bot 信号的 open PR head
+            │    → 本地对抗检视发布(每晚每 head ≤2 次,timeout 7500s)
+            ├ 泳道3 pr-repair-agent ×2 空槽: READY_TO_FIX 的引擎 PR
+            │    → collect 导出 → 意见批判处置 → 新 head
+            │      (rounds ≤ 动态上限 2–3,§4)
+            ├ audit 后台线(并发 1,timeout 7500s;距窗末 <7500s 不 spawn)
+            └─ merge 门扫: 引擎 PR + 用户 docs PR 连续评估
+                 → 六门槛全过(§7) → squash merge --delete-branch
+                 + 门槛证据审计评论 + merged_at/merged_sha 记账
+       09:00 软停: 停新派 → 在跑 agent ≤30min(SOFT_STOP_GRACE_SEC)缓冲,
+       超时击杀**不计 attempts**、条目回队次夜续 → worktree 全清
+       → 夜报 report-YYYYMMDD.md + state["last_report"] → 退出
+       (timeout 39600s 外层兜底)
 ```
 
-**scan tick 顺序**（实码序，`_run_scan_orchestration`）：flock `scan.lock`
-（LOCK_EX|LOCK_NB，拿不到打印退出码 0）→ 首启动迁移（仅非 dry）→ 标签渠道
-就位（仅非 dry，失败仅告警）→ PAUSED 检查（派发全停、观测照常）→
-intake_ci（`scan_red_runs` 回看 3 天 → `triage_new_red_runs`：幂等建/复用
-issue → QUEUED；同 workflow 活跃条目 → 挂 `extra_runs` 追加评论不开新
-issue，同根因收敛）→ 收割 `reap_or_advance` → 队列对账
-`reconcile_issues`（资格达成的 manual issue 入队 + HUMAN_CLOSED 清扫——
-清扫以对账拉取的 open 列表预筛，列表内条目零 `gh issue view`，离列表才
-逐条复核一次，PR#317 检视#13 去掉了每条每 tick 的 N+1 探查）→
-`heal_clone` →
-ci 重派扫（DISPATCHED 且无 PID）→ 任务 FIFO 派发扫（QUEUED 全部
-source，按 issue 号排序；两扫先经 `_dispatch_gate_ok` 标签资格复查，
-见 §2）→ 车道 B `lane_b_advance` → state 原子落盘
-（每次成功派发即时落盘，检视#6；finally：GhError 中途崩溃也落盘已推进
-部分；dry-run 不落盘）。
+三泳道全部异步、互不阻塞；intake 是循环步而非前置阶段。每次派发前过
+**内存闸**：`MemAvailable ≥ 8G`（env `PIPELINE_MIN_MEM_GB` 可调，宁慢勿爆）；
+低于阈值本轮不派新，在跑不动、记日志；audit 同过闸。09:00 后到次日
+23:00 前**无任何自动 tick**（白天引擎闲置，会话手动用 `scan` 薄壳/`dry-run`）。
 
-**audit 独立线**（`run_audit`，与 scan 并行不互斥）：
+**cycle_once 轮内顺序**（实码序，`task_loop_pipeline.cycle_once`，裁定#2
+顺序载荷不可破坏——同 key 死槽依赖 janitor 先清，janitor 先于一切派发）：
+intake（`scan_red_runs` → `revert_attribution` → `triage_new_red_runs`）→
+槽位 janitor → 收割 `reap_or_advance` → 队列对账 `reconcile_issues` →
+`heal_clone` → 泳道1 派发（取材含 QUEUED 与「DISPATCHED 且无 agent」，
+经 `_dispatch_gate_ok` 标签资格复查，§2）→ 泳道2 检视派发（PAUSED 同闸；
+`needs_review_list` + `already_reviewed` 幂等）→ 泳道3 车道 B
+（`lane_b_advance`，派发已槽位化为 pr_repair）→ audit 后台线 spawn →
+merge 门扫 `merge_sweep` → state 原子落盘（`_pipeline_save`：pipeline 是
+state 唯一写者；每次成功派发/merge 记账即时落盘，见下）。
 
-- 独立 `audit.lock`（flock）——**不占修复单飞槽**（read-only 审查与第 5 bot
-  `pr_local_review --all-open` 同级定位）；PAUSED 同闸（熔断闸同样管 audit
-  的 claude 调用）。
+**scan 薄壳与 dry-run**：`scan` 子命令降级为「单轮 pipeline 循环」薄壳
+（`run_pipeline_single_cycle`，与 pipeline 共用 pipeline.lock 和同一编排；
+终态 cron 不再调它——旧 scan 行删除随 §3.1 runbook 部署，供会话内手动
+推进）——旧 `_run_scan_orchestration` 编排保留
+给 `dry-run` 子命令的只读预演。`pipeline --dry-run` 全流程零副作用演练
+（零 gh 写/零 git/零 spawn/零本地写）。
+
+**audit 后台线**（`run_audit`，pipeline 内 spawn，并发 1——`spawn_audit`
+槽空则 spawn 一发 `task_loop.py audit` 子进程，timeout 7500s/发）：
+
+- 独立 `audit.lock`（flock）——**不占三泳道槽**（独立 audit 槽 ×1）；
+  PAUSED 同闸（熔断闸同样管 audit 的 claude 调用）。编排层（`spawn_audit`）
+  另补三前置：内存闸不足不 spawn、克隆目录缺失不 spawn、**距窗末剩余
+  < 7500s 不 spawn**（软停击杀会丢收尾 merge-write 白审 ~2h）。
+  子进程 `setsid` 独立——pipeline 死/机器重启，audit 照样跑完。
 - cursor：state 的 `audit_cursor`（上次审到的 SHA + 时间）；无 cursor 首跑
   回看 24h。`git fetch` 后 `cursor..origin/main` 无新 commit → 本轮退出。
 - **单轮 diff 上限（轮5 B48）**：区间 diff 超 3000 行时从**最旧侧切块**，
-  本轮只审一块、cursor 只推进到块基，余量下一轮（6h）续审——PAUSED 长
+  本轮只审一块、cursor 只推进到块基，余量由后续 spawn 续审接力（窗口内
+  audit 槽空即再 spawn 一发）——PAUSED 长
   挂恢复后 base 停在数周前的超大区间不会再因 claude 上下文溢出（空输出/
-  畸形 → strict 抛错 → cursor 不推进）而每 6h 重复烧配额死循环；单个
+  畸形 → strict 抛错 → cursor 不推进）而重复烧配额死循环；单个
   commit 自身超限时仍整块审查（尽力，不卡死在它身上）。
 - 审查复用 `pr_local_review` 对抗审查引擎（prompt 泛化：diff + commit
   messages 替代 PR context），在即用即弃 worktree 里跑，绝不碰用户工作区。
@@ -91,27 +121,40 @@ source，按 issue 号排序；两扫先经 `_dispatch_gate_ok` 标签资格复�
   才建 bug issue（labels `agent-task agent-bug bug`，正文含 marker）。
   findings 入库中途 GhError → 本轮零落盘，下轮靠 gh body marker 查重兜底
   （双源设计的意义）。
-- **state 写入纪律（Ruling 11）——为什么走 `_audit_state_merge_write`**：
-  audit 只持 audit.lock，而 claude 运行数分钟期间并发 scan tick（持
-  scan.lock）会推进 entries（派发记账/收割/对账）——若把 audit 启动时
-  load 的整份快照 save 回去，会把 scan 的推进整体回滚：丢 agent_pid/状态
-  → 单飞失明 → 同一克隆重复派 agent（生产事故 9d6ba452 同类根因）。故
-  audit 的一切持久化都经 `_audit_state_merge_write`：拿 scan.lock（阻塞式
-  flock——audit 自己的临界区只有一次 load+save，亚秒级；scan 从不碰
-  audit.lock，锁序单向无死锁）后 load 磁盘**最新** state，只 update audit
-  自有键（`audit_cursor`/`audit_seen`/`auth_failure_streak`），再原子 save。
-  **entries 的权威属于 scan，audit 永不写它**。认证失效计数
-  `_audit_streak_add` 同一纪律（scan.lock 内对磁盘最新值读-改-写）。
+- **state 写入纪律（Ruling 11，pipeline 期演进）——为什么走
+  `_audit_state_merge_write`**：audit 子进程只持 audit.lock，而其 claude
+  运行数分钟期间并发的编排循环会推进 entries（派发记账/收割/对账）——
+  若把 audit 启动时 load 的整份快照 save 回去，会把编排器的推进整体回滚：
+  丢 agent_pid/状态 → 槽位失明 → 同一 worktree 重复派 agent（生产事故
+  9d6ba452 同类根因）。故 audit 的一切持久化都经 `_audit_state_merge_write`：
+  拿 scan.lock（阻塞式 flock——audit 自己的临界区只有一次 load+save，
+  亚秒级；编排器从不持 scan.lock，锁序单向无死锁）后 load 磁盘**最新**
+  state，只 update audit 自有键（`audit_cursor`/`audit_seen`/
+  `auth_failure_streak`），再原子 save。**entries 的权威属于 pipeline
+  （唯一写者），audit 永不写它**。认证失效计数 `_audit_streak_add`
+  同一纪律（scan.lock 内对磁盘最新值读-改-写）。
+  **pipeline 侧对称纪律（`_pipeline_save`）**：pipeline 整夜持有内存
+  state，落盘走 scan.lock 内 merge-save——audit 独占键
+  （`audit_cursor`/`audit_seen`）以磁盘为权威直接回填（裸 save 会把
+  audit 同窗推进写回旧值）；双写者键 `auth_failure_streak` 合并取
+  max(盘, 内存)——两源任一见 ≥3 连败即熔断，成功归零可能被另一线未
+  归零值掩盖 → **熔断宁早勿晚**（fail-safe）；其余键 pipeline 唯一
+  写者、内存为准。过渡期注意（§3.1 crontab 3 删 2 增部署前）：旧 cron
+  的 scan tick 仍整段持有 scan.lock（分钟级），pipeline 落盘与之串行
+  （有界等待，不构成死锁）。
   **等待时长的如实声明（轮6 #51）**：「亚秒级」说的是 audit 自己的临界区；
-  **等 scan 放锁**的时长可达一个 scan tick 的全长——scan 持锁期间可在
-  lane_b 内同步跑本地 claude 审查（至多 1h），audit 此时会阻塞等待且持着
-  audit.lock（下一 audit tick 锁忙退出，无死锁、无 state 损坏）。部署行
-  的 `timeout 7500` 把这一等待封顶（被杀点若在落盘前 = 设计好的「本轮零
-  落盘」语义，findings 查重由 gh body marker 兜底，下轮重试）。
+  等待其他 scan.lock 持有者放锁的时长以其临界区为界（过渡期旧 scan tick
+  分钟级）。spawn 侧 `timeout 7500` 把整发 audit 封顶（被杀点若在落盘前 =
+  设计好的「本轮零落盘」语义，findings 查重由 gh body marker 兜底，下一发
+  重试）。
 
-**关键约束**（全部由单测锚定）：全局同时最多 **1 个修复 agent**（跨全部
-source 共槽；audit 不占槽）；attempts ≤2、rounds ≤4、认证连续 ≥3 →
-PAUSED 熔断；第 5 bot（local-claude）连续 3 tick 缺位仅告警不降门槛。
+**关键约束**（全部由单测锚定）：三泳道并行槽位 **issue 修复 ×2 / pr 检视
+×2 / 意见修复 ×2**（同 key 互斥、满槽拒绝、超时判死回收；audit 独立
+×1 不占泳道槽）；attempts ≤2、**rounds ≤ 动态上限 2–3**（docs-only 或
+简单 diff（总增删 ≤100 行 ∧ 变更文件 ≤5）→ 2，其余 → 3；取代旧固定
+rounds≤4）、认证连续 ≥3 → PAUSED 熔断；merge 门独立双熔断（PAUSED /
+`NO_AUTO_MERGE`，§7）；三泳道每次派发前过内存闸（MemAvailable ≥ 8G）；
+第 5 bot（local-claude）连续 3 tick 缺位仅告警不降门槛。
 
 ## 2. 标签协议（Copilot assignment 模式）
 
@@ -154,45 +197,57 @@ PAUSED 熔断；第 5 bot（local-claude）连续 3 tick 缺位仅告警不降�
 
 ## 3. 部署
 
-### 3.1 终态 crontab（两行）
+### 3.1 终态 crontab（nightly pipeline，2026-11-13 红线反转）
+
+**3 删**：`33 */6` scan 行（cron 漂移实况，见下）、`17 */6` audit 行、
+`*/30` pr_local_review（第 5 bot 时间线）行。**2 增**（monitor 采集行
+不动，与本体系无关）：
 
 ```cron
-*/30 * * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py scan >> ~/.local/state/sdcshield-task-loop/cron.log 2>&1
-17 */6 * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && timeout 7500 /usr/bin/python3 scripts/task_loop.py audit >> ~/.local/state/sdcshield-task-loop/audit.log 2>&1
+0 23 * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && timeout 39600 /usr/bin/python3 scripts/task_loop.py pipeline >> ~/.local/state/sdcshield-task-loop/pipeline.log 2>&1
+@reboot /home/sdc/wangxu/operator/sdcshield/scripts/pipeline_selfheal.sh
 ```
 
-（audit 取 17 分——避开整点扎堆；scan 行沿用 */30 既有节奏仅换入口。
-**`mkdir -p` 前缀是硬要求**：shell 在命令启动前打开重定向目标，父目录
-缺失时 `>>` 直接失败、命令体根本不执行——而创建该目录的又恰是这个
-python 进程本身（`_run_scan_orchestration`/`run_audit` 启动时的
-makedirs 与首启动迁移）。没有此前缀，换行即鸡生蛋死锁：首个 tick 静默
-死亡，`tail cron.log` 只会看到文件不存在。`~` 由 cron 的 `/bin/sh -c`
-作波浪线展开，与既有行同机制。）
-安装：`crontab -e` 把既有 `ci_triage.py scan` 行替换为上行 scan、新增
-audit 行——`mkdir -p` 前缀使换行**无时序依赖**（不必等首个经薄壳的
-scan 建好新目录）。**cron PATH 注意（轮5 会话#6 如实声明）**——cron
-环境只有 `/usr/bin:/bin` 量级裸 PATH，故用显式 `/usr/bin/python3`。
-**引擎自身的 gh 调用（label ensure / run list / issue create·search·close
-/ pr list）直接跑在 cron 的 PATH 上、从不 source agent.env**——`gh` 必须
-对 cron PATH 可达（本机 gh 在 `~/.local/bin`，靠 crontab 顶部一条
-`PATH=` 头提供；fresh 机器/新 crontab 若无该头，每 tick 会在第一个 gh
-调用处 exit 1）。agent 派发所需的 `claude`/`gh` 由 agent.env 内的
-`PATH` 提供（dispatch 命令先 `source agent.env` 再起 claude）——两个
-PATH 需求相互独立，缺一不可。
+- scan/audit/第 5 bot 检视三条旧 cron 线全部折进 pipeline：CI 红 intake
+  与收割对账是循环步，audit 是 pipeline 内 spawn 的后台线（§1），第 5
+  bot 检视是泳道 2（`pr_local_review.py --pr N` / `--all-open` CLI 保留
+  供会话手动）。
+- `0 23` 启动 + `timeout 39600`（11h，I4：软停等待窗最长 3600s+1800s
+  grace，外层与窗口**零裕量**咬合时软停等待段必被外层 timeout 杀——夜报/
+  记账丢失；11h 留 30min 裕量）外层兜底；pipeline 自身按
+  `--window-start/--window-end`（默认 23/9）窗口循环、09:00 软停。
+- `@reboot` 自愈：机器重启落在 23:00–09:00 窗口内则重新拉起同一命令
+  （`scripts/pipeline_selfheal.sh`，锁语义双保险——已在跑则秒退）。
+  本机频繁重启是常态（2026-11-12 当天 13h 内 5 次 boot）。
+- **`mkdir -p` 前缀是硬要求**（沿袭旧约）：shell 在命令启动前打开重定向
+  目标，父目录缺失时 `>>` 直接失败、命令体根本不执行。`~` 由 cron 的
+  `/bin/sh -c` 作波浪线展开。**cron PATH 注意**：cron 环境只有
+  `/usr/bin:/bin` 量级裸 PATH，故用显式 `/usr/bin/python3`；引擎自身的
+  `gh` 调用直接跑在 cron 的 PATH 上（本机靠 crontab 顶部 `PATH=` 头），
+  agent 派发所需的 `claude`/`gh` 由 agent.env 内 `PATH` 提供（§3.3）。
+- 历史注记（如实记录）：2026-10-31 切换时 scan 部署为 `*/30`，实况后
+  漂移为 `33 */6`（2026-11-12 实测，`crontab -l` 为准）；audit `17 */6`
+  与文档一致；第 5 bot 时间线日志此前仍写旧目录
+  `sdcshield-ci-triage/cron.log`。三行将随本节 runbook 部署删除，漂移随之
+  消解——runbook 是**合入 main 后的人工步骤**，执行前三行旧 cron 仍在，
+  实况以 `crontab -l` 为准。
 
-**部署时序依赖（如实声明）**：autoci 克隆跟踪 main——本 PR 合入**前**，
-crontab 的 `ci_triage.py scan` 走 main 上的旧文件，不受影响；合入
-**后**，main 的 `ci_triage.py` 已是模块别名薄壳（`import task_loop`），
-旧 cron 行自动经壳切到新引擎（首个非 dry scan 触发下述 state 目录迁移，
-输出仍重定向到旧目录 cron.log，无害）；**cron 行换成 `task_loop.py` +
-新增 audit 行是人工步骤**——audit 线在人工添加前不启动。第 5 bot 时间
-触发线（`pr_local_review.py --all-open`，主工作区）不属于本引擎 cron，
-见 [ci-triage.md](ci-triage.md) §2.2，切换不受影响。
+**部署 runbook（合入 main 后人工执行，四步）**：
+
+1. `cd /home/sdc/wangxu/operator/sdcshield-autoci && git fetch origin && git reset --hard origin/main`（自举：pipeline 跑的必须是含本引擎的新 main）
+2. crontab 编辑：删 `33 */6` scan 行、`17 */6` audit 行、`*/30`
+   pr_local_review 行；增上方两行
+3. `touch ~/.local/state/sdcshield-task-loop/NO_AUTO_MERGE`（灰度首夜：
+   merge 门转纯报告模式，只出「本应 merge + 门槛证据」夜报）
+4. 次晨 `tail -50 ~/.local/state/sdcshield-task-loop/pipeline.log` + 最新
+   `report-*.md` 人工复核 merge 门判定 → 复核数晚无误后
+   `rm ~/.local/state/sdcshield-task-loop/NO_AUTO_MERGE` 放开真自动 merge
 
 ### 3.2 首启动自动迁移（state 目录）
 
 `~/.local/state/sdcshield-ci-triage/` → `~/.local/state/sdcshield-task-loop/`，
-`_migrate_legacy_state_dir()` 在 scan/audit 拿到锁后执行（仅非 dry）：
+`_migrate_legacy_state_dir()` 在 pipeline 前奏 / scan 薄壳 / audit 拿到锁后
+执行（仅非 dry）：
 
 - 触发条件：生效 state 目录为默认新目录（env 重定向的测试 run 不迁——
   不动真实目录）∧ 新目录无 `state.json` ∧ 旧目录有；
@@ -221,8 +276,9 @@ crontab 的 `ci_triage.py scan` 走 main 上的旧文件，不受影响；合入
 ### 3.4 完全停用
 
 ```console
-crontab -e    # 删两行部署行(停调度)
-touch ~/.local/state/sdcshield-task-loop/PAUSED   # 保险:已在跑的 tick 不再派发
+crontab -e    # 删两行部署行(0 23 pipeline + @reboot 自愈,停调度)
+touch ~/.local/state/sdcshield-task-loop/PAUSED   # 保险:已在跑的循环不再派发
+touch ~/.local/state/sdcshield-task-loop/NO_AUTO_MERGE  # 保险:只停自动 merge(派发照常)
 ```
 
 ## 4. 状态机速查
@@ -236,22 +292,40 @@ touch ~/.local/state/sdcshield-task-loop/PAUSED   # 保险:已在跑的 tick 不
 | `DISPATCHED` | 修复/实现 agent 在跑 | 派发成功（打 `agent-wip`，attempts+1） | （prompt 要求 agent 最终把报告贴 issue） |
 | `PR_OPEN` | agent 自开 PR 已核实 | 收割核实 `gh pr list --head` 命中 open PR | 贴 PR 简报评论（车道 A→B 的唯一铰链） |
 | `BOT_FIX` | bot 意见处置 agent 在跑 | 车道 B READY_TO_FIX → collect 导出 + 派 agent（rounds+1，**同 head 只派一次**） | 处置报告贴 issue |
-| `DONE` | 结案 | 车道 B 判定 READY_TO_MERGE/CLOSED | @wangxumarshall 请人工 merge（或合并/关闭总结）+ 关 issue + 摘 wip |
-| `ESCALATED` | 升级人工，冻结 | attempts>2 / rounds≥4 / agent 自报 escalated / 熔断 | @wangxumarshall 评论附日志尾证据与建议 + `agent-escalated` 标签 + 摘 wip |
+| `DONE` | 结案 | 引擎 PR：merge 门六门槛全过自动 squash merge（§7）后置 DONE，**记账 `merged_at`/`merged_sha`（revert 归因主数据，人工 merge 永不写）**；用户 docs PR：merge 门过即合（无条目，不进状态机） | PR 评论贴门槛证据审计 + issue 贴闭环评论 + 关 issue + 摘 wip |
+| `ESCALATED` | 升级人工，冻结 | attempts>2 / rounds 超动态上限（2/3，§4 全局机制）/ agent 自报 escalated / 熔断 / revert 二阶链 / 与 main 冲突连续 ≥2 夜（`conflict_nights`，merge 门逐夜计数——夜 = pipeline 夜 23:00–09:00 跨午夜，同夜多轮 cycle 不重复计数；spec §5——不自动 rebase） | @wangxumarshall 评论附日志尾证据与建议 + `agent-escalated` 标签 + 摘 wip |
 | `HUMAN_CLOSED` | 人工接管，工具永不再碰 | QUEUED/DISPATCHED 条目 issue 已被人工关闭（无 PR 路径；有 PR 路径的由车道 B 收尾） | 不 @ 不评论（DISPATCHED 先击杀在跑 agent、摘 wip） |
 
 **全局机制**：
 
-- **单飞**：全局同时最多 1 个修复 agent，跨全部 source 共槽——派发前
-  `has_running_agent` 检查（PID 探活），冲突拒绝派发下一轮再试；audit
-  不占槽。
+- **三泳道槽位**：issue 修复 / pr 检视 / 意见修复各 ×2 并行（audit 独立
+  ×1 不占泳道槽）——槽位租约带 `started_at`+PID+`boot_id`，超时判死回收、
+  同 key 互斥、满槽拒绝下一轮再试；取代旧「全局单飞 1 agent」约束。
 - **attempts ≤ 2**：dead/timeout/谎报 done（日志称 done 但 `gh pr list`
   查无 PR）各 +1，超限升级；agent 诚实自报 escalated **不计** attempts
-  （诚实上报不是失败重试）。
-- **rounds ≤ 4**：车道 B bot 意见处置轮数，`rounds ≥ 4` → ESCALATED。
-- **认证熔断**：`auth_failure_streak` 跨条目/跨车道/含 audit 累计（任何
-  一次 success 归零——防「连续 ≥3」退化成「累计 ≥3」）；连续 ≥3 → 写
-  `PAUSED` + 升级评论。
+  （诚实上报不是失败重试）；**窗口软停击杀与机器重启（boot_id 变化）死亡
+  同样不计**——环境性失败 ≠ agent 失败（PR #611 attempts=4 假性升级教训），
+  条目干净回队次夜续跑。
+- **rounds 动态上限 2–3**：检视-修复轮数按复杂度定（`max_rounds_for`：
+  docs-only 或简单 diff——总增删 ≤100 行 ∧ 变更文件 ≤5 → 上限 2；
+  其余 → 上限 3），超限 ESCALATED——取代旧固定 `rounds ≤ 4`。
+- **认证熔断**：`auth_failure_streak` 跨条目/跨泳道/含 audit 累计（任何
+  一次 success 归零——防「连续 ≥3」退化成「累计 ≥3」；pipeline 落盘与
+  audit 锁下合并写取 max，宁严勿松）；连续 ≥3 → 写 `PAUSED` + 升级评论。
+- **merge 记账与 revert 归因**：引擎 PR 自动 merge 后 entry 记
+  `merged_at`/`merged_sha`——只由编排器 merge 执行写（**人工 merge 的
+  sha 永不进归因集**，回读失败降级 None 并 [warn]——已合入是事实，账面
+  如实反映）；夜间 intake 发现 main 红 run 且 `head_sha` 命中 `merged_sha`
+  集 → 建 revert issue（分支随 issue 约定 `fix/issue-<N>`——issue 走泳道1
+  派发即按 issue 号建分支，不为 revert 单设命名；merge 门正则
+  `fix/revert-prN` 模式为防御性冗余保留，正文 `revert-for: PR #N @ <sha>`
+  双源查重——state `revert_seen` 主查重（建成即记，跨轮零 gh）+ gh 裸 sha
+  双态搜索兜底（state 丢失/重启后，open/closed 命中均不重建））入泳道1，
+  revert PR 走**同一 merge 门**；归因命中且已建/已有 revert issue 的红 run
+  **吸收**——不再走 triage 前向修复（防 revert agent 与修复 agent 对同一
+  故障互踩），归因不到/查重与探针失败转人工的红照旧前向修复（兜底零
+  丢失）；revert 链深度 ≤1——revert
+  PR 再引红直接 ESCALATED（防 revert 打乒乓球）。
 - **同根因收敛**：同 workflow 有活跃条目（非 DONE/ESCALATED/HUMAN_CLOSED
   三终态，与上表一致）时新红 run 不开新 issue，只挂 `extra_runs` + 追加评论；
   HUMAN_CLOSED 是终态——人工已接管的死条目不参与收敛，新红 run 照常开新
@@ -259,17 +333,24 @@ touch ~/.local/state/sdcshield-task-loop/PAUSED   # 保险:已在跑的 tick 不
 
 ## 5. 运维
 
-### 5.1 kill switch（一键停派发）
+### 5.1 kill switch（双闸：停派发 / 停自动 merge）
 
 ```console
-touch ~/.local/state/sdcshield-task-loop/PAUSED   # 停:派发全停,观测照常
+touch ~/.local/state/sdcshield-task-loop/PAUSED   # 停:一切派发全停,观测照常
 rm    ~/.local/state/sdcshield-task-loop/PAUSED   # 恢复
+touch ~/.local/state/sdcshield-task-loop/NO_AUTO_MERGE   # 只停自动 merge:merge 门转纯报告模式
+rm    ~/.local/state/sdcshield-task-loop/NO_AUTO_MERGE   # 恢复自动 merge
 ```
 
-PAUSED 语义：`dispatch_agent` 内部闸门——存在即拒绝一切派发（车道 A/B
-同闸），audit 的 claude 调用同样被拦；扫描/issue 搜索/收割观测照常。
-kill switch 与熔断共用 PAUSED 文件；过渡期旧目录
+PAUSED 语义：`dispatch_agent` 内部闸门——存在即拒绝一切派发（三泳道
+同闸），audit 的 claude 调用与泳道2 检视派发同样被拦；扫描/issue 搜索/
+收割观测照常。kill switch 与熔断共用 PAUSED 文件；过渡期旧目录
 （`sdcshield-ci-triage`）的 PAUSED 同样生效（双路径检查）。
+
+`NO_AUTO_MERGE` 语义（merge 门专用熔断，spec §11 灰度）：存在即 merge
+门转**纯报告模式**——检视/修复/audit 全部照常跑，merge 只在夜报记
+would-merge（PR 号 + 门槛逐条证据）绝不执行；部署灰度与运行期紧急停
+自动 merge 共用此文件（§3.1 runbook 第 3/4 步）。
 
 ### 5.2 熔断恢复
 
@@ -282,9 +363,16 @@ kill switch 与熔断共用 PAUSED 文件；过渡期旧目录
 
 ```console
 cd /home/sdc/wangxu/operator/sdcshield-autoci
-python3 scripts/task_loop.py status            # 队列总览: streak/PAUSED/单飞占用
+python3 scripts/task_loop.py status            # 队列总览: streak/PAUSED/槽位占用
+                                               #   + 顶部最近一夜报告行(state["last_report"])
                                                #   + 全部条目 + 待入队任务
-python3 scripts/task_loop.py dry-run           # scan 只读演练: 零 gh 写/零 git/零派发/零本地写
+python3 scripts/task_loop.py scan              # 单轮 pipeline 循环薄壳: 会话内手动推进,
+                                               #   与 pipeline 共用 pipeline.lock 和同一编排;
+                                               #   (终态不再由 cron 调,夜间编排归 pipeline;
+                                               #    旧 scan 行删除随 §3.1 runbook)
+python3 scripts/task_loop.py pipeline --dry-run # nightly pipeline 全流程零副作用演练:
+                                               #   零 gh 写/零 git/零 spawn/零本地写
+python3 scripts/task_loop.py dry-run           # 旧 scan 编排只读演练: 零 gh 写/零 git/零派发/零本地写
                                                #   (不建状态目录/锁文件),复跑无痕;
                                                #   迁移前(新目录无 state、legacy 有)只读
                                                #   回退加载 legacy 状态预演——与真实首 tick
@@ -308,15 +396,20 @@ env 重定向（测试/多实例）：`TASKLOOP_STATE_DIR`（>
 
 | 文件 | 内容 |
 | --- | --- |
-| `state.json` | 全部条目 + 熔断计数 + audit cursor/seen（原子写：tmp → os.replace） |
-| `PAUSED` | 存在即 kill switch/熔断生效 |
-| `scan.lock` | scan 互斥锁（flock） |
-| `audit.lock` | audit 互斥锁（与 scan 分离，不占修复单飞槽） |
+| `state.json` | 全部条目（含 `merged_at`/`merged_sha`）+ 槽位账本 `slots` + 熔断计数 + audit cursor/seen + `last_report`（原子写：tmp → os.replace；pipeline 唯一写者，`_pipeline_save` 锁下 merge-save） |
+| `PAUSED` | 存在即 kill switch/认证熔断生效（派发全停） |
+| `NO_AUTO_MERGE` | 存在即 merge 门转纯报告模式（§5.1） |
+| `pipeline.lock` | pipeline/scan 薄壳互斥锁（flock） |
+| `scan.lock` | state merge-save 互斥锁（flock；audit 子进程合并写与 `_pipeline_save` 共用） |
+| `audit.lock` | audit 互斥锁（与编排锁分离，不占泳道槽） |
 | `agent.env` | 凭据环境快照（600，§3.3） |
 | `agent-<runid 或 issue-N>-<UTC 时间戳>.log` | 每次派发的 agent 完整 stdout/stderr（ci 源按 run_id、其余源按 issue 号命名；重派不覆盖上一轮现场） |
 | `prompt-<issue 号>-<UTC 时间戳>.txt` | 派发 prompt 落盘（0600，经 stdin 喂给 claude——修 argv 传 prompt 的 ARG_MAX 隐患；issue 号缺省时用 run_id） |
 | `collect-pr<N>.md` | 车道 B 派发前导出的 bot 检视意见（不可信检视数据） |
-| `cron.log` / `audit.log` | crontab 重定向的 scan / audit 输出 |
+| `pipeline.log` | crontab `0 23` 重定向的 pipeline 输出（revert 转人工/升级/查重留痕在此，夜报正文引其路径） |
+| `report-YYYYMMDD.md` | 每晚夜间报告＝**事件清单**（`write_report` 实落内容：merge/would-merge/gate-reject/revert-issue/槽回收事件，一事一行）+ 人工介入信号见 `pipeline.log`（转人工/升级/查重/去重留痕只在 stdout，夜报正文只引其路径，不复制内容）；`state["last_report"]` 记最新一份，`status` 顶部展示 |
+| `audit.log` | pipeline spawn 的 audit 后台线输出 |
+| `cron.log` | 旧 scan 输出归档（终态 cron 不再调 scan——旧 scan 行删除随 §3.1 runbook） |
 
 旧目录 `~/.local/state/sdcshield-ci-triage/` 迁移后保留归档（含历史
 agent 日志与 cron.log）。
@@ -328,28 +421,33 @@ agent 日志与 cron.log）。
 凭据后删 PAUSED（§5.2）。连续 ≥3 次会自动熔断，不会无限烧配额。
 
 **Q：为什么我的 PR 没被接管？**
-车道 B 只接管引擎**自己派生**分支的 PR——`fix/ci-<runid>` 与
+车道 B（泳道3）只接管引擎**自己派生**分支的 PR——`fix/ci-<runid>` 与
 `fix|feat/issue-<N>`（`pr_number` 唯一来源是收割 success 路径的
 `gh pr list --head <fix_branch>` 查询，车道 B 从不扫描存量 open PR）。
-用户在研 PR 完全不碰——继续用交互式 `/pr-loop`（D6 决策，根除同一 PR
-并发 actor 冲突）。
+用户在研 PR 的检视-修复不接管——继续用交互式 `/pr-loop`（D6 决策，根除
+同一 PR 并发 actor 冲突）。**例外是 merge 门的 docs-only 快道**（§7）：
+用户 docs PR 标题无 `WIP:` 前缀且零可行动意见时会被当夜自动合入——
+`WIP:` 前缀即草稿闸（不想被合就保留前缀）；检视信号（第 5 bot）仍照常
+提供，有意见则不合入、留人工。
 
 **Q：feature issue 为什么一直不派发？**
 缺 `agent-approved`（feature 类的派发门，§2 资格公式）。`python3
-scripts/task_loop.py approve <N>` 或 GitHub 手动打标签，下一 scan tick
-进队列。
+scripts/task_loop.py approve <N>` 或 GitHub 手动打标签，下一轮编排循环
+进队列（夜间 pipeline 自动；白天可 `scan` 薄壳手动推进，§5.3）。
 
 **Q：agent 会不会碰我的工作区？**
 不会。修复/实现 agent 只在独立克隆
-`/home/sdc/wangxu/operator/sdcshield-autoci` 里工作（cwd 即克隆目录），
+`/home/sdc/wangxu/operator/sdcshield-autoci` 的**每条目独立 worktree**
+（`<clone>/.worktrees/<lane>-<key>`，派发前 `git worktree add`，收割/软停
+remove、残留由每轮无条件 heal 清）里工作，
 prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/main` 起
-`checkout -B fix|feat/issue-<N>`，结束回干净 main。audit 的审查在克隆内
+`checkout -B fix|feat/issue-<N>`。audit 的审查在克隆内
 的即用即弃 worktree 跑（`cmd_audit` 先 chdir 到克隆目录，缺失时如实
 报错退出，绝不留在用户工作区）。
 
 **Q：如何完全停用？**
-`crontab -e` 删两行部署行 + `touch PAUSED`（§3.4）。已开 issue 保留
-人工处置。
+`crontab -e` 删两行部署行（`0 23` pipeline + `@reboot` 自愈）+
+`touch PAUSED`（§3.4）。已开 issue 保留人工处置。
 
 ## 7. 依赖与红线（agent prompt 硬编码）
 
@@ -369,7 +467,8 @@ prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/
   不是安全边界**（同 pr_local_review 的 I3 已知边界）。所有 agent 与
   audit 审查都以 `--dangerously-skip-permissions` 跑**无沙箱** claude，
   可执行任意命令；其输入面包括 PR diff/正文、issue 正文/评论、CI 日志，
-  以及 **audit 每 6h 对 main 增量的 diff 全文 + commit messages**——
+  以及 **audit 后台线（旧「每 6h」cron 将随 §3.1 runbook 部署删除，终态为
+  pipeline 窗口内 spawn 的多轮接力，§1）对 main 增量的 diff 全文 + commit messages**——
   squash-merge 的 commit message 可含外部贡献者（无 push 权者）撰写的
   PR 标题/正文文本，即无人值守线会周期性地把此类文本喂给无沙箱 claude。
   这是与第 5 bot「PR 内容同源暴露」同级的**已知接受边界**（单人体量下
@@ -385,13 +484,44 @@ prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/
   --body "Closes #N + 报告"`）；与 `auto-pr.yml` 谁先谁后不定——create
   因"分支已有 PR"失败时兜底 `gh pr edit` 改写标题与正文（必须含
   `Closes #N`），两条路径终态一致。
-- **merge 永远在人**：引擎、agent、命令面都绝不 merge、绝不 resolve。
+- **merge 红线（2026-11-13 反转，spec 2026-11-12-full-auto-pipeline §5）**：
+  merge 执行权在**编排器确定性门槛代码**（`evaluate_merge_gate` →
+  `execute_merge`），绝不在 LLM——agent prompt 红线「绝不 merge」沿用，
+  agent 仍一律不许 merge。范围与门槛：
+  - **引擎 PR**（state 有条目 ∧ head 分支匹配
+    `fix/issue-N|fix/ci-N|fix/revert-prN`）与**全 docs-only PR**（全部
+    变更文件 `.md`；不要求引擎归属、适用任意 PR）过门自动
+    `gh pr merge --squash --delete-branch`；**用户非 docs PR 永不自动
+    merge**，由人执行。
+  - **六门槛**（任一不过不动，只判不执行分离）：①归属（docs-only 例外
+    放宽）；②检视——`classify_state == READY_TO_MERGE`，docs 快道放宽为
+    第 5 bot 唯一必需信号（外部 4 bot 事件驱动照跑不等待）+ 静默窗
+    900→300s + 零可行动意见；③CI check——全门槛查 `lint`/`git-sanity`/
+    `Build binary for CPU (Linux)`/`zizmor`，docs-only 只查前二；红 job 与
+    **最近 3 个已合入 PR 同 workflowName 的红 job 集**对照，全组 ⊆
+    基线 → 判「继承红」放行（PR #426/#343 先例，门槛内建基线对照）；
+    ④open ∧ 非 DRAFT ∧ 非 fork ∧ mergeable；⑤熔断——PAUSED 与
+    `NO_AUTO_MERGE` 双熔断（任一存在 → merge 门转纯报告模式，§5.1）；
+    ⑥审计——merge 前 PR 评论贴门槛逐条证据，merge 后 state 记
+    `merged_at`/`merged_sha`（revert 归因主数据，人工 merge 永不写）、
+    issue 贴结案评论。
+  - **docs 快道草稿闸**：标题 `WIP:` 前缀 = 草稿永不自动 merge，去掉
+    前缀 = 显式同意当夜合入（auto-pr 生成标题恰为 `WIP: <分支>`，闸与
+    现状自洽）。
+  - **`NO_AUTO_MERGE` 永远有效**：`touch` 后 merge 门纯报告（would-merge
+    证据进夜报），复核后 `rm` 放开——部署灰度与紧急停共用（§3.1/§5.1）。
+  - **自动 resolve review threads 仍然禁止**（该红线未反转）：检视意见
+    逐条批判性处置 + reply 答复（§1 泳道3），绝不自动 resolve/mark
+    resolved；剩余 threads 保留供人工。
+  - merge 后 main 红 → 精确归因自动 revert（`merged_sha` 集命中才回滚，
+    §4 全局机制）；归因不到照旧前向修复。
 
 ## 8. 与 pr_loop / ci_triage 的关系
 
 依赖栈（方向不变）：`pr_local_review`（基座：gh 原语 + 本地对抗审查）
-→ `pr_loop`（中层：PR 五 bot 状态机）→ `task_loop`（顶层：cron 编排 +
-issue 生命周期 + agent 派发收割）。
+→ `pr_loop`（中层：PR 五 bot 状态机）→ `task_loop`（顶层：nightly
+pipeline 编排 + issue 生命周期 + agent 派发收割 + merge 门，
+`task_loop_pipeline` 模块承载泳道/门槛/软停/夜报）。
 
 - **pr_loop** 管"已存在 PR 的检视-修复循环"——车道 B 全量复用其
   `fetch_pr`/`classify_state`/`render_collect`/`ensure_local_review`
@@ -424,9 +554,15 @@ issue 生命周期 + agent 派发收割）。
 - `/dev-loop approve <N>`：`python3 scripts/task_loop.py approve <N>`。
 - `/dev-loop status`（缺省）：队列总览。
 - **PR 开出后路由到 `/pr-loop` 阶段 2–6**（wait → collect → 批判性处置
-  → 循环 → merge 提醒），零重复实现。
+  → 循环 → merge 交接），零重复实现。
 
 ## 10. 验收记录（实测，2026-10-31）
+
+> 历史注记：本节是 **scan-cron 时代**（`*/30` scan + `17 */6` audit 双
+> cron、「READY_TO_MERGE 时 @人工 merge」旧红线）的部署切换与验收记录，
+> 全部为当时真实事件，保留供追溯；2026-11-13 起调度与 merge 政策已被
+> nightly pipeline 取代（§1/§3.1/§7），下述 cron 形态与 merge 提醒语义
+> 不再是现状。
 
 **部署切换时间线（全部真实事件，本机观测）**：
 
@@ -456,9 +592,10 @@ issue 生命周期 + agent 派发收割）。
   循环 → merge 提醒；异常结局（ESCALATED/HUMAN_CLOSED 路径）如实记录。
   此项同时是 PR-5（删薄壳）的前置条件。
 
-观测命令：`tail -5 ~/.local/state/sdcshield-task-loop/cron.log`（scan）、
-`tail -5 ~/.local/state/sdcshield-task-loop/audit.log`（audit）、
-`python3 scripts/task_loop.py status`（队列总览）。
+观测命令（nightly pipeline 时代，§5.3/§5.4）：
+`tail -50 ~/.local/state/sdcshield-task-loop/pipeline.log`（pipeline）、
+最新 `report-YYYYMMDD.md`（夜报）、`python3 scripts/task_loop.py status`
+（队列总览，顶部含最近一夜报告行）。
 
 ## 11. 延伸阅读
 

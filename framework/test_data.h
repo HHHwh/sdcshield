@@ -93,14 +93,17 @@ struct Common
  * 载体。字段语义:
  *   - test_id_hash: test->id 的 FNV-1a 64 位哈希; 0 = 空槽(fresh memfd
  *     零页)。槽被不同测试复用时按哈希失配重置(防读到陈旧值, spec §8)。
- *   - eff_ratio:   VmHWM/(n²·elem·本slice线程数) 的 EMA(α=0.5)。记账
- *     口径由联合求解侧缓存(sdc_joint_cache), 未走联合求解的测试无写入。
+ *   - eff_ratio:   (VmHWM − fork 基线)/(n²·elem·本slice线程数) 的
+ *     EMA(α=0.5); 基线在 run_one_test_inner 入口、任何测试分配前采样
+ *     (issue #385, 见 sandstone_run.cpp sdc_feedback_write)。记账口径由
+ *     联合求解侧缓存(sdc_joint_cache), 未走联合求解的测试无写入。
  *   - samples:     EMA 样本数(该槽该测试的写入次数), 0 = 无有效反馈。
  *   - seq:         seqlock 序号(PR#302 检视 #13/#26)。槽是 MAP_SHARED
  *     上的单写者(本 slice 的当前 child)/多读者(兄弟 slice child 的
  *     test_init 读侧)共享字段——普通非原子 store/RMW 是标准意义的
  *     data race, 编译器与架构重排都可使读者见到混合态(如新 hash 配
- *     旧 eff_ratio, 异常偏大的旧 eff 会经无上钳的向上修正放大 n_mem)。
+ *     旧 eff_ratio, 异常偏大的旧 eff 会经向上修正放大 n_mem——#385 的
+ *     4×锚上钳只限制放大倍数, 不替代本 seqlock 的混合态防护)。
  *     写者: [seq→奇(relaxed, s1=seq0|1)] → 字段更新(复位+EMA) →
  *     [s1+1→偶(release)]；置奇用 |1 而非 +1: 上代写者被杀使 seq 停在
  *     奇数时, +1 会把半写态发布为偶数"稳定态"且令此后相位永久倒置,

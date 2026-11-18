@@ -131,19 +131,19 @@ static int neon_rot_ldr_at_top_rowmajor_gps_sve_init(struct test *test) {
         data->scratch[j] = gps_sve_tag(GPS_SVE_MAGIC_SCR, (uint64_t)j * 8, 0);
     }
 
-    /* golden: 从标签数据按父系旋转预计算 (标签流经 ALU) */
-    svbool_t pg = svptrue_b64();
-    for (int i = 0; i < data->slots; i++) {
-        svuint64_t a = svld1_u64(pg, data->srcA + (size_t)i * lanes);
-        svuint64_t b = svld1_u64(pg, data->srcB + (size_t)i * lanes);
-        svuint64_t res = svundef_u64();
-        switch (i % 4) {
-            case 0: res = svadd_u64_x(pg, a, b); break;
-            case 1: res = sveor_u64_x(pg, a, b); break;
-            case 2: res = svand_u64_x(pg, a, b); break;
-            case 3: res = svorr_u64_x(pg, a, b); break;
+    /* golden (issue #373): scalar independent recomputation — 从标签数据
+     * 以纯 C 整数运算复算（标量管线，非被测 SVE 单元），持久 SVE 数据
+     * 通路故障不再能同时污染 golden 与 actual。相位 = 槽序号 % 4（一槽
+     * = `lanes` 个连续元素，与 run 循环的按槽 switch 一致）。上方 GPS
+     * 标签填充是输入生成：填充故障对 golden 与 run 输入同构污染，任何
+     * 输出比对 golden 都无法检出，超出本范式（PR #412 k7pattern 裁定）。 */
+    for (size_t e = 0; e < elems; e++) {
+        switch ((e / (size_t)lanes) % 4) {
+            case 0: data->expected[e] = data->srcA[e] + data->srcB[e]; break;
+            case 1: data->expected[e] = data->srcA[e] ^ data->srcB[e]; break;
+            case 2: data->expected[e] = data->srcA[e] & data->srcB[e]; break;
+            case 3: data->expected[e] = data->srcA[e] | data->srcB[e]; break;
         }
-        svst1_u64(pg, data->expected + (size_t)i * lanes, res);
     }
 
     mkdir("movbe_log", 0755);        /* mkdir creates only the last component */

@@ -1,2 +1,0 @@
-command-line: 'sdcshield -e mesh_upi_sse_asymm_distrib_int -t 13356s --max-test-loop-count=0 --on-crash=context --on-hang=kill --ignore-timeout --ignore-os-errors --retest-on-failure=3 --temperature-threshold=95000 -o /home/sdc/sdc-excite-reproduce/logs/20261009/091419-l4_dwell_mesh_upi_sse_asymm_distrib_int_c20.yaml'
-version: sdcshield-6a4f4e16ec03-dirty
