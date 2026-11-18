@@ -110,21 +110,48 @@ static int llc_randomized_load_run(struct test *test, int cpu) {
     memset_random(data.data(), buffer_bytes);
     memset(check.data(), 0, buffer_bytes);
 
+    /* init-time golden sum of data[] — data[] is never written after
+     * this, so any later read of a corrupted line changes the sweep
+     * sum below (the L3 verification reference) */
+    uint64_t golden_sum = 0;
+    for (size_t i = 0; i < num_words; ++i)
+        golden_sum += (uint64_t)data[i];
+
     do {
-        size_t idx = random64() % num_words;
+        for (uint64_t batch = 0; batch < (1ULL << 22); ++batch) {
+            size_t idx = random64() % num_words;
 
-        /* randomized LLC load — the pressure the spec asks for */
-        uint32_t original = data[idx];
+            /* randomized LLC load — the pressure the spec asks for */
+            uint32_t original = data[idx];
 
-        /* store -> REAL load-back through the LSU forwarding path */
-        check[idx] = original;
-        uint32_t loaded = llrl_ldr(&check[idx]);
+            /* store -> REAL load-back through the LSU forwarding path
+             * (secondary surface, kept) */
+            check[idx] = original;
+            uint32_t loaded = llrl_ldr(&check[idx]);
 
-        if (memcmp(&original, &loaded, sizeof(uint32_t)) != 0) {
-            report_fail_msg("llc_randomized_load: store->load "
-                            "consistency failure at idx %zu: stored "
-                            "0x%08x loaded 0x%08x (LSU forwarding path)",
-                            idx, original, loaded);
+            if (memcmp(&original, &loaded, sizeof(uint32_t)) != 0) {
+                report_fail_msg("llc_randomized_load: store->load "
+                                "consistency failure at idx %zu: stored "
+                                "0x%08x loaded 0x%08x (LSU forwarding path)",
+                                idx, original, loaded);
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* L3 verification sweep (2026-11-17 rework, user directive):
+         * dense full-word re-read of data[] — window-sized traffic
+         * evicts the private L2, so this sum compare is L3/DRAM-
+         * served and catches corruption the immediate pair cannot
+         * (the register-laundering blind spot of data[] loads). */
+        uint64_t sweep_sum = 0;
+        for (size_t i = 0; i < num_words; ++i)
+            sweep_sum += (uint64_t)data[i];
+        if (sweep_sum != golden_sum) {
+            report_fail_msg("llc_randomized_load: golden sweep mismatch: "
+                            "init sum 0x%016lx sweep sum 0x%016lx "
+                            "(L3-resident data corruption)",
+                            (unsigned long)golden_sum,
+                            (unsigned long)sweep_sum);
             return EXIT_FAILURE;
         }
     } while (test_time_condition(test));
@@ -132,7 +159,7 @@ static int llc_randomized_load_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(llc_randomized_load, "Stress LLC with persistent randomized loads over per-thread windows sized to the probed per-cluster L3 (capacity-boundary working set); store->asm-ldr load-back bit verification on the LSU forwarding path (ARM64)")
+DECLARE_TEST(llc_randomized_load, "Stress LLC with persistent randomized loads over per-thread windows sized to the probed per-cluster L3; store->asm-ldr load-back on the LSU forwarding path PLUS periodic dense golden-sum sweep of the whole window (L3-path verification, 2026-11-17 rework) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = llc_randomized_load_init,
     .test_run = llc_randomized_load_run,
