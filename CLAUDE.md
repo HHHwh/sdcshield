@@ -81,7 +81,9 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               ARM64_REQUIRES_SVE/SVE2 门控, 净变化 0)
                                                #   PR #814 merge 后（L3_cache_920 统一目录 30 件 + 退役重复件
                                                #               与 4 件 FP64 复制体）：firestorm no-SVE 本机 2026-11-18
-                                               #               实测 519 PROD / 628 q0 / 632 q-1（链见 README）。
+                                               #               实测 519 PROD / 628 q0 / 632 q-1（链见 README）；
+                                               #               +fmov_train 对 2（11-18 晚，跨堆 FMOV 消费链
+                                               #               独立验证对）→ 0102 主机实测 522/631/635。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
