@@ -363,6 +363,16 @@ if host_machine.cpu_family() == 'aarch64'
             'L3_cache_920/llc_randomized_load.cpp',
             'L3_cache_920/llc_uniform_load.cpp',
             'L3_cache_920/l3_execute.cpp',
+            # adaptive_l3_sdc (2026-11-18): adaptive_mem_sdc runtime
+            # chassis (21-combo shm rotation: combat/test/verify, KEY/
+            # MODE/TEST_SLICE/ORDER/COMBO/VERIFY/COVFILE env contract)
+            # with the L3_cache_920 load patterns as the engine layer
+            # (7 patterns x scalar/NEON/FP64 datapaths, each pattern
+            # semantically identical to its parent test in this
+            # directory).  NOTE: no .fracture_loop_count override in the
+            # test — the rotation model relies on the framework's
+            # default auto-fracture re-forking short-lived children.
+            'L3_cache_920/adaptive_l3_sdc.cpp',
             'cache/flushed_memcpy.cpp',
             'cache/flushed_memcpy_bis.cpp',
             'cache/sfence.cpp',
