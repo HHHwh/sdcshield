@@ -47,7 +47,7 @@
 - llcstress 延迟复验中刚重写的尾部槽位停留 L2（混合服务，源码注记）
 - write_only avx2 版簇内并发 >6 线程时聚合超切片（流式为主，源码注记）
 - SVE 孪生不随迁（`tests/cpu/sve/mesh/` 按其自身组织）
-- arm_add/fp64 下同名 NEON/FP64 孪生仍是改造前结构（后续传导，未入夹）
+- arm_add/fp64 下的同名 NEON/FP64 孪生（`llc_{randomized,uniform}_load_neon`、`llcstress_neon{,_fp64}`、`l3_execute_neon{,_fp64}` 共 6 件）已于 2026-11-18 **同步传导能力改造**（civac 逐出 L2 / 延迟复验扫 + STRIDE_V 512 / 动态 L3 窗 + 稠密向量黄金扫算），留在其家族目录（arm_add NEON pass / fp64 数据通路族）组织
 
 ## x86-64
 

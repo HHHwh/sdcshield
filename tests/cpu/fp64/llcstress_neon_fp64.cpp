@@ -29,8 +29,13 @@ static inline void st_vec(double *a, float64x2_t v) {
 }
 
 static constexpr size_t LLSN_MEM_SIZE  = 64ULL * 1024 * 1024;  /* 64 MB  */
-static constexpr size_t LLSN_STRIDE_V  = 1024;   /* f64x2 slots per band  */
+/* 2026-11-18 L3-capability rework (twin of the scalar parent's):
+ * STRIDE_V 1024 -> 512 so a thread's own-slot footprint is 8192 lines
+ * (512 KB = the private L2 boundary, parent parity), plus a DELAYED
+ * RE-VERIFICATION sweep below. */
+static constexpr size_t LLSN_STRIDE_V  = 512;    /* f64x2 slots per band  */
 static constexpr size_t LLSN_BANDS     = LLSN_MEM_SIZE / 16 / LLSN_STRIDE_V;
+static constexpr uint64_t LLSN_SWEEP_EVERY = 65536;
 
 static int llcstress_neon_fp64_init(struct test *test) {
     auto *mem = new std::vector<uint8_t>;
@@ -56,47 +61,72 @@ static int llcstress_neon_fp64_run(struct test *test, int cpu) {
     std::vector<double> counts(LLSN_BANDS * 2, 0.0);
 
     do {
-        /* random band; our vector slot inside it — full-window
-         * roaming, zero same-slot races across threads */
-        size_t band = random64() % LLSN_BANDS;
-        double *slot = base + (band * LLSN_STRIDE_V + (size_t)cpu) * 2;
+        for (uint64_t batch = 0; batch < LLSN_SWEEP_EVERY; ++batch) {
+            /* random band; our vector slot inside it — full-window
+             * roaming, zero same-slot races across threads */
+            size_t band = random64() % LLSN_BANDS;
+            double *slot = base + (band * LLSN_STRIDE_V + (size_t)cpu) * 2;
 
-        /* FP64 16B load-modify-store on the roamed slot */
-        /* ALL slot accesses via asm: an intrinsic vst1q->vld1q pair
-         * on the same address gets store-transformed + load-forwarded
-         * by GCC (parent's measured trap) — asm cannot be. */
-        float64x2_t v = ld_vec(slot);
-        v = vaddq_f64(v, vdupq_n_f64(1.0));
-        st_vec(slot, v);
+            /* FP64 16B load-modify-store on the roamed slot */
+            /* ALL slot accesses via asm: an intrinsic vst1q->vld1q pair
+             * on the same address gets store-transformed + load-forwarded
+             * by GCC (parent's measured trap) — asm cannot be. */
+            float64x2_t v = ld_vec(slot);
+            v = vaddq_f64(v, vdupq_n_f64(1.0));
+            st_vec(slot, v);
 
-        /* per-band golden (counts is private verification state —
-         * intrinsic access is fine, it is not the path under test) */
-        double *cnt = counts.data() + band * 2;
-        float64x2_t c = vaddq_f64(vld1q_f64(cnt), vdupq_n_f64(1.0));
-        vst1q_f64(cnt, c);
+            /* per-band golden (counts is private verification state —
+             * intrinsic access is fine, it is not the path under test) */
+            double *cnt = counts.data() + band * 2;
+            float64x2_t c = vaddq_f64(vld1q_f64(cnt), vdupq_n_f64(1.0));
+            vst1q_f64(cnt, c);
 
-        /* read-back: the slot must hold exactly this band's count
-         * (bit-exact: integer-valued f64 lanes) */
-        float64x2_t mem_v = ld_vec(slot);
-        uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(mem_v),
-                                    vreinterpretq_u64_f64(c));
-        if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
-            report_fail_msg("llcstress_neon_fp64: slot read-back mismatch "
-                            "(band %zu): mem-bits {%016llx,%016llx} vs expected-bits "
-                            "{%016llx,%016llx} (lost/corrupted FP64 store)",
-                            band,
-                            (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(mem_v), 0),
-                            (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(mem_v), 1),
-                            (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(c), 0),
-                            (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(c), 1));
-            return EXIT_FAILURE;
+            /* read-back: the slot must hold exactly this band's count
+             * (bit-exact: integer-valued f64 lanes) */
+            float64x2_t mem_v = ld_vec(slot);
+            uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(mem_v),
+                                        vreinterpretq_u64_f64(c));
+            if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
+                report_fail_msg("llcstress_neon_fp64: slot read-back mismatch "
+                                "(band %zu): mem-bits {%016llx,%016llx} vs expected-bits "
+                                "{%016llx,%016llx} (lost/corrupted FP64 store)",
+                                band,
+                                (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(mem_v), 0),
+                                (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(mem_v), 1),
+                                (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(c), 0),
+                                (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(c), 1));
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* L3 verification sweep (2026-11-18 rework): re-read ALL own
+         * slots against the per-band counts shadow — delayed by a
+         * full interval of random-band roaming, so everything except
+         * the just-re-stored tail is L2-evicted and L3/DRAM-served. */
+        for (size_t b = 0; b < LLSN_BANDS; ++b) {
+            double *slot = base + (b * LLSN_STRIDE_V + (size_t)cpu) * 2;
+            float64x2_t mem_v = ld_vec(slot);
+            float64x2_t c = vld1q_f64(counts.data() + b * 2);
+            uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(mem_v),
+                                        vreinterpretq_u64_f64(c));
+            if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
+                report_fail_msg("llcstress_neon_fp64: delayed re-verification "
+                                "mismatch (band %zu): mem-bits {%016llx,%016llx} "
+                                "vs expected-bits {%016llx,%016llx} (L3-resident "
+                                "corruption)", b,
+                                (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(mem_v), 0),
+                                (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(mem_v), 1),
+                                (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(c), 0),
+                                (unsigned long long)vgetq_lane_u64(vreinterpretq_u64_f64(c), 1));
+                return EXIT_FAILURE;
+            }
         }
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(llcstress_neon_fp64, "FP64 variant of llcstress_neon: high-frequency random LLC roaming over 64MB with per-thread f64x2 interleave slots: asm ldr/vaddq_f64/str RMW + immediate read-back verify (ARM64)")
+DECLARE_TEST(llcstress_neon_fp64, "FP64 variant of llcstress_neon: high-frequency random LLC roaming over 64MB with per-thread f64x2 interleave slots: asm ldr/vaddq_f64/str RMW + immediate read-back verify PLUS delayed re-verification sweep against the per-band counts shadow (L3-path, 2026-11-18 rework) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = llcstress_neon_fp64_init,
     .test_run = llcstress_neon_fp64_run,

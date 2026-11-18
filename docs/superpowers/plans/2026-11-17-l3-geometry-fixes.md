@@ -67,3 +67,17 @@ asymm 双件 golden_sum/块级 reload + sse 双件同构）——六件全合格
 验证：构建零警告；七件 -n 4 实跑全 pass 全时长；zstd19 回归 pass。
 七件随迁 L3_cache_920/（夹内 15 件 = 审计 14 + NEON memcpy 孪生），
 README 重写为收录+改造档案。arm_add/fp64 同名孪生未传导（挂账）。
+
+## 单元 9（2026-11-18）：六件同名 NEON/FP64 孪生能力传导（用户指令
+"neon 扩展版写了吗"）
+
+- l3_execute_neon / l3_execute_neon_fp64：flush 函数加 dc civac 逐出
+  L2（与标量父版同款）
+- llcstress_neon / llcstress_neon_fp64：STRIDE_V 1024→512（足迹 512KB
+  对齐父版）+ 每 65536 存储对全 8192 槽位做 counts 影子延迟复验扫
+- llc_{randomized,uniform}_load_neon：32MiB 硬编码 → 动态簇 L3 探测
+  + data[] init 向量黄金和 + 周期稠密向量扫算（uniform 步长遍 1/32
+  覆盖由扫算补全）
+六件留在 arm_add/fp64 家族目录（不随迁），README 地图更新。
+验证：构建 0 警告；六件 -n 4 -t 2000 全 pass 全时长（2000-2112ms）；
+zstd19 回归 pass。

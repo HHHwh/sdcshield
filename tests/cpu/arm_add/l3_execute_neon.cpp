@@ -43,11 +43,19 @@ struct L3ENData {
 };
 }
 
+/* 2026-11-18 L3-capability rework (twin of the scalar parent's): the
+ * dc civac pass (clean+invalidate to the PoC) EVICTS the code lines
+ * from the private unified L2 first — bare ic ivau only reaches the
+ * PoU = L2 and the refetch stayed L2-served.  After civac + ivau the
+ * next fetch misses L1I AND L2 and is genuinely L3-served. */
 static inline void l3en_flush_icache(const void *start, size_t len) {
-    const char *p = reinterpret_cast<const char *>(
+    const char *base = reinterpret_cast<const char *>(
         reinterpret_cast<uintptr_t>(start) & ~(uintptr_t)(L3EN_LINE - 1));
     const char *end = reinterpret_cast<const char *>(start) + len;
-    for (; p < end; p += L3EN_LINE)
+    for (const char *p = base; p < end; p += L3EN_LINE)
+        __asm__ volatile("dc civac, %0" :: "r"(p) : "memory");
+    __asm__ volatile("dsb ish" ::: "memory");
+    for (const char *p = base; p < end; p += L3EN_LINE)
         __asm__ volatile("ic ivau, %0" :: "r"(p) : "memory");
     __asm__ volatile("dsb ish" ::: "memory");
     __asm__ volatile("isb" ::: "memory");
@@ -107,7 +115,7 @@ static int l3_execute_neon_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(l3_execute_neon, "Reads and executes NEON code from L3: ic-ivau + dsb/isb forces re-fetch of a veorq/vmulq/vaddq/vshlq kernel; results bit-compared to the init snapshot (fetch-path SDC on NEON code) (ARM64)")
+DECLARE_TEST(l3_execute_neon, "Reads and executes NEON code from L3: dc-civac evicts the code lines from L2 (to PoC) before ic-ivau + dsb/isb, so the re-fetch of the veorq/vmulq/vaddq/vshlq kernel is genuinely L3-served; results bit-compared to the init snapshot (L3->ICache fetch-path SDC on NEON code, 2026-11-18 rework) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = l3_execute_neon_init,
     .test_run = l3_execute_neon_run,
