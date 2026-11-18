@@ -11,7 +11,7 @@
 2. **校验点经存储层级重读比对**（memcmp/sum 稠密重读、延迟复验、跨核读者
    全量重读——而非 store-buffer 立即转发回读）
 
-## 收录用例（15 件 = 审计 14 件 + NEON memcpy 孪生）
+## 收录用例（33 件 = 正典 14 + NEON 孪生 5 + FP64 孪生 14，2026-11-18 统一归位）
 
 **复制路径（2）**——L3 尺度块 memcpy + memcmp 全量重读：
 - `memcpy_l3_cache_size`（libc 路径）、`memcpy_l3_cache_size_neon`（vld1q/vst1q 流）
@@ -47,7 +47,12 @@
 - llcstress 延迟复验中刚重写的尾部槽位停留 L2（混合服务，源码注记）
 - write_only avx2 版簇内并发 >6 线程时聚合超切片（流式为主，源码注记）
 - SVE 孪生不随迁（`tests/cpu/sve/mesh/` 按其自身组织）
-- **NEON/FP64 扩展矩阵已完备（2026-11-18）**：`arm_add/` 下 6 件 NEON 孪生（llc 对、llcstress、l3_execute 等，能力改造已传导）；`fp64/` 下 14 件 f64x2 孪生——`l3_execute_neon_fp64`、`llcstress_neon_fp64`（既有）+ 新增 12 件（llc 对、memcpy、mesh read ×6、write_only ×3），全部出生即带 L3 能力设计（动态窗/4MB 共享/0.5 倍数 k 空间精确和/golden 扫算/延迟复验）。标量↔NEON↔FP64 三种数据通路 × 读/写/复制/指令四路径全覆盖
+- **NEON/FP64 孪生已全部统一迁入本目录（2026-11-18 用户指令）**：
+  NEON 孪生 5 件（`memcpy_l3_cache_size_neon`、`llc_{randomized,uniform}_load_neon`、
+  `llcstress_neon`、`l3_execute_neon`——能力改造已传导）+ FP64 孪生 14 件
+  （`l3_execute_neon_fp64`、`llcstress_neon_fp64` 既有 + 12 件新增，出生即带
+  L3 能力设计：动态窗/4MB 共享/0.5 倍数 k 空间精确和/golden 扫算/延迟复验）。
+  标量 ↔ NEON ↔ FP64 三种数据通路 × 读/写/复制/指令四路径——33 件全在本目录
 
 ## x86-64
 
