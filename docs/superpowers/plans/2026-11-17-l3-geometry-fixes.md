@@ -51,3 +51,19 @@ asymm 双件 golden_sum/块级 reload + sse 双件同构）——六件全合格
 共享 4MB 数组（∈ (L2, 簇 L3)，驻留不随线程数退化）+ sum/golden
 全量重读校验。git mv 迁移 + meson 路径更新（注册面与 x86 SKIP
 语义不变）+ README 收录表扩。
+
+## 单元 8（2026-11-18）：七件能力改造（用户勘正指令："原版是 x86 语义，
+改成本机能检测 L3"——非注释工程而是能力改造）
+
+落选七件逐件改造，使校验点真穿存储层级：
+- l3_execute：dc civac（PoC）先于 ic ivau，逐出 L2 → 重取指 L3 供数
+- avx2_write_only：两遍式（写满+golden sum → 延迟全量重读复算）
+- sse/avx512_asymm_write_only：4KB→4MB 共享扩容（协议逐句保留，
+  节流档距放大，补 fracture=-1——实测默认 40 轮预算 638/98/13ms
+  即提前退场，修复后全时长）
+- llcstress：延迟复验扫（65536 间隔 + 影子逐槽比对，L2 边界足迹
+  的混合服务诚实注记）
+- llc pair：data[] golden_sum init 定标 + 周期稠密扫算
+验证：构建零警告；七件 -n 4 实跑全 pass 全时长；zstd19 回归 pass。
+七件随迁 L3_cache_920/（夹内 15 件 = 审计 14 + NEON memcpy 孪生），
+README 重写为收录+改造档案。arm_add/fp64 同名孪生未传导（挂账）。
