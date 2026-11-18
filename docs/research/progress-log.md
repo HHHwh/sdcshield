@@ -1597,3 +1597,24 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
 - **移交(框架层系统性缺口, 另立 issue)**: knob-from-worker fail-loud
   检查被 NDEBUG 门控(release 全绿盲区)+ 无 selftest 锁契约;
   sdc_stress_config.h worker cache-miss 静默回退 default 同类风险。
+
+## 2026-11-18 adaptive_l3_sdc 落地 + 21 臂本机标定（L3 域自适应首役）
+
+- **用例落地**：`tests/cpu/L3_cache_920/adaptive_l3_sdc.cpp`——L3_cache_920
+  目录 33 件负载模式装进 adaptive_mem_sdc 运行时底盘，21 组合 =
+  7 访问模式（seq/rand/stride-read、write、copy、rmw、fetch）× 3 数据
+  通路（scalar/NEON/FP64）。VERIFY 21/21 零失配、七模式抽查全 pass、
+  combat 全核基线零 fail、zstd19 回归 pass。设计依据用户勘误：中间负载
+  = ldr 与 str 之间任何保功能可插入操作；组合空间不得被本机负结果框死
+  （他机存在 4×ldr+1×str 触发实例）。
+- **21 臂锁定标定扫**（600s/臂，掩码 96-189 含 179，auto seed，11:38→
+  15:06，零宕机）：**21/21 组合全部零检出！！！**（双法交叉）——core-179
+  触发域钉死在 L1D/转发紧时序，L3 容量域全负空间；kPriorityOrder 表序
+  恒等即本机序（零 TTF 信号）。他机各自重跑同法扫标定（ORDER env 覆盖）。
+- 专档：`docs/20261118/adaptive_l3_sweep21/RESULTS.md`（含与
+  adaptive_mem_sdc 的 L1D/L3 域分界表）；原始数据
+  `/home/sdc/adaptive_l3_sweep21/`（21×run.log + env.log + bin 备份）。
+- **工程备注**：本会话曾误判"末槽 idle 不工作"——实为 covfile trace
+  有意跳过 -1 子进程（墙钟实测 idle 正常）；又一度误判 auto-fracture
+  短寿命为缺陷——实为轮转模型依赖（子进程短命再 fork）。两次均自查
+  纠正，教训：底盘设计意图先读注释再下结论。
