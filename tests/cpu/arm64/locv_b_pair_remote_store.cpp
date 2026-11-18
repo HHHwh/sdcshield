@@ -62,7 +62,7 @@ struct LocvBData {
     uint64_t *expected;
     uint64_t *poke;      /* one 64B line per pair (8 qwords) */
     uint64_t *pairbuf;   /* 2*COUNT qwords per pair, interleaved */
-    volatile int *ready; /* per-cpu liveness flag */
+    std::atomic<int> *ready; /* per-cpu liveness flag (relaxed cross-thread) */
 };
 
 #if defined(__x86_64__) || defined(__i386__)
@@ -103,7 +103,7 @@ static int locv_b_init(struct test *test) {
     const int pairs = (thread_count() + 1) / 2;
     data->poke = static_cast<uint64_t *>(aligned_alloc(64, pairs * 8 * sizeof(uint64_t)));
     data->pairbuf = static_cast<uint64_t *>(aligned_alloc(64, pairs * 2 * LOCV_B_COUNT * sizeof(uint64_t)));
-    data->ready = static_cast<volatile int *>(calloc(2 * pairs, sizeof(int)));
+    data->ready = new std::atomic<int>[2 * pairs]();  /* value-initialized to 0 */
 
     memset_random(data->srcA, LOCV_B_COUNT * sizeof(uint64_t));
     memset_random(data->srcB, LOCV_B_COUNT * sizeof(uint64_t));
@@ -133,7 +133,7 @@ static int locv_b_run_common(struct test *test, int cpu, LocvBMode mode) {
     if (mode != B_INTERLEAVE)
         temp = static_cast<uint64_t *>(aligned_alloc(64, LOCV_B_COUNT * sizeof(uint64_t)));
 
-    data->ready[cpu] = 1;
+    data->ready[cpu].store(1, std::memory_order_release);
     uint64_t marker = (uint64_t)cpu << 32;
 
     TEST_LOOP(test, 1 << 8) {
@@ -159,7 +159,7 @@ static int locv_b_run_common(struct test *test, int cpu, LocvBMode mode) {
                                 static_cast<unsigned long long>(r));
             }
             if (mode == B_POKE && (k & (LOCV_B_POKE_EVERY - 1)) == 0
-                && data->ready[partner]) {
+                && data->ready[partner].load(std::memory_order_acquire)) {
                 store_qword(&data->poke[pair * 8], ++marker);
             }
         }
@@ -181,7 +181,7 @@ static int locv_b_cleanup(struct test *test) {
         free(data->expected);
         free(data->poke);
         free(data->pairbuf);
-        free(const_cast<int *>(data->ready));
+        delete[] data->ready;
         free(data);
     }
     return EXIT_SUCCESS;

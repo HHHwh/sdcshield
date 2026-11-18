@@ -26,7 +26,7 @@
 namespace { /* ODR: per-TU TestData */
 struct TestData {
     alignas(16) double *data;            /* shared, 16B aligned */
-    double golden_sum;                   /* init-time exact sum */
+    alignas(16) double *golden;          /* init-time element-exact golden copy */
     std::atomic<uint64_t> thread_idx;
 };
 }
@@ -37,21 +37,27 @@ static inline double mrl_dist(void) {
 }
 
 static int mesh_upi_avx2_read_L3_neon_fp64_init(struct test *test) {
-    auto *td = new TestData;
-    if (!td) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    TestData *td;
+    try {
+        td = new TestData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s TestData", test->id);
+        return EXIT_SKIP;
+    }
 
     td->data = (double *)aligned_alloc(16, ARRAY_DOUBLES * sizeof(double));
-    if (!td->data) {
+    td->golden = (double *)aligned_alloc(16, ARRAY_DOUBLES * sizeof(double));
+    if (!td->data || !td->golden) {
+        free(td->data); free(td->golden);
         delete td;
         return EXIT_FAILURE;
     }
 
-    double sum = 0.0;
     for (size_t i = 0; i < ARRAY_DOUBLES; ++i) {
-        td->data[i] = mrl_dist();
-        sum += td->data[i];
+        td->golden[i] = td->data[i] = mrl_dist();
     }
-    td->golden_sum = sum;
     td->thread_idx.store(0, std::memory_order_relaxed);
     test->data = td;
 
@@ -66,22 +72,27 @@ static int mesh_upi_avx2_read_L3_neon_fp64_run(struct test *test, int cpu) {
     (void)id;
 
     do {
-        double local_sum = 0.0;
-
         /* sequential f64x2 reads over the shared 4MB array —
-         * L3-resident steady state, sum vs golden is the L3
-         * read-path verification */
+         * L3-resident steady state; element-exact per-lane compare
+         * against the init-time golden copy is the L3 read-path
+         * verification (2026-11-18 rework: a sum-only compare was
+         * blind to permutation/swap-class corruption; per-lane
+         * bit-exact compare is not — 0.5-multiple data makes every
+         * lane bit-significant). */
         for (size_t i = 0; i < ARRAY_DOUBLES; i += VEC_LANES) {
             float64x2_t v = vld1q_f64(td->data + i);
-            local_sum += vgetq_lane_f64(v, 0) + vgetq_lane_f64(v, 1);
-        }
-
-        if (local_sum != td->golden_sum) {
-            report_fail_msg("mesh_upi_avx2_read_L3_neon_fp64: sum mismatch "
-                            "after full-array re-read (L3 read path): "
-                            "golden %.17g got %.17g",
-                            td->golden_sum, local_sum);
-            return EXIT_FAILURE;
+            float64x2_t g = vld1q_f64(td->golden + i);
+            uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(v),
+                                        vreinterpretq_u64_f64(g));
+            if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
+                report_fail_msg("%s: golden mismatch at pair %zu: "
+                                "golden (%.17g, %.17g) got (%.17g, %.17g) "
+                                "(L3 read path, element-exact compare)",
+                                test->id, i / VEC_LANES,
+                                vgetq_lane_f64(g, 0), vgetq_lane_f64(g, 1),
+                                vgetq_lane_f64(v, 0), vgetq_lane_f64(v, 1));
+                return EXIT_FAILURE;
+            }
         }
     } while (test_time_condition(test));
 
@@ -91,12 +102,13 @@ static int mesh_upi_avx2_read_L3_neon_fp64_run(struct test *test, int cpu) {
 static int mesh_upi_avx2_read_L3_neon_fp64_finish(struct test *test) {
     auto *td = static_cast<TestData *>(test->data);
     free(td->data);
+    free(td->golden);
     delete td;
     test->data = nullptr;
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(mesh_upi_avx2_read_L3_neon_fp64, "FP64 variant of mesh_upi_avx2_read_L3_int: 100% sequential f64x2 reads over a shared 4MB L3-scale array, per-pass golden f64-sum re-verify (L3 read-path SDC) (ARM64)")
+DECLARE_TEST(mesh_upi_avx2_read_L3_neon_fp64, "FP64 variant of mesh_upi_avx2_read_L3_int: 100% sequential f64x2 reads over a shared 4MB L3-scale array, per-pass element-exact golden re-verify (L3 read-path SDC) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = mesh_upi_avx2_read_L3_neon_fp64_init,
     .test_run = mesh_upi_avx2_read_L3_neon_fp64_run,

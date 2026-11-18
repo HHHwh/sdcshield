@@ -1,6 +1,5 @@
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <atomic>
 #ifdef __aarch64__
@@ -31,17 +30,19 @@
  *      协议——无业务计数器清零、无胜者选举、无套圈窗口（B1 保证读者
  *      快照时全部写完成且无人开写下一迭代；B2 保证读者读完才允许
  *      覆写数组）；
- *   2. 累计和差分（expected = cum(K) - cum(K-1)）替代"每迭代清零
- *      global_sum"——global_sum 单调累加，B1 后读者读到稳定值；
+ *   2. （2026-11-18 收口前为累计和差分校验；现改为读者与写点双写
+ *      的 golden 副本逐元素比对——差分 sum 对保和类损坏失明，
+ *      element-exact 比对不失明，global_sum 计数器随之退役）；
  *   3. 写核心静态分区（写者 wid 固定负责 [b_lo, b_hi)）替代 next_block
  *      动态分配——每块恰一个写者，无分配竞争、无每迭代复位（保持
  *      "全部非读核共写数组、唯一读核校验"的写压力语义；W > NUM_BLOCKS
- *      时多余写者本轮空转，所有块仍恰好被写一次，sum 语义不变）。
+ *      时多余写者本轮空转，所有块仍恰好被写一次，golden 双写
+ *      语义不变）。
  * 时间到期时各线程在自己的屏障自旋处退出（他人亦到期退出，有界无死锁）。 */
 namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;           // 共享数据数组（16 字节对齐）
-    std::atomic<uint64_t> global_sum;    // 跨迭代单调累计（差分得每迭代期望）
+    alignas(16) int32_t *golden;         // 写点双写的 element-exact golden 副本
     std::atomic<uint32_t> thread_idx;    // 线程 ID 分配器
     std::atomic<uint32_t> b1_count, b1_sense;   // 屏障 B1: 写后读前
     std::atomic<uint32_t> b2_count, b2_sense;   // 屏障 B2: 读后写前
@@ -53,17 +54,25 @@ static int mesh_upi_avx512_asymm_write_only_int_init(struct test *test) {
         return -255;   // 需要至少 2 个线程
     }
 
-    auto *td = new TestData;
-    if (!td) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    TestData *td;
+    try {
+        td = new TestData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s TestData", test->id);
+        return EXIT_SKIP;
+    }
 
     td->data = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
-    if (!td->data) {
+    td->golden = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
+    if (!td->data || !td->golden) {
+        free(td->data); free(td->golden);
         delete td;
         return EXIT_FAILURE;
     }
     memset(td->data, 0, TOTAL_BYTES);
 
-    td->global_sum.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
     td->b1_count.store(0, std::memory_order_relaxed);
     td->b1_sense.store(0, std::memory_order_relaxed);
@@ -96,10 +105,6 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
     /* randomization hardening H14' (P17): framework RNG (per-thread
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
     auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
-
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
 
     /* 感知反转屏障（v2 范式，参照 symm_int 13b13850 + avx2_asymm_int
      * G2'/G3'）：最后一个到达者清 cnt、翻转 sense 放行所有人；其余自旋
@@ -139,24 +144,22 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
         b_hi = (wid == W - 1) ? NUM_BLOCKS : b_lo + per;
     }
 
-    uint64_t prev_cum = 0;    // 读者上一迭代 B1 快照（角色固定，写者无需差分）
-
     do {
         if (!is_reader) {
             // ---------- 写核心：写入自己的静态分区 ----------
-            // （本轮状态无需清零——global_sum 单调累计，读者差分取值。）
+            // （本轮状态无需清零——静态分区，B1/B2 屏障轮次隔离。）
             for (uint32_t block = b_lo; block < b_hi; ++block) {
                 size_t offset = block * BLOCK_ELEMENTS;
                 int32_t vals[BLOCK_ELEMENTS];
-                uint64_t local_sum = 0;
                 for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
                     vals[j] = dist();
-                    local_sum += (uint64_t)vals[j];
                 }
-                // 使用 4 个 NEON 向量存储 16 个元素
+                // 使用 4 个 NEON 向量存储 16 个元素；同一向量同步双写进
+                // golden 副本（element-exact 校验的参照，2026-11-18 收口）
                 for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
                     int32x4_t vec = vld1q_s32(vals + v * NEON_VECTOR_SIZE);
                     vst1q_s32(td->data + offset + v * NEON_VECTOR_SIZE, vec);
+                    vst1q_s32(td->golden + offset + v * NEON_VECTOR_SIZE, vec);
                 }
                 __sync_synchronize();   // 确保写入对其他核心可见
 
@@ -175,37 +178,26 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
                         break;
                     }
                 }
-                /* 写核心的立即读回是唯一逐字节的写入内容校验——读核心的
-                 * sum 校验可被保和损坏（如元素交换）绕过，所以 block_ok
-                 * 为假必须直接判失败，不能只记录。 */
+                /* 写核心的立即读回是逐字节的写入内容校验（LSU 转发域），
+                 * block_ok 为假直接判失败；驻留窗口的 L3 域校验由读者
+                 * 的 element-exact golden 比对承担（见下）。 */
                 if (!block_ok) {
-                    fprintf(stderr, "mesh_upi_avx512_asymm_write_only_int: Thread %d (writer), block %u immediate read-back mismatch, written vals[0..3]=(%d,%d,%d,%d), loaded data[0..3] at offset %zu=(%d,%d,%d,%d), result=%sFAIL%s\n",
-                            id, block,
-                            vals[0], vals[1], vals[2], vals[3],
-                            offset,
-                            td->data[offset], td->data[offset + 1],
-                            td->data[offset + 2], td->data[offset + 3],
-                            RED, RESET);
-                    fflush(stderr);
-                    report_fail_msg("mesh_upi_avx512_asymm_write_only_int: writer immediate read-back mismatch (store/load corruption)");
+                    report_fail_msg("%s: writer immediate read-back mismatch "
+                                    "at block %u (store/load corruption)",
+                                    test->id, block);
                     return EXIT_FAILURE;
                 }
-
-                td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
             }
         }
 
-        // B1：本轮全部块写完成（此后到 B2 之间数组冻结、global_sum 稳定）
+        // B1：本轮全部块写完成（此后到 B2 之间数组与 golden 副本双双冻结）
         if (!barrier(td->b1_count, td->b1_sense)) break;
 
         if (is_reader) {
-            // 累计和差分快照：expected = cum(K) - cum(K-1)（B1 后无写 → 值稳定）
-            uint64_t cum = td->global_sum.load(std::memory_order_seq_cst);
-            uint64_t expected_sum = cum - prev_cum;   // 本迭代全部块之和
-            prev_cum = cum;
-
-            // 读取整个数组，计算校验和并进行一致性测试
-            uint64_t read_sum = 0;
+            // element-exact 校验（2026-11-18 收口：原差分 sum 对保和类
+            // 损坏——块/行置换、steering 对换——失明；改为与写点双写的
+            // golden 副本逐元素比对。数组 B1 后冻结，golden 同点双写
+            // 同序冻结，比较语义 = 「重读值 == 写入值」的逐元素形式。）
             bool consistent = true;
             alignas(16) int32_t store_buf[BLOCK_ELEMENTS];
 
@@ -214,10 +206,23 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
                 int32_t vals[BLOCK_ELEMENTS];
                 for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
                     int32x4_t vec = vld1q_s32(td->data + i + v * NEON_VECTOR_SIZE);
+                    /* element-exact：每个向量与 golden 对应向量逐 lane
+                     * 位比较 */
+                    int32x4_t gv = vld1q_s32(td->golden + i + v * NEON_VECTOR_SIZE);
+                    uint32x4_t gdiff = veorq_u32(vreinterpretq_u32_s32(vec),
+                                                 vreinterpretq_u32_s32(gv));
+                    if (vmaxvq_u32(gdiff) != 0) {
+                        report_fail_msg("%s: golden mismatch at elem %zu: "
+                                        "golden {%d,%d,%d,%d} got {%d,%d,%d,%d} "
+                                        "(L3 write path, element-exact compare)",
+                                        test->id, i + v * NEON_VECTOR_SIZE,
+                                        vgetq_lane_s32(gv, 0), vgetq_lane_s32(gv, 1),
+                                        vgetq_lane_s32(gv, 2), vgetq_lane_s32(gv, 3),
+                                        vgetq_lane_s32(vec, 0), vgetq_lane_s32(vec, 1),
+                                        vgetq_lane_s32(vec, 2), vgetq_lane_s32(vec, 3));
+                        return EXIT_FAILURE;
+                    }
                     vst1q_s32(vals + v * NEON_VECTOR_SIZE, vec);
-                }
-                for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
-                    read_sum += (uint64_t)vals[j];
                 }
 
                 // 一致性测试：Store/Load 比较
@@ -239,23 +244,9 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
                 }
             }
 
-            bool sum_ok = (read_sum == expected_sum);
-            bool passed = sum_ok && consistent;
-
-            if (!passed) {
-                // 首次失败证据（原先每轮都从读核心打印 PASS 行）
-                fprintf(stderr, "mesh_upi_avx512_asymm_write_only_int: Thread %d (reader), data[0..15]=(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
-                        id,
-                        td->data[0], td->data[1], td->data[2], td->data[3],
-                        td->data[4], td->data[5], td->data[6], td->data[7],
-                        td->data[8], td->data[9], td->data[10], td->data[11],
-                        td->data[12], td->data[13], td->data[14], td->data[15],
-                        read_sum, expected_sum, consistent,
-                        passed ? GREEN : RED,
-                        passed ? "PASS" : "FAIL",
-                        RESET);
-                fflush(stderr);
-                report_fail_msg("mesh_upi_avx512_asymm_write_only_int: Sum mismatch or consistency failure");
+            if (!consistent) {
+                report_fail_msg("%s: store->reload consistency failure "
+                                "(LSU forwarding path)", test->id);
                 return EXIT_FAILURE;
             }
         }
@@ -267,14 +258,12 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
 
     return EXIT_SUCCESS;
 
-    #undef GREEN
-    #undef RED
-    #undef RESET
 }
 
 static int mesh_upi_avx512_asymm_write_only_int_finish(struct test *test) {
     auto *td = static_cast<TestData*>(test->data);
     free(td->data);
+    free(td->golden);
     delete td;
     return EXIT_SUCCESS;
 }
@@ -290,7 +279,7 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
 static int mesh_upi_avx512_asymm_write_only_int_finish(struct test *test) { (void)test; return EXIT_SUCCESS; }
 #endif
 DECLARE_TEST(mesh_upi_avx512_asymm_write_only_int,
-             "Mutual write stress MESH and UPI (do NEON stores to L1/L2/L3; 4MB L3-scale shared array, reader differential-sum verify — 2026-11-17 rework)")
+             "Mutual write stress MESH and UPI (do NEON stores to L1/L2/L3; 4MB L3-scale shared array, reader element-exact golden verify — 2026-11-18 rework)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = mesh_upi_avx512_asymm_write_only_int_init,
     .test_run = mesh_upi_avx512_asymm_write_only_int_run,

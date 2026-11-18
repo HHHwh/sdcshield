@@ -31,10 +31,14 @@ static size_t get_l3_size() {
 
 static int memcpy_l3_cache_size_neon_fp64_init(struct test *test) {
     /* probe HERE — topology is filled by now (memcpy H8' lesson) */
-    auto *block = new size_t(get_l3_size());
-    if (!block)
-        return EXIT_FAILURE;
-    test->data = block;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    try {
+        test->data = new size_t(get_l3_size());
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s l3-size word", test->id);
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 }
 

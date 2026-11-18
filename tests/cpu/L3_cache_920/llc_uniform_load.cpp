@@ -75,10 +75,14 @@ static inline uint32_t llul_ldr(const uint32_t *addr) {
 
 static int llc_uniform_load_init(struct test *test) {
     /* probe HERE — topology is filled by now (see llul_l3_size) */
-    auto *block = new size_t(llul_l3_size());
-    if (!block)
-        return EXIT_FAILURE;
-    test->data = block;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    try {
+        test->data = new size_t(llul_l3_size());
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s l3-size word", test->id);
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 }
 
@@ -95,15 +99,12 @@ static int llc_uniform_load_run(struct test *test, int cpu) {
     const size_t num_words = buffer_bytes / sizeof(uint32_t);
 
     std::vector<uint32_t> data(num_words);    /* strided load source   */
+    std::vector<uint32_t> golden(num_words);  /* element-exact golden copy */
     std::vector<uint32_t> check(num_words);   /* store->load window    */
 
     memset_random(data.data(), buffer_bytes);
+    memcpy(golden.data(), data.data(), buffer_bytes);
     memset(check.data(), 0, buffer_bytes);
-
-    /* init-time golden sum of data[] (never written after this) */
-    uint64_t golden_sum = 0;
-    for (size_t i = 0; i < num_words; ++i)
-        golden_sum += (uint64_t)data[i];
 
     /* random walk start; rotates by one element each full pass */
     size_t offset = random64() % LLUL_STRIDE;
@@ -129,27 +130,30 @@ static int llc_uniform_load_run(struct test *test, int cpu) {
         }
         offset = (offset + 1) % LLUL_STRIDE;
 
-        /* L3 verification sweep (2026-11-17 rework, user directive):
-         * the stride pass covers only 1/32 of the window; this DENSE
-         * pass re-reads every word — window-sized traffic evicts the
-         * private L2, so the sum compare is L3/DRAM-served. */
-        uint64_t sweep_sum = 0;
-        for (size_t i = 0; i < num_words; ++i)
-            sweep_sum += (uint64_t)data[i];
-        if (sweep_sum != golden_sum) {
-            report_fail_msg("llc_uniform_load: golden sweep mismatch: "
-                            "init sum 0x%016lx sweep sum 0x%016lx "
-                            "(L3-resident data corruption)",
-                            (unsigned long)golden_sum,
-                            (unsigned long)sweep_sum);
-            return EXIT_FAILURE;
+        /* L3 verification sweep (2026-11-18 element-exact rework): the
+         * stride pass covers only 1/STRIDE of the window; this DENSE
+         * pass re-reads every word and compares ELEMENT-EXACT against
+         * the init-time golden copy — window-sized traffic evicts the
+         * private L2, so the compare is L3/DRAM-served. Element-exact
+         * (not a sum): permutation/swap-class L3 corruption changes the
+         * word at its index and FAILS here, where a sum-only check is
+         * blind to order-preserving compensating damage. */
+        for (size_t i = 0; i < num_words; ++i) {
+            if (data[i] != golden[i]) {
+                report_fail_msg("llc_uniform_load: golden sweep mismatch "
+                                "at idx %zu: golden 0x%08x got 0x%08x "
+                                "(L3-resident data corruption, "
+                                "element-exact compare)",
+                                i, golden[i], data[i]);
+                return EXIT_FAILURE;
+            }
         }
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(llc_uniform_load, "Stress LLC with persistent uniform 128B-strided loads over per-thread windows sized to the probed per-cluster L3; store->asm-ldr load-back on the LSU forwarding path PLUS per-pass dense golden-sum sweep of the whole window (L3-path verification, 2026-11-17 rework) (ARM64)")
+DECLARE_TEST(llc_uniform_load, "Stress LLC with persistent uniform 128B-strided loads over per-thread windows sized to the probed per-cluster L3; store->asm-ldr load-back on the LSU forwarding path PLUS per-pass dense element-exact golden sweep of the whole window (L3-path verification, 2026-11-18 rework) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = llc_uniform_load_init,
     .test_run = llc_uniform_load_run,

@@ -162,8 +162,7 @@ struct AL3Data {
     char tag[96];                     /* "combo#N [pattern/dp/geom]" */
     /* SEQ_READ shared 4MB array (all threads re-read; race-free RO) */
     void *seq_buf;                    /* int32[1M] or double[512K] */
-    uint64_t seq_golden_int;          /* scalar + neon arms */
-    double seq_golden_f64;            /* fp64 arm */
+    void *seq_golden_buf;             /* element-exact golden copy (2026-11-18) */
     /* RMW shared 64MB window (per-child; slots per-thread by band) */
     uint8_t *rmw_mem;
 };
@@ -253,7 +252,7 @@ static void al3_fail(struct AL3Data *d, const char *fmt, ...)
 }
 
 /* ------------------------------------------------------------------ */
-/* Engine: SEQ_READ — shared 4MB, golden sum, full re-read per pass    */
+/* Engine: SEQ_READ — shared 4MB, element-exact golden, full re-read   */
 /* ------------------------------------------------------------------ */
 
 static int al3_seq_read_run(struct test *test, struct AL3Data *d, int cpu)
@@ -261,52 +260,61 @@ static int al3_seq_read_run(struct test *test, struct AL3Data *d, int cpu)
     (void)cpu;
     const struct AL3ComboDef &cd = kComboTable[d->combo];
 
+    /* 2026-11-18 element-exact rework (parent-test sync): full re-read
+     * compared lane-by-lane against the init-time golden copy — the
+     * previous sum-only compare was blind to permutation/swap-class
+     * corruption. */
     if (cd.dp == DP_FP64) {
         const double *buf = static_cast<const double *>(d->seq_buf);
+        const double *g = static_cast<const double *>(d->seq_golden_buf);
         do {
-            double local_sum = 0.0;
             for (size_t i = 0; i < AL3_SEQ_DOUBLES; i += 2) {
                 float64x2_t v = vld1q_f64(buf + i);
-                local_sum += vgetq_lane_f64(v, 0) + vgetq_lane_f64(v, 1);
-            }
-            if (local_sum != d->seq_golden_f64) {
-                al3_fail(d, "sum mismatch after full-array re-read (L3 "
-                           "read path): golden %.17g got %.17g",
-                         d->seq_golden_f64, local_sum);
-                return EXIT_FAILURE;
+                float64x2_t gv = vld1q_f64(g + i);
+                uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(v),
+                                            vreinterpretq_u64_f64(gv));
+                if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
+                    al3_fail(d, "golden mismatch at pair %zu (L3 read path, "
+                               "element-exact): golden (%.17g, %.17g) got "
+                               "(%.17g, %.17g)", i / 2,
+                             vgetq_lane_f64(gv, 0), vgetq_lane_f64(gv, 1),
+                             vgetq_lane_f64(v, 0), vgetq_lane_f64(v, 1));
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     } else if (cd.dp == DP_NEON) {
         const int32_t *buf = static_cast<const int32_t *>(d->seq_buf);
+        const int32_t *g = static_cast<const int32_t *>(d->seq_golden_buf);
         do {
-            uint64_t local_sum = 0;
             for (size_t i = 0; i < AL3_SEQ_INTS; i += 4) {
                 int32x4_t v = vld1q_s32(buf + i);
-                int32_t vals[4];
-                vst1q_s32(vals, v);
-                for (int j = 0; j < 4; ++j)
-                    local_sum += (uint64_t)vals[j];
-            }
-            if (local_sum != d->seq_golden_int) {
-                al3_fail(d, "sum mismatch after full-array re-read (L3 "
-                           "read path): golden 0x%016llx got 0x%016llx",
-                         (unsigned long long)d->seq_golden_int,
-                         (unsigned long long)local_sum);
-                return EXIT_FAILURE;
+                int32x4_t gv = vld1q_s32(g + i);
+                uint32x4_t diff = veorq_u32(vreinterpretq_u32_s32(v),
+                                            vreinterpretq_u32_s32(gv));
+                if (vmaxvq_u32(diff) != 0) {
+                    al3_fail(d, "golden mismatch at vec %zu (L3 read path, "
+                               "element-exact): golden {%d,%d,%d,%d} got "
+                               "{%d,%d,%d,%d}", i / 4,
+                             vgetq_lane_s32(gv, 0), vgetq_lane_s32(gv, 1),
+                             vgetq_lane_s32(gv, 2), vgetq_lane_s32(gv, 3),
+                             vgetq_lane_s32(v, 0), vgetq_lane_s32(v, 1),
+                             vgetq_lane_s32(v, 2), vgetq_lane_s32(v, 3));
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     } else {
         const int32_t *buf = static_cast<const int32_t *>(d->seq_buf);
+        const int32_t *g = static_cast<const int32_t *>(d->seq_golden_buf);
         do {
-            uint64_t local_sum = 0;
-            for (size_t i = 0; i < AL3_SEQ_INTS; ++i)
-                local_sum += (uint64_t)buf[i];
-            if (local_sum != d->seq_golden_int) {
-                al3_fail(d, "sum mismatch after full-array re-read (L3 "
-                           "read path): golden 0x%016llx got 0x%016llx",
-                         (unsigned long long)d->seq_golden_int,
-                         (unsigned long long)local_sum);
-                return EXIT_FAILURE;
+            for (size_t i = 0; i < AL3_SEQ_INTS; ++i) {
+                if (buf[i] != g[i]) {
+                    al3_fail(d, "golden mismatch at idx %zu (L3 read path, "
+                               "element-exact): golden 0x%08x got 0x%08x",
+                             i, (unsigned)g[i], (unsigned)buf[i]);
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     }
@@ -327,15 +335,12 @@ static int al3_rand_read_run(struct test *test, struct AL3Data *d, int cpu)
     if (cd.dp == DP_FP64) {
         const size_t num_vecs = buffer_bytes / 16;
         std::vector<double> data(num_vecs * 2);
+        std::vector<double> golden(num_vecs * 2);
         std::vector<double> check(num_vecs * 2);
         for (size_t i = 0; i < num_vecs * 2; ++i)
             data[i] = al3_dist_f64();
+        memcpy(golden.data(), data.data(), buffer_bytes);
         memset(check.data(), 0, buffer_bytes);
-        double golden_sum = 0.0;
-        for (size_t v = 0; v < num_vecs; ++v) {
-            float64x2_t x = vld1q_f64(data.data() + v * 2);
-            golden_sum += vgetq_lane_f64(x, 0) + vgetq_lane_f64(x, 1);
-        }
         do {
             for (uint64_t batch = 0; batch < (1ULL << 20); ++batch) {
                 size_t vidx = random64() % num_vecs;
@@ -352,30 +357,29 @@ static int al3_rand_read_run(struct test *test, struct AL3Data *d, int cpu)
                     return EXIT_FAILURE;
                 }
             }
-            double sweep_sum = 0.0;
             for (size_t v = 0; v < num_vecs; ++v) {
                 float64x2_t x = vld1q_f64(data.data() + v * 2);
-                sweep_sum += vgetq_lane_f64(x, 0) + vgetq_lane_f64(x, 1);
-            }
-            if (sweep_sum != golden_sum) {
-                al3_fail(d, "golden sweep mismatch: init sum %.17g sweep "
-                           "sum %.17g (L3-resident data corruption)",
-                         golden_sum, sweep_sum);
-                return EXIT_FAILURE;
+                float64x2_t g = vld1q_f64(golden.data() + v * 2);
+                uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(x),
+                                            vreinterpretq_u64_f64(g));
+                if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
+                    al3_fail(d, "golden sweep mismatch at vec %zu: golden "
+                               "(%.17g, %.17g) got (%.17g, %.17g) "
+                               "(L3-resident data corruption, element-exact)",
+                             v, vgetq_lane_f64(g, 0), vgetq_lane_f64(g, 1),
+                             vgetq_lane_f64(x, 0), vgetq_lane_f64(x, 1));
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     } else if (cd.dp == DP_NEON) {
         const size_t num_vecs = buffer_bytes / 16;
         std::vector<uint32_t> data(num_vecs * 4);
+        std::vector<uint32_t> golden(num_vecs * 4);
         std::vector<uint32_t> check(num_vecs * 4);
         memset_random(data.data(), buffer_bytes);
+        memcpy(golden.data(), data.data(), buffer_bytes);
         memset(check.data(), 0, buffer_bytes);
-        uint64_t golden_sum = 0;
-        for (size_t v = 0; v < num_vecs; ++v) {
-            uint32x4_t x = vld1q_u32(data.data() + v * 4);
-            golden_sum += (uint64_t)vgetq_lane_u32(x, 0) + vgetq_lane_u32(x, 1)
-                        + vgetq_lane_u32(x, 2) + vgetq_lane_u32(x, 3);
-        }
         do {
             for (uint64_t batch = 0; batch < (1ULL << 20); ++batch) {
                 size_t vidx = random64() % num_vecs;
@@ -396,29 +400,31 @@ static int al3_rand_read_run(struct test *test, struct AL3Data *d, int cpu)
                     return EXIT_FAILURE;
                 }
             }
-            uint64_t sweep_sum = 0;
             for (size_t v = 0; v < num_vecs; ++v) {
                 uint32x4_t x = vld1q_u32(data.data() + v * 4);
-                sweep_sum += (uint64_t)vgetq_lane_u32(x, 0) + vgetq_lane_u32(x, 1)
-                           + vgetq_lane_u32(x, 2) + vgetq_lane_u32(x, 3);
-            }
-            if (sweep_sum != golden_sum) {
-                al3_fail(d, "golden sweep mismatch: init sum 0x%016llx "
-                           "sweep sum 0x%016llx (L3-resident data corruption)",
-                         (unsigned long long)golden_sum,
-                         (unsigned long long)sweep_sum);
-                return EXIT_FAILURE;
+                uint32x4_t g = vld1q_u32(golden.data() + v * 4);
+                uint32x4_t diff = veorq_u32(x, g);
+                if (vmaxvq_u32(diff) != 0) {
+                    al3_fail(d, "golden sweep mismatch at vec %zu: golden "
+                               "{%08x,%08x,%08x,%08x} got {%08x,%08x,%08x,"
+                               "%08x} (L3-resident data corruption, "
+                               "element-exact)", v,
+                             vgetq_lane_u32(g, 0), vgetq_lane_u32(g, 1),
+                             vgetq_lane_u32(g, 2), vgetq_lane_u32(g, 3),
+                             vgetq_lane_u32(x, 0), vgetq_lane_u32(x, 1),
+                             vgetq_lane_u32(x, 2), vgetq_lane_u32(x, 3));
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     } else {
         const size_t num_words = buffer_bytes / sizeof(uint32_t);
         std::vector<uint32_t> data(num_words);
+        std::vector<uint32_t> golden(num_words);
         std::vector<uint32_t> check(num_words);
         memset_random(data.data(), buffer_bytes);
+        memcpy(golden.data(), data.data(), buffer_bytes);
         memset(check.data(), 0, buffer_bytes);
-        uint64_t golden_sum = 0;
-        for (size_t i = 0; i < num_words; ++i)
-            golden_sum += (uint64_t)data[i];
         do {
             for (uint64_t batch = 0; batch < (1ULL << 22); ++batch) {
                 size_t idx = random64() % num_words;
@@ -432,15 +438,14 @@ static int al3_rand_read_run(struct test *test, struct AL3Data *d, int cpu)
                     return EXIT_FAILURE;
                 }
             }
-            uint64_t sweep_sum = 0;
-            for (size_t i = 0; i < num_words; ++i)
-                sweep_sum += (uint64_t)data[i];
-            if (sweep_sum != golden_sum) {
-                al3_fail(d, "golden sweep mismatch: init sum 0x%016llx "
-                           "sweep sum 0x%016llx (L3-resident data corruption)",
-                         (unsigned long long)golden_sum,
-                         (unsigned long long)sweep_sum);
-                return EXIT_FAILURE;
+            for (size_t i = 0; i < num_words; ++i) {
+                if (data[i] != golden[i]) {
+                    al3_fail(d, "golden sweep mismatch at idx %zu: golden "
+                               "0x%08x got 0x%08x (L3-resident data "
+                               "corruption, element-exact)", i,
+                             (unsigned)golden[i], (unsigned)data[i]);
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     }
@@ -460,15 +465,12 @@ static int al3_stride_read_run(struct test *test, struct AL3Data *d, int cpu)
     if (cd.dp == DP_FP64) {
         const size_t num_vecs = buffer_bytes / 16;
         std::vector<double> data(num_vecs * 2);
+        std::vector<double> golden(num_vecs * 2);
         std::vector<double> check(num_vecs * 2);
         for (size_t i = 0; i < num_vecs * 2; ++i)
             data[i] = al3_dist_f64();
+        memcpy(golden.data(), data.data(), buffer_bytes);
         memset(check.data(), 0, buffer_bytes);
-        double golden_sum = 0.0;
-        for (size_t v = 0; v < num_vecs; ++v) {
-            float64x2_t x = vld1q_f64(data.data() + v * 2);
-            golden_sum += vgetq_lane_f64(x, 0) + vgetq_lane_f64(x, 1);
-        }
         size_t offset = random64() % AL3_STRIDE_VECS;
         do {
             for (size_t v = offset; v < num_vecs; v += AL3_STRIDE_VECS) {
@@ -486,30 +488,29 @@ static int al3_stride_read_run(struct test *test, struct AL3Data *d, int cpu)
                 }
             }
             offset = (offset + 1) % AL3_STRIDE_VECS;
-            double sweep_sum = 0.0;
             for (size_t v = 0; v < num_vecs; ++v) {
                 float64x2_t x = vld1q_f64(data.data() + v * 2);
-                sweep_sum += vgetq_lane_f64(x, 0) + vgetq_lane_f64(x, 1);
-            }
-            if (sweep_sum != golden_sum) {
-                al3_fail(d, "golden sweep mismatch: init sum %.17g sweep "
-                           "sum %.17g (L3-resident data corruption)",
-                         golden_sum, sweep_sum);
-                return EXIT_FAILURE;
+                float64x2_t g = vld1q_f64(golden.data() + v * 2);
+                uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(x),
+                                            vreinterpretq_u64_f64(g));
+                if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
+                    al3_fail(d, "golden sweep mismatch at vec %zu: golden "
+                               "(%.17g, %.17g) got (%.17g, %.17g) "
+                               "(L3-resident data corruption, element-exact)",
+                             v, vgetq_lane_f64(g, 0), vgetq_lane_f64(g, 1),
+                             vgetq_lane_f64(x, 0), vgetq_lane_f64(x, 1));
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     } else if (cd.dp == DP_NEON) {
         const size_t num_vecs = buffer_bytes / 16;
         std::vector<uint32_t> data(num_vecs * 4);
+        std::vector<uint32_t> golden(num_vecs * 4);
         std::vector<uint32_t> check(num_vecs * 4);
         memset_random(data.data(), buffer_bytes);
+        memcpy(golden.data(), data.data(), buffer_bytes);
         memset(check.data(), 0, buffer_bytes);
-        uint64_t golden_sum = 0;
-        for (size_t v = 0; v < num_vecs; ++v) {
-            uint32x4_t x = vld1q_u32(data.data() + v * 4);
-            golden_sum += (uint64_t)vgetq_lane_u32(x, 0) + vgetq_lane_u32(x, 1)
-                        + vgetq_lane_u32(x, 2) + vgetq_lane_u32(x, 3);
-        }
         size_t offset = random64() % AL3_STRIDE_VECS;
         do {
             for (size_t v = offset; v < num_vecs; v += AL3_STRIDE_VECS) {
@@ -532,29 +533,31 @@ static int al3_stride_read_run(struct test *test, struct AL3Data *d, int cpu)
                 }
             }
             offset = (offset + 1) % AL3_STRIDE_VECS;
-            uint64_t sweep_sum = 0;
             for (size_t v = 0; v < num_vecs; ++v) {
                 uint32x4_t x = vld1q_u32(data.data() + v * 4);
-                sweep_sum += (uint64_t)vgetq_lane_u32(x, 0) + vgetq_lane_u32(x, 1)
-                           + vgetq_lane_u32(x, 2) + vgetq_lane_u32(x, 3);
-            }
-            if (sweep_sum != golden_sum) {
-                al3_fail(d, "golden sweep mismatch: init sum 0x%016llx "
-                           "sweep sum 0x%016llx (L3-resident data corruption)",
-                         (unsigned long long)golden_sum,
-                         (unsigned long long)sweep_sum);
-                return EXIT_FAILURE;
+                uint32x4_t g = vld1q_u32(golden.data() + v * 4);
+                uint32x4_t diff = veorq_u32(x, g);
+                if (vmaxvq_u32(diff) != 0) {
+                    al3_fail(d, "golden sweep mismatch at vec %zu: golden "
+                               "{%08x,%08x,%08x,%08x} got {%08x,%08x,%08x,"
+                               "%08x} (L3-resident data corruption, "
+                               "element-exact)", v,
+                             vgetq_lane_u32(g, 0), vgetq_lane_u32(g, 1),
+                             vgetq_lane_u32(g, 2), vgetq_lane_u32(g, 3),
+                             vgetq_lane_u32(x, 0), vgetq_lane_u32(x, 1),
+                             vgetq_lane_u32(x, 2), vgetq_lane_u32(x, 3));
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     } else {
         const size_t num_words = buffer_bytes / sizeof(uint32_t);
         std::vector<uint32_t> data(num_words);
+        std::vector<uint32_t> golden(num_words);
         std::vector<uint32_t> check(num_words);
         memset_random(data.data(), buffer_bytes);
+        memcpy(golden.data(), data.data(), buffer_bytes);
         memset(check.data(), 0, buffer_bytes);
-        uint64_t golden_sum = 0;
-        for (size_t i = 0; i < num_words; ++i)
-            golden_sum += (uint64_t)data[i];
         size_t offset = random64() % AL3_STRIDE_WORDS;
         do {
             for (size_t idx = offset; idx < num_words; idx += AL3_STRIDE_WORDS) {
@@ -570,15 +573,14 @@ static int al3_stride_read_run(struct test *test, struct AL3Data *d, int cpu)
                 }
             }
             offset = (offset + 1) % AL3_STRIDE_WORDS;
-            uint64_t sweep_sum = 0;
-            for (size_t i = 0; i < num_words; ++i)
-                sweep_sum += (uint64_t)data[i];
-            if (sweep_sum != golden_sum) {
-                al3_fail(d, "golden sweep mismatch: init sum 0x%016llx "
-                           "sweep sum 0x%016llx (L3-resident data corruption)",
-                         (unsigned long long)golden_sum,
-                         (unsigned long long)sweep_sum);
-                return EXIT_FAILURE;
+            for (size_t i = 0; i < num_words; ++i) {
+                if (data[i] != golden[i]) {
+                    al3_fail(d, "golden sweep mismatch at idx %zu: golden "
+                               "0x%08x got 0x%08x (L3-resident data "
+                               "corruption, element-exact)", i,
+                             (unsigned)golden[i], (unsigned)data[i]);
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
     }
@@ -598,96 +600,110 @@ static int al3_write_run(struct test *test, struct AL3Data *d, int cpu)
     if (cd.dp == DP_FP64) {
         alignas(16) double *buf = static_cast<double *>(
                 aligned_alloc(16, AL3_SEQ_DOUBLES * sizeof(double)));
-        if (!buf) {
+        alignas(16) double *golden = static_cast<double *>(
+                aligned_alloc(16, AL3_SEQ_DOUBLES * sizeof(double)));
+        if (!buf || !golden) {
+            free(buf); free(golden);
             al3_fail(d, "alloc failed");
             return EXIT_FAILURE;
         }
         do {
-            double golden_sum = 0.0;
+            /* 2026-11-18 element-exact rework (parent-test sync): the
+             * previous sum-only compare was blind to permutation/
+             * swap-class write-path damage. */
             for (size_t i = 0; i < AL3_SEQ_DOUBLES; i += 2) {
                 double vals[2];
                 for (int l = 0; l < 2; ++l)
                     vals[l] = al3_dist_f64();
                 float64x2_t v = vld1q_f64(vals);
                 vst1q_f64(buf + i, v);
-                golden_sum += vals[0] + vals[1];
+                vst1q_f64(golden + i, v);
             }
-            double reread_sum = 0.0;
             for (size_t i = 0; i < AL3_SEQ_DOUBLES; i += 2) {
                 float64x2_t loaded = vld1q_f64(buf + i);
-                reread_sum += vgetq_lane_f64(loaded, 0) + vgetq_lane_f64(loaded, 1);
-            }
-            if (reread_sum != golden_sum) {
-                al3_fail(d, "write->delayed-re-read sum mismatch (L3 write "
-                           "path): golden %.17g reread %.17g",
-                         golden_sum, reread_sum);
-                free(buf);
-                return EXIT_FAILURE;
+                float64x2_t g = vld1q_f64(golden + i);
+                uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(loaded),
+                                            vreinterpretq_u64_f64(g));
+                if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
+                    al3_fail(d, "write->delayed-re-read golden mismatch at "
+                               "pair %zu (L3 write path, element-exact): "
+                               "golden (%.17g, %.17g) got (%.17g, %.17g)",
+                             i / 2,
+                             vgetq_lane_f64(g, 0), vgetq_lane_f64(g, 1),
+                             vgetq_lane_f64(loaded, 0), vgetq_lane_f64(loaded, 1));
+                    free(buf); free(golden);
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
         free(buf);
+        free(golden);
     } else if (cd.dp == DP_NEON) {
         alignas(16) int32_t *buf = static_cast<int32_t *>(
                 aligned_alloc(16, AL3_SEQ_INTS * sizeof(int32_t)));
-        if (!buf) {
+        alignas(16) int32_t *golden = static_cast<int32_t *>(
+                aligned_alloc(16, AL3_SEQ_INTS * sizeof(int32_t)));
+        if (!buf || !golden) {
+            free(buf); free(golden);
             al3_fail(d, "alloc failed");
             return EXIT_FAILURE;
         }
         do {
-            uint64_t golden_sum = 0;
             for (size_t i = 0; i < AL3_SEQ_INTS; i += 4) {
                 int32_t vals[4];
                 for (int j = 0; j < 4; ++j)
                     vals[j] = al3_dist_int();
                 int32x4_t v = vld1q_s32(vals);
                 vst1q_s32(buf + i, v);
-                for (int j = 0; j < 4; ++j)
-                    golden_sum += (uint64_t)vals[j];
+                vst1q_s32(golden + i, v);
             }
-            uint64_t reread_sum = 0;
             for (size_t i = 0; i < AL3_SEQ_INTS; i += 4) {
                 int32x4_t loaded = vld1q_s32(buf + i);
-                int32_t loaded_vals[4];
-                vst1q_s32(loaded_vals, loaded);
-                for (int j = 0; j < 4; ++j)
-                    reread_sum += (uint64_t)loaded_vals[j];
-            }
-            if (reread_sum != golden_sum) {
-                al3_fail(d, "write->delayed-re-read sum mismatch (L3 write "
-                           "path): golden 0x%016llx reread 0x%016llx",
-                         (unsigned long long)golden_sum,
-                         (unsigned long long)reread_sum);
-                free(buf);
-                return EXIT_FAILURE;
+                int32x4_t g = vld1q_s32(golden + i);
+                uint32x4_t diff = veorq_u32(vreinterpretq_u32_s32(loaded),
+                                            vreinterpretq_u32_s32(g));
+                if (vmaxvq_u32(diff) != 0) {
+                    al3_fail(d, "write->delayed-re-read golden mismatch at "
+                               "vec %zu (L3 write path, element-exact): "
+                               "golden {%d,%d,%d,%d} got {%d,%d,%d,%d}",
+                             i / 4,
+                             vgetq_lane_s32(g, 0), vgetq_lane_s32(g, 1),
+                             vgetq_lane_s32(g, 2), vgetq_lane_s32(g, 3),
+                             vgetq_lane_s32(loaded, 0), vgetq_lane_s32(loaded, 1),
+                             vgetq_lane_s32(loaded, 2), vgetq_lane_s32(loaded, 3));
+                    free(buf); free(golden);
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
         free(buf);
+        free(golden);
     } else {
         alignas(16) int32_t *buf = static_cast<int32_t *>(
                 aligned_alloc(16, AL3_SEQ_INTS * sizeof(int32_t)));
-        if (!buf) {
+        alignas(16) int32_t *golden = static_cast<int32_t *>(
+                aligned_alloc(16, AL3_SEQ_INTS * sizeof(int32_t)));
+        if (!buf || !golden) {
+            free(buf); free(golden);
             al3_fail(d, "alloc failed");
             return EXIT_FAILURE;
         }
         do {
-            uint64_t golden_sum = 0;
-            for (size_t i = 0; i < AL3_SEQ_INTS; ++i) {
-                buf[i] = al3_dist_int();
-                golden_sum += (uint64_t)buf[i];
-            }
-            uint64_t reread_sum = 0;
             for (size_t i = 0; i < AL3_SEQ_INTS; ++i)
-                reread_sum += (uint64_t)buf[i];
-            if (reread_sum != golden_sum) {
-                al3_fail(d, "write->delayed-re-read sum mismatch (L3 write "
-                           "path): golden 0x%016llx reread 0x%016llx",
-                         (unsigned long long)golden_sum,
-                         (unsigned long long)reread_sum);
-                free(buf);
-                return EXIT_FAILURE;
+                golden[i] = buf[i] = al3_dist_int();
+            for (size_t i = 0; i < AL3_SEQ_INTS; ++i) {
+                if (buf[i] != golden[i]) {
+                    al3_fail(d, "write->delayed-re-read golden mismatch at "
+                               "idx %zu (L3 write path, element-exact): "
+                               "golden 0x%08x got 0x%08x", i,
+                             (unsigned)golden[i], (unsigned)buf[i]);
+                    free(buf); free(golden);
+                    return EXIT_FAILURE;
+                }
             }
         } while (test_time_condition(test));
         free(buf);
+        free(golden);
     }
     return EXIT_SUCCESS;
 }
@@ -1233,9 +1249,15 @@ static void al3_covfile_trace(int combo)
 
 static int adaptive_l3_sdc_init(struct test *test)
 {
-    auto *d = new struct AL3Data;
-    if (!d)
-        return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    struct AL3Data *d;
+    try {
+        d = new struct AL3Data;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s AL3Data", test->id);
+        return EXIT_SKIP;
+    }
     memset(d, 0, sizeof(*d));
 
     d->shm = al3_shm_setup();
@@ -1288,31 +1310,33 @@ static int adaptive_l3_sdc_init(struct test *test)
         if (cd.dp == DP_FP64) {
             auto *buf = static_cast<double *>(
                     aligned_alloc(16, AL3_SEQ_DOUBLES * sizeof(double)));
-            if (!buf) {
+            auto *g = static_cast<double *>(
+                    aligned_alloc(16, AL3_SEQ_DOUBLES * sizeof(double)));
+            if (!buf || !g) {
+                free(buf); free(g);
                 delete d;
                 return EXIT_FAILURE;
             }
-            double sum = 0.0;
             for (size_t i = 0; i < AL3_SEQ_DOUBLES; ++i) {
-                buf[i] = al3_dist_f64();
-                sum += buf[i];
+                g[i] = buf[i] = al3_dist_f64();
             }
             d->seq_buf = buf;
-            d->seq_golden_f64 = sum;
+            d->seq_golden_buf = g;
         } else {
             auto *buf = static_cast<int32_t *>(
                     aligned_alloc(16, AL3_SEQ_INTS * sizeof(int32_t)));
-            if (!buf) {
+            auto *g = static_cast<int32_t *>(
+                    aligned_alloc(16, AL3_SEQ_INTS * sizeof(int32_t)));
+            if (!buf || !g) {
+                free(buf); free(g);
                 delete d;
                 return EXIT_FAILURE;
             }
-            uint64_t sum = 0;
             for (size_t i = 0; i < AL3_SEQ_INTS; ++i) {
-                buf[i] = al3_dist_int();
-                sum += (uint64_t)buf[i];
+                g[i] = buf[i] = al3_dist_int();
             }
             d->seq_buf = buf;
-            d->seq_golden_int = sum;
+            d->seq_golden_buf = g;
         }
     } else if (cd.pattern == AL3_RMW) {
         d->rmw_mem = new uint8_t[AL3_RMW_BYTES]();   /* zero-initialized */
@@ -1350,6 +1374,7 @@ static int adaptive_l3_sdc_cleanup(struct test *test)
     auto *d = static_cast<struct AL3Data *>(test->data);
     if (d) {
         free(d->seq_buf);
+        free(d->seq_golden_buf);
         delete[] d->rmw_mem;
         delete d;
     }

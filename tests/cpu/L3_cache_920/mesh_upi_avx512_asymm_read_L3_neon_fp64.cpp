@@ -28,7 +28,7 @@
 namespace { /* ODR: per-TU TestData */
 struct TestData {
     alignas(16) double *data;            /* shared, 16B aligned */
-    double golden_sum;                   /* init-time exact sum */
+    alignas(16) double *golden;          /* init-time element-exact golden copy */
     std::atomic<uint64_t> thread_idx;
 };
 }
@@ -39,21 +39,27 @@ static inline double marl_dist(void) {
 }
 
 static int mesh_upi_avx512_asymm_read_L3_neon_fp64_init(struct test *test) {
-    auto *td = new TestData;
-    if (!td) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    TestData *td;
+    try {
+        td = new TestData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s TestData", test->id);
+        return EXIT_SKIP;
+    }
 
     td->data = (double *)aligned_alloc(16, ARRAY_DOUBLES * sizeof(double));
-    if (!td->data) {
+    td->golden = (double *)aligned_alloc(16, ARRAY_DOUBLES * sizeof(double));
+    if (!td->data || !td->golden) {
+        free(td->data); free(td->golden);
         delete td;
         return EXIT_FAILURE;
     }
 
-    double sum = 0.0;
     for (size_t i = 0; i < ARRAY_DOUBLES; ++i) {
-        td->data[i] = marl_dist();
-        sum += td->data[i];
+        td->golden[i] = td->data[i] = marl_dist();
     }
-    td->golden_sum = sum;
     td->thread_idx.store(0, std::memory_order_relaxed);
     test->data = td;
 
@@ -68,7 +74,10 @@ static int mesh_upi_avx512_asymm_read_L3_neon_fp64_run(struct test *test, int cp
     (void)id;
 
     do {
-        double local_sum = 0.0;
+        /* element-exact L3 verification (2026-11-18 rework): each
+         * loaded vector is compared lane-by-lane against the
+         * init-time golden copy — a sum-only compare was blind to
+         * permutation/swap-class corruption. */
         bool consistent = true;
         alignas(16) double store_buf[BLOCK_DOUBLES];
 
@@ -77,7 +86,18 @@ static int mesh_upi_avx512_asymm_read_L3_neon_fp64_run(struct test *test, int cp
             float64x2_t vecs[VECS_PER_BLOCK];
             for (int v = 0; v < VECS_PER_BLOCK; ++v) {
                 vecs[v] = vld1q_f64(td->data + i + v * VEC_LANES);
-                local_sum += vgetq_lane_f64(vecs[v], 0) + vgetq_lane_f64(vecs[v], 1);
+                float64x2_t gv = vld1q_f64(td->golden + i + v * VEC_LANES);
+                uint64x2_t gdiff = veorq_u64(vreinterpretq_u64_f64(vecs[v]),
+                                             vreinterpretq_u64_f64(gv));
+                if (vmaxvq_u32(vreinterpretq_u32_u64(gdiff)) != 0) {
+                    report_fail_msg("%s: golden mismatch at elem %zu: "
+                                    "golden (%.17g, %.17g) got (%.17g, %.17g) "
+                                    "(L3 read path, element-exact compare)",
+                                    test->id, i + v * VEC_LANES,
+                                    vgetq_lane_f64(gv, 0), vgetq_lane_f64(gv, 1),
+                                    vgetq_lane_f64(vecs[v], 0), vgetq_lane_f64(vecs[v], 1));
+                    return EXIT_FAILURE;
+                }
             }
 
             /* block store->reload consistency sub-check (stack buf) */
@@ -96,13 +116,9 @@ static int mesh_upi_avx512_asymm_read_L3_neon_fp64_run(struct test *test, int cp
             if (!consistent) break;
         }
 
-        bool sum_ok = (local_sum == td->golden_sum);
-        if (!sum_ok || !consistent) {
-            report_fail_msg("mesh_upi_avx512_asymm_read_L3_neon_fp64: "
-                            "sum mismatch or block inconsistency after "
-                            "full-array re-read (L3 read path): golden "
-                            "%.17g got %.17g consistent=%d",
-                            td->golden_sum, local_sum, (int)consistent);
+        if (!consistent) {
+            report_fail_msg("%s: block store->reload inconsistency "
+                            "(LSU forwarding path)", test->id);
             return EXIT_FAILURE;
         }
     } while (test_time_condition(test));
@@ -113,6 +129,7 @@ static int mesh_upi_avx512_asymm_read_L3_neon_fp64_run(struct test *test, int cp
 static int mesh_upi_avx512_asymm_read_L3_neon_fp64_finish(struct test *test) {
     auto *td = static_cast<TestData *>(test->data);
     free(td->data);
+    free(td->golden);
     delete td;
     test->data = nullptr;
     return EXIT_SUCCESS;

@@ -32,15 +32,29 @@ static constexpr size_t LLSN_MEM_SIZE  = 64ULL * 1024 * 1024;  /* 64 MB  */
 /* 2026-11-18 L3-capability rework (twin of the scalar parent's):
  * STRIDE_V 1024 -> 512 so a thread's own-slot footprint is 8192 lines
  * (512 KB = the private L2 boundary, parent parity), plus a DELAYED
- * RE-VERIFICATION sweep below. */
+ * RE-VERIFICATION sweep below.  Slot exclusivity premise: bands are
+ * claimed per (cpu % LLSN_STRIDE_V)-style slot assignment, so the
+ * premise holds for cpu < LLSN_STRIDE_V = 512 — beyond 512 hardware
+ * threads the slot would be shared; the framework's thread_count()
+ * cap and the 96-logical-core lab parts keep this inert, and the
+ * delayed sweep is band-keyed (not slot-keyed), so verification is
+ * unaffected either way. */
 static constexpr size_t LLSN_STRIDE_V  = 512;    /* uint32x4 slots per band */
 static constexpr size_t LLSN_BANDS     = LLSN_MEM_SIZE / 16 / LLSN_STRIDE_V;
 static constexpr uint64_t LLSN_SWEEP_EVERY = 65536;
 
 static int llcstress_neon_init(struct test *test) {
-    auto *mem = new std::vector<uint8_t>;
-    if (!mem) return EXIT_FAILURE;
-    mem->resize(LLSN_MEM_SIZE);
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    std::vector<uint8_t> *mem;
+    try {
+        mem = new std::vector<uint8_t>;
+        mem->resize(LLSN_MEM_SIZE);
+    } catch (const std::bad_alloc &) {
+        delete mem;
+        log_skip(RuntimeSkipCategory, "memory: %s 64MB window", test->id);
+        return EXIT_SKIP;
+    }
     test->data = mem;
     return EXIT_SUCCESS;
 }

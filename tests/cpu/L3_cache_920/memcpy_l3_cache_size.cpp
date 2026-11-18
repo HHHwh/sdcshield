@@ -30,10 +30,14 @@ static int memcpy_l3_cache_size_init(struct test *test) {
     /* 在 test_init 里探测（此刻框架 topology 已填充 device_info）——
      * 静态全局初始化发生在 main 之前，device_count() 尚为 0，探测会
      * 静默落回兜底值（H8' 实测踩过这个坑）。 */
-    auto *block = new size_t(get_l3_size());
-    if (!block)
-        return EXIT_FAILURE;
-    test->data = block;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    try {
+        test->data = new size_t(get_l3_size());
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s l3-size word", test->id);
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 }
 

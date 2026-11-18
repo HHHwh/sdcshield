@@ -13,8 +13,11 @@
  *  (store then IMMEDIATE load-back of the same qword) is served by
  *  the store-buffer/L1 forwarding path and does not reach L2/L3.
  *  This test stresses LLC traffic and verifies the LSU forwarding
- *  path; L3-resident data-integrity verification is carried by the
- *  mesh read_L3 family (sum/golden over a shared 4 MB array).
+ *  path immediately; L3-resident data-integrity verification is the
+ *  DELAYED RE-VERIFICATION sweep below (each band's own slot
+ *  re-read after the sweep interval — see the rework note in the
+ *  run body) plus the mesh read_L3 family (element-exact golden
+ *  compare over a shared 4 MB array, 2026-11-18 element-exact pass).
  *
  *  FALSE-POSITIVE FIX over the user's draft (measured reasoning): the
  *  draft let ALL threads randomly write ANY qword in the shared 64 MB
@@ -65,9 +68,17 @@ struct LLSData {
 }
 
 static int llcstress_init(struct test *test) {
-    auto *td = new LLSData;
-    if (!td) return EXIT_FAILURE;
-    td->mem.resize(LLS_MEM_SIZE);
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    LLSData *td;
+    try {
+        td = new LLSData;
+        td->mem.resize(LLS_MEM_SIZE);
+    } catch (const std::bad_alloc &) {
+        delete td;
+        log_skip(RuntimeSkipCategory, "memory: %s 64MB window", test->id);
+        return EXIT_SKIP;
+    }
     test->data = td;
     return EXIT_SUCCESS;
 }

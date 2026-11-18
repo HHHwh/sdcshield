@@ -49,10 +49,14 @@ static inline float64x2_t ldr_vec_f64(const double *addr) {
 static constexpr size_t LLULNF_STRIDE_VECS = 128 / 16;   /* one f64x2 per 128B */
 
 static int llc_uniform_load_neon_fp64_init(struct test *test) {
-    auto *block = new size_t(llulnf_l3_size());
-    if (!block)
-        return EXIT_FAILURE;
-    test->data = block;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    try {
+        test->data = new size_t(llulnf_l3_size());
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s l3-size word", test->id);
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 }
 
@@ -68,18 +72,13 @@ static int llc_uniform_load_neon_fp64_run(struct test *test, int cpu) {
     const size_t num_vecs = buffer_bytes / 16;
 
     std::vector<double> data(num_vecs * 2);
+    std::vector<double> golden(num_vecs * 2);
     std::vector<double> check(num_vecs * 2);
 
     for (size_t i = 0; i < num_vecs * 2; ++i)
         data[i] = llulnf_dist();
+    memcpy(golden.data(), data.data(), buffer_bytes);
     memset(check.data(), 0, buffer_bytes);
-
-    /* init-time golden sum (exact; fixed loop order) */
-    double golden_sum = 0.0;
-    for (size_t v = 0; v < num_vecs; ++v) {
-        float64x2_t x = vld1q_f64(data.data() + v * 2);
-        golden_sum += vgetq_lane_f64(x, 0) + vgetq_lane_f64(x, 1);
-    }
 
     size_t offset = random64() % LLULNF_STRIDE_VECS;
 
@@ -106,26 +105,35 @@ static int llc_uniform_load_neon_fp64_run(struct test *test, int cpu) {
         }
         offset = (offset + 1) % LLULNF_STRIDE_VECS;
 
-        /* L3 verification sweep: dense f64x2 re-read — window-sized
-         * traffic evicts the private L2, sum compare L3/DRAM-served. */
-        double sweep_sum = 0.0;
+        /* L3 verification sweep (2026-11-18 element-exact rework):
+         * dense f64x2 re-read, each lane compared bit-exact against
+         * the init-time golden copy — window-sized traffic evicts the
+         * private L2, so the compare is L3/DRAM-served. Element-exact
+         * (not a sum): permutation/swap-class L3 corruption and a
+         * wrong-index load returning a different legal vector both
+         * FAIL here where a sum-only check is order-blind. */
         for (size_t v = 0; v < num_vecs; ++v) {
             float64x2_t x = vld1q_f64(data.data() + v * 2);
-            sweep_sum += vgetq_lane_f64(x, 0) + vgetq_lane_f64(x, 1);
-        }
-        if (sweep_sum != golden_sum) {
-            report_fail_msg("llc_uniform_load_neon_fp64: golden sweep "
-                            "mismatch: init sum %.17g sweep sum %.17g "
-                            "(L3-resident data corruption)",
-                            golden_sum, sweep_sum);
-            return EXIT_FAILURE;
+            float64x2_t g = vld1q_f64(golden.data() + v * 2);
+            uint64x2_t diff = veorq_u64(vreinterpretq_u64_f64(x),
+                                        vreinterpretq_u64_f64(g));
+            if (vmaxvq_u32(vreinterpretq_u32_u64(diff)) != 0) {
+                report_fail_msg("%s: golden sweep mismatch at vec %zu: "
+                                "golden (%.17g, %.17g) got (%.17g, %.17g) "
+                                "(L3-resident data corruption, "
+                                "element-exact compare)",
+                                test->id, v,
+                                vgetq_lane_f64(g, 0), vgetq_lane_f64(g, 1),
+                                vgetq_lane_f64(x, 0), vgetq_lane_f64(x, 1));
+                return EXIT_FAILURE;
+            }
         }
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(llc_uniform_load_neon_fp64, "FP64 variant of llc_uniform_load: uniform 128B-strided vld1q_f64 loads over per-thread windows sized to the probed per-cluster L3 (prefetcher stress); asm ldr-q read-back PLUS per-pass dense golden f64-sum sweep (L3-path verification) (ARM64)")
+DECLARE_TEST(llc_uniform_load_neon_fp64, "FP64 variant of llc_uniform_load: uniform 128B-strided vld1q_f64 loads over per-thread windows sized to the probed per-cluster L3 (prefetcher stress); asm ldr-q read-back PLUS per-pass dense element-exact golden sweep (L3-path verification) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = llc_uniform_load_neon_fp64_init,
     .test_run = llc_uniform_load_neon_fp64_run,

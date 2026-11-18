@@ -38,9 +38,17 @@ static constexpr size_t LLSN_BANDS     = LLSN_MEM_SIZE / 16 / LLSN_STRIDE_V;
 static constexpr uint64_t LLSN_SWEEP_EVERY = 65536;
 
 static int llcstress_neon_fp64_init(struct test *test) {
-    auto *mem = new std::vector<uint8_t>;
-    if (!mem) return EXIT_FAILURE;
-    mem->resize(LLSN_MEM_SIZE);
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    std::vector<uint8_t> *mem;
+    try {
+        mem = new std::vector<uint8_t>;
+        mem->resize(LLSN_MEM_SIZE);
+    } catch (const std::bad_alloc &) {
+        delete mem;
+        log_skip(RuntimeSkipCategory, "memory: %s 64MB window", test->id);
+        return EXIT_SKIP;
+    }
     test->data = mem;
     return EXIT_SUCCESS;
 }

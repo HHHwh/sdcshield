@@ -46,11 +46,15 @@ static inline uint32x4_t ldr_vec(const uint32_t *addr) {
 }
 
 static int llc_randomized_load_neon_init(struct test *test) {
-    /* probe HERE — topology is filled by now (see llrln_l3_size) */
-    auto *block = new size_t(llrln_l3_size());
-    if (!block)
-        return EXIT_FAILURE;
-    test->data = block;
+    /* probe HERE — topology is filled by now (see llrln_l3_size).
+     * throwing-new OOM follows the repo T10 convention: bad_alloc ->
+     * clean SKIP (resource exhaustion is not an SDC red). */
+    try {
+        test->data = new size_t(llrln_l3_size());
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s l3-size word", test->id);
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 }
 
@@ -66,18 +70,12 @@ static int llc_randomized_load_neon_run(struct test *test, int cpu) {
     const size_t num_vecs = buffer_bytes / 16;
 
     std::vector<uint32_t> data(num_vecs * 4);    /* random-index loads */
+    std::vector<uint32_t> golden(num_vecs * 4);  /* element-exact golden copy */
     std::vector<uint32_t> check(num_vecs * 4);   /* store->load verify */
 
     memset_random(data.data(), buffer_bytes);
+    memcpy(golden.data(), data.data(), buffer_bytes);
     memset(check.data(), 0, buffer_bytes);
-
-    /* init-time golden vector-sum of data[] (never written after) */
-    uint64_t golden_sum = 0;
-    for (size_t v = 0; v < num_vecs; ++v) {
-        uint32x4_t x = vld1q_u32(data.data() + v * 4);
-        golden_sum += (uint64_t)vgetq_lane_u32(x, 0) + vgetq_lane_u32(x, 1)
-                    + vgetq_lane_u32(x, 2) + vgetq_lane_u32(x, 3);
-    }
 
     do {
         for (uint64_t batch = 0; batch < (1ULL << 20); ++batch) {
@@ -107,29 +105,38 @@ static int llc_randomized_load_neon_run(struct test *test, int cpu) {
             }
         }
 
-        /* L3 verification sweep (2026-11-18 rework): dense vector
-         * re-read of data[] — window-sized traffic evicts the private
-         * L2, so the sum compare is L3/DRAM-served. */
-        uint64_t sweep_sum = 0;
+        /* L3 verification sweep (2026-11-18 element-exact rework):
+         * dense vector re-read of data[], each lane compared bit-exact
+         * against the init-time golden copy — window-sized traffic
+         * evicts the private L2, so the compare is L3/DRAM-served.
+         * Element-exact (not a sum): a randomized load returning a
+         * different legal data[] vector, and permutation/swap-class
+         * L3 corruption, both FAIL here where a sum-only check is
+         * order- and content-blind. */
         for (size_t v = 0; v < num_vecs; ++v) {
             uint32x4_t x = vld1q_u32(data.data() + v * 4);
-            sweep_sum += (uint64_t)vgetq_lane_u32(x, 0) + vgetq_lane_u32(x, 1)
-                       + vgetq_lane_u32(x, 2) + vgetq_lane_u32(x, 3);
-        }
-        if (sweep_sum != golden_sum) {
-            report_fail_msg("llc_randomized_load_neon: golden sweep "
-                            "mismatch: init sum 0x%016lx sweep sum "
-                            "0x%016lx (L3-resident data corruption)",
-                            (unsigned long)golden_sum,
-                            (unsigned long)sweep_sum);
-            return EXIT_FAILURE;
+            uint32x4_t g = vld1q_u32(golden.data() + v * 4);
+            uint32x4_t diff = veorq_u32(x, g);
+            if (vmaxvq_u32(diff) != 0) {
+                report_fail_msg("llc_randomized_load_neon: golden sweep "
+                                "mismatch at vec %zu: golden {%08x,%08x,"
+                                "%08x,%08x} got {%08x,%08x,%08x,%08x} "
+                                "(L3-resident data corruption, "
+                                "element-exact per-lane compare)",
+                                v,
+                                vgetq_lane_u32(g, 0), vgetq_lane_u32(g, 1),
+                                vgetq_lane_u32(g, 2), vgetq_lane_u32(g, 3),
+                                vgetq_lane_u32(x, 0), vgetq_lane_u32(x, 1),
+                                vgetq_lane_u32(x, 2), vgetq_lane_u32(x, 3));
+                return EXIT_FAILURE;
+            }
         }
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(llc_randomized_load_neon, "Random LLC roaming with vld1q vector loads over per-thread windows sized to the probed per-cluster L3; store->asm-ldr-q vector load-back on the LSU forwarding path PLUS periodic dense golden vector-sum sweep (L3-path verification, 2026-11-18 rework) (ARM64)")
+DECLARE_TEST(llc_randomized_load_neon, "Random LLC roaming with vld1q vector loads over per-thread windows sized to the probed per-cluster L3; store->asm-ldr-q vector load-back on the LSU forwarding path PLUS periodic dense element-exact per-lane golden sweep (L3-path verification, 2026-11-18 rework) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = llc_randomized_load_neon_init,
     .test_run = llc_randomized_load_neon_run,

@@ -1,9 +1,7 @@
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -18,14 +16,14 @@
 // 性 + 容量驻留双真），sum/golden 校验点落在 L3 路径上。协议（块竞争
 // + 轮屏障 + 读者校验和）逐句保留，仅工作集与自旋节流档距随尺度放大。
 #define BLOCK_ELEMENTS VECTOR_SIZE
-#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 256
+#define NUM_BLOCKS (TOTAL_ELEMENTS / BLOCK_ELEMENTS)  // = 262144
 #define TOTAL_BYTES (TOTAL_ELEMENTS * sizeof(int32_t))
 
 namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;           // 共享数据数组，16 字节对齐
+    alignas(16) int32_t *golden;         // 写点双写的 element-exact golden 副本
     std::atomic<uint32_t> next_block;    // 下一个可分配的块索引
-    std::atomic<uint64_t> global_sum;    // 所有写核心的校验和累加
     std::atomic<uint32_t> allocated_blocks; // 已分配的块数
     std::atomic<uint32_t> thread_idx;    // 线程 ID 分配器
     /* sense-reversal 轮屏障（2731971 已验证模式）：原 reset-winner 协议
@@ -53,18 +51,27 @@ static int mesh_upi_sse_write_only_int_init(struct test *test) {
         return -255;   // SKIP
     }
 
-    auto *td = new TestData;
-    if (!td) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    TestData *td;
+    try {
+        td = new TestData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s TestData", test->id);
+        return EXIT_SKIP;
+    }
 
     td->data = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
-    if (!td->data) {
+    td->golden = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
+    if (!td->data || !td->golden) {
+        free(td->data); free(td->golden);
         delete td;
         return EXIT_FAILURE;
     }
     memset(td->data, 0, TOTAL_BYTES);
+    memset(td->golden, 0, TOTAL_BYTES);
 
     td->next_block.store(0, std::memory_order_relaxed);
-    td->global_sum.store(0, std::memory_order_relaxed);
     td->allocated_blocks.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
     td->arrived.store(0, std::memory_order_relaxed);
@@ -78,7 +85,7 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
     (void)cpu;
     auto *td = static_cast<TestData*>(test->data);
 
-    int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
+    const int id = (int)td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_reader = (id == 0);
 
     /* 屏障参与者总数取框架权威值 thread_count()（自动尊重 --cpuset、
@@ -98,10 +105,6 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
     auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
 
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
-
     uint32_t my_epoch = 0;
     do {
         if (!is_reader) {
@@ -116,14 +119,14 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
 
                 size_t offset = block * BLOCK_ELEMENTS;
                 int32_t vals[VECTOR_SIZE];
-                uint64_t local_sum = 0;
                 for (int j = 0; j < VECTOR_SIZE; ++j) {
                     vals[j] = dist();
-                    local_sum += (uint64_t)vals[j];
                 }
-                // NEON 加载/存储
+                // NEON 加载/存储；同一向量同步双写进 golden 副本
+                // （element-exact 校验的参照，2026-11-18 收口）
                 int32x4_t v = vld1q_s32(vals);
                 vst1q_s32(td->data + offset, v);
+                vst1q_s32(td->golden + offset, v);
                 __sync_synchronize();   // 类似 _mm_sfence
 
                 // 一致性测试：立即读回比较
@@ -137,7 +140,6 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
                     // 发现不一致，但继续处理（最终会在读核心校验时失败）
                 }
 
-                td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
                 td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
             }
         } else {
@@ -156,21 +158,29 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
                 }
             }
 
-            // 读取整个数组，计算校验和并进行一致性测试
-            // Sum snapshot BEFORE the read loop (TOCTOU fix): a fast thread
-            // can finish its read, run the reset phase and start writing the
-            // NEXT iteration while this thread is still walking the buffer.
-            uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
-            uint64_t read_sum = 0;
+            // 读取整个数组做 element-exact 校验（2026-11-18 收口：
+            // 原先的全量和值校验对保和类损坏——块/行置换、steering
+            // 对换——失明；改为与写点双写的 golden 副本逐元素比对。
+            // 数组在 B1 屏障后冻结，golden 与 data 同点双写同序冻结，
+            // 比较语义 = 「重读值 == 写入值」的逐元素形式。）
             bool consistent = true;
             alignas(16) int32_t store_buf[VECTOR_SIZE];
 
             for (size_t i = 0; i < TOTAL_ELEMENTS; i += VECTOR_SIZE) {
                 int32x4_t v = vld1q_s32(td->data + i);
-                int32_t vals[VECTOR_SIZE];
-                vst1q_s32(vals, v);
-                for (int j = 0; j < VECTOR_SIZE; ++j) {
-                    read_sum += (uint64_t)vals[j];
+                int32x4_t g = vld1q_s32(td->golden + i);
+                uint32x4_t gdiff = veorq_u32(vreinterpretq_u32_s32(v),
+                                             vreinterpretq_u32_s32(g));
+                if (vmaxvq_u32(gdiff) != 0) {
+                    report_fail_msg("%s: golden mismatch at vec %zu: "
+                                    "golden {%d,%d,%d,%d} got {%d,%d,%d,%d} "
+                                    "(L3 write path, element-exact compare)",
+                                    test->id, i / VECTOR_SIZE,
+                                    vgetq_lane_s32(g, 0), vgetq_lane_s32(g, 1),
+                                    vgetq_lane_s32(g, 2), vgetq_lane_s32(g, 3),
+                                    vgetq_lane_s32(v, 0), vgetq_lane_s32(v, 1),
+                                    vgetq_lane_s32(v, 2), vgetq_lane_s32(v, 3));
+                    return EXIT_FAILURE;
                 }
 
                 // 一致性测试：Store/Load 比较
@@ -185,20 +195,9 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
                 }
             }
 
-            bool sum_ok = (read_sum == expected_sum);
-            bool passed = sum_ok && consistent;
-
-            if (!passed) {
-                // 首次失败证据（原先每轮都从读核心打印 PASS 行）
-                fprintf(stderr, "mesh_upi_sse_write_only_int: Thread %d (reader), data[0..3]=(%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
-                        id,
-                        td->data[0], td->data[1], td->data[2], td->data[3],
-                        read_sum, expected_sum, consistent,
-                        passed ? GREEN : RED,
-                        passed ? "PASS" : "FAIL",
-                        RESET);
-                fflush(stderr);
-                report_fail_msg("mesh_upi_sse_write_only_int: Sum mismatch or consistency failure");
+            if (!consistent) {
+                report_fail_msg("%s: store->reload consistency failure "
+                                "(LSU forwarding path)", test->id);
                 return EXIT_FAILURE;
             }
 
@@ -207,7 +206,7 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
         }
 
         /* ---------- 轮屏障：sense-reversal，读者与全体写者都到达 ----------
-         * 最后到达者在此复位下一轮状态（global_sum/next_block/
+         * 最后到达者在此复位下一轮状态（next_block/
          * allocated_blocks）后翻转 epoch：fetch_add(acq_rel) 的到达链
          * 保证复位发生时所有线程都已离开本轮的填充/校验（写者不再需要
          * 自旋等 next_block==0），epoch 的 release 存储保证复位先于任何
@@ -218,7 +217,6 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
         {
             uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
             if (done == total_threads) {
-                td->global_sum.store(0, std::memory_order_seq_cst);
                 td->next_block.store(0, std::memory_order_seq_cst);
                 td->allocated_blocks.store(0, std::memory_order_seq_cst);
                 td->arrived.store(0, std::memory_order_relaxed);
@@ -248,6 +246,7 @@ out_of_budget:
 static int mesh_upi_sse_write_only_int_finish(struct test *test) {
     auto *td = static_cast<TestData*>(test->data);
     free(td->data);
+    free(td->golden);
     delete td;
     return EXIT_SUCCESS;
 }

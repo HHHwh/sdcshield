@@ -1,9 +1,12 @@
-/*  l3_execute_neon_fp64 — FP64 data-path variant of tests/cpu/arm_add/l3_execute_neon.cpp
- *  (2026-11-10; parent untouched).
+/*  l3_execute_neon_fp64 — FP64 data-path variant of
+ *  tests/cpu/L3_cache_920/l3_execute_neon.cpp (2026-11-10; parents
+ *  moved into L3_cache_920 by the 2026-11-18 unification).
  *
- *  Same fetch-path probe structure — ic ivau invalidation of the
- *  worker's code + dsb ish + isb resync forces re-fetch through
- *  L2/L3, executed results bit-compared to the INIT-TIME snapshot —
+ *  Same fetch-path probe structure — the 2026-11-17 capability
+ *  rework's dc civac pass (clean+invalidate to the PoC, evicting the
+ *  code lines from the private L2) followed by ic ivau + dsb ish +
+ *  isb resync, so the re-fetch is genuinely L3-served; executed
+ *  results bit-compared to the INIT-TIME snapshot —
  *  but the worker's compute kernel is the FP64 vector pipeline: a
  *  fixed vmulq/vaddq/vsubq chain over float64x2, so the code being
  *  re-fetched is FP64-heavy machine code (the fetch corruption of an
@@ -66,8 +69,15 @@ static inline void l3en_flush_icache(const void *start, size_t len) {
 }
 
 static int l3_execute_neon_fp64_init(struct test *test) {
-    auto *d = new L3ENData;
-    if (!d) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    L3ENData *d;
+    try {
+        d = new L3ENData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s L3ENData", test->id);
+        return EXIT_SKIP;
+    }
     for (int i = 0; i < L3EN_NUM_INPUTS; ++i) {
         for (int l = 0; l < 2; ++l)
             d->in[i][l] = (double)(i * 7 + l * 13 + 1);   /* mild integers */

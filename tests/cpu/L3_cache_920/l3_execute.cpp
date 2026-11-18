@@ -106,8 +106,15 @@ static inline void l3e_flush_icache(const void *start, size_t len) {
 }
 
 static int l3_execute_init(struct test *test) {
-    auto *d = new L3EData;
-    if (!d) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    L3EData *d;
+    try {
+        d = new L3EData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s L3EData", test->id);
+        return EXIT_SKIP;
+    }
 
     /* deterministic inputs; b == 0 at i = 12, 25, 38, 51 (boundary
      * branch coverage); no runtime RNG anywhere in this test */

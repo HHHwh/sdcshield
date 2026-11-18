@@ -6,15 +6,14 @@
  *  The 2026-11-17 capability-rework geometry, born here from the
  *  start: 4 MB SHARED double array with the v2 double-barrier
  *  protocol (B1 write->read, B2 read->write), STATIC writer
- *  partitions (every block written exactly once per round), and
- *  cumulative differential k-space sums (global_ksum monotonic;
- *  reader takes expected = cum(K) - cum(K-1) after B1).  k = (int64)
- *  (v*2) over exact 0.5-multiples makes every accumulator
- *  exact-integer math (order-independent, bit-exact).
+ *  partitions (every block written exactly once per round), and —
+ *  since the 2026-11-18 element-exact rework — a write-point
+ *  double-written golden copy verified per-lane by the reader after
+ *  B1 (the previous cumulative differential k-space sum compare was
+ *  blind to permutation/swap-class write-path damage).
  */
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <atomic>
 #include <unistd.h>
@@ -37,7 +36,7 @@ static inline float64x2_t ma_ldr_vec_f64(const double *addr) {
 namespace { /* ODR: per-TU TestData */
 struct TestData {
     alignas(16) double *data;            /* shared, 16B aligned */
-    std::atomic<uint64_t> global_ksum;   /* monotonic k-space accumulator */
+    alignas(16) double *golden;          /* write-point double-written golden copy */
     std::atomic<uint32_t> thread_idx;
     std::atomic<uint32_t> b1_count, b1_sense;   /* B1: write->read */
     std::atomic<uint32_t> b2_count, b2_sense;   /* B2: read->write */
@@ -54,17 +53,26 @@ static int mesh_upi_avx512_asymm_write_only_neon_fp64_init(struct test *test) {
         return -255;   /* SKIP */
     }
 
-    auto *td = new TestData;
-    if (!td) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    TestData *td;
+    try {
+        td = new TestData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s TestData", test->id);
+        return EXIT_SKIP;
+    }
 
     td->data = (double *)aligned_alloc(16, ARRAY_DOUBLES * sizeof(double));
-    if (!td->data) {
+    td->golden = (double *)aligned_alloc(16, ARRAY_DOUBLES * sizeof(double));
+    if (!td->data || !td->golden) {
+        free(td->data); free(td->golden);
         delete td;
         return EXIT_FAILURE;
     }
     memset(td->data, 0, ARRAY_DOUBLES * sizeof(double));
+    memset(td->golden, 0, ARRAY_DOUBLES * sizeof(double));
 
-    td->global_ksum.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
     td->b1_count.store(0, std::memory_order_relaxed);
     td->b1_sense.store(0, std::memory_order_relaxed);
@@ -120,21 +128,21 @@ static int mesh_upi_avx512_asymm_write_only_neon_fp64_run(struct test *test, int
         b_hi = (wid == W - 1) ? NUM_BLOCKS : b_lo + per;
     }
 
-    uint64_t prev_cum = 0;
-
     do {
         if (!is_reader) {
             for (uint32_t block = b_lo; block < b_hi; ++block) {
                 size_t offset = block * BLOCK_DOUBLES;
                 double vals[BLOCK_DOUBLES];
-                uint64_t ksum = 0;
                 for (int j = 0; j < BLOCK_DOUBLES; ++j) {
                     vals[j] = mawol_dist();
-                    ksum += (uint64_t)(int64_t)(vals[j] * 2.0);
                 }
-                for (int v = 0; v < VECS_PER_BLOCK; ++v)
-                    vst1q_f64(td->data + offset + v * VEC_LANES,
-                              vld1q_f64(vals + v * VEC_LANES));
+                /* same vector double-written into the golden copy
+                 * (element-exact reference, 2026-11-18 rework) */
+                for (int v = 0; v < VECS_PER_BLOCK; ++v) {
+                    float64x2_t vec = vld1q_f64(vals + v * VEC_LANES);
+                    vst1q_f64(td->data + offset + v * VEC_LANES, vec);
+                    vst1q_f64(td->golden + offset + v * VEC_LANES, vec);
+                }
                 __sync_synchronize();
 
                 /* immediate read-back via asm (per-byte write check) */
@@ -150,14 +158,11 @@ static int mesh_upi_avx512_asymm_write_only_neon_fp64_run(struct test *test, int
                     }
                 }
                 if (!block_ok) {
-                    report_fail_msg("mesh_upi_avx512_asymm_write_only_neon_"
-                                    "fp64: writer immediate read-back mismatch "
+                    report_fail_msg("%s: writer immediate read-back mismatch "
                                     "(block %u, store/load corruption)",
-                                    block);
+                                    test->id, block);
                     return EXIT_FAILURE;
                 }
-
-                td->global_ksum.fetch_add(ksum, std::memory_order_seq_cst);
             }
         }
 
@@ -165,11 +170,11 @@ static int mesh_upi_avx512_asymm_write_only_neon_fp64_run(struct test *test, int
         if (!barrier(td->b1_count, td->b1_sense)) break;
 
         if (is_reader) {
-            uint64_t cum = td->global_ksum.load(std::memory_order_seq_cst);
-            uint64_t expected_ksum = cum - prev_cum;
-            prev_cum = cum;
-
-            uint64_t read_ksum = 0;
+            /* element-exact verification (2026-11-18 rework: the
+             * previous differential k-space sum compare was blind to
+             * permutation/swap-class write-path damage; the per-lane
+             * compare against the write-point golden copy is not.
+             * Array and golden are both frozen between B1 and B2.) */
             bool consistent = true;
             alignas(16) double store_buf[BLOCK_DOUBLES];
 
@@ -177,8 +182,19 @@ static int mesh_upi_avx512_asymm_write_only_neon_fp64_run(struct test *test, int
                 float64x2_t vecs[VECS_PER_BLOCK];
                 for (int v = 0; v < VECS_PER_BLOCK; ++v) {
                     vecs[v] = vld1q_f64(td->data + i + v * VEC_LANES);
-                    read_ksum += (uint64_t)(int64_t)(vgetq_lane_f64(vecs[v], 0) * 2.0);
-                    read_ksum += (uint64_t)(int64_t)(vgetq_lane_f64(vecs[v], 1) * 2.0);
+                    float64x2_t gv = vld1q_f64(td->golden + i + v * VEC_LANES);
+                    uint64x2_t gdiff = veorq_u64(vreinterpretq_u64_f64(vecs[v]),
+                                                 vreinterpretq_u64_f64(gv));
+                    if (vmaxvq_u32(vreinterpretq_u32_u64(gdiff)) != 0) {
+                        report_fail_msg("%s: golden mismatch at elem %zu: "
+                                        "golden (%.17g, %.17g) got (%.17g, "
+                                        "%.17g) (L3 write path, element-exact "
+                                        "compare)",
+                                        test->id, i + v * VEC_LANES,
+                                        vgetq_lane_f64(gv, 0), vgetq_lane_f64(gv, 1),
+                                        vgetq_lane_f64(vecs[v], 0), vgetq_lane_f64(vecs[v], 1));
+                        return EXIT_FAILURE;
+                    }
                 }
 
                 for (int v = 0; v < VECS_PER_BLOCK; ++v)
@@ -196,13 +212,9 @@ static int mesh_upi_avx512_asymm_write_only_neon_fp64_run(struct test *test, int
                 if (!consistent) break;
             }
 
-            if (read_ksum != expected_ksum || !consistent) {
-                report_fail_msg("mesh_upi_avx512_asymm_write_only_neon_"
-                                "fp64: reader k-sum mismatch or block "
-                                "inconsistency (L3 write path): expected "
-                                "ksum %lu got %lu consistent=%d",
-                                (unsigned long)expected_ksum,
-                                (unsigned long)read_ksum, (int)consistent);
+            if (!consistent) {
+                report_fail_msg("%s: store->reload consistency failure "
+                                "(LSU forwarding path)", test->id);
                 return EXIT_FAILURE;
             }
         }
@@ -218,6 +230,7 @@ static int mesh_upi_avx512_asymm_write_only_neon_fp64_run(struct test *test, int
 static int mesh_upi_avx512_asymm_write_only_neon_fp64_finish(struct test *test) {
     auto *td = static_cast<TestData *>(test->data);
     free(td->data);
+    free(td->golden);
     delete td;
     test->data = nullptr;
     return EXIT_SUCCESS;

@@ -1,9 +1,7 @@
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -17,17 +15,26 @@
 namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;          // 共享只读数据，16 字节对齐
-    uint64_t golden_sum;                // 预先计算的参考累加和
+    alignas(16) int32_t *golden;        // init-time element-exact golden copy
     std::atomic<uint32_t> thread_idx;   // 用于线程 ID 分配
 };
 }
 
 static int mesh_upi_avx512_asymm_read_L3_int_init(struct test *test) {
-    auto *td = new TestData;
-    if (!td) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    TestData *td;
+    try {
+        td = new TestData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s TestData", test->id);
+        return EXIT_SKIP;
+    }
 
     td->data = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
-    if (!td->data) {
+    td->golden = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
+    if (!td->data || !td->golden) {
+        free(td->data); free(td->golden);
         delete td;
         return EXIT_FAILURE;
     }
@@ -35,12 +42,9 @@ static int mesh_upi_avx512_asymm_read_L3_int_init(struct test *test) {
     /* randomization hardening H14' (P17): framework RNG (per-thread
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
     auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
-    uint64_t sum = 0;
     for (size_t i = 0; i < ARRAY_ELEMS; ++i) {
-        td->data[i] = dist();
-        sum += (uint64_t)td->data[i];
+        td->golden[i] = td->data[i] = dist();
     }
-    td->golden_sum = sum;
     td->thread_idx.store(0, std::memory_order_relaxed);
     test->data = td;
 
@@ -51,27 +55,37 @@ static int mesh_upi_avx512_asymm_read_L3_int_run(struct test *test, int cpu) {
     (void)cpu;
     auto *td = static_cast<TestData*>(test->data);
 
-    int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
+    (void)td->thread_idx.fetch_add(1, std::memory_order_relaxed);   /* diagnostics only */
 
     alignas(16) int32_t store_buf[VECTOR_SIZE];
 
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
-
     do {
-        uint64_t local_sum = 0;
         bool consistent = true;
 
         for (size_t i = 0; i < ARRAY_ELEMS; i += VECTOR_SIZE) {
-            // 加载 16 个元素（分 4 个 NEON 向量）
+            /* element-exact L3 verification (2026-11-18 rework): each
+             * of the 4 loaded vectors is compared lane-by-lane against
+             * the init-time golden copy — a sum-only compare was blind
+             * to permutation/swap-class corruption. */
             int32_t vals[VECTOR_SIZE];
             for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
                 int32x4_t vec = vld1q_s32(td->data + i + v * NEON_VECTOR_SIZE);
+                int32x4_t gv  = vld1q_s32(td->golden + i + v * NEON_VECTOR_SIZE);
+                uint32x4_t gdiff = veorq_u32(vreinterpretq_u32_s32(vec),
+                                             vreinterpretq_u32_s32(gv));
+                if (vmaxvq_u32(gdiff) != 0) {
+                    report_fail_msg("%s: golden mismatch at elem %zu: "
+                                    "golden {%d,%d,%d,%d} got {%d,%d,%d,%d} "
+                                    "(L3-resident data corruption, "
+                                    "element-exact compare)",
+                                    test->id, i + v * NEON_VECTOR_SIZE,
+                                    vgetq_lane_s32(gv, 0), vgetq_lane_s32(gv, 1),
+                                    vgetq_lane_s32(gv, 2), vgetq_lane_s32(gv, 3),
+                                    vgetq_lane_s32(vec, 0), vgetq_lane_s32(vec, 1),
+                                    vgetq_lane_s32(vec, 2), vgetq_lane_s32(vec, 3));
+                    return EXIT_FAILURE;
+                }
                 vst1q_s32(vals + v * NEON_VECTOR_SIZE, vec);
-            }
-            for (int j = 0; j < VECTOR_SIZE; ++j) {
-                local_sum += (uint64_t)vals[j];
             }
 
             // 一致性测试：Store/Load 比较
@@ -94,23 +108,9 @@ static int mesh_upi_avx512_asymm_read_L3_int_run(struct test *test, int cpu) {
             if (!consistent) break;
         }
 
-        bool sum_ok = (local_sum == td->golden_sum);
-        bool passed = sum_ok && consistent;
-
-        if (!passed) {
-            // 首次失败证据（原先每个工作迭代都从线程 0 打印 PASS 行）
-            fprintf(stderr, "mesh_upi_avx512_asymm_read_L3_int: Thread %d, data[0..15]=(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d), local_sum=%lu, golden_sum=%lu, consistent=%d, result=%s%s%s\n",
-                    id,
-                    td->data[0], td->data[1], td->data[2], td->data[3],
-                    td->data[4], td->data[5], td->data[6], td->data[7],
-                    td->data[8], td->data[9], td->data[10], td->data[11],
-                    td->data[12], td->data[13], td->data[14], td->data[15],
-                    local_sum, td->golden_sum, consistent,
-                    passed ? GREEN : RED,
-                    passed ? "PASS" : "FAIL",
-                    RESET);
-            fflush(stderr);
-            report_fail_msg("mesh_upi_avx512_asymm_read_L3_int: Sum mismatch or consistency failure");
+        if (!consistent) {
+            report_fail_msg("%s: store->reload consistency failure "
+                            "(LSU forwarding path)", test->id);
             return EXIT_FAILURE;
         }
 
@@ -118,14 +118,12 @@ static int mesh_upi_avx512_asymm_read_L3_int_run(struct test *test, int cpu) {
 
     return EXIT_SUCCESS;
 
-    #undef GREEN
-    #undef RED
-    #undef RESET
 }
 
 static int mesh_upi_avx512_asymm_read_L3_int_finish(struct test *test) {
     auto *td = static_cast<TestData*>(test->data);
     free(td->data);
+    free(td->golden);
     delete td;
     return EXIT_SUCCESS;
 }

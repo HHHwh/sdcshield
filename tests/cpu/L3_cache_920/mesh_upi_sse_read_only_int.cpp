@@ -1,9 +1,7 @@
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -15,17 +13,26 @@
 namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;          // 共享只读数据，16 字节对齐
-    uint64_t golden_sum;                // 预先计算的参考累加和
+    alignas(16) int32_t *golden;       // init-time element-exact golden copy
     std::atomic<uint32_t> thread_idx;   // 用于线程 ID 分配
 };
 }
 
 static int mesh_upi_sse_read_only_int_init(struct test *test) {
-    auto *td = new TestData;
-    if (!td) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    TestData *td;
+    try {
+        td = new TestData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s TestData", test->id);
+        return EXIT_SKIP;
+    }
 
     td->data = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
-    if (!td->data) {
+    td->golden = (int32_t*)aligned_alloc(16, TOTAL_BYTES);
+    if (!td->data || !td->golden) {
+        free(td->data); free(td->golden);
         delete td;
         return EXIT_FAILURE;
     }
@@ -34,12 +41,9 @@ static int mesh_upi_sse_read_only_int_init(struct test *test) {
     /* randomization hardening H14' (P17): framework RNG (per-thread
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
     auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
-    uint64_t sum = 0;
     for (size_t i = 0; i < ARRAY_ELEMS; ++i) {
-        td->data[i] = dist();
-        sum += (uint64_t)td->data[i];
+        td->golden[i] = td->data[i] = dist();
     }
-    td->golden_sum = sum;
     td->thread_idx.store(0, std::memory_order_relaxed);
     test->data = td;
 
@@ -50,17 +54,12 @@ static int mesh_upi_sse_read_only_int_run(struct test *test, int cpu) {
     (void)cpu;
     auto *td = static_cast<TestData*>(test->data);
 
-    int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
+    (void)td->thread_idx.fetch_add(1, std::memory_order_relaxed);   /* diagnostics only */
 
     // 每个线程独立的临时缓冲区，用于一致性测试（Store/Load）
     alignas(16) int32_t store_buf[VECTOR_SIZE];
 
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
-
     do {
-        uint64_t local_sum = 0;
         bool consistent = true;
 
         // 顺序读取整个数组，每次 4 个 int32
@@ -68,11 +67,24 @@ static int mesh_upi_sse_read_only_int_run(struct test *test, int cpu) {
             // 使用 NEON 加载（对齐）
             int32x4_t v = vld1q_s32(td->data + i);
 
-            // 累加所有元素
-            int32_t vals[VECTOR_SIZE];
-            vst1q_s32(vals, v);
-            for (int j = 0; j < VECTOR_SIZE; ++j) {
-                local_sum += (uint64_t)vals[j];
+            /* element-exact L3 verification (2026-11-18 rework): the
+             * loaded vector is compared lane-by-lane against the
+             * init-time golden copy — a sum-only compare was blind to
+             * permutation/swap-class corruption. */
+            int32x4_t g = vld1q_s32(td->golden + i);
+            uint32x4_t gdiff = veorq_u32(vreinterpretq_u32_s32(v),
+                                         vreinterpretq_u32_s32(g));
+            if (vmaxvq_u32(gdiff) != 0) {
+                report_fail_msg("%s: golden mismatch at vec %zu: golden "
+                                "{%d,%d,%d,%d} got {%d,%d,%d,%d} "
+                                "(L3-resident data corruption, "
+                                "element-exact compare)",
+                                test->id, i / VECTOR_SIZE,
+                                vgetq_lane_s32(g, 0), vgetq_lane_s32(g, 1),
+                                vgetq_lane_s32(g, 2), vgetq_lane_s32(g, 3),
+                                vgetq_lane_s32(v, 0), vgetq_lane_s32(v, 1),
+                                vgetq_lane_s32(v, 2), vgetq_lane_s32(v, 3));
+                return EXIT_FAILURE;
             }
 
             // ----- 一致性测试：Store/Load 比较 -----
@@ -92,20 +104,9 @@ static int mesh_upi_sse_read_only_int_run(struct test *test, int cpu) {
             }
         }
 
-        bool sum_ok = (local_sum == td->golden_sum);
-        bool passed = sum_ok && consistent;
-
-        if (!passed) {
-            // 首次失败证据（原先每个工作迭代都从线程 0 打印 PASS 行）
-            fprintf(stderr, "mesh_upi_sse_read_only_int: Thread %d, data[0..3]=(%d,%d,%d,%d), local_sum=%lu, golden_sum=%lu, consistent=%d, result=%s%s%s\n",
-                    id,
-                    td->data[0], td->data[1], td->data[2], td->data[3],
-                    local_sum, td->golden_sum, consistent,
-                    passed ? GREEN : RED,
-                    passed ? "PASS" : "FAIL",
-                    RESET);
-            fflush(stderr);
-            report_fail_msg("mesh_upi_sse_read_only_int: Sum mismatch or consistency failure");
+        if (!consistent) {
+            report_fail_msg("%s: store->reload consistency failure "
+                            "(LSU forwarding path)", test->id);
             return EXIT_FAILURE;
         }
 
@@ -113,14 +114,12 @@ static int mesh_upi_sse_read_only_int_run(struct test *test, int cpu) {
 
     return EXIT_SUCCESS;
 
-    #undef GREEN
-    #undef RED
-    #undef RESET
 }
 
 static int mesh_upi_sse_read_only_int_finish(struct test *test) {
     auto *td = static_cast<TestData*>(test->data);
     free(td->data);
+    free(td->golden);
     delete td;
     return EXIT_SUCCESS;
 }

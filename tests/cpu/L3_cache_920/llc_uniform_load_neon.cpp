@@ -10,10 +10,13 @@
  *  can still be register-folded), bit-compared with veorq/vmaxvq.
  *
  *  2026-11-18 L3-capability rework (twin of the scalar parent's):
- *  data[] gets an init-time golden vector-sum and a per-pass DENSE
- *  sweep (the stride walk covers only 1/32 of the window; the sweep
- *  covers all of it) — window-sized traffic evicts the private L2,
- *  so the sum compare is L3/DRAM-served.
+ *  data[] gets an init-time golden COPY and a per-pass DENSE sweep
+ *  (the stride walk covers only 1/8 of the window — one 16 B vector
+ *  per 128 B stride; the sweep covers all of it) — window-sized
+ *  traffic evicts the private L2, so the compare is L3/DRAM-served.
+ *  The sweep is ELEMENT-EXACT per lane (2026-11-18 element-exact
+ *  pass, same as the scalar parent): a sum-only check is blind to
+ *  permutation/swap-class corruption; per-lane compare is not.
  */
 #include "sandstone.h"
 #include "sandstone_p.h"   /* device_count/device_info: L3 size probe */
@@ -45,11 +48,16 @@ static inline uint32x4_t ldr_vec(const uint32_t *addr) {
 }
 
 static int llc_uniform_load_neon_init(struct test *test) {
-    /* probe HERE — topology is filled by now (see lluln_l3_size) */
-    auto *block = new size_t(lluln_l3_size());
-    if (!block)
-        return EXIT_FAILURE;
-    test->data = block;
+    /* probe HERE — topology is filled by now (see lluln_l3_size).
+     * throwing-new OOM path follows the repo's T10 convention
+     * (cf. gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP,
+     * resource exhaustion is not an SDC red. */
+    try {
+        test->data = new size_t(lluln_l3_size());
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s l3-size word", test->id);
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 }
 
@@ -66,18 +74,12 @@ static int llc_uniform_load_neon_run(struct test *test, int cpu) {
     const size_t num_vecs = buffer_bytes / 16;
 
     std::vector<uint32_t> data(num_vecs * 4);
+    std::vector<uint32_t> golden(num_vecs * 4);
     std::vector<uint32_t> check(num_vecs * 4);
 
     memset_random(data.data(), buffer_bytes);
+    memcpy(golden.data(), data.data(), buffer_bytes);
     memset(check.data(), 0, buffer_bytes);
-
-    /* init-time golden vector-sum of data[] (never written after) */
-    uint64_t golden_sum = 0;
-    for (size_t v = 0; v < num_vecs; ++v) {
-        uint32x4_t x = vld1q_u32(data.data() + v * 4);
-        golden_sum += (uint64_t)vgetq_lane_u32(x, 0) + vgetq_lane_u32(x, 1)
-                    + vgetq_lane_u32(x, 2) + vgetq_lane_u32(x, 3);
-    }
 
     size_t offset = random64() % LLULN_STRIDE_VECS;
 
@@ -110,30 +112,38 @@ static int llc_uniform_load_neon_run(struct test *test, int cpu) {
         }
         offset = (offset + 1) % LLULN_STRIDE_VECS;
 
-        /* L3 verification sweep (2026-11-18 rework): the stride walk
-         * covers only 1/32 of the window; this DENSE pass re-reads
-         * every vector — window-sized traffic evicts the private L2,
-         * so the sum compare is L3/DRAM-served. */
-        uint64_t sweep_sum = 0;
+        /* L3 verification sweep (2026-11-18 element-exact rework): the
+         * stride walk covers only 1/8 of the window (one 16 B vector
+         * per 128 B stride); this DENSE pass re-reads every vector and
+         * compares EACH LANE bit-exact against the init-time golden
+         * copy — window-sized traffic evicts the private L2, so the
+         * compare is L3/DRAM-served. Element-exact (not a sum):
+         * permutation/swap-class L3 corruption fails here where a
+         * sum-only check is order-blind. */
         for (size_t v = 0; v < num_vecs; ++v) {
             uint32x4_t x = vld1q_u32(data.data() + v * 4);
-            sweep_sum += (uint64_t)vgetq_lane_u32(x, 0) + vgetq_lane_u32(x, 1)
-                       + vgetq_lane_u32(x, 2) + vgetq_lane_u32(x, 3);
-        }
-        if (sweep_sum != golden_sum) {
-            report_fail_msg("llc_uniform_load_neon: golden sweep "
-                            "mismatch: init sum 0x%016lx sweep sum "
-                            "0x%016lx (L3-resident data corruption)",
-                            (unsigned long)golden_sum,
-                            (unsigned long)sweep_sum);
-            return EXIT_FAILURE;
+            uint32x4_t g = vld1q_u32(golden.data() + v * 4);
+            uint32x4_t diff = veorq_u32(x, g);
+            if (vmaxvq_u32(diff) != 0) {
+                report_fail_msg("llc_uniform_load_neon: golden sweep "
+                                "mismatch at vec %zu: golden {%08x,"
+                                "%08x,%08x,%08x} got {%08x,%08x,%08x,"
+                                "%08x} (L3-resident data corruption, "
+                                "element-exact per-lane compare)",
+                                v,
+                                vgetq_lane_u32(g, 0), vgetq_lane_u32(g, 1),
+                                vgetq_lane_u32(g, 2), vgetq_lane_u32(g, 3),
+                                vgetq_lane_u32(x, 0), vgetq_lane_u32(x, 1),
+                                vgetq_lane_u32(x, 2), vgetq_lane_u32(x, 3));
+                return EXIT_FAILURE;
+            }
         }
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(llc_uniform_load_neon, "Uniform 128B-strided vld1q vector loads over per-thread windows sized to the probed per-cluster L3 (prefetcher stress); store->asm-ldr-q vector load-back PLUS per-pass dense golden vector-sum sweep (L3-path verification, 2026-11-18 rework) (ARM64)")
+DECLARE_TEST(llc_uniform_load_neon, "Uniform 128B-strided vld1q vector loads over per-thread windows sized to the probed per-cluster L3 (prefetcher stress); store->asm-ldr-q vector load-back PLUS per-pass dense element-exact per-lane golden sweep (L3-path verification, 2026-11-18 rework) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = llc_uniform_load_neon_init,
     .test_run = llc_uniform_load_neon_run,

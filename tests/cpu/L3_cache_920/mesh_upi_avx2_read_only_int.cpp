@@ -1,9 +1,7 @@
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -14,17 +12,26 @@
 namespace { /* ODR: per-TU TestData (66-file same-name hazard) */
 struct TestData {
     alignas(16) int32_t *data;         // 共享只读数据（16 字节对齐）
-    uint64_t golden_sum;               // 预先计算的参考累加和
+    alignas(16) int32_t *golden;       // init-time element-exact golden copy
     std::atomic<uint64_t> thread_idx;  // 用于线程 ID 分配
 };
 }
 
 static int mesh_upi_avx2_read_only_int_init(struct test *test) {
-    auto *td = new TestData;
-    if (!td) return EXIT_FAILURE;
+    /* throwing-new OOM follows the repo T10 convention (cf.
+     * gemm_cdouble_dynamic_square): bad_alloc -> clean SKIP. */
+    TestData *td;
+    try {
+        td = new TestData;
+    } catch (const std::bad_alloc &) {
+        log_skip(RuntimeSkipCategory, "memory: %s TestData", test->id);
+        return EXIT_SKIP;
+    }
 
     td->data = (int32_t*)aligned_alloc(16, ARRAY_SIZE * sizeof(int32_t));
-    if (!td->data) {
+    td->golden = (int32_t*)aligned_alloc(16, ARRAY_SIZE * sizeof(int32_t));
+    if (!td->data || !td->golden) {
+        free(td->data); free(td->golden);
         delete td;
         return EXIT_FAILURE;
     }
@@ -33,12 +40,9 @@ static int mesh_upi_avx2_read_only_int_init(struct test *test) {
     /* randomization hardening H14' (P17): framework RNG (per-thread
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
     auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
-    uint64_t sum = 0;
     for (size_t i = 0; i < ARRAY_SIZE; ++i) {
-        td->data[i] = dist();
-        sum += (uint64_t)td->data[i];
+        td->golden[i] = td->data[i] = dist();
     }
-    td->golden_sum = sum;
     td->thread_idx.store(0, std::memory_order_relaxed);
     test->data = td;
 
@@ -50,52 +54,42 @@ static int mesh_upi_avx2_read_only_int_run(struct test *test, int cpu) {
     auto *td = static_cast<TestData*>(test->data);
 
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
-
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
+    (void)id;   /* diagnostics only; the hot path carries no I/O */
 
     do {
-        uint64_t local_sum = 0;
-
-        // 顺序读取整个数组，使用 NEON 加载（每次 4 个 int32）
+        /* element-exact L3 verification (2026-11-18 rework): every
+         * loaded vector is compared lane-by-lane against the init-time
+         * golden copy — a sum-only compare was blind to permutation/
+         * swap-class corruption; the per-lane compare is not. */
         for (size_t i = 0; i < ARRAY_SIZE; i += VECTOR_SIZE) {
             int32x4_t v = vld1q_s32(td->data + i);
-            int32_t vals[VECTOR_SIZE];
-            vst1q_s32(vals, v);
-            for (int j = 0; j < VECTOR_SIZE; ++j) {
-                local_sum += (uint64_t)vals[j];
+            int32x4_t g = vld1q_s32(td->golden + i);
+            uint32x4_t diff = veorq_u32(vreinterpretq_u32_s32(v),
+                                        vreinterpretq_u32_s32(g));
+            if (vmaxvq_u32(diff) != 0) {
+                report_fail_msg("%s: golden "
+                                "mismatch at vec %zu: golden {%d,%d,%d,%d} "
+                                "got {%d,%d,%d,%d} (L3-resident data "
+                                "corruption, element-exact compare)",
+                                test->id, i / VECTOR_SIZE,
+                                vgetq_lane_s32(g, 0), vgetq_lane_s32(g, 1),
+                                vgetq_lane_s32(g, 2), vgetq_lane_s32(g, 3),
+                                vgetq_lane_s32(v, 0), vgetq_lane_s32(v, 1),
+                                vgetq_lane_s32(v, 2), vgetq_lane_s32(v, 3));
+                return EXIT_FAILURE;
             }
-        }
-
-        bool passed = (local_sum == td->golden_sum);
-
-        if (!passed) {
-            // 首次失败证据（原先每个工作迭代都打印 PASS 行）
-            fprintf(stderr, "mesh_upi_avx2_read_only_int: Thread %d, data[0..3]=(%d,%d,%d,%d), local_sum=%lu, golden_sum=%lu, result=%s%s%s\n",
-                    id,
-                    td->data[0], td->data[1], td->data[2], td->data[3],
-                    local_sum, td->golden_sum,
-                    passed ? GREEN : RED,
-                    passed ? "PASS" : "FAIL",
-                    RESET);
-            fflush(stderr);
-            report_fail_msg("mesh_upi_avx2_read_only_int: Sum mismatch");
-            return EXIT_FAILURE;
         }
 
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
 
-    #undef GREEN
-    #undef RED
-    #undef RESET
 }
 
 static int mesh_upi_avx2_read_only_int_finish(struct test *test) {
     auto *td = static_cast<TestData*>(test->data);
     free(td->data);
+    free(td->golden);
     delete td;
     return EXIT_SUCCESS;
 }
