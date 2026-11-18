@@ -45,6 +45,18 @@
 
 static constexpr size_t LLS_MEM_SIZE  = 64ULL * 1024 * 1024;  /* 64 MB */
 static constexpr size_t LLS_STRIDE_QW = 1024;   /* qwords per interleave band */
+/* 2026-11-17 L3-capability rework (user directive): the immediate
+ * read-back pair below is store-buffer/L1 forwarding — the audit
+ * finding — so a DELAYED RE-VERIFICATION sweep is added: every
+ * LLS_SWEEP_EVERY stores, re-read ALL own slots against a shadow of
+ * the latest written values.  A thread's own-slot footprint is
+ * 8192 lines (512 KB = the private L2 boundary); with 65536-store
+ * intervals a slot's last store is ~uniformly old, so the large
+ * majority of re-reads are L2-evicted and L3/DRAM-served — the
+ * genuine L3 verification point.  The re-stored tail stays L2-hot
+ * (documented mix; slot interleave stays disjoint: cpu < 1024). */
+static constexpr size_t LLS_BANDS = LLS_MEM_SIZE / 8 / LLS_STRIDE_QW;  /* 8192 */
+static constexpr uint64_t LLS_SWEEP_EVERY = 65536;
 
 namespace { /* ODR: per-TU LLSData */
 struct LLSData {
@@ -70,33 +82,60 @@ static int llcstress_cleanup(struct test *test) {
 static int llcstress_run(struct test *test, int cpu) {
     auto *td = static_cast<LLSData *>(test->data);
 
-    const size_t bands = LLS_MEM_SIZE / 8 / LLS_STRIDE_QW;
+    const size_t bands = LLS_BANDS;
     uint64_t local_iterations = 0;
 
+    /* per-thread shadow: the latest value written to OUR slot in each
+     * band (race-free by interleave; unwritten slots read 0 == the
+     * zero-initialized window). */
+    std::vector<uint64_t> shadow(bands, 0);
+
     do {
-        /* random band; our qword slot inside it = band*1024 + cpu —
-         * full-window roaming, zero same-slot races across threads */
-        size_t band = random64() % bands;
-        size_t offset = (band * LLS_STRIDE_QW + (size_t)cpu) * 8;
+        for (uint64_t batch = 0; batch < LLS_SWEEP_EVERY; ++batch) {
+            /* random band; our qword slot inside it = band*1024 + cpu —
+             * full-window roaming, zero same-slot races across threads */
+            size_t band = random64() % bands;
+            size_t offset = (band * LLS_STRIDE_QW + (size_t)cpu) * 8;
 
-        uint64_t write_val = random64();
-        uint64_t *ptr = reinterpret_cast<uint64_t *>(td->mem.data() + offset);
+            uint64_t write_val = random64();
+            uint64_t *ptr = reinterpret_cast<uint64_t *>(td->mem.data() + offset);
 
-        /* the stress pair: store, then load back and verify */
-        *ptr = write_val;
-        uint64_t read_val = *ptr;
+            /* the stress pair: store, then load back and verify
+             * (LSU-forwarding surface, kept as the fast check) */
+            *ptr = write_val;
+            uint64_t read_val = *ptr;
 
-        if (read_val != write_val) {
-            report_fail_msg("llcstress: read-back mismatch at iteration "
-                            "%lu (band %zu, offset 0x%zx): wrote "
-                            "0x%016lx read 0x%016lx",
-                            (unsigned long)local_iterations, band, offset,
-                            (unsigned long)write_val,
-                            (unsigned long)read_val);
-            return EXIT_FAILURE;
+            if (read_val != write_val) {
+                report_fail_msg("llcstress: read-back mismatch at iteration "
+                                "%lu (band %zu, offset 0x%zx): wrote "
+                                "0x%016lx read 0x%016lx",
+                                (unsigned long)local_iterations, band, offset,
+                                (unsigned long)write_val,
+                                (unsigned long)read_val);
+                return EXIT_FAILURE;
+            }
+
+            shadow[band] = write_val;
+            ++local_iterations;
         }
 
-        ++local_iterations;
+        /* L3 verification sweep: re-read ALL own slots against the
+         * shadow — delayed by a full interval of random-band roaming,
+         * so everything except the just-re-stored tail is served from
+         * L3/DRAM, not the store buffer (see the constants comment). */
+        for (size_t b = 0; b < bands; ++b) {
+            size_t offset = (b * LLS_STRIDE_QW + (size_t)cpu) * 8;
+            uint64_t v = *reinterpret_cast<const uint64_t *>(
+                td->mem.data() + offset);
+            if (v != shadow[b]) {
+                report_fail_msg("llcstress: delayed re-verification mismatch "
+                                "(band %zu, offset 0x%zx): wrote 0x%016lx "
+                                "reread 0x%016lx (L3-resident corruption)",
+                                b, offset, (unsigned long)shadow[b],
+                                (unsigned long)v);
+                return EXIT_FAILURE;
+            }
+        }
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
