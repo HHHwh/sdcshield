@@ -1157,6 +1157,24 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/l3_execute_neon_fp64.cpp',
             'fp64/mem_disambig_alu_neon_fp64.cpp',
             'fp64/store_visibility_cross_class_neon_fp64.cpp',
+            # L3_cache_920 FP64 expansion (2026-11-18, user directive):
+            # every L3-capable test's f64x2 datapath twin — dynamic L3
+            # windows / 4MB shared arrays / golden k-space sums, the
+            # 2026-11-17/18 L3-capability design born from the start.
+            # Parents: tests/cpu/L3_cache_920/ (canonical) + arm_add
+            # NEON twins; see that directory's README.
+            'fp64/llc_randomized_load_neon_fp64.cpp',
+            'fp64/llc_uniform_load_neon_fp64.cpp',
+            'fp64/memcpy_l3_cache_size_neon_fp64.cpp',
+            'fp64/mesh_upi_avx2_read_L3_neon_fp64.cpp',
+            'fp64/mesh_upi_sse_read_L3_neon_fp64.cpp',
+            'fp64/mesh_upi_avx512_asymm_read_L3_neon_fp64.cpp',
+            'fp64/mesh_upi_avx2_read_only_neon_fp64.cpp',
+            'fp64/mesh_upi_sse_read_only_neon_fp64.cpp',
+            'fp64/mesh_upi_avx512_asymm_read_only_neon_fp64.cpp',
+            'fp64/mesh_upi_avx2_write_only_neon_fp64.cpp',
+            'fp64/mesh_upi_sse_write_only_neon_fp64.cpp',
+            'fp64/mesh_upi_avx512_asymm_write_only_neon_fp64.cpp',
             # memory-access B-class: tail access pair + load heads on the
             # FP-register datapath (d-reg ldr/str, ldaxr/fadd/stxr,
             # stnp d,d), shared ma_tail_probe_fp64.h bit-exact golden

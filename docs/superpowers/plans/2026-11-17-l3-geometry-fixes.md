@@ -81,3 +81,21 @@ README 重写为收录+改造档案。arm_add/fp64 同名孪生未传导（挂�
 六件留在 arm_add/fp64 家族目录（不随迁），README 地图更新。
 验证：构建 0 警告；六件 -n 4 -t 2000 全 pass 全时长（2000-2112ms）；
 zstd19 回归 pass。
+
+## 单元 10（2026-11-18）：FP64 扩展矩阵补全（用户指令"其他的
+neon 以及 neon-fp64 扩展版呢"）
+
+事实澄清：mesh 族 9 件本身即 NEON 实现（x86 遗留命名），无需再扩
+NEON；真正缺的是 FP64 扩展。新增 12 件 `tests/cpu/fp64/` f64x2 孪生：
+- llc 对：动态 L3 窗 + asm ldr-q 回读 + 稠密 f64 黄金扫算
+- memcpy_l3：f64x2 复制循环（64B 倍数块无尾巴）+ memcmp
+- mesh read ×6（read_L3/read_only 各 avx2/sse/asymm）：4MB 共享
+  double 数组 + 每遍 golden f64 和（asymm 带块级 reload 副校验）
+- mesh write_only ×3：avx2 两遍式；sse 轮屏障协议；asymm 双屏障
+  静态分区差分——校验全走 k 空间（0.5 倍数 → k=v*2 精确整数和，
+  atomic 累计/差分保序无关精确）
+全部出生即带 fracture=-1（write_only 三件的前车之鉴）。12 件同日
+sed 派生 4 件（sse_read_L3/read_only、asymm_read_only 等同构件）。
+验证：构建 1 个既有无关警告；12 件 -n 4 -t 2000 全 pass 全时长
+（2001-2048ms）；zstd19 回归 pass。README 扩展矩阵档案更新
+（标量/NEON/FP64 × 读/写/复制/指令 全覆盖）。
