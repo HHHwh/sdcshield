@@ -27,10 +27,11 @@ extern "C" {
 #endif
 
 enum AdaptDtype { DT_FP64, DT_INT };
-enum AdaptLoad  { LOAD_FP64ROT, LOAD_INTROT, LOAD_EMPTY, LOAD_MLA, LOAD_SUB };
+enum AdaptLoad  { LOAD_FP64ROT, LOAD_INTROT, LOAD_EMPTY, LOAD_MLA, LOAD_SUB,
+                  LOAD_XFMOV };   /* 2026-11-18: cross-file FMOV consumer chain */
 enum AdaptSweep { SWEEP_ALT, SWEEP_MONO };
 
-#define ADAPT_COMBO_COUNT 30
+#define ADAPT_COMBO_COUNT 36
 #define ADAPT_SLICE_SECONDS 1800
 #define ADAPT_COUNT 1024                 /* elements per buffer, family convention */
 
@@ -44,15 +45,21 @@ struct ComboDef {
 
 /* Stable recipe table (combo# = index = row): FP64 segment first, then
  * int; within each: ldr 2 before 3, str 2/3/4, load order
- * INTROT > EMPTY > MLA > SUB.  EMPTY lives only in the int segment
- * (with no ALU the dtype is unobservable — deduped in v2). */
+ * INTROT > EMPTY > MLA > SUB > XFMOV (rows #30-35, 2026-11-18 user
+ * directive: the cross-file FMOV middle load as a family choice; the
+ * standalone validation pair lives in fmov_train_{ldr_str,ldp_stp}.cpp).
+ * EMPTY lives only in the int segment (with no ALU the dtype is
+ * unobservable — deduped in v2). */
 extern const struct ComboDef kComboTable[ADAPT_COMBO_COUNT];
 
 /* Rotation order: slice slot -> combo ID.  Default = measured
  * first-detection TTF from the 2026-11-14 30-combo locked sweep
- * (fastest #12 first), zero arms as the reserve layer in table order;
+ * (fastest #12 first), zero arms as the reserve layer in table order,
+ * then the six XFMOV rows uncalibrated (11-18 standalone 10min
+ * full-core arms: 0 fail on this host — negative-space data, other
+ * hosts may differ per the machine-generality rule);
  * source: docs/20261114/adaptive_combo_sweep/RESULTS.md.  Overridable
- * per run with ADAPTIVE_MEM_SDC_ORDER (full permutation of 0..29). */
+ * per run with ADAPTIVE_MEM_SDC_ORDER (full permutation of 0..35). */
 extern const int kPriorityOrder[ADAPT_COMBO_COUNT];
 
 /* Shared-memory state — the ONLY cross-child state.  No std::atomic

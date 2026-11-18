@@ -397,6 +397,13 @@ static void __attribute__((noinline)) sve_fill_golden(struct SveCtx *ctx, const 
                 case LOAD_EMPTY:
                     e = a;
                     break;
+                case LOAD_XFMOV:
+                    /* unreachable in the SVE engine: XFMOV combos are
+                     * routed to the NEON engine unconditionally (the
+                     * cross-file FMOV chain is NEON-encoded by design;
+                     * NEON executes natively on SVE hosts) */
+                    e = a;
+                    break;
                 default:
                     e = (cd.ldr == 3) ? sub_rot3(pg, i % 4, a, b, svld_guard64(pg, C + off))
                                       : sub_rot(pg, i % 4, a, b);

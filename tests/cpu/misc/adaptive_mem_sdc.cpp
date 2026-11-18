@@ -30,7 +30,7 @@
  * init: "<iso> <pid> <isa> <mode> <combo>"), ADAPTIVE_MEM_SDC_COMBO
  * (lock every child to this combo regardless of slice — the
  * confirmation-arm hook for combos beyond #0), ADAPTIVE_MEM_SDC_ORDER
- * (full permutation of 0..29, rotation slot -> combo ID; default =
+ * (full permutation of 0..35, rotation slot -> combo ID; default =
  * measured-TTF priority order), ADAPTIVE_MEM_SDC_ISA (auto|neon|sve|sve2
  * research override; forcing an ISA wider than HWCAP advertises is
  * refused with a stderr warning), ADAPTIVE_MEM_SDC_MODE (combat|test;
@@ -64,7 +64,8 @@
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Combo priority table (spec §2, exact 30 rows)                       */
+/* Combo priority table (spec §2 rows #0-29; #30-35 = 2026-11-18       */
+/* XFMOV extension, user directive — same int-segment grid)           */
 /* ------------------------------------------------------------------ */
 
 extern "C" const struct ComboDef kComboTable[ADAPT_COMBO_COUNT] = {
@@ -100,6 +101,16 @@ extern "C" const struct ComboDef kComboTable[ADAPT_COMBO_COUNT] = {
     { DT_INT, 3, 4, LOAD_EMPTY,  "empty"  },
     { DT_INT, 3, 4, LOAD_MLA,    "mla"    },
     { DT_INT, 3, 4, LOAD_SUB,    "sub"    },
+    /* #30-35 XFMOV extension (2026-11-18, user directive): the cross-file
+     * FMOV consumer chain as a load-family choice, same int-segment grid.
+     * Standalone validation pair: fmov_train_ldr_str / fmov_train_ldp_stp
+     * (10min full-core arms, 0 fail on this host). */
+    { DT_INT, 2, 2, LOAD_XFMOV, "xfmov" },
+    { DT_INT, 2, 3, LOAD_XFMOV, "xfmov" },
+    { DT_INT, 2, 4, LOAD_XFMOV, "xfmov" },
+    { DT_INT, 3, 2, LOAD_XFMOV, "xfmov" },
+    { DT_INT, 3, 3, LOAD_XFMOV, "xfmov" },
+    { DT_INT, 3, 4, LOAD_XFMOV, "xfmov" },
 };
 
 /* ------------------------------------------------------------------ */
@@ -114,6 +125,7 @@ extern "C" const struct ComboDef kComboTable[ADAPT_COMBO_COUNT] = {
 extern "C" const int kPriorityOrder[ADAPT_COMBO_COUNT] = {
     12, 0, 7, 13, 21, 9, 25, 8, 14, 1, 3, 6, 10, 18, 26,     /* active: TTF 6.45s .. 58.4s */
     2, 4, 5, 11, 15, 16, 17, 19, 20, 22, 23, 24, 27, 28, 29, /* reserve: 10min zero arms */
+    30, 31, 32, 33, 34, 35,                                  /* XFMOV: uncalibrated (11-18, negative on this host) */
 };
 
 /* ------------------------------------------------------------------ */
@@ -262,6 +274,110 @@ static inline uint64x2_t sub_rot3(int slot, uint64x2_t a, uint64x2_t b, uint64x2
     }
 }
 
+/* ---- XFMOV 中间负载 (2026-11-18, 用户指令: 跨寄存器堆 FMOV 消费链) ----
+ * 指令序列取自用户提供的 SIMDFPLoadStoreMemLoopCpyP08 反汇编; 独立验证对
+ * fmov_train_ldr_str / fmov_train_ldp_stp 已全核 10min 零错。语义:
+ *   a 双 lane 跨堆出 (fmov x,d 平面形 + fmov x,v.d[1] 索引形——索引形
+ *   d[0] 不可编码, ARM 只允许高半索引) → GPR add rot → 跨堆回 →
+ *   b <OP> (a+rot); ldr3 形再 c <OP> 一次。OP 槽轮转 add/eor(.16b)/sub
+ *   (i%3)。显式寄存器绑定保 FMOV 精确编码 (G2 编码保真门以 objdump 验)。
+ * golden = neon_fill_golden 的 LOAD_XFMOV case 标量位级复算。 */
+static constexpr uint64_t XFMOV_ROT = 0x9E3779B97F4A7C15ULL;
+
+static inline __attribute__((always_inline)) uint64x2_t xfmov_rot(int slot, uint64x2_t a, uint64x2_t b)
+{
+    register uint64x2_t va __asm__("v16") = a;
+    register uint64x2_t vb __asm__("v17") = b;
+    register uint64x2_t vr __asm__("v18");
+    uint64_t r = XFMOV_ROT;
+    if (slot == 0)
+        __asm__ volatile(
+            "fmov x9,  d16\n\t"
+            "fmov x10, v16.d[1]\n\t"
+            "add  x11, x9,  %[rot]\n\t"
+            "add  x12, x10, %[rot]\n\t"
+            "fmov d19,  x11\n\t"
+            "fmov v19.d[1], x12\n\t"
+            "add  v18.2d, v17.2d, v19.2d"
+            : "=w" (vr)
+            : "w" (va), "w" (vb), [rot] "r" (r)
+            : "x9", "x10", "x11", "x12", "v19");
+    else if (slot == 1)
+        __asm__ volatile(
+            "fmov x9,  d16\n\t"
+            "fmov x10, v16.d[1]\n\t"
+            "add  x11, x9,  %[rot]\n\t"
+            "add  x12, x10, %[rot]\n\t"
+            "fmov d19,  x11\n\t"
+            "fmov v19.d[1], x12\n\t"
+            "eor  v18.16b, v17.16b, v19.16b"
+            : "=w" (vr)
+            : "w" (va), "w" (vb), [rot] "r" (r)
+            : "x9", "x10", "x11", "x12", "v19");
+    else
+        __asm__ volatile(
+            "fmov x9,  d16\n\t"
+            "fmov x10, v16.d[1]\n\t"
+            "add  x11, x9,  %[rot]\n\t"
+            "add  x12, x10, %[rot]\n\t"
+            "fmov d19,  x11\n\t"
+            "fmov v19.d[1], x12\n\t"
+            "sub  v18.2d, v17.2d, v19.2d"
+            : "=w" (vr)
+            : "w" (va), "w" (vb), [rot] "r" (r)
+            : "x9", "x10", "x11", "x12", "v19");
+    return vr;
+}
+
+static inline __attribute__((always_inline)) uint64x2_t xfmov_rot3(int slot, uint64x2_t a, uint64x2_t b, uint64x2_t c)
+{
+    register uint64x2_t va __asm__("v16") = a;
+    register uint64x2_t vb __asm__("v17") = b;
+    register uint64x2_t vc __asm__("v20") = c;
+    register uint64x2_t vr __asm__("v18");
+    uint64_t r = XFMOV_ROT;
+    if (slot == 0)
+        __asm__ volatile(
+            "fmov x9,  d16\n\t"
+            "fmov x10, v16.d[1]\n\t"
+            "add  x11, x9,  %[rot]\n\t"
+            "add  x12, x10, %[rot]\n\t"
+            "fmov d19,  x11\n\t"
+            "fmov v19.d[1], x12\n\t"
+            "add  v18.2d, v17.2d, v19.2d\n\t"
+            "add  v18.2d, v20.2d, v18.2d"
+            : "=w" (vr)
+            : "w" (va), "w" (vb), "w" (vc), [rot] "r" (r)
+            : "x9", "x10", "x11", "x12", "v19");
+    else if (slot == 1)
+        __asm__ volatile(
+            "fmov x9,  d16\n\t"
+            "fmov x10, v16.d[1]\n\t"
+            "add  x11, x9,  %[rot]\n\t"
+            "add  x12, x10, %[rot]\n\t"
+            "fmov d19,  x11\n\t"
+            "fmov v19.d[1], x12\n\t"
+            "eor  v18.16b, v17.16b, v19.16b\n\t"
+            "eor  v18.16b, v20.16b, v18.16b"
+            : "=w" (vr)
+            : "w" (va), "w" (vb), "w" (vc), [rot] "r" (r)
+            : "x9", "x10", "x11", "x12", "v19");
+    else
+        __asm__ volatile(
+            "fmov x9,  d16\n\t"
+            "fmov x10, v16.d[1]\n\t"
+            "add  x11, x9,  %[rot]\n\t"
+            "add  x12, x10, %[rot]\n\t"
+            "fmov d19,  x11\n\t"
+            "fmov v19.d[1], x12\n\t"
+            "sub  v18.2d, v17.2d, v19.2d\n\t"
+            "sub  v18.2d, v20.2d, v18.2d"
+            : "=w" (vr)
+            : "w" (va), "w" (vb), "w" (vc), [rot] "r" (r)
+            : "x9", "x10", "x11", "x12", "v19");
+    return vr;
+}
+
 /* =====================================================================
  * 模块库 (2026-11-14 用户架构: 按分类写功能块, 按优先级拼接)
  * 每个模块的文本 = 家族父版对应段落的逐字形式; 底盘宏拼接后, 每个组合
@@ -301,6 +417,8 @@ static inline uint32x4_t *S32(void *p) { return static_cast<uint32x4_t *>(p); }
 #define M_EMPTY3()    uint64x2_t res = a; (void)b; (void)c;
 #define M_SUB2()      uint64x2_t res = sub_rot(i % 4, a, b);
 #define M_SUB3()      uint64x2_t res = sub_rot3(i % 4, a, b, c);
+#define M_XFMOV2()    uint64x2_t res = xfmov_rot(i % 3, a, b);
+#define M_XFMOV3()    uint64x2_t res = xfmov_rot3(i % 3, a, b, c);
 #define M_MLA2()      uint32x4_t res = mla_rot(i % 4, a, b);
 #define M_MLA3()      uint32x4_t res = mla_rot3(i % 4, a, b, c);
 
@@ -454,6 +572,13 @@ ADAPT_CHASSIS_ALT_U64 (nc_26, M_D2_U64, M_LDR3_U64, M_INTROT3,  M_STR4_U64)  /* 
 ADAPT_CHASSIS_ALT_U64 (nc_27, M_D2_U64, M_LDR3_U64, M_EMPTY3,   M_STR4_U64)  /* #27 empty/ldr3/str4 */
 ADAPT_CHASSIS_MONO_U32(nc_28, M_D2_U32, M_LDR3_U32, M_MLA3,     M_STR4_U32)  /* #28 mla/ldr3/str4 */
 ADAPT_CHASSIS_MONO_U64(nc_29, M_D2_U64, M_LDR3_U64, M_SUB3,     M_STR4_U64)  /* #29 sub/ldr3/str4 */
+/* ---- XFMOV 扩展 6 组合 (2026-11-18): ALT 底盘 (introt 母型) + FMOV 跨堆链 ---- */
+ADAPT_CHASSIS_ALT_U64 (nc_30, M_D0_U64, M_LDR2_U64, M_XFMOV2,   M_STR2_U64)  /* #30 xfmov/ldr2/str2 */
+ADAPT_CHASSIS_ALT_U64 (nc_31, M_D1_U64, M_LDR2_U64, M_XFMOV2,   M_STR3_U64)  /* #31 xfmov/ldr2/str3 */
+ADAPT_CHASSIS_ALT_U64 (nc_32, M_D2_U64, M_LDR2_U64, M_XFMOV2,   M_STR4_U64)  /* #32 xfmov/ldr2/str4 */
+ADAPT_CHASSIS_ALT_U64 (nc_33, M_D0_U64, M_LDR3_U64, M_XFMOV3,   M_STR2_U64)  /* #33 xfmov/ldr3/str2 */
+ADAPT_CHASSIS_ALT_U64 (nc_34, M_D1_U64, M_LDR3_U64, M_XFMOV3,   M_STR3_U64)  /* #34 xfmov/ldr3/str3 */
+ADAPT_CHASSIS_ALT_U64 (nc_35, M_D2_U64, M_LDR3_U64, M_XFMOV3,   M_STR4_U64)  /* #35 xfmov/ldr3/str4 */
 
 /* 分发表: 优先级序直排 (combo# = 下标), 与 kComboTable 逐行对应 */
 using SweepFn = void (*)(struct test *, struct NeonCtx *);
@@ -463,6 +588,7 @@ static const SweepFn neon_combo_fns[ADAPT_COMBO_COUNT] = {
     &nc_12, &nc_13, &nc_14, &nc_15, &nc_16, &nc_17,
     &nc_18, &nc_19, &nc_20, &nc_21, &nc_22, &nc_23,
     &nc_24, &nc_25, &nc_26, &nc_27, &nc_28, &nc_29,
+    &nc_30, &nc_31, &nc_32, &nc_33, &nc_34, &nc_35,
 };
 
 /* ---- cold path: fill + golden (same intrinsics as the hot loop) ---- */
@@ -514,7 +640,29 @@ static void __attribute__((noinline)) neon_fill_golden(struct NeonCtx *ctx)
         }
     }
 
-    if (cd.load == LOAD_MLA) {
+    if (cd.load == LOAD_XFMOV) {
+        /* scalar bit-exact golden mirroring the asm chain:
+         * r = op(b, a + XFMOV_ROT); ldr3: r = op(c, r);
+         * op rotates add/eor/sub by element index (i % 3) */
+        auto op = [](int s, uint64_t x, uint64_t y) {
+            return s == 0 ? (x + y) : (s == 1 ? (x ^ y) : (x - y));
+        };
+        auto *aw = static_cast<const uint64_t *>(ctx->srcA);
+        auto *bw = static_cast<const uint64_t *>(ctx->srcB);
+        auto *cw = static_cast<const uint64_t *>(ctx->srcC);
+        auto *ew = static_cast<uint64_t *>(ctx->expected);
+        for (int i = 0; i < ADAPT_COUNT; ++i) {
+            const int slot = i % 3;
+            uint64_t r0 = op(slot, bw[2 * i],     aw[2 * i]     + XFMOV_ROT);
+            uint64_t r1 = op(slot, bw[2 * i + 1], aw[2 * i + 1] + XFMOV_ROT);
+            if (cd.ldr == 3) {
+                r0 = op(slot, cw[2 * i],     r0);
+                r1 = op(slot, cw[2 * i + 1], r1);
+            }
+            ew[2 * i] = r0;
+            ew[2 * i + 1] = r1;
+        }
+    } else if (cd.load == LOAD_MLA) {
         auto *A = static_cast<uint32x4_t *>(ctx->srcA);
         auto *B = static_cast<uint32x4_t *>(ctx->srcB);
         auto *C = static_cast<uint32x4_t *>(ctx->srcC);
@@ -710,7 +858,7 @@ static int probe_isa(void)
 
 /* Rotation order actually used by this child: kPriorityOrder (measured-
  * TTF default) unless ADAPTIVE_MEM_SDC_ORDER carries a valid full
- * permutation of 0..29.  Parsed once per child init (cold path); any
+ * permutation of 0..35.  Parsed once per child init (cold path); any
  * malformed or non-permutation value: stderr warning + default order. */
 static int g_rot_order[ADAPT_COMBO_COUNT];
 
@@ -874,6 +1022,13 @@ static int adaptive_mem_sdc_run(struct test *test, int cpu)
     if (combo < 0)
         return EXIT_SUCCESS;             /* post-SDC or shm unusable: idle */
 
+    /* XFMOV combos always take the NEON engine: the cross-file FMOV
+     * chain is NEON-encoded by design (fmov D-plane / V.D[1] forms)
+     * and NEON executes natively on SVE hosts — real execution on
+     * every ISA, no placeholder skip. */
+    if (combo >= 0 && kComboTable[combo].load == LOAD_XFMOV)
+        return adaptive_neon_run_combo(test, cpu, combo);
+
     switch (data->isa) {
         case 1:
         case 2:
@@ -901,7 +1056,7 @@ static int adaptive_mem_sdc_cleanup(struct test *test) { (void)test; return EXIT
 
 #endif
 
-DECLARE_TEST(adaptive_mem_sdc, "Adaptive memory-access SDC test: probes widest SIMD (SVE2>SVE>NEON, ADAPTIVE_MEM_SDC_ISA override), sweeps 30-combo rotation sequence (kPriorityOrder: measured-TTF order, fastest first, ADAPTIVE_MEM_SDC_ORDER override, 30min wall-clock slice per combo, verify-mode round-robin for golden smoke); MODE=combat (default: first SDC freezes the rotation) or MODE=test (survey: every combo runs one TEST_SLICE window, detections reported but not frozen, idle after the last slot); SDC report carries the combo tag")
+DECLARE_TEST(adaptive_mem_sdc, "Adaptive memory-access SDC test: probes widest SIMD (SVE2>SVE>NEON, ADAPTIVE_MEM_SDC_ISA override), sweeps 36-combo rotation sequence (30 original + 6 XFMOV cross-file FMOV middle-load rows, 2026-11-18) (kPriorityOrder: measured-TTF order, fastest first, ADAPTIVE_MEM_SDC_ORDER override, 30min wall-clock slice per combo, verify-mode round-robin for golden smoke); MODE=combat (default: first SDC freezes the rotation) or MODE=test (survey: every combo runs one TEST_SLICE window, detections reported but not frozen, idle after the last slot); SDC report carries the combo tag")
     .test_init    = adaptive_mem_sdc_init,
     .test_run     = adaptive_mem_sdc_run,
     .test_cleanup = adaptive_mem_sdc_cleanup,
