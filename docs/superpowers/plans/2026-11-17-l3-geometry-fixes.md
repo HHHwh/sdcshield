@@ -1,0 +1,101 @@
+# L3 几何修正系列实施计划（2026-11-17）
+
+> 背景：L3 审计（本会话）判定 14 个 L3/LLC 用例中若干个在鲲鹏 920
+> 分布式 L3（24MB/24 核簇，sysfs+框架双源实测）上参数/描述失真。
+> 用户裁定：立即修改并推送 GitHub 通报其他机器。
+
+**Goal**: 5 个修正单元，逐一验证提交推送至 `feat/migrate-opendcdiag-tests`。
+
+## 单元清单
+
+1. **fix(arm64) llc_randomized_load + llc_uniform_load**：32MiB/线程
+   硬编码窗 → `device_info` 探测的簇 L3 尺寸（照 memcpy_l3_cache_size
+   的 get_l3_size 三步探测模式，init 期探测经 test->data 传递）。
+   容量边界工作集语义入注释。真代码改动。
+2. **fix(arm64) memcpy_l3_cache_size**：注释"本机实测 56MB" → 24MB/簇
+   （异板陈旧记录，本机框架 cache-info 实证 24MB）。
+3. **fix(arm64) l3_execute**：描述与头注释诚实化——ic ivau 重取指由
+   L2（PoU）供数，非 L3；保留测试名（注册表稳定），只修描述。
+4. **docs(arm64) mesh write_only ×3**：4MB/线程私有窗的 L3 驻留并发
+   边界注记（簇内 ≤6 线程驻留；全簇 24×4MB=96MB 流式）。
+5. **docs(arm64) llcstress**：检测面注记——64MB 窗压 L3 替换真实，
+   但校验对走 store-buffer/L1 转发，L3 驻留数据完整性由 mesh read_L3
+   族承担。
+
+## 验证口径
+
+- 单元 1（代码）：构建零新警告 + 两用例实跑 exit:pass + zstd19 回归。
+- 单元 2-5（注释/描述）：构建零新警告 + `-l` 新描述在场。
+- x86-64 untouched：全部文件在 aarch64 门控列表（memcpy 为注释改动）。
+
+## 审计事实基线（改动依据）
+
+- L1D 64KB/核，L2 512KB/核私有，L3 24MB/簇共享 24 核（8 簇分布式）
+- 框架 cache-info：L3 unified 25165824B，breakdown {24MB, cpu0, ×24}
+- mesh 族 4MB 共享数组 ∈ (L2, 簇 L3) → 几何正确不改
+- 32MiB/线程 vs 每线程有效份额 1MB → 32× 过订阅 = DRAM 流式化
+
+## 单元 6（2026-11-17 追加）：L3_cache_920 精选目录
+
+用户指令：复审八件套代码逻辑，能真检测本机 L3 者收入新目录
+`tests/cpu/L3_cache_920/`。终裁 **1/8 合格**（memcpy_l3_cache_size：
+L3 尺度窗 + memcmp 全量重读校验），连带其 NEON 孪生
+（memcpy_l3_cache_size_neon，同构合格，含 arm_add 相对包含修复与
+56MB 勘误）。收录判据：工作集 L3 尺度 + 校验点经存储层级重读比对。
+其余 7 件落选原因入目录 README。SVE 孪生不随迁（属 tests/cpu/sve 组织）。
+
+## 单元 7（2026-11-17 追加）：mesh read 族六件扩收
+
+用户指令：全部扩收。入夹前逐件验明校验逻辑（avx2_read_only 全文 +
+asymm 双件 golden_sum/块级 reload + sse 双件同构）——六件全合格：
+共享 4MB 数组（∈ (L2, 簇 L3)，驻留不随线程数退化）+ sum/golden
+全量重读校验。git mv 迁移 + meson 路径更新（注册面与 x86 SKIP
+语义不变）+ README 收录表扩。
+
+## 单元 8（2026-11-18）：七件能力改造（用户勘正指令："原版是 x86 语义，
+改成本机能检测 L3"——非注释工程而是能力改造）
+
+落选七件逐件改造，使校验点真穿存储层级：
+- l3_execute：dc civac（PoC）先于 ic ivau，逐出 L2 → 重取指 L3 供数
+- avx2_write_only：两遍式（写满+golden sum → 延迟全量重读复算）
+- sse/avx512_asymm_write_only：4KB→4MB 共享扩容（协议逐句保留，
+  节流档距放大，补 fracture=-1——实测默认 40 轮预算 638/98/13ms
+  即提前退场，修复后全时长）
+- llcstress：延迟复验扫（65536 间隔 + 影子逐槽比对，L2 边界足迹
+  的混合服务诚实注记）
+- llc pair：data[] golden_sum init 定标 + 周期稠密扫算
+验证：构建零警告；七件 -n 4 实跑全 pass 全时长；zstd19 回归 pass。
+七件随迁 L3_cache_920/（夹内 15 件 = 审计 14 + NEON memcpy 孪生），
+README 重写为收录+改造档案。arm_add/fp64 同名孪生未传导（挂账）。
+
+## 单元 9（2026-11-18）：六件同名 NEON/FP64 孪生能力传导（用户指令
+"neon 扩展版写了吗"）
+
+- l3_execute_neon / l3_execute_neon_fp64：flush 函数加 dc civac 逐出
+  L2（与标量父版同款）
+- llcstress_neon / llcstress_neon_fp64：STRIDE_V 1024→512（足迹 512KB
+  对齐父版）+ 每 65536 存储对全 8192 槽位做 counts 影子延迟复验扫
+- llc_{randomized,uniform}_load_neon：32MiB 硬编码 → 动态簇 L3 探测
+  + data[] init 向量黄金和 + 周期稠密向量扫算（uniform 步长遍 1/32
+  覆盖由扫算补全）
+六件留在 arm_add/fp64 家族目录（不随迁），README 地图更新。
+验证：构建 0 警告；六件 -n 4 -t 2000 全 pass 全时长（2000-2112ms）；
+zstd19 回归 pass。
+
+## 单元 10（2026-11-18）：FP64 扩展矩阵补全（用户指令"其他的
+neon 以及 neon-fp64 扩展版呢"）
+
+事实澄清：mesh 族 9 件本身即 NEON 实现（x86 遗留命名），无需再扩
+NEON；真正缺的是 FP64 扩展。新增 12 件 `tests/cpu/fp64/` f64x2 孪生：
+- llc 对：动态 L3 窗 + asm ldr-q 回读 + 稠密 f64 黄金扫算
+- memcpy_l3：f64x2 复制循环（64B 倍数块无尾巴）+ memcmp
+- mesh read ×6（read_L3/read_only 各 avx2/sse/asymm）：4MB 共享
+  double 数组 + 每遍 golden f64 和（asymm 带块级 reload 副校验）
+- mesh write_only ×3：avx2 两遍式；sse 轮屏障协议；asymm 双屏障
+  静态分区差分——校验全走 k 空间（0.5 倍数 → k=v*2 精确整数和，
+  atomic 累计/差分保序无关精确）
+全部出生即带 fracture=-1（write_only 三件的前车之鉴）。12 件同日
+sed 派生 4 件（sse_read_L3/read_only、asymm_read_only 等同构件）。
+验证：构建 1 个既有无关警告；12 件 -n 4 -t 2000 全 pass 全时长
+（2001-2048ms）；zstd19 回归 pass。README 扩展矩阵档案更新
+（标量/NEON/FP64 × 读/写/复制/指令 全覆盖）。
