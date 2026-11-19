@@ -1,5 +1,5 @@
 /*  store_visibility_cross_class_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/store_visibility_cross_class.cpp (2026-11-10;
+ *  tests/cpu/neon_memcpy_cache/store_visibility_cross_class.cpp (2026-11-10;
  *  parent untouched).  Cross-coherency-domain chassis (advisory atomic
  *  version bookkeeping, unbarriered/barriered reader pair, regression
  *  checks) kept verbatim; the version-slot payload runs the FP-register
@@ -32,7 +32,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <atomic>
-#include "../arm_add/arm_add_excite.h"
+#include "../neon_memcpy_cache/arm_add_excite.h"
 
 #define SVC_MAX_THREADS 1024
 

@@ -142,8 +142,8 @@ if host_machine.cpu_family() == 'aarch64'
         if_true : files(
             'memory/memcpy_rewr.cpp',
             # NEON variant shares the original .conf via the same
-            # MEMCPY_REWR_SRC_DIR define (arm_add/memcpy_rewr_neon.cpp)
-            'arm_add/memcpy_rewr_neon.cpp',
+            # MEMCPY_REWR_SRC_DIR define (neon_memcpy_cache/memcpy_rewr_neon.cpp)
+            'neon_memcpy_cache/memcpy_rewr_neon.cpp',
         )
     )
 endif
@@ -336,6 +336,11 @@ if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
             'misc/adaptive_mem_sdc.cpp',
+            'misc/fmov_train_3ldp_stp.cpp',
+            'misc/fmov_train_3ldr_str.cpp',
+            'misc/fmov_train_ldr_str.cpp',
+            'misc/fmov_train_ldp_stp.cpp',
+            'misc/loop_check_m.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
@@ -938,7 +943,7 @@ if host_machine.cpu_family() == 'aarch64'
     )
 endif
 
-# arm_add/ —— 2026-11-02 用户规格 10 测试中查重后落地的 7 个（3 个已存在
+# neon_memcpy_cache/（原 arm_add/，2026-11-19 目录改名）—— 2026-11-02 用户规格 10 测试中查重后落地的 7 个（3 个已存在
 # 不重复实现：atomic_simd_128/256_unaligned、spinlock_unaligned）。
 # A 组 5 个 = str 失效故障报告五维探针（跨域写可见性 / 三层回读丢写 /
 # 锁+屏障路径丢写 / 低占空比跨 die / 高密度多宽度 str 批）；B 组 2 个 =
@@ -948,42 +953,42 @@ endif
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
-            'arm_add/store_visibility_cross_class.cpp',
-            'arm_add/store_lost_write_detect.cpp',
-            'arm_add/barrier_after_lock_store.cpp',
-            'arm_add/low_load_cache_pressure.cpp',
-            'arm_add/str_instruction_stress.cpp',
-            'arm_add/cache_stress_clflush.cpp',
-            'arm_add/cache_stress_memcpy.cpp',
-            'arm_add/cache_stress_clflush_2_neon.cpp',
-            'arm_add/cache_stress_memcpy_2_neon.cpp',
-            'arm_add/flushed_memcpy_neon.cpp',
-            'arm_add/flushed_memcpy_bis_neon.cpp',
+            'neon_memcpy_cache/store_visibility_cross_class.cpp',
+            'neon_memcpy_cache/store_lost_write_detect.cpp',
+            'neon_memcpy_cache/barrier_after_lock_store.cpp',
+            'neon_memcpy_cache/low_load_cache_pressure.cpp',
+            'neon_memcpy_cache/str_instruction_stress.cpp',
+            'neon_memcpy_cache/cache_stress_clflush.cpp',
+            'neon_memcpy_cache/cache_stress_memcpy.cpp',
+            'neon_memcpy_cache/cache_stress_clflush_2_neon.cpp',
+            'neon_memcpy_cache/cache_stress_memcpy_2_neon.cpp',
+            'neon_memcpy_cache/flushed_memcpy_neon.cpp',
+            'neon_memcpy_cache/flushed_memcpy_bis_neon.cpp',
             'L3_cache_920/llcstress_neon.cpp',
             'L3_cache_920/llc_randomized_load_neon.cpp',
             'L3_cache_920/llc_uniform_load_neon.cpp',
             'L3_cache_920/l3_execute_neon.cpp',
-            'arm_add/sfence_neon.cpp',
-            'arm_add/store_visibility_cross_class_neon.cpp',
-            'arm_add/store_lost_write_detect_neon.cpp',
-            'arm_add/barrier_after_lock_store_neon.cpp',
-            'arm_add/low_load_cache_pressure_neon.cpp',
-            'arm_add/str_instruction_stress_neon.cpp',
-            'arm_add/cache_stress_clflush_neon.cpp',
-            'arm_add/cache_stress_memcpy_neon.cpp',
-            'arm_add/cachebounce_neon.cpp',
-            'arm_add/mem_disambiguation_neon.cpp',
-            'arm_add/mem_disambig_alu_neon.cpp',
-            'arm_add/mfence_neon.cpp',
-            'arm_add/mfence_pure_neon.cpp',
-            'arm_add/memcpy0_neon.cpp',
-            'arm_add/memcpy1_neon.cpp',
-            'arm_add/memcpy_l1d_size_neon.cpp',
-            'arm_add/memcpy_l2_cache_size_neon.cpp',
+            'neon_memcpy_cache/sfence_neon.cpp',
+            'neon_memcpy_cache/store_visibility_cross_class_neon.cpp',
+            'neon_memcpy_cache/store_lost_write_detect_neon.cpp',
+            'neon_memcpy_cache/barrier_after_lock_store_neon.cpp',
+            'neon_memcpy_cache/low_load_cache_pressure_neon.cpp',
+            'neon_memcpy_cache/str_instruction_stress_neon.cpp',
+            'neon_memcpy_cache/cache_stress_clflush_neon.cpp',
+            'neon_memcpy_cache/cache_stress_memcpy_neon.cpp',
+            'neon_memcpy_cache/cachebounce_neon.cpp',
+            'neon_memcpy_cache/mem_disambiguation_neon.cpp',
+            'neon_memcpy_cache/mem_disambig_alu_neon.cpp',
+            'neon_memcpy_cache/mfence_neon.cpp',
+            'neon_memcpy_cache/mfence_pure_neon.cpp',
+            'neon_memcpy_cache/memcpy0_neon.cpp',
+            'neon_memcpy_cache/memcpy1_neon.cpp',
+            'neon_memcpy_cache/memcpy_l1d_size_neon.cpp',
+            'neon_memcpy_cache/memcpy_l2_cache_size_neon.cpp',
             'L3_cache_920/memcpy_l3_cache_size_neon.cpp',
-            'arm_add/memcpy_sem_neon.cpp',
-            'arm_add/memcpy_shuffle_neon.cpp',
-            'arm_add/memcpy_shuffle_v2_neon.cpp',
+            'neon_memcpy_cache/memcpy_sem_neon.cpp',
+            'neon_memcpy_cache/memcpy_shuffle_neon.cpp',
+            'neon_memcpy_cache/memcpy_shuffle_v2_neon.cpp',
         )
     )
 endif
@@ -1105,25 +1110,25 @@ tests_set_base.add(
 )
 
 
-# lock_arm/ —— 2026-11-03 spinlock/lock 族的 NEON 扩展（锁协议原样保留——
+# neon_lock/（原 lock_arm/，2026-11-19 目录改名）—— 2026-11-03 spinlock/lock 族的 NEON 扩展（锁协议原样保留——
 # CAS/ldaxr-stxr/xchg 获取与屏障释放正是被测对象且无 NEON 等价；锁内/
 # 原子更新旁新增 per-thread uint32x4 向量槽 payload（asm ld_vec/st_vec），
 # 原版全部校验保留 + 新增槽 == local_sum 低 32 位校验。仅 aarch64。
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
-            'lock_arm/spinlock_stress_neon.cpp',
-            'lock_arm/spinlock_stress_bts_neon.cpp',
-            'lock_arm/spinlock_stress_cmpxchg_neon.cpp',
-            'lock_arm/spinlock_stress_cmpxchg_even_odd_neon.cpp',
-            'lock_arm/spinlock_stress_cmpxchg16b_neon.cpp',
-            'lock_arm/spinlock_rmw_cmpxchg_neon.cpp',
-            'lock_arm/spinlock_rmw_cmpxchg_pause_neon.cpp',
-            'lock_arm/spinlock_rmw_xchg_neon.cpp',
-            'lock_arm/spinlock_rmw_xchg_pause_neon.cpp',
-            'lock_arm/lockless_cmpxchg_neon.cpp',
-            'lock_arm/lockless_cmpxchg8b_neon.cpp',
-            'lock_arm/lockless_cmpxchg16b_neon.cpp',
+            'neon_lock/spinlock_stress_neon.cpp',
+            'neon_lock/spinlock_stress_bts_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg_even_odd_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg16b_neon.cpp',
+            'neon_lock/spinlock_rmw_cmpxchg_neon.cpp',
+            'neon_lock/spinlock_rmw_cmpxchg_pause_neon.cpp',
+            'neon_lock/spinlock_rmw_xchg_neon.cpp',
+            'neon_lock/spinlock_rmw_xchg_pause_neon.cpp',
+            'neon_lock/lockless_cmpxchg_neon.cpp',
+            'neon_lock/lockless_cmpxchg8b_neon.cpp',
+            'neon_lock/lockless_cmpxchg16b_neon.cpp',
         )
     )
 endif
@@ -1155,7 +1160,8 @@ if host_machine.cpu_family() == 'aarch64'
 endif
 
 # fp64/ —— 2026-11-10 FP64 数据通路变体家族：arm_add/lock_arm/memory-access
-# 三目录探针的 _fp64 改造版（A 类：ALU 消费端换 FP64 四槽轮转
+# 三目录探针的 _fp64 改造版（arm_add 现名 neon_memcpy_cache、lock_arm 现
+# 名 neon_lock；A 类：ALU 消费端换 FP64 四槽轮转
 # add/sub/mul/rev-sub——整数口→FP 口；B 类：载荷寄存器通路换 FP 寄存器），
 # load/store 骨架与检测语义逐字节保持父测试。golden 遵守 issue #373
 # 标量独立重算纪律（纯 C +,-,* 编译为 FADD/FSUB/FMUL D，与向量形式共享
@@ -1168,7 +1174,7 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/ma_src_overl2_fp64.cpp',
             'fp64/ma_l2evict_rev_fp64.cpp',
             'fp64/ma_alu_fixed_fp64.cpp',
-            # lock_arm pass: lock/CAS protocol bit-level untouched; slot RMW
+            # lock_arm（现 neon_lock）pass: lock/CAS protocol bit-level untouched; slot RMW
             # vaddq_u32 -> vaddq_f64, plain-counter variants double+FADD
             # (exact domain < 2^53), pack variants keep integer packing.
             'fp64/spinlock_stress_neon_fp64.cpp',
@@ -1183,7 +1189,7 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/lockless_cmpxchg_neon_fp64.cpp',
             'fp64/lockless_cmpxchg8b_neon_fp64.cpp',
             'fp64/lockless_cmpxchg16b_neon_fp64.cpp',
-            # arm_add A-class: consumer ALU re-typed to the FP64 pipe
+            # arm_add（现 neon_memcpy_cache）A-class: consumer ALU re-typed to the FP64 pipe
             'fp64/cachebounce_neon_fp64.cpp',
             'L3_cache_920/llcstress_neon_fp64.cpp',
             'L3_cache_920/l3_execute_neon_fp64.cpp',
@@ -1194,7 +1200,7 @@ if host_machine.cpu_family() == 'aarch64'
             # windows / 4MB shared arrays / golden k-space sums, the
             # 2026-11-17/18 L3-capability design born from the start.
             # Parents: tests/cpu/L3_cache_920/ (canonical) + arm_add
-            # NEON twins; see that directory's README.
+            #（现 neon_memcpy_cache）NEON twins; see that directory's README.
             'L3_cache_920/llc_randomized_load_neon_fp64.cpp',
             'L3_cache_920/llc_uniform_load_neon_fp64.cpp',
             'L3_cache_920/memcpy_l3_cache_size_neon_fp64.cpp',
@@ -1212,7 +1218,7 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/ma_barrier_fp64.cpp',
             'fp64/ma_civac_fp64.cpp',
             'fp64/ma_nt_fp64.cpp',
-            # arm_add B-class probes: payload re-typed to the FP-register
+            # arm_add（现 neon_memcpy_cache）B-class probes: payload re-typed to the FP-register
             # datapath (str/ldr %d0 scalar, f64x2 vectors); lock/ver/marker
             # protocols bit-level untouched.  mem_disambiguation_neon
             # re-audited to C-class (q-register bit-pattern IO: the f64

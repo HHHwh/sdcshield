@@ -1,4 +1,4 @@
-/*  spinlock_stress_cmpxchg16b_neon_fp64.cpp — FP64 data-path variant of tests/cpu/lock_arm/spinlock_stress_cmpxchg16b_neon.cpp
+/*  spinlock_stress_cmpxchg16b_neon_fp64.cpp — FP64 data-path variant of tests/cpu/neon_lock/spinlock_stress_cmpxchg16b_neon.cpp
  *  (2026-11-10; parent untouched).  The lock-free / wide-CAS pack protocol
  *  (counter+version double-field packing, unpack/pack arithmetic, the CAS
  *  itself) is EXACTLY the parent's — bit-level, the test's subject.

@@ -1,5 +1,5 @@
 /*  barrier_after_lock_store_neon_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/barrier_after_lock_store_neon.cpp (2026-11-10;
+ *  tests/cpu/neon_memcpy_cache/barrier_after_lock_store_neon.cpp (2026-11-10;
  *  parent untouched).  Lock protocol (ldaxr/stxr + dmb ish release) is
  *  the parent's GPR bit-level subject; the handoff vector under the
  *  lock is re-typed to f64x2 — epoch as integer-valued double, broadcast

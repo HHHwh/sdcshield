@@ -1,5 +1,5 @@
 /*  str_instruction_stress_neon — NEON variant of
- *  tests/cpu/arm_add/str_instruction_stress.cpp (original untouched).
+ *  tests/cpu/neon_memcpy_cache/str_instruction_stress.cpp (original untouched).
  *
  *  The scalar four-width str batch becomes a DENSE NEON VECTOR store
  *  batch: every slot is one uint32x4 (all lanes carry the epoch), the

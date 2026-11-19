@@ -1,5 +1,5 @@
 /*  barrier_after_lock_store_neon — NEON variant of
- *  tests/cpu/arm_add/barrier_after_lock_store.cpp (original
+ *  tests/cpu/neon_memcpy_cache/barrier_after_lock_store.cpp (original
  *  untouched).
  *
  *  The lock stays the SPEC'S ldaxr/stxr exclusive pair (acquire/

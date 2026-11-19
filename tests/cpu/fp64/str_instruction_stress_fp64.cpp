@@ -1,5 +1,5 @@
 /*  str_instruction_stress_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/str_instruction_stress.cpp (2026-11-10; parent
+ *  tests/cpu/neon_memcpy_cache/str_instruction_stress.cpp (2026-11-10; parent
  *  untouched).  Completed-state marker protocol (odd/even ver,
  *  dmb ish/dsb ish fences, one-epoch foresight tolerance) kept
  *  verbatim; the payload batch is re-typed to the SINGLE 64-bit FP
@@ -49,7 +49,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <atomic>
-#include "../arm_add/arm_add_excite.h"
+#include "../neon_memcpy_cache/arm_add_excite.h"
 
 #define SIS_MAX_THREADS 1024
 #define SIS_NSLOTS      1024

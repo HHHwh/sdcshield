@@ -1,10 +1,10 @@
 /*  store_lost_write_detect_neon_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/store_lost_write_detect_neon.cpp (2026-11-10;
+ *  tests/cpu/neon_memcpy_cache/store_lost_write_detect_neon.cpp (2026-11-10;
  *  parent untouched).  Sentinel-vector ladder chassis kept verbatim;
  *  the vector payload is re-typed to f64x2 (integer-valued epoch
  *  doubles, bit-exact veorq_u64 verify, vcltq_f64 ordering).
  *  NEON variant of
- *  tests/cpu/arm_add/store_lost_write_detect.cpp (original untouched).
+ *  tests/cpu/neon_memcpy_cache/store_lost_write_detect.cpp (original untouched).
  *
  *  Same three-layer lost-write ladder on the 16-byte NEON datapath:
  *  the sentinel is a uint32x4 epoch vector (all lanes carry the epoch,

@@ -1,5 +1,5 @@
 /*  store_lost_write_detect_neon — NEON variant of
- *  tests/cpu/arm_add/store_lost_write_detect.cpp (original untouched).
+ *  tests/cpu/neon_memcpy_cache/store_lost_write_detect.cpp (original untouched).
  *
  *  Same three-layer lost-write ladder on the 16-byte NEON datapath:
  *  the sentinel is a uint32x4 epoch vector (all lanes carry the epoch,

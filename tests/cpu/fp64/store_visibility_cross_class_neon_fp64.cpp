@@ -1,5 +1,5 @@
 /*  store_visibility_cross_class_neon_fp64 — FP64 data-path variant of
- *  tests/cpu/arm_add/store_visibility_cross_class_neon.cpp (2026-11-10;
+ *  tests/cpu/neon_memcpy_cache/store_visibility_cross_class_neon.cpp (2026-11-10;
  *  parent untouched).
  *
  *  Same cross-coherency-domain visibility probe, with the payload on

@@ -2,12 +2,12 @@
  *  tests/cpu/L3_cache_920/ after the 2026-11-17 L3-audit curation) —
  *  auto-derived by the 2026-11-02 cache/memory NEON pass: load-point
  *  neon_copy() calls replaced with the explicit vld1q/vst1q stream in
- *  arm_add/arm_add_neon_copy.h (bypasses the libc IFUNC dispatcher,
+ *  neon_memcpy_cache/arm_add_neon_copy.h (bypasses the libc IFUNC dispatcher,
  *  keeps the NEON datapath attribution).  Identifiers carry the _neon
  *  suffix to avoid ODR clashes with the original TU.
  */
 #include <sandstone.h>
-#include "../arm_add/arm_add_neon_copy.h"
+#include "../neon_memcpy_cache/arm_add_neon_copy.h"
 using arm_add_neon::neon_copy;
 #include "sandstone_p.h"
 #include <cstdint>

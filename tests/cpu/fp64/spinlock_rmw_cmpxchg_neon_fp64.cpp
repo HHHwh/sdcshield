@@ -1,4 +1,4 @@
-/*  spinlock_rmw_cmpxchg_neon_fp64.cpp — FP64 data-path variant of tests/cpu/lock_arm/spinlock_rmw_cmpxchg_neon.cpp
+/*  spinlock_rmw_cmpxchg_neon_fp64.cpp — FP64 data-path variant of tests/cpu/neon_lock/spinlock_rmw_cmpxchg_neon.cpp
  *  (2026-11-10; parent untouched).  The lock protocol (CAS / xchg / BTS
  *  acquisition, barriered release, spin hints) is EXACTLY the parent's —
  *  it is the test's subject.  What is re-typed: the in-critical-section

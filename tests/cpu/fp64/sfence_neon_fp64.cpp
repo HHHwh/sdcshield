@@ -1,4 +1,4 @@
-/*  sfence_neon_fp64 — FP64 datapath variant of tests/cpu/arm_add/sfence_neon.cpp
+/*  sfence_neon_fp64 — FP64 datapath variant of tests/cpu/neon_memcpy_cache/sfence_neon.cpp
  *  (2026-11-10; parent untouched).
  *
  *  Same barrier structure, with the payload re-typed where the FP

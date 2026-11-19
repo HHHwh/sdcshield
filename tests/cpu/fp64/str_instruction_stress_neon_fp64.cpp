@@ -1,12 +1,12 @@
 /*  str_instruction_stress_neon_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/str_instruction_stress_neon.cpp (2026-11-10;
+ *  tests/cpu/neon_memcpy_cache/str_instruction_stress_neon.cpp (2026-11-10;
  *  parent untouched).  Completed-state marker protocol (odd/even ver,
  *  dmb/dsb fences, one-epoch foresight tolerance) kept verbatim; the
  *  vector batch is re-typed to f64x2 (integer-valued epoch doubles,
  *  bit-exact veorq_u64 lane verify, asm st_vec/ld_vec kept).
  *
  *  (was: NEON variant of
- *  tests/cpu/arm_add/str_instruction_stress.cpp)
+ *  tests/cpu/neon_memcpy_cache/str_instruction_stress.cpp)
  *
  *  The scalar four-width str batch becomes a DENSE NEON VECTOR store
  *  batch: every slot is one uint32x4 (all lanes carry the epoch), the

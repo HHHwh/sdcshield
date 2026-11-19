@@ -1,5 +1,5 @@
 /*  cache_stress_clflush_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/cache_stress_clflush.cpp (2026-11-10; parent
+ *  tests/cpu/neon_memcpy_cache/cache_stress_clflush.cpp (2026-11-10; parent
  *  untouched).
  *
  *  Parent: batch copy (plain GPR memcpy) into dst with dc civac + dsb sy
@@ -22,7 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <arm_neon.h>
-#include "../arm_add/arm_add_excite.h"
+#include "../neon_memcpy_cache/arm_add_excite.h"
 
 #define CSF_SIZE        (64 * 1024)              /* 64 KB, 1024 lines */
 #define CSF_LINE        64

@@ -1,7 +1,7 @@
 /*  cache_stress_clflush_2 — memory copy under RANDOM cache-line flush
  *  interference (633 #26 lineage, user spec 2026-11-02).
  *
- *  Differentiated from arm_add/cache_stress_clflush (same 633 #26
+ *  Differentiated from neon_memcpy_cache/cache_stress_clflush (same 633 #26
  *  lineage, written the same day): that one uses a fixed random golden
  *  + deterministic every-8th-line flush cadence; THIS variant uses
  *  per-iteration random re-fill of BOTH buffers (fresh bit patterns
