@@ -36,9 +36,6 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <cstring>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/time.h>
 
 static constexpr size_t CACHE_LINE_SIZE = 64;
 /* 16 rows × 64B = 1KB shared input footprint (<< L1D 64KB, stays resident). */
@@ -49,23 +46,7 @@ static constexpr size_t CACHEBOUNCE_COUNT = CACHEBOUNCE_ROWS * U64_PER_ROW;
 struct CachebounceSdcData {
     uint64_t *input;     /* shared, all cores read → MESI ping-pong */
     uint64_t *expected;  /* shared golden (precomputed ALU result) */
-    int dump_fd;         /* per-process binary log */
 };
-
-#pragma pack(push, 1)
-struct cachebounce_sdc_record {
-    uint64_t timestamp_us;
-    uint32_t cpu;
-    uint32_t iteration;
-    uint32_t index;
-    uint32_t op_type;       /* 0=xor, 1=add (kept simple: one op) */
-    uint64_t inputA;
-    uint64_t golden;
-    uint64_t actual_dst;
-    uint64_t actual_temp;
-    uint64_t xor_val;
-};
-#pragma pack(pop)
 
 #if defined(__aarch64__)
 static inline void store_qword(void *addr, uint64_t val) {
@@ -102,13 +83,6 @@ static int cachebounce_sdc_init(struct test *test) {
         data->expected[i] = data->input[i] ^ mask;
     }
 
-    char path[256];
-    snprintf(path, sizeof(path), "/tmp/cachebounce_sdc_%d.bin", getpid());
-    data->dump_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (data->dump_fd < 0) {
-        log_error("cachebounce_sdc: failed to open dump log %s", path);
-    }
-
     test->data = data;
     return EXIT_SUCCESS;
 }
@@ -121,8 +95,6 @@ static int cachebounce_sdc_run(struct test *test, int cpu) {
      * *input reads* bounce the shared lines across cores (ping-pong). */
     uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(CACHE_LINE_SIZE, CACHEBOUNCE_COUNT * sizeof(uint64_t)));
     if (!temp) return EXIT_FAILURE;
-
-    uint32_t iter = 0;
 
     TEST_LOOP(test, 1 << 13) {
         for (size_t i = 0; i < CACHEBOUNCE_COUNT; ++i) {
@@ -151,26 +123,8 @@ static int cachebounce_sdc_run(struct test *test, int cpu) {
                           (unsigned long)temp[i], (unsigned long)dst,
                           (temp[i] == dst) ? "[fwd-faithful]" : "[fwd-damaged]");
 
-                if (data->dump_fd >= 0) {
-                    struct timeval tv;
-                    gettimeofday(&tv, nullptr);
-                    struct cachebounce_sdc_record rec = {
-                        .timestamp_us = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec,
-                        .cpu = (uint32_t)cpu,
-                        .iteration = iter,
-                        .index = (uint32_t)i,
-                        .op_type = 0,
-                        .inputA = inputv,
-                        .golden = golden,
-                        .actual_dst = actual,
-                        .actual_temp = temp[i],
-                        .xor_val = xorv,
-                    };
-                    if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best-effort dump */ }
-                }
             }
         }
-        ++iter;
     }
 
     free(temp);
@@ -180,7 +134,6 @@ static int cachebounce_sdc_run(struct test *test, int cpu) {
 static int cachebounce_sdc_cleanup(struct test *test) {
     auto *data = static_cast<CachebounceSdcData *>(test->data);
     if (data) {
-        if (data->dump_fd >= 0) close(data->dump_fd);
         free(data->input);
         free(data->expected);
         delete data;

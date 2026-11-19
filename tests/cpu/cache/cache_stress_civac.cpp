@@ -35,9 +35,6 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <cstring>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/time.h>
 
 static constexpr size_t CACHE_LINE_SIZE = 64;
 /* 16384 uint32_t = 64KB = exactly fills a 64KB L1D (matches movbe footprint). */
@@ -46,21 +43,7 @@ static constexpr size_t CSTRESS_BUFFER_SIZE = 1 << 14;
 struct CacheStressCivacData {
     uint32_t *input;    /* shared source buffer (reload target after evict) */
     uint32_t *swapped;  /* shared store target (bswapped value written here) */
-    int dump_fd;
 };
-
-#pragma pack(push, 1)
-struct cache_stress_civac_record {
-    uint64_t timestamp_us;
-    uint32_t cpu;
-    uint32_t iteration;
-    uint32_t index;
-    uint32_t input_val;
-    uint32_t golden;
-    uint32_t actual;
-    uint32_t xor_val;
-};
-#pragma pack(pop)
 
 #if defined(__aarch64__)
 /* Correct data-cache-line evict: clean+invalidate to the point of coherency,
@@ -85,13 +68,6 @@ static int cache_stress_civac_init(struct test *test) {
         data->input[i] = random32();
     }
 
-    char path[256];
-    snprintf(path, sizeof(path), "/tmp/cache_stress_civac_%d.bin", getpid());
-    data->dump_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (data->dump_fd < 0) {
-        log_error("cache_stress_civac: failed to open dump log %s", path);
-    }
-
     test->data = data;
     return EXIT_SUCCESS;
 }
@@ -99,8 +75,6 @@ static int cache_stress_civac_init(struct test *test) {
 static int cache_stress_civac_run(struct test *test, int cpu) {
     auto *data = static_cast<CacheStressCivacData *>(test->data);
     (void)cpu;
-
-    uint32_t iter = 0;
 
     /* Loop granularity (issues #369/#360 class): the body is one full
      * 16384-element sweep whose every element pays a `dc civac` + `dsb sy`
@@ -162,24 +136,8 @@ static int cache_stress_civac_run(struct test *test, int cpu) {
                           ab[3], ab[2], ab[1], ab[0],
                           xb[3], xb[2], xb[1], xb[0]);
 
-                if (data->dump_fd >= 0) {
-                    struct timeval tv;
-                    gettimeofday(&tv, nullptr);
-                    struct cache_stress_civac_record rec = {
-                        .timestamp_us = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec,
-                        .cpu = (uint32_t)cpu,
-                        .iteration = iter,
-                        .index = (uint32_t)i,
-                        .input_val = inputv,
-                        .golden = golden,
-                        .actual = actual,
-                        .xor_val = xorv,
-                    };
-                    if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best-effort dump */ }
-                }
             }
         }
-        ++iter;
     }
 
     return EXIT_SUCCESS;
@@ -188,7 +146,6 @@ static int cache_stress_civac_run(struct test *test, int cpu) {
 static int cache_stress_civac_cleanup(struct test *test) {
     auto *data = static_cast<CacheStressCivacData *>(test->data);
     if (data) {
-        if (data->dump_fd >= 0) close(data->dump_fd);
         free(data->input);
         free(data->swapped);
         delete data;

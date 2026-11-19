@@ -17,8 +17,9 @@
  * trigger rate, if any, is attributable to XOR alone.
  *
  * On miscompare, logs inputA/inputB/golden/actual/xor + per-byte breakdown
- * and writes a binary record, mirroring mrn_rmw_dump's fail-only design.
- * All dumping lives in the cold failure branch; the hot path is stable.
+ * (log-only; the former per-miscompare /tmp record was removed — nothing
+ * consumed the file and the log carries the same fields). All logging
+ * lives in the cold failure branch; the hot path is stable.
  *
  * asm note: output `=&r` (early-clobber) — see stress_sub.cpp header.
  * @endparblock
@@ -27,9 +28,6 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <cstring>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/time.h>
 
 #define STRESS_COUNT 1024
 
@@ -37,22 +35,7 @@ struct StressData {
     uint64_t *srcA;
     uint64_t *srcB;
     uint64_t *expected;
-    int dump_fd;
 };
-
-#pragma pack(push, 1)
-struct stress_xor_record {
-    uint64_t timestamp_us;
-    uint32_t cpu;
-    uint32_t iteration;
-    uint32_t index;
-    uint64_t inputA;
-    uint64_t inputB;
-    uint64_t golden;
-    uint64_t actual;
-    uint64_t xor_val;
-};
-#pragma pack(pop)
 
 #if defined(__aarch64__)
 static inline void store_qword(void *addr, uint64_t val) {
@@ -92,22 +75,15 @@ static int stress_xor_init(struct test *test) {
         data->expected[i] = data->srcA[i] ^ data->srcB[i];
     }
 
-    char path[256];
-    snprintf(path, sizeof(path), "/tmp/stress_xor_%d.bin", getpid());
-    data->dump_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (data->dump_fd < 0) {
-        log_error("stress_xor: failed to open dump log %s", path);
-    }
-
     test->data = data;
     return EXIT_SUCCESS;
 }
 
 static int stress_xor_run(struct test *test, int cpu) {
     auto *data = static_cast<StressData *>(test->data);
+    (void)cpu;
     uint64_t *temp = static_cast<uint64_t *>(aligned_alloc_safe(64, STRESS_COUNT * sizeof(uint64_t)));
     uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc_safe(64, STRESS_COUNT * sizeof(uint64_t)));
-    uint32_t iter = 0;
 
     TEST_LOOP(test, 1 << 13) {
         for (int i = 0; i < STRESS_COUNT; i++) {
@@ -140,28 +116,10 @@ static int stress_xor_run(struct test *test, int cpu) {
                               ab[7], ab[6], ab[5], ab[4], ab[3], ab[2], ab[1], ab[0],
                               xb[7], xb[6], xb[5], xb[4], xb[3], xb[2], xb[1], xb[0]);
 
-                    if (data->dump_fd >= 0) {
-                        struct timeval tv;
-                        gettimeofday(&tv, NULL);
-                        struct stress_xor_record rec = {
-                            .timestamp_us = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec,
-                            .cpu = (uint32_t)cpu,
-                            .iteration = iter,
-                            .index = (uint32_t)i,
-                            .inputA = data->srcA[i],
-                            .inputB = data->srcB[i],
-                            .golden = golden,
-                            .actual = actual,
-                            .xor_val = xorv,
-                        };
-                        if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best effort */ }
-                    }
-
                     report_fail_msg("stress_xor: data miscompare at index %u", (unsigned)i);
                 }
             }
         }
-        iter++;
     }
 
     free(dst);
@@ -172,7 +130,6 @@ static int stress_xor_run(struct test *test, int cpu) {
 static int stress_xor_cleanup(struct test *test) {
     auto *data = static_cast<StressData *>(test->data);
     if (data) {
-        if (data->dump_fd >= 0) close(data->dump_fd);
         free(data->srcA);
         free(data->srcB);
         free(data->expected);
