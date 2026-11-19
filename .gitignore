@@ -44,3 +44,10 @@ __pycache__/
 /.entire/
 /.planning/
 docs/superpowers/
+docs/runs
+*.log
+fleet
+.trae
+findings.md
+progress.md
+task_plan.md
