@@ -1,5 +1,5 @@
 /*  barrier_after_lock_store_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/barrier_after_lock_store.cpp (2026-11-10; parent
+ *  tests/cpu/neon_memcpy_cache/barrier_after_lock_store.cpp (2026-11-10; parent
  *  untouched).
  *
  *  Same write-loss probe INSIDE the lock+barrier path, with the
@@ -24,7 +24,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <atomic>
-#include "../arm_add/arm_add_excite.h"
+#include "../neon_memcpy_cache/arm_add_excite.h"
 
 namespace { /* ODR: per-TU BALSData */
 struct BALSData {

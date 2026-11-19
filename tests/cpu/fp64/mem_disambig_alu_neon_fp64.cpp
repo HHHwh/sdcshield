@@ -1,4 +1,4 @@
-/*  mem_disambig_alu_neon_fp64 — FP64 data-path variant of tests/cpu/arm_add/mem_disambig_alu_neon.cpp
+/*  mem_disambig_alu_neon_fp64 — FP64 data-path variant of tests/cpu/neon_memcpy_cache/mem_disambig_alu_neon.cpp
  *  (2026-11-10; parent untouched).
  *
  *  Parent: a rotating vector ALU (veorq/vaddq/vandq/vsubq on uint64x2,

@@ -1,5 +1,5 @@
 /*  low_load_cache_pressure_neon — NEON variant of
- *  tests/cpu/arm_add/low_load_cache_pressure.cpp (original untouched).
+ *  tests/cpu/neon_memcpy_cache/low_load_cache_pressure.cpp (original untouched).
  *
  *  Same low-duty-cycle cross-die probe (10 ms period, duty_us knob,
  *  cntvct window timing, sleep as payload) — the slot payload moves

@@ -1,5 +1,5 @@
 /*  low_load_cache_pressure_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/low_load_cache_pressure.cpp (2026-11-10; parent
+ *  tests/cpu/neon_memcpy_cache/low_load_cache_pressure.cpp (2026-11-10; parent
  *  untouched).  Duty-cycle chassis, dmb ish cadence, remote-load sweep
  *  and excitation filler kept verbatim; the epoch slot payload runs
  *  the FP-register datapath (str/ldr %d0, integer-valued epoch doubles
@@ -36,7 +36,7 @@
 #include <cstdint>
 #include <ctime>
 #include <atomic>
-#include "../arm_add/arm_add_excite.h"
+#include "../neon_memcpy_cache/arm_add_excite.h"
 
 #define LLP_MAX_THREADS 1024
 #define LLP_PERIOD_NS   10000000LL   /* 10 ms */

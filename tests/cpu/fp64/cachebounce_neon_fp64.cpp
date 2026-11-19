@@ -1,4 +1,4 @@
-/*  cachebounce_neon_fp64 — FP64 data-path variant of tests/cpu/arm_add/cachebounce_neon.cpp.
+/*  cachebounce_neon_fp64 — FP64 data-path variant of tests/cpu/neon_memcpy_cache/cachebounce_neon.cpp.
  *
  *  Parent: all cores RMW a shared 64-byte bouncing line — each core holds
  *  one uint32x4 slot, vld1q + vaddq(+1) + vst1q (asm), register golden.

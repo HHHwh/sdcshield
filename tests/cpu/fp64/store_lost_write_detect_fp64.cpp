@@ -1,5 +1,5 @@
 /*  store_lost_write_detect_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/store_lost_write_detect.cpp (2026-11-10; parent
+ *  tests/cpu/neon_memcpy_cache/store_lost_write_detect.cpp (2026-11-10; parent
  *  untouched).  Sentinel ladder chassis (same-core read-back,
  *  release/acquire publication, dsb re-read) kept verbatim; the
  *  sentinel payload runs the FP-register datapath (str/ldr %d0,
@@ -39,7 +39,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <atomic>
-#include "../arm_add/arm_add_excite.h"
+#include "../neon_memcpy_cache/arm_add_excite.h"
 
 #define SLD_MAX_THREADS 1024
 

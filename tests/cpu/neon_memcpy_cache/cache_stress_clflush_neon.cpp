@@ -1,4 +1,4 @@
-/*  NEON variant of tests/cpu/arm_add/cache_stress_clflush_neon.cpp — same-day NEON pass:
+/*  NEON variant of tests/cpu/neon_memcpy_cache/cache_stress_clflush_neon.cpp — same-day NEON pass:
  *  the copy load points become the explicit vld1q/vst1q stream
  *  (arm_add_neon_copy.h); flush/verify semantics identical.  The
   *  scalar original stays; identifiers carry the _neon suffix (ODR).

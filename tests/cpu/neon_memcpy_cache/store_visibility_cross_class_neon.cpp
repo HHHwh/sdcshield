@@ -1,5 +1,5 @@
 /*  store_visibility_cross_class_neon — NEON variant of
- *  tests/cpu/arm_add/store_visibility_cross_class.cpp (original
+ *  tests/cpu/neon_memcpy_cache/store_visibility_cross_class.cpp (original
  *  untouched).
  *
  *  Same cross-coherency-domain visibility probe, with the payload on

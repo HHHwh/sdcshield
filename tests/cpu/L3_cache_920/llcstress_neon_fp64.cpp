@@ -1,4 +1,4 @@
-/*  llcstress_neon_fp64 — FP64 data-path variant of tests/cpu/arm_add/llcstress_neon.cpp
+/*  llcstress_neon_fp64 — FP64 data-path variant of tests/cpu/L3_cache_920/llcstress_neon.cpp
  *  (2026-11-10; parent untouched).
  *
  *  The random LLC roaming chassis is EXACTLY the parent's (64 MB shared

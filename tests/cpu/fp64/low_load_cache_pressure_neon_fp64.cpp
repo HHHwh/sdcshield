@@ -1,11 +1,11 @@
 /*  low_load_cache_pressure_neon_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/low_load_cache_pressure_neon.cpp (2026-11-10;
+ *  tests/cpu/neon_memcpy_cache/low_load_cache_pressure_neon.cpp (2026-11-10;
  *  parent untouched).  Duty-cycle chassis, dmb ish cadence and
  *  remote-load sweep kept verbatim; the epoch vector slot is re-typed
  *  to f64x2 (integer-valued epoch doubles, bit-exact verify, vcltq_f64
  *  ordering == parent u32 ordering in the exact domain).
  *  NEON variant of
- *  tests/cpu/arm_add/low_load_cache_pressure.cpp (original untouched).
+ *  tests/cpu/neon_memcpy_cache/low_load_cache_pressure.cpp (original untouched).
  *
  *  Same low-duty-cycle cross-die probe (10 ms period, duty_us knob,
  *  cntvct window timing, sleep as payload) — the slot payload moves

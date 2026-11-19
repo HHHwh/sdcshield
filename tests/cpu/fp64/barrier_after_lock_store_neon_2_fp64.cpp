@@ -1,5 +1,5 @@
 /*  barrier_after_lock_store_neon_2_fp64 — FP64 datapath variant of
- *  tests/cpu/arm_add/barrier_after_lock_store_neon_2.cpp (2026-11-10;
+ *  tests/cpu/neon_memcpy_cache/barrier_after_lock_store_neon_2.cpp (2026-11-10;
  *  parent UNCOMMITTED co-worker WIP on disk at adaptation time — the frozen
  *  disk state is the reference, a fresh clone may not carry it yet):
  *  v2 discriminator chassis (bounded try-lock,
