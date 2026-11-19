@@ -61,6 +61,19 @@
 #include <sys/auxv.h>
 #include <asm/hwcap.h>
 #include <sys/mman.h>
+
+/* HWCAP2 fallback, for build environments whose uapi asm/hwcap.h predates
+ * the feature (openEuler 20.03-LTS ships 4.19-era headers with no HWCAP2_*
+ * definitions at all — SVE2 landed in uapi 5.10). Value per uapi
+ * asm/hwcap.h; same fallback pattern as framework arm64_vl.h. The fallback
+ * carries the exact uapi bit, so probe_isa() behaves identically whether
+ * the macro comes from the header or here (CI 20.03 containers run on a
+ * modern runner kernel where AT_HWCAP2 can legitimately carry the bit).
+ * HWCAP_SVE (AT_HWCAP family, uapi 4.15) is present in 4.19-era headers
+ * and needs no fallback. */
+#ifndef HWCAP2_SVE2
+#define HWCAP2_SVE2 (1UL << 1)
+#endif
 #endif
 
 /* ------------------------------------------------------------------ */
