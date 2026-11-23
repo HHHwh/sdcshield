@@ -488,7 +488,7 @@ static int fmov_train_gdroop_ldp_stp_intr_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(fmov_train_gdroop_ldp_stp_intr, "All-core synchronized global-droop excitation (all-core undervolt lineage): sense-reversal barrier aligns every worker through stall (low current) -> synchronized FMA burst (global current step) -> fmov_train_ldr_str recipe chunks inside the sagged window, byte-exact per-round scalar golden on every core; knobs stall/burst/chunk/gap/toggle (-O) sweep the global waveform (ARM64)")
+DECLARE_TEST(fmov_train_gdroop_ldp_stp_intr, "All-core synchronized global-droop excitation (all-core undervolt lineage): sense-reversal barrier aligns every worker through stall (low current) -> synchronized FMA burst (global current step) -> fmov_train_ldp_stp recipe chunks inside the sagged window, byte-exact per-round scalar golden on every core; knobs stall/burst/chunk/gap/toggle (-O) sweep the global waveform (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = fmov_train_gdroop_ldp_stp_intr_init,
     .test_run = fmov_train_gdroop_ldp_stp_intr_run,
