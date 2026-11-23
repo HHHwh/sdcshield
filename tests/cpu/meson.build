@@ -1262,6 +1262,22 @@ tests_config_base = tests_set_base.apply(tests_config)
 # working on toolchains that inline 128-bit atomics natively.
 atomic_lib = cc.find_library('atomic', required : false)
 
+# shm_open — used by adaptive_mem_sdc / adaptive_l3_sdc for cross-fork named
+# shared memory (siblings each mmap independently, so MAP_ANONYMOUS is not a
+# substitute) — lives in librt on glibc < 2.34 (openEuler 20.03 images:
+# glibc 2.28; Multi-OS Verify run 44683247314, all five 20.03 jobs died at
+# the final link with "undefined reference to `shm_open'" in exactly these
+# two tests). glibc 2.34 folded shm_open into libc, so 22.03/24.03 and any
+# newer toolchain link without it. Probe instead of linking unconditionally:
+# hosts whose libc already provides it keep an unchanged link line, and only
+# the genuinely affected toolchains gain -lrt (mirrors the libatomic guard
+# above; x86-64 is left untouched per CLAUDE.md rule 5).
+rt_lib = []
+if host_machine.cpu_family() != 'x86_64' and not cc.has_function('shm_open', prefix: '#include <sys/mman.h>')
+    rt_lib = cc.find_library('rt')
+endif
+
+
 tests_base_a = static_library(
     'tests_base',
     sources : tests_config_base.sources(),
@@ -1273,6 +1289,7 @@ tests_base_a = static_library(
         tests_config_base.dependencies(),
         boost_dep,
         atomic_lib,
+        rt_lib,
         isal_lib,
         openblas_dep,
         sleef_dep,

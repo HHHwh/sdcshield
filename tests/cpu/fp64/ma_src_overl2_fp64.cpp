@@ -16,13 +16,25 @@
  *  instead of the rowmajor_fp64 precedent's fmax — std::fmax has
  *  implementation freedom that can break bit-exactness of a scalar
  *  golden on double-NaN payloads; +,-,* compile to FADD/FSUB/FMUL which
- *  share the vector forms' pseudocode (bit-identical by architecture).
+ *  share the vector forms' pseudocode.  NaN-selection caveat (measured
+ *  2026-11-20, run 44701023625 20.03-LTS-SP1 miscompare): for a
+ *  BOTH-NaN lane that shared pseudocode leaves WHICH input NaN to
+ *  return (quieterized) implementation-defined, and the scalar and NEON
+ *  forms choose differently on this core class — Kunpeng 920 and the CI
+ *  runner both return quiet(op1) from scalar FADD/FMUL and quiet(op2)
+ *  from vaddq/vmulq (2e5 random both-sNaN pairs: ~50% diverge).  The
+ *  scalar golden can therefore never be bit-equal to the NEON consumer
+ *  on NaN-pair lanes; inputs are sanitized NaN/Inf-free at fill time
+ *  (see init) so finite-only arithmetic — bit-deterministic across
+ *  forms and operand order — is what the memcmp covers.  Same
+ *  discipline as adaptive_mem_sdc's LOAD_FP64ROT sanitize (2026-11-13
+ *  verify fail, same root class).
+ *
  *  The mixed 4-way switch blocks auto-vectorization of the golden loop.
  *
  *  Golden is init-time SCALAR double recomputation over the full 4 MiB
  *  (issue #373 discipline preserved from the parent: zero vector ALU in
- *  init, independent recomputation path).  NaN/Inf propagation on random
- *  bit patterns is deterministic and bit-compared.  fracture disabled:
+ *  init, independent recomputation path).  fracture disabled:
  *  cache fracturing would perturb the footprint experiment.
  */
 #include <sandstone.h>
@@ -62,6 +74,23 @@ static int ma_src_overl2_fp64_init(struct test *test) {
     memset_random(d->srcA, sizeof(d->srcA));
     memset_random(d->srcB, sizeof(d->srcB));
     memset_random(d->scratch, sizeof(d->scratch));
+    /* NaN/Inf-free FP64 sources (run 44701023625 SP1 miscompare): for a
+     * both-NaN lane AArch64 lets the implementation pick WHICH input NaN
+     * to return quieterized — and the scalar and NEON forms pick
+     * different operands on this core class (scalar → op1, NEON → op2,
+     * measured, see header).  Clearing exponent bit 62 on all-ones-
+     * exponent lanes (NaN/Inf → finite) removes the ambiguity entirely;
+     * finite +,-,* are bit-identical between scalar and vector forms and
+     * under operand reordering.  scratch is a dead load only — never
+     * consumed by FP arithmetic, no sanitize needed. */
+    auto sanitize_f64_bits = [](void *buf, size_t bytes) {
+        auto *w = static_cast<uint64_t *>(buf);
+        for (size_t k = 0; k < bytes / sizeof(uint64_t); ++k)
+            if ((w[k] >> 52 & 0x7ff) == 0x7ff)
+                w[k] &= ~(1ULL << 62);
+    };
+    sanitize_f64_bits(d->srcA, sizeof(d->srcA));
+    sanitize_f64_bits(d->srcB, sizeof(d->srcB));
     /* scalar double golden over the full 4 MiB — same rotating arithmetic
      * on scalar FP lanes, zero vector ALU in init (issue #373).  Rotation
      * uses the WINDOW index parity (g % 4), matching the hot loop's i % 4. */

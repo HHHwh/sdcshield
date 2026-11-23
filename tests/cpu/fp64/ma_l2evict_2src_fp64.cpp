@@ -23,15 +23,22 @@
  *  (instruction vs glibc branch) that can break bit-exactness of a
  *  SCALAR golden on double-NaN payloads, while +,-,* compile to
  *  FADD/FSUB/FMUL which share the exact FPAdd/FPSub/FPMul pseudocode
- *  with the vector forms (bit-identical by architecture).  The mixed
- *  4-way switch also blocks auto-vectorization of the golden loop
- *  (issue #373: zero vector ALU in init).
+ *  with the vector forms.  NaN-selection caveat (measured 2026-11-20,
+ *  run 44701023625 20.03-LTS-SP1 miscompare in the sibling
+ *  ma_src_overl2_fp64): for a BOTH-NaN lane that shared pseudocode
+ *  leaves WHICH input NaN to return (quieterized) implementation-
+ *  defined, and the scalar and NEON forms choose differently on this
+ *  core class (scalar → op1, NEON → op2, measured).  Inputs are
+ *  sanitized NaN/Inf-free at fill time (see init) — same discipline as
+ *  adaptive_mem_sdc's LOAD_FP64ROT sanitize (2026-11-13 verify fail,
+ *  same root class).  The mixed 4-way switch also blocks
+ *  auto-vectorization of the golden loop (issue #373: zero vector ALU
+ *  in init).
  *
  *  Golden is init-time SCALAR double recomputation of the same rotating
- *  arithmetic (issue #373 discipline preserved from the parent).
- *  NaN/Inf propagation on random bit patterns is deterministic
- *  (single IEEE754 ops, same FPCR) and bit-compared via memcmp, as in
- *  the parent.  Pre-registered expectation inherited: 0 fail.
+ *  arithmetic (issue #373 discipline preserved from the parent) over
+ *  finite-only sanitized sources, bit-compared via memcmp, as in the
+ *  parent.  Pre-registered expectation inherited: 0 fail.
  */
 #include <sandstone.h>
 #include <arm_neon.h>
@@ -74,10 +81,29 @@ static int ma_l2evict_2src_fp64_init(struct test *test) {
         return EXIT_FAILURE;
     memset_random(d->srcA, sizeof(d->srcA));
     memset_random(d->srcB, sizeof(d->srcB));
+    /* NaN/Inf-free FP64 sources (same root class as the run 44701023625
+     * SP1 miscompare in sibling ma_src_overl2_fp64): for a both-NaN lane
+     * AArch64 lets the implementation pick WHICH input NaN to return
+     * quieterized — and the scalar and NEON forms pick different
+     * operands on this core class (scalar → op1, NEON → op2, measured,
+     * see header).  Clearing exponent bit 62 on all-ones-exponent lanes
+     * (NaN/Inf → finite) removes the ambiguity entirely; finite +,-,*
+     * are bit-identical between scalar and vector forms and under
+     * operand reordering. */
+    auto sanitize_f64_bits = [](void *buf, size_t bytes) {
+        auto *w = static_cast<uint64_t *>(buf);
+        for (size_t k = 0; k < bytes / sizeof(uint64_t); ++k)
+            if ((w[k] >> 52 & 0x7ff) == 0x7ff)
+                w[k] &= ~(1ULL << 62);
+    };
+    sanitize_f64_bits(d->srcA, sizeof(d->srcA));
+    sanitize_f64_bits(d->srcB, sizeof(d->srcB));
     /* scalar double golden — the same rotating arithmetic on scalar FP
-     * lanes, zero vector ALU in init (issue #373).  The pure C +,-,*
-     * operators compile to FADD/FSUB/FMUL D which share the vector ops'
-     * pseudocode, so the golden is bit-identical to the NEON consumer. */
+     * lanes, zero vector ALU in init (issue #373).  On the NaN/Inf-free
+     * sanitized sources the pure C +,-,* operators compile to
+     * FADD/FSUB/FMUL D, bit-identical to the NEON consumer (the
+     * both-NaN selection point where the forms diverge is unreachable —
+     * see the sanitize above). */
     const double *a = reinterpret_cast<const double *>(d->srcA);
     const double *b = reinterpret_cast<const double *>(d->srcB);
     double *e = reinterpret_cast<double *>(d->expected);
