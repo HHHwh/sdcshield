@@ -83,7 +83,13 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               与 4 件 FP64 复制体）：firestorm no-SVE 本机 2026-11-18
                                                #               实测 519 PROD / 628 q0 / 632 q-1（链见 README）；
                                                #               +fmov_train 对 2（11-18 晚，跨堆 FMOV 消费链
-                                               #               独立验证对）→ 0102 主机实测 522/631/635。
+                                               #               独立验证对）→ 0102 主机实测 522/631/635；
+                                               #   +fmov_train_gdroop 四件（11-23，全核同步全局 droop 激发
+                                               #               四件套：asm ldr_str/ldp_stp 孪生 + intrinsics
+                                               #               受控编码判别对，研究仓逐字节回迁）→ 0102 主机
+                                               #               2026-11-23 实测 521/630/634（回迁前当日基线
+                                               #               517/626/630，与 11-18 522 间 main 退役/新增
+                                               #               推算链不可精确拼接，以实测为准）。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
