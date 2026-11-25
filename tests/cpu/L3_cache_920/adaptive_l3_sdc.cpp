@@ -72,6 +72,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <arm_neon.h>
 #endif
 
@@ -1087,7 +1088,13 @@ static size_t al3_l3_size(void)
     return 8 * 1024 * 1024;
 }
 
-/* Map (or create) the named shm; creator publishes the anchor */
+/* Map (or create) the named shm; creator publishes the anchor.
+ * Latecomers fstat-gate on size BEFORE mmap and stay pure observers of
+ * the object (only the creator sizes it): mmap of a 0-byte tmpfs file
+ * succeeds with a bare VMA and the first ready-spin touch then raises
+ * SIGBUS/BUS_ADRERR while the creator is between shm_open and ftruncate,
+ * or after a creator died there — same 2026-11-24 root cause as
+ * adaptive_mem_sdc's shm_setup (board fail + V1/V3 repro). */
 static struct AL3Shm *al3_shm_setup(void)
 {
     const char *key = getenv("ADAPTIVE_L3_SDC_KEY");
@@ -1108,6 +1115,26 @@ static struct AL3Shm *al3_shm_setup(void)
         fd = shm_open(name, O_RDWR, 0600);
         if (fd < 0)
             return nullptr;
+        /* wait until the creator has sized the object: an undersized
+         * mapping would fault on first touch (see header comment).
+         * Healthy path costs one fstat; the 500000 x 10us bound is 5s
+         * in nominal arithmetic but ~31s measured on the dev host
+         * (timer slack makes usleep(10) cost ~60us) and stretches
+         * further under load — on timeout return nullptr (the pick
+         * path idles the child). */
+        struct stat st;
+        bool sized = false;
+        for (int i = 0; i < 500000; i++) {
+            if (fstat(fd, &st) == 0 && st.st_size >= (off_t)sizeof(struct AL3Shm)) {
+                sized = true;
+                break;
+            }
+            usleep(10);
+        }
+        if (!sized) {
+            close(fd);
+            return nullptr;
+        }
     }
     if (creator && ftruncate(fd, sizeof(struct AL3Shm)) != 0) {
         close(fd);

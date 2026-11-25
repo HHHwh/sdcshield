@@ -59,6 +59,7 @@
 
 #if defined(__aarch64__)
 #include <sys/auxv.h>
+#include <sys/stat.h>
 #include <asm/hwcap.h>
 #include <sys/mman.h>
 
@@ -780,7 +781,14 @@ static const char *isa_tag(int isa)
 /* Map (or create) the named shm.  O_EXCL decides the creator; the
  * creator publishes the anchor then sets ready (release).  Latecomers
  * spin on ready (acquire) with a bounded wait — on timeout the mapping
- * is returned anyway and pick_combo() falls back to idle. */
+ * is returned anyway and pick_combo() falls back to idle.
+ * Latecomers fstat-gate on size BEFORE mmap and stay pure observers of
+ * the object (only the creator sizes it): mmap of a 0-byte tmpfs file
+ * succeeds with a bare VMA, and the first touch (the ready spin, offset
+ * 0) then raises SIGBUS/BUS_ADRERR while the creator is still between
+ * shm_open and ftruncate, or after a creator died there leaving a stale
+ * 0-byte object (2026-11-24 board fail at the line-828 ldar; V1/V3
+ * repro on the dev host). */
 static struct AdaptiveShm *shm_setup(void)
 {
     const char *key = getenv("ADAPTIVE_MEM_SDC_KEY");
@@ -802,6 +810,28 @@ static struct AdaptiveShm *shm_setup(void)
         fd = shm_open(name, O_RDWR, 0600);
         if (fd < 0)
             return nullptr;
+        /* wait until the creator has sized the object: an undersized
+         * mapping would fault on first touch.  Poll st_size with the fd
+         * still open (fd is closed right after mmap below, so this must
+         * happen here).  A healthy creator sizes within microseconds of
+         * our EEXIST, so the wait costs one fstat; the 500000 x 10us
+         * bound is 5s in nominal arithmetic but ~31s measured on the
+         * dev host (timer slack makes usleep(10) cost ~60us) and
+         * stretches further under load — on timeout give up and return
+         * nullptr (pick_combo's shm==nullptr path idles the child). */
+        struct stat st;
+        bool sized = false;
+        for (int i = 0; i < 500000; i++) {
+            if (fstat(fd, &st) == 0 && st.st_size >= (off_t)sizeof(struct AdaptiveShm)) {
+                sized = true;
+                break;
+            }
+            usleep(10);
+        }
+        if (!sized) {
+            close(fd);
+            return nullptr;
+        }
     }
 
     if (creator && ftruncate(fd, sizeof(struct AdaptiveShm)) != 0) {
