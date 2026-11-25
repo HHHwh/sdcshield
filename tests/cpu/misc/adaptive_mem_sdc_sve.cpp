@@ -17,6 +17,14 @@
  * §8): this host (Kunpeng 920, ARMv8.1-A) cannot execute these paths.
  * The compile gate + objdump gate prove encoding-level correctness
  * only.
+ * 2026-11-25: the store section is the NEON-mirror COPY CHAIN (str
+ * axis = chain length, str4 = the A->B->C->A->B->A cycle) with the
+ * runtime footprint tier plumbed through ctx->count.  HONEST BOUNDARY
+ * (user directive 2026-11-25): SVE runtime legs are NOT validated now —
+ * gem5-fi SE legs are deferred to a later campaign; this host has no
+ * SVE, so today's proof is the compile gate + the objdump chain gate
+ * (per-body 8 loads / 6 stores, st→ld adjacency ≥5 — real reloads, not
+ * IR-level store-forwarded copies).
  *
  * SVE idiom note: sizeless types forbid pointer arithmetic, so buffers
  * are PLAIN element arrays; vector i of a u64 buffer lives at
@@ -28,6 +36,7 @@
 
 #include "sandstone.h"
 #include "adaptive_mem_sdc.h"
+#include "adaptive_mem_sdc_detect.h"
 
 #include <arm_sve.h>
 
@@ -45,6 +54,8 @@ struct SveCtx {
     int combo;
     int isa;                             /* 1=SVE 2=SVE2 (report tag) */
     int test_mode;                       /* survey mode: per-child exit, not global flag */
+    int count;                           /* elements per buffer (runtime tier, 2026-11-25) */
+    int cpu;
     uint64_t sweep;
     void *srcA, *srcB, *srcC, *scratch, *expected;
     void *temp, *dst, *junk1, *junk2;
@@ -81,6 +92,29 @@ static inline void svst64(svbool_t pg, uint64_t *addr, svuint64_t v)
 static inline void svst32(svbool_t pg, uint32_t *addr, svuint32_t v)
 {
     svst1_u32(pg, addr, v);
+}
+
+/* Chain-reload guard (2026-11-25): the empty-asm "w"-input guard above
+ * keeps a DEAD load alive but does NOT prevent GCC from satisfying a
+ * load adjacent to a same-address store via IR-level store→load
+ * forwarding (objdump gate caught it: 0 reloads emitted).  The memory
+ * clobber BEFORE the load makes GCC assume the barrier may have
+ * overwritten [addr], so the reload MUST re-read memory — a real
+ * store→load forwarding window in the machine code, like the NEON
+ * engine's asm-volatile ldr. */
+static inline svuint64_t svchain_ld64(svbool_t pg, const uint64_t *addr)
+{
+    __asm__ volatile ("" : : : "memory");
+    svuint64_t v = svld1_u64(pg, addr);
+    __asm__ volatile ("" : : "w"(v) : "memory");
+    return v;
+}
+static inline svuint32_t svchain_ld32(svbool_t pg, const uint32_t *addr)
+{
+    __asm__ volatile ("" : : : "memory");
+    svuint32_t v = svld1_u32(pg, addr);
+    __asm__ volatile ("" : : "w"(v) : "memory");
+    return v;
 }
 
 /* ---- slot ops (i%4), _x (unpredicated) forms, formulas per spec §3 ---- */
@@ -182,13 +216,23 @@ static inline svuint64_t sub_rot3(svbool_t pg, int slot, svuint64_t a, svuint64_
     }
 }
 
+static int sve_check_buffer(struct SveCtx *ctx, const struct SveGeom *g,
+                            const char *name, const void *actual, size_t lane_bytes)
+{
+    const AdaptiveSdcLocation location = {
+        ctx->isa == 2 ? "SVE2" : "SVE", "sve_hot_sweep", ctx->combo, ctx->cpu,
+        ctx->sweep, g->vl_bytes, lane_bytes, 0
+    };
+    return adaptive_sdc_check_bytes(&location, name, actual, ctx->expected,
+                                    static_cast<size_t>(ctx->count) * g->vl_bytes);
+}
+
 /* ---- hot sweep: one full sweep (ADAPT_COUNT vectors), noinline ----
  * u64-path: vector i at &buf[i * lanes64]; u32-path: &buf[i * lanes32] */
 template <AdaptLoad LOAD, int LDR, int STR, AdaptSweep SWEEP>
 static bool __attribute__((noinline)) sve_hot_sweep(struct SveCtx *ctx, const struct SveGeom *g)
 {
     constexpr bool is_u32 = (LOAD == LOAD_MLA);
-    const size_t bytes = ADAPT_COUNT * g->vl_bytes;
     bool clean = true;
 
     if constexpr (is_u32) {
@@ -204,8 +248,8 @@ static bool __attribute__((noinline)) sve_hot_sweep(struct SveCtx *ctx, const st
         const uint64_t lanes = g->lanes32;
 
         const bool descending = (SWEEP == SWEEP_ALT) && ((ctx->sweep & 1) != 0);
-        for (int n = 0; n < ADAPT_COUNT; n++) {
-            const int i = descending ? (ADAPT_COUNT - 1 - n) : n;
+        for (int n = 0; n < ctx->count; n++) {
+            const int i = descending ? (ctx->count - 1 - n) : n;
             const uint64_t off = i * lanes;
             svuint32_t unused_x = svld_guard32(pg, scratch + off);
             (void)unused_x;
@@ -221,10 +265,26 @@ static bool __attribute__((noinline)) sve_hot_sweep(struct SveCtx *ctx, const st
             } else {
                 res = mla_rot(pg, i % 4, a, b);
             }
+            /* 2026-11-25 copy chain (NEON mirror): str2/3/4 = 2/3/6 chained
+             * copies; every link reloads the just-stored address through
+             * the same svld_guard asm-volatile (no compiler register
+             * forwarding); sources stay read-only, dst is the sink. */
+            svuint32_t chain_t;
             svst32(pg, temp + off, res);
-            if constexpr (STR >= 3) svst32(pg, junk1 + off, res);
-            if constexpr (STR >= 4) svst32(pg, junk2 + off, res);
-            svst32(pg, dst + off, res);
+            chain_t = svchain_ld32(pg, temp + off);
+            if constexpr (STR >= 3) {
+                svst32(pg, junk1 + off, chain_t);
+                chain_t = svchain_ld32(pg, junk1 + off);
+            }
+            if constexpr (STR >= 4) {
+                svst32(pg, junk2 + off, chain_t);
+                chain_t = svchain_ld32(pg, junk2 + off);
+                svst32(pg, temp + off, chain_t);
+                chain_t = svchain_ld32(pg, temp + off);
+                svst32(pg, junk1 + off, chain_t);
+                chain_t = svchain_ld32(pg, junk1 + off);
+            }
+            svst32(pg, dst + off, chain_t);
         }
     } else {
         auto *srcA = static_cast<uint64_t *>(ctx->srcA);
@@ -239,8 +299,8 @@ static bool __attribute__((noinline)) sve_hot_sweep(struct SveCtx *ctx, const st
         const uint64_t lanes = g->lanes64;
 
         const bool descending = (SWEEP == SWEEP_ALT) && ((ctx->sweep & 1) != 0);
-        for (int n = 0; n < ADAPT_COUNT; n++) {
-            const int i = descending ? (ADAPT_COUNT - 1 - n) : n;
+        for (int n = 0; n < ctx->count; n++) {
+            const int i = descending ? (ctx->count - 1 - n) : n;
             const uint64_t off = i * lanes;
             svuint64_t unused_x = svld_guard64(pg, scratch + off);
             (void)unused_x;
@@ -260,29 +320,51 @@ static bool __attribute__((noinline)) sve_hot_sweep(struct SveCtx *ctx, const st
                 else if constexpr (LOAD == LOAD_INTROT)  res = int_rot(pg, i % 4, a, b);
                 else                                     res = sub_rot(pg, i % 4, a, b);
             }
+            /* 2026-11-25 copy chain (NEON mirror): str2/3/4 = 2/3/6 chained
+             * copies; every link reloads the just-stored address through
+             * the same svld_guard asm-volatile (no compiler register
+             * forwarding); sources stay read-only, dst is the sink.
+             * str4 = the literal A->B->C->A->B->A cycle (temp/junk1/junk2
+             * circulation) with dst closing the chain. */
+            svuint64_t chain_t;
             svst64(pg, temp + off, res);
-            if constexpr (STR >= 3) svst64(pg, junk1 + off, res);
-            if constexpr (STR >= 4) svst64(pg, junk2 + off, res);
-            svst64(pg, dst + off, res);
+            chain_t = svchain_ld64(pg, temp + off);
+            if constexpr (STR >= 3) {
+                svst64(pg, junk1 + off, chain_t);
+                chain_t = svchain_ld64(pg, junk1 + off);
+            }
+            if constexpr (STR >= 4) {
+                svst64(pg, junk2 + off, chain_t);
+                chain_t = svchain_ld64(pg, junk2 + off);
+                svst64(pg, temp + off, chain_t);
+                chain_t = svchain_ld64(pg, temp + off);
+                svst64(pg, junk1 + off, chain_t);
+                chain_t = svchain_ld64(pg, junk1 + off);
+            }
+            svst64(pg, dst + off, chain_t);
         }
     }
+    /* Check every chain destination even after a mismatch: one sweep may
+     * contain independent corruption in more than one buffer. */
+    constexpr size_t lane_bytes = is_u32 ? sizeof(uint32_t) : sizeof(uint64_t);
+    clean &= sve_check_buffer(ctx, g, "temp", ctx->temp, lane_bytes);
+    if constexpr (STR >= 3)
+        clean &= sve_check_buffer(ctx, g, "junk1", ctx->junk1, lane_bytes);
+    if constexpr (STR >= 4)
+        clean &= sve_check_buffer(ctx, g, "junk2", ctx->junk2, lane_bytes);
+    clean &= sve_check_buffer(ctx, g, "dst", ctx->dst, lane_bytes);
     ctx->sweep++;
-
-    auto *expected = static_cast<uint8_t *>(ctx->expected);
-    auto *dstb = static_cast<uint8_t *>(ctx->dst);
-    if (memcmp(dstb, expected, bytes) != 0)
-        clean = false;
 
     if (!clean) {
         const struct ComboDef &cd = kComboTable[ctx->combo];
-        /* set the cross-child flag BEFORE the noreturn report */
+        /* stop sibling children before spending time on the cold diagnostics */
         __atomic_store_n(&ctx->shm->sdc_flag, 1u, __ATOMIC_RELEASE);
         /* vl in the tag: on-machine trio diagnostics key field */
-        report_fail_msg("adaptive_mem_sdc combo#%d [%s/vl%dB/%s/ldr%d/str%d/%s] data miscompare",
+        report_fail_msg("adaptive_mem_sdc combo#%d [%s/vl%dB/%s/ldr%d/str%d/%s/count%dK] data miscompare",
                         ctx->combo, ctx->isa == 2 ? "SVE2" : "SVE",
                         (int)g->vl_bytes,
                         cd.dt == DT_FP64 ? "fp64" : "int",
-                        cd.ldr, cd.str, cd.label);
+                        cd.ldr, cd.str, cd.label, ctx->count / 1024);
     }
 
     /* Exit condition.  Combat: the global sdc_flag stops this child once
@@ -326,7 +408,7 @@ static const SveSweepFn sve_by_lts[5][2][3] = {
 static void __attribute__((noinline)) sve_fill_golden(struct SveCtx *ctx, const struct SveGeom *g)
 {
     const struct ComboDef &cd = kComboTable[ctx->combo];
-    const size_t bytes = ADAPT_COUNT * g->vl_bytes;
+    const size_t bytes = (size_t)ctx->count * g->vl_bytes;
 
     memset_random(ctx->srcA, bytes);
     memset_random(ctx->srcB, bytes);
@@ -364,7 +446,7 @@ static void __attribute__((noinline)) sve_fill_golden(struct SveCtx *ctx, const 
         auto *E = static_cast<uint32_t *>(ctx->expected);
         const svbool_t pg = svptrue_b32();
         const uint64_t lanes = g->lanes32;
-        for (int i = 0; i < ADAPT_COUNT; i++) {
+        for (int i = 0; i < ctx->count; i++) {
             const uint64_t off = i * lanes;
             svuint32_t a = svld_guard32(pg, A + off);
             svuint32_t b = svld_guard32(pg, B + off);
@@ -380,7 +462,7 @@ static void __attribute__((noinline)) sve_fill_golden(struct SveCtx *ctx, const 
         auto *E = static_cast<uint64_t *>(ctx->expected);
         const svbool_t pg = svptrue_b64();
         const uint64_t lanes = g->lanes64;
-        for (int i = 0; i < ADAPT_COUNT; i++) {
+        for (int i = 0; i < ctx->count; i++) {
             const uint64_t off = i * lanes;
             svuint64_t a = svld_guard64(pg, A + off);
             svuint64_t b = svld_guard64(pg, B + off);
@@ -414,9 +496,16 @@ static void __attribute__((noinline)) sve_fill_golden(struct SveCtx *ctx, const 
     }
 }
 
+/* RDVL element width in bytes — consumed by the init-time memory guard
+ * (adaptive_mem_sdc.cpp pick_count) ONLY after HWCAP advertised SVE.
+ * VL1024 -> 128. */
+extern "C" int adaptive_sve_probe_vl_bytes(void)
+{
+    return (int)svcntb();
+}
+
 extern "C" int adaptive_sve_run_combo(struct test *test, int cpu, int combo)
 {
-    (void)cpu;
     if (combo < 0 || combo >= ADAPT_COMBO_COUNT)
         return EXIT_SUCCESS;
 
@@ -429,13 +518,15 @@ extern "C" int adaptive_sve_run_combo(struct test *test, int cpu, int combo)
     ctx.combo = combo;
     ctx.isa = mdata ? mdata->isa : 1;
     ctx.test_mode = mdata ? mdata->test_mode : 0;
+    ctx.count = mdata ? mdata->count : ADAPT_COUNT;
+    ctx.cpu = cpu;
 
     struct SveGeom g;
     g.lanes64 = svcntd();
     g.lanes32 = svcntw();
     g.vl_bytes = svcntb();
 
-    const size_t bytes = ADAPT_COUNT * g.vl_bytes;
+    const size_t bytes = (size_t)ctx.count * g.vl_bytes;
     ctx.srcA     = aligned_alloc(64, bytes);
     ctx.srcB     = aligned_alloc(64, bytes);
     ctx.srcC     = aligned_alloc(64, bytes);
@@ -473,6 +564,12 @@ extern "C" int adaptive_sve_run_combo(struct test *test, int cpu, int combo)
 {
     (void)test; (void)cpu; (void)combo;
     return EXIT_SUCCESS;
+}
+
+/* never executed on non-aarch64 (meson aarch64 gate); link completeness */
+extern "C" int adaptive_sve_probe_vl_bytes(void)
+{
+    return 16;
 }
 
 #endif

@@ -36,6 +36,8 @@ routes you; consult it before guessing.
 4. **Plan-driven** — anything beyond a single obvious line: invoke
    `superpowers:writing-plans` first, plan under
    `docs/superpowers/plans/YYYY-MM-DD-<feature>.md`. No plan, no code.
+   例外（用户裁定 2026-11-25）：简单问题直接做，不走 writing-plans
+   （例：研究仓逐字节回迁、单点小改、显而易见修复）。
 5. **x86-64 untouched** — the port is additive (`#elif __aarch64__`, per-arch
    meson guards); widen `#ifdef __x86_64__` to include `__aarch64__` only
    where genuinely shared.

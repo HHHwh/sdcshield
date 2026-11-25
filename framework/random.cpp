@@ -440,9 +440,22 @@ __uint128_t EngineWrapper<aes_engine>::generate128(thread_rng *generator)
 /*
  * ARM equivalent of the x86 aes_engine. Uses the AArch64 NEON AES
  * instructions (AESE + AESMC) instead of the Intel AESENC intrinsic.
- * vaesmcq_u8(vaeseq_u8(data, key)) is the ARM counterpart to
- * _mm_aesenc_si128(data, key) (one AES round: SubBytes/ShiftRows/
- * AddRoundKey followed by MixColumns).
+ *
+ * NOTE: AESE(data, key) is NOT the AESENC(data, key) counterpart —
+ * ARM AESE folds the round key in BEFORE SubBytes
+ * (AESE = ShiftRows(SubBytes(data ^ key))), while x86 AESENC applies it
+ * AFTER (MixColumns(ShiftRows(SubBytes(data))) ^ key).  With this
+ * engine's state[1] = ~state[0] construction that placement matters:
+ * the zeroth round input is pattern ^ ~pattern = 0xff..f, so the FIRST
+ * AESE+AESMC output is the CONSTANT 0x1616..16 regardless of seed
+ * (adversarial review 2026-11-25, exposed quantitatively by
+ * adaptive_mem_sdc's weighted footprint tier draw).  The constructor
+ * therefore advances the engine once and consumes the degenerate
+ * output: every value returned through the public interface is
+ * seed-dependent, and the visible stream is bit-identical to what this
+ * engine always produced from its second draw on.  sdcshield is an
+ * ARM64-only fork, so the streams are not kept portable to the x86
+ * AESENC twin (user ruling 2026-11-25).
  *
  * The +crypto target attribute enables the AES instructions for just
  * this engine on a generic AArch64 build (mirroring x86's
@@ -458,6 +471,13 @@ struct aes_engine
         uint8x16_t pattern = vld1q_u8(reinterpret_cast<const uint8_t *>(&sseq));
         state[0] = pattern;
         state[1] = veorq_u8(pattern, vdupq_n_u8(0xff));
+        // state[1] = ~state[0] makes the zeroth round input
+        // pattern ^ ~pattern = 0xff..f, whose AESE+AESMC output is the
+        // seed-INdependent constant 0x1616..16 (see the block comment).
+        // Advance once at construction and consume the degenerate value:
+        // the public stream then starts at the round that has always been
+        // seed-dependent, bit-identical to the old engine's second draw.
+        generateM128();
     }
 
 #if defined(__clang__)

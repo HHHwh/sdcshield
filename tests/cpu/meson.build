@@ -328,14 +328,25 @@ tests_set_base.add(
 #   - cache/cachebounce_sdc, cache_stress_civac (dc civac asm),
 #     memory/mem_disambig_alu (store-forwarding discrimination probe)
 # The 2026-11-16 import brings misc/adaptive_mem_sdc (3-file byte-identical
-# migration from the research repo's working tree): adaptive 30-combo
-# rotation SDC test — NEON engine + DECLARE_TEST here, SVE/SVE2 engine TU
-# in the dedicated tests_sve_adaptive static_library below (see the SVE
-# library block). HWCAP ladder SVE2>SVE>NEON self-selects at runtime.
+# migration from the research repo's working tree).  The 2026-11-25 second
+# backport (research working-tree snapshot, NOT byte-identical: the #868
+# latecomer fstat gate and the @test parblock are autoci-only and were
+# re-applied on top) redefines the str axis as chained copies (str2/3/4 =
+# 2/3/6 copies with asm-volatile reloads), adds the {64K..512K} runtime
+# footprint tiers under a MemAvailable guard, the opt-in PROFILE=stress|soak
+# engine (adaptive_mem_sdc_stress.cpp) and the shared adaptive_sdc_*
+# forensics library (adaptive_mem_sdc_detect.cpp/.h — both support TUs with
+# no DECLARE_TEST of their own; the DECLARE_TEST stays adaptive_mem_sdc):
+# 36-combo rotation SDC test — NEON engine + DECLARE_TEST here, SVE/SVE2
+# engine TU in the dedicated tests_sve_adaptive static_library below (see
+# the SVE library block). HWCAP ladder SVE2>SVE>NEON self-selects at
+# runtime; PROFILE!=standard bypasses ISA routing into the stress engine.
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
             'misc/adaptive_mem_sdc.cpp',
+            'misc/adaptive_mem_sdc_detect.cpp',
+            'misc/adaptive_mem_sdc_stress.cpp',
             'misc/fmov_train_3ldp_stp.cpp',
             'misc/fmov_train_3ldr_str.cpp',
             'misc/fmov_train_ldr_str.cpp',

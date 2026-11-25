@@ -33,12 +33,26 @@ enum AdaptSweep { SWEEP_ALT, SWEEP_MONO };
 
 #define ADAPT_COMBO_COUNT 36
 #define ADAPT_SLICE_SECONDS 1800
-#define ADAPT_COUNT 1024                 /* elements per buffer, family convention */
+/* Fallback element count for the engine defensive path only (test->data
+ * missing); the REAL footprint is drawn at test_init (2026-11-25):
+ * elements-per-buffer tiers {64K, 128K, 256K, 512K} weighted 40/30/20/10
+ * (512K highest), then memory-guarded — ncpu × 9 buffers × count ×
+ * elem_bytes (16 on NEON, svcntb() on SVE) must fit MemAvailable × 0.8;
+ * over-budget random picks downgrade to the largest tier that fits, a 64K
+ * that still does not fit skips the test honestly (EXIT_SKIP, rule 6).
+ * ADAPTIVE_MEM_SDC_COUNT={64|128|256|512} pins one tier and BYPASSES the
+ * downgrade (stderr warning when over budget — explicit operator intent
+ * keeps campaign determinism); ADAPTIVE_MEM_SDC_MEM_BUDGET_MB overrides
+ * the MemAvailable input (verification/ops).  The EFFECTIVE tier rides
+ * the fail tag ([.../count%dK]) and the COVFILE 6th column. */
+#define ADAPT_COUNT 1024
 
 struct ComboDef {
     enum AdaptDtype dt;
     int ldr;                             /* independent ALU sources: 2 or 3 */
-    int str;                             /* stores per element: 2/3/4, dst last */
+    int str;                             /* chained copies per element (2026-11-25: str axis = chain length) —
+                                            str2 = 2 copies, str3 = 3, str4 = 6 (the literal A->B->C->A->B->A cycle);
+                                            every link reloads the just-stored address, dst is the sink */
     enum AdaptLoad load;
     const char *label;
 };
@@ -78,6 +92,9 @@ struct AdaptiveShm {
 struct test;
 int adaptive_neon_run_combo(struct test *test, int cpu, int combo);
 int adaptive_sve_run_combo(struct test *test, int cpu, int combo);
+/* RDVL element width in bytes (svcntb()).  Defined in the SVE TU; the
+ * init-time memory guard calls it ONLY after HWCAP advertised SVE. */
+int adaptive_sve_probe_vl_bytes(void);
 
 /* Per-child plumbing state (test->data), shared by both engine TUs */
 struct AdaptiveMemSdcData {
@@ -90,6 +107,8 @@ struct AdaptiveMemSdcData {
                                           * keep running after detections, idle
                                           * after the last slot) */
     int test_slice;                      /* test-mode slice seconds (default 600) */
+    int count;                           /* effective footprint tier, elements (2026-11-25) */
+    int profile;                         /* 0=standard, 1=stress, 2=soak */
 };
 
 #ifdef __cplusplus
