@@ -1701,3 +1701,6 @@ subdir('arm64/sdc_fuzzing')
 # self-gating pattern as arm64/ above: the subdir's own meson.build wraps
 # everything in the aarch64 guard, so x86-64 is untouched.
 subdir('sve')
+# fmov/: LDP/STP 拷贝探针族 + adaptive_ldp_stp 引擎（346 套件
+# SIMDFPLoadStoreMemLoopCpy 谱系）。同上自门控模式，x86-64 untouched。
+subdir('fmov')

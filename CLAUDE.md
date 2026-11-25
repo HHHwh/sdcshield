@@ -90,6 +90,13 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               2026-11-23 实测 521/630/634（回迁前当日基线
                                                #               517/626/630，与 11-18 522 间 main 退役/新增
                                                #               推算链不可精确拼接，以实测为准）。
+                                               #   +fmov 目录 10 件（11-25，346 套件
+                                               #               SIMDFPLoadStoreMemLoopCpy 谱系 LDP/STP
+                                               #               拷贝探针族：P05 乒乓轮换 ALU / P06 5a_a5
+                                               #               数据面 / P08 纯拷贝基线 / P13 双源 EXT
+                                               #               × asm/intr 判别对 + adaptive_ldp_stp
+                                               #               双引擎 54/27 组合，研究仓逐字节回迁）
+                                               #               → 0102 主机 2026-11-25 实测 531/640/644。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
