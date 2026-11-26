@@ -4,21 +4,21 @@
 
 ## 0. 口径与边界
 
-- **覆盖范围**：aarch64 构建编译注册的全部 868 个用例（二进制 `tests` section 实例机械计数：152816B/176B=868，`nm | grep ^_test_` 同数对账）。
-- **三层构成**：本机可见可执行 652（`--quality=-1 --list-tests`，no-SVE 鲲鹏 920 / 192 线程 / 754GB / openEuler 24.03）；spec 门控隐藏 216（SVE/SVE2/SME——本机无 SVE，`-e` 显式注册时诚实 SKIP，实测 skip-reason `test compiled with sve`）；notbuilt 21（退役未删源 `arm0102_*` 基础 10 + gpu/idxd/ifs/framework 自检等纯 x86 源，不入本表）。
+- **覆盖范围**：aarch64 构建编译注册的全部 868 个用例（`nm` `_test_*` 符号 868；`tests` section 152592B÷176B=867 实例 + 第 868 件 `mce_check` 经 `DECLARE_MANUAL_TEST`（无 section 属性）落 `.data`——见 framework/sandstone.h:179）。
+- **三层构成（868）**：①名单可见 652（`--quality=-1 --list-tests`，no-SVE 鲲鹏 920 / 192 线程 / 754GB / openEuler 24.03；其中 628 例本机实测执行、24 例运行期如实 SKIP——vmx 9 / ist 3 / zero_control 3 / SVE 编译门 7 / HLE·uscat 等）；②spec 门控隐藏 215（SVE/SVE2/SME——本机无 SVE，`-e` 显式注册时诚实 SKIP，实测 skip-reason `test compiled with sve`）；③`DECLARE_MANUAL_TEST` 1 件（`mce_check`：不进名单、由 special_tests 恒插每个 run 末尾、本机实测 4.2ms pass）。notbuilt 21（退役未删源 `arm0102_*` 基础 10 + gpu/idxd/ifs/framework 自检等纯 x86 源）不入本表。
 - **计时口径**：单轮 = 一次 fracture 片的 `test-runtime`；轮次 = `-t 2000` 窗口内完成的片数（`--full-log` 实测）。`desired_duration` 语义：-1 = run-once、0 = 默认窗口、INT_MAX = 永跑。`mesh_upi_sse_sym` 因定幅缺陷（物存×9/10÷2 无分母，`mesh_upi_sse_sym.cpp:70`）单独以 `SDC_MESH_BUFFER_BYTES=1GiB` 限幅实测，标注于行内。
-- **复现情况四分类**：①直接复现器（为已知故障签名定向编写）②注入自检实证（注入被检出证明检测能力，非实机复现）③实机 SDC 关联/运行史 ④gem5-fi 功能验证 ⑤无记录。gem5 功能验证 ≠ SDC 复现，绝不混写。
-- **诚实边界**：0102 本机 7×24 战役（2026-10-11/12 谱系腿）daily_summary 原文「事件数: 0 / fail/crash 文件数: 0」——战役期检测阴性如实记；隐藏 216 例计时列无本机实测。
+- **复现情况五档分类**：①直接复现器（为已知故障签名定向编写）②注入自检实证（注入被检出证明检测能力，非实机复现）③实机 SDC 关联/运行史 ④gem5-fi 功能验证 ⑤无记录。gem5 功能验证 ≠ SDC 复现，绝不混写。
+- **诚实边界**：0102 本机 7×24 战役（2026-10-11/12 谱系腿）daily_summary 原文「事件数: 0 / fail/crash 文件数: 0」——战役期检测阴性如实记；隐藏 215 例计时列无本机实测（spec 门控不执行，仅源码/他机/gem5 证据）。
 
 ## 1. 测试域总览
 
 | 测试域 | 用例数 | 代表用例 | 单轮执行时间跨度（本机实测） | SDC 检测能力 | 复现情况 |
 |---|---|---|---|---|---|
-| 内存拷贝与一致性 | 55 | memcpy_l1d_cache_size、memcpy_rewr、mem_disambiguation、mmu_split_tlb_arm、adaptive_mem_sdc | 4.5ms – 15.3s | NEON/标量 memcpy 全 cache 级谱系 + store 消歧/转发/序一致性 + MMU/TLB 扰动 + MPSC 多生产者拷贝；逐字节 memcmp/哨兵回读 | ②×15 ⑤×40 |
-| 内存访问模式 | 9 | random_access_sweep、low_load_cache_pressure、ma_alu_fixed | 2001.1ms – 2.0s | 大 mmap 随机偏移/块长扫掠 + 低占空比跨核扫；NEON RMW 字节精确校验 | ①×9 |
+| 内存拷贝与一致性 | 55 | memcpy_l1d_cache_size、memcpy_l2_cache_size、memcpy_rewr、mem_disambiguation、adaptive_mem_sdc | 4.5ms – 15.3s | NEON/标量 memcpy 全 cache 级谱系 + store 消歧/转发/序一致性 + MPSC 多生产者拷贝 + 大 mmap 随机扫掠/低占空比跨核件；逐字节 memcmp/哨兵回读 | ②×15 ⑤×40 |
+| 内存访问模式 | 9 | ma_alu_fixed、ma_ldr_random、ma_copy_stream、ma_nt（按实测故障签名定向的 ma_* 9 件族） | 2001.1ms – 2.0s | ma_* 9 件定向访存判别族（按用户实测故障签名定向编写：负载结束后连续访存对第二个写回错位等）；期望值预存比对 | ①×9 |
 | FP64 数据面（cache 读扫描族） | 41 | avx512_read_only_neon_fp64、sse_read_L3_neon_fp64、arm_add 探针 FP64 判别臂 | 4.5ms – 2.6s | FP64 只读/对称扫描压 L1→L3→DRAM + arm_add 探针 FP64 判别臂；双引擎/哨兵校验（arm_add 注入 7/7 检出） | ②×12 ⑤×29 |
-| 缓存与 L3 跨核互联 | 39 | cachebounce_neon、L3_cache_920 谱系（avx2/sse 读扫描 + adaptive_l3_sdc） | 4.6ms – 2.7s | L3_cache_920 30 件谱系（标量/NEON/FP64/自适应引擎）+ cachebounce 跨核弹跳 + DC-CIVAC 冲刷干扰对；sum/element-exact 收口 | ①×1 ②×1 ③×2 ④×22 ⑤×13 |
-| MESH/UPI 互联（NEON） | 19 | mesh_upi_avx_sym、mesh_upi_avx512_symm_f64、mesh_upi_sse_sym（定幅缺陷件） | 4.1ms – 2.8s | 多核互读/对称/非对称访存协同（int32/FP64）；MD5/聚合校验；含同族已知零检出件如实标注 | ③×4 ⑤×15 |
+| 缓存与 L3 跨核互联 | 39 | cachebounce、cachebounce_sdc、adaptive_l3_sdc、avx2_read_L3_int（L3_cache_920 谱系） | 4.6ms – 2.7s | L3_cache_920 30 件谱系（标量/NEON/FP64/自适应引擎）+ cachebounce 跨核弹跳 + DC-CIVAC 冲刷干扰对；sum/element-exact 收口 | ①×1 ②×1 ③×2 ④×22 ⑤×13 |
+| MESH/UPI 互联（NEON） | 19 | mesh_upi_avx2_symm_int、mesh_upi_avx_sym、mesh_upi_sse_sym（定幅缺陷件） | 4.1ms – 2.8s | 多核互读/对称/非对称访存协同（int32/FP64）；MD5/聚合校验；含同族已知零检出件如实标注 | ③×4 ⑤×15 |
 | MESH/UPI 互联（SVE） | 18 | mesh_upi_sve_sym、mesh_upi_sve_read_only_int | 全隐藏，无本机实测 | 同族 SVE 判别臂（18 件）；3 件写侧自认合法配置零检出（#357/#358） | ⑤×18 |
 | 锁与原子 | 48 | lockless_cmpxchg_ring、spinlock_stale_read、neon_lock 槽校验族 | 2.3ms – 125.4s | 真 ldaxr/stxr 接力、无锁 cmpxchg、自旋竞争、NEON 锁槽校验器；neon_lock 13 件注入自检实证（61393685） | ①×3 ②×13 ⑤×32 |
 | 虚拟化 | 9 | vmx_vmexit_cpuid（ARM64 占位诚实 SKIP） | 2.0–2.3ms | ARM64 全为占位诚实 SKIP（no VT-x/VMX）——如实零检测能力 | ⑤×9 |
@@ -31,7 +31,7 @@
 | 压缩 | 10 | zstd19、zlib9、isal_igzip、zfuzz | 25.0ms – 2.2s | zlib/zstd 压缩-解压往返 + isa-l deflate/inflate；往返逐字节 memcmp | ⑤×10 |
 | 哈希摘要（OpenSSL） | 3 | openssl_sha、openssl_sha3、openssl_sm3sm4 | 111.9ms – 11.4s | SHA-2 加法链、SHA-3/Keccak、SM3/SM4 国密通路 vs 标准向量 | ⑤×3 |
 | IPSec/密码（NEON） | 46 | ipsec_aes256_cbc_sha2_256_avx、ipsec_aes128_gcm_*、ipsec_3des_docsis_* | 401.2ms – 2.3s | OpenSSL EVP 全家（AES-CBC/CTR/GCM/CMAC/XCBC + HMAC）；每迭代重掷明文 + 同源重算三/四重逐字节 memcmp | ⑤×46 |
-| IPSec/密码（SVE） | 24 | ipsec_*_sve 多流 HMAC 17 件、ipsec_*_sve_wide EVP 7 件 | 可见件计时待注入 | 同族 SVE 臂 + 17 件多流 HMAC（流数=lane 数，gem5-fi 四档 16-run 字节级实证） | ④×17 ⑤×7 |
+| IPSec/密码（SVE） | 24 | ipsec_*_sve 多流 HMAC 17 件、ipsec_*_sve_wide EVP 7 件 | 7 可见件实测 SKIP（SVE 编译门）；17 例隐藏无实测 | 同族 SVE 臂 + 17 件多流 HMAC（流数=lane 数，gem5-fi 四档 16-run 字节级实证） | ④×17 ⑤×7 |
 | 线性代数（Eigen） | 47 | eigen_svd_double、eigen_gemm_cdouble_dynamic_square、eigen_svd_jacobi、eigen_sparse | 402.3ms – 145.9s（另 28 例隐藏无实测） | BDCSVD/Jacobi SVD、GEMM 四 dtype、稀疏 Cholesky；同源 per-thread 重算 golden + isApprox 判别（满核假阳已修复） | ③×2 ④×45 |
 | 数学库（SLEEF/OpenBLAS/pocketFFT/ACL） | 10 | sleef_neon、openblas_dgemm、openblas_lu、pocketfft_fft、acl_gemm | 8.0ms – 242.5s（另 2 例隐藏无实测） | SLEEF 多项式 FMA 依赖链、OpenBLAS NEON 微核 GEMM/LU 三重比对、pocketfft Bluestein 蝶形、ACL NEGEMM（唯一容差件 1e-4f） | ④×2 ⑤×8 |
 | ARM64 SDC 专项 | 39 | arm64_sdc、power_virus_dit、sve512_f64_chain_arm、sve2_cross_precision_arm、arm_add 7 探针 | 4.1ms – 2.1s（另 22 例隐藏无实测） | arm64_sdc di/dt 电压病毒、乱序依赖链、LSU/L2C/MMU 谱系、FPCR 舍入×FZ 笛卡尔、sve512 族（cn23154 真机首验）、SME ZA（软件不可见诚实 SKIP）、arm_add 7 探针（注入 7/7） | ①×10 ②×1 ③×4 ④×14 ⑤×10 |
@@ -45,7 +45,7 @@
 | 调度与中断风暴 | 4 | sched_storm_baseline（179 调度 panic 证伪腿） | 286.9ms – 2.9s | sched_storm 四件（baseline/futex/hybrid/thread）BETA 级；调度风暴下数据一致性 | ③×4 |
 | 平台监控与 RAS | 2 | smi_count、mce_check | 4.2ms – 2.0s | smi_count CNTVCT 时间毛刺地图（INFO 级不判失败）+ mce_check EDAC ce/ue 实数统计（真实测试必过） | ⑤×2 |
 | 硬件自检占位（IST） | 3 | ist、ist_array、ist_sbaf | 1.4–1.7ms | ARM64 In-Silicon Test 后端未实现——占位诚实 SKIP | ⑤×3 |
-| SVE 移植套件（avx 谱系） | 61 | fma_tail_sve、mesh_upi_sve_*、ipsec_*_sve、kreg_sve | 全隐藏，无本机实测 | avx53 命名 SVE1 移植（fma/mesh/ipsec/kreg/vector/rot 等）+ crt_builtins_sve；负载环境与 golden 模式全保留 | ①×13 ②×1 ④×40 ⑤×7 |
+| SVE 移植套件（avx 谱系） | 61 | adcx_sve、adcxlong_sve、fma_tail_sve、arm0102_kreg_logic_sve（本域 61 件；mesh/ipsec 的 _sve 臂在 §2.5/§2.18 域） | 全隐藏，无本机实测 | avx53 命名 SVE1 移植（fma/mesh/ipsec/kreg/vector/rot 等）+ crt_builtins_sve；负载环境与 golden 模式全保留 | ①×13 ②×1 ④×40 ⑤×7 |
 | 杂项移植与专项探针 | 4 | loop_check_m、mite、probe_asm_fwd_* | 42.6ms – 2.1s | loop_check_m/mite/movdq2q 等零散移植件；回读或重算校验 | ①×2 ⑤×2 |
 
 ## 2. 逐域明细（868 例全量）
@@ -1060,7 +1060,7 @@
 | `mem_disambig_alu_sve` | PROD（SVE） | —（本机无 SVE，spec 门控不执行） | 数据依赖地址满宽 svst1_u64（svdup res 广播）→ asm ldr z 立即回读；ALU {^,+,&,-} i%4 旋转（ALU 非探针对象，随机地址才是）→lane 级 svcmpne 检测 + 失配 spill 双向量逐 lane golden/actual/xor dump + report_fail | ⑤无记录；源 missing_testcases_20261009（d9bea0e3 迁移）；6902536c #366 sizing 按线程均摊+跨度改裸 mmap 绕框架 malloc 清零风暴（实测孤儿 RSS 52GiB 修复）；4cdbb34f 文档收尾 | 512 模式 init 期抽取重放（原件语义）；跨度裸 mmap+MADV_NOHUGEPAGE+预触 512 访问窗（RSS 上界 ≤4MiB/线程，与 THP 策略解耦）；644b6b1a cold-path bit dump；vs mrn 家族：随机数据依赖地址替代固定步进（文件头） |
 | `mite_sve` | PROD（SVE） | —（本机无 SVE，spec 门控不执行） | SVE 整数 ALU 常量依赖链 + 谓词选择（svadd/sveor/svsub/svsel/svcmp）→init 标量参考 golden（process_value_ref）逐元素 memcmp + 冷路径 bit 级证据转储（前 8 处 golden/actual/xor + 总数） | ④功能验证：全 VL 矩阵 94 号行 128/256/512 三档 pass（matrix.md，git 31f6a99e^）；git 7e020003（batch 5 core-179 dataflow family 21 ports）+ e91508e1（all-VL P6 门迁移）+ f597dc9a（171 用例挂 arm64_requires） | 标量分支→谓词选择（svsel/svcmp）语义保持；非 16 倍数 count 向下取整保 64B 对齐；dst 每 run 独立分配 |
 | `mmu_split_tlb_sve` | PROD（SVE） | —（本机无 SVE，spec 门控不执行） | memfd 单物理页×8 别名 VA（inline-asm str/ldr + SVE 16B svst1/ldp 跨别名一致）+ 跨页 8B（页末-4，单指令双 TLB 查找）+ pressure_pages 逐页扫（≫DTLB）→别名间/128B 别名/跨页/跨行/压力页 byte-exact 读回比对，任一失配 report_fail_msg | ⑤无记录；文件头——MMU 覆盖最弱单元(20%)，mmu_stress_arm 未覆盖翻译一致性/别名面与页界+行界复合分裂；78ee2d15；f597dc9a | 别名页 MAP_SHARED 同 fd offset 0 ×8（NUM_ALIASES 固定）；跨页探针借压力区前两连续页；压力区 per-thread 私有 mmap 防跨线程 madvise 竞态（吸取 mmu_stress_arm 教训） |
-| `neon_add_sve` | BETA（SVE） | —（本机无 SVE，spec 门控不执行） | SVE svadd 整数加法 lane→标量独立 golden（#pragma optimize no-tree-vectorize 钉住；scripts/check-scalar-golden.sh 机械门）+memcmp_or_fail | 不在 SVE 全 VL 矩阵 190 清单（193−3 排除「不在本机默认集」；BETA 分级与排除相符，具体归因未确认）；issue #373 golden 迁移注释在源码 | #373 要旨：原 init 同码 golden 会被持续性 SVE 故障同构污染（golden 与 actual 同错相消）；元素级加法为自动向量化惯用式故需 no-tree-vectorize 防御 |
+| `neon_add_sve` | BETA（SVE） | —（本机无 SVE，spec 门控不执行） | SVE svadd 整数加法 lane→标量独立 golden（#pragma optimize no-tree-vectorize 钉住；scripts/check-scalar-golden.sh 机械门）+memcmp_or_fail | ⑤无记录；不在 SVE 全 VL 矩阵 190 清单（193−3 排除「不在本机默认集」；BETA 分级与排除相符，具体归因未确认）；issue #373 golden 迁移注释在源码 | #373 要旨：原 init 同码 golden 会被持续性 SVE 故障同构污染（golden 与 actual 同错相消）；元素级加法为自动向量化惯用式故需 no-tree-vectorize 防御 |
 | `ooo_dep_chain_sve` | PROD（SVE） | —（本机无 SVE，spec 门控不执行） | OoO 调度器/ROB/重命名：数据依赖 ldr 链（下址=上载数据，LCG 高汉明单环置换）+ 移位进位混合 ALU+访存链 + RW 反依赖槽 + 256 深纯 ALU mul/add/shift 链（inline-asm 防 hoist/CSE）→四链校验和 vs 软件参考（同确定序列重算）byte-exact + RW 槽逐个读回比对；report_fail_msg | ⑤无记录；文件头——OoO 覆盖弱单元(56%)，重放/重命名瞬态故障面，补 move_elimination_jit 之外的 ROB/PRF 深度面；78ee2d15；a31bd969 ODR（OooDepData 2 文件同名） | 名带 _sve 且挂 ARM64_REQUIRES_SVE，但 run 体无任何 sv 指令——纯标量 inline-asm ldr/str 依赖链（grep 实证，SVE 门仅为目录族口径）；ALU_DEPTH=256 常量不随旋钮；rob_depth 兼作 RW 槽数与长 ALU 链深 |
 | `operand_space_sve` | PROD（SVE） | —（本机无 SVE，spec 门控不执行） | SVE svadd 进位链+svmul 乘法 lane+asm str/ldr 存储转储转发探针→三重校验：svadd 进位链和 memcmp golden+SLF 探针求和一致性+乘积 lo/hi 比对；任一失配 report_fail | ④SVE 全 VL 矩阵（README:357）；PR #294 检视 r1 f4f8779a（sve_mul_words 谓词钳制 4-lane 消 VL>256 栈越界） | NUM_WORDS=4（256-bit 操作数宽）固定；乘高半 __int128 折叠（svmulh 为 SVE2）；17 值高汉明表；SLF 探针保持原版标量 asm（标量转发通路） |
 | `power_virus_dit_sve` | PROD（SVE） | —（本机无 SVE，spec 门控不执行） | SVE svmla f32 全 lane 依赖链 burst+yield 停顿→burst 后全 lane 字节精确 vs 同序 fmaf 参考（svcmpeq/svcntp 全 lane 计数）+位级 log | ④SVE 全 VL 矩阵（README:357） | 交替高汉明常数对（1,4 / −2,0.125）最大操作数翻转；8 cycle/do-while；sw_ref 预算一次 svdup 为 vref |
@@ -1086,6 +1086,6 @@
 ## 3. 数据来源与证据链
 
 - 骨架：`nm builddir/sdcshield`（`_test_*` 符号 868）＋ `tests` section 尺寸对账＋ `--quality=-1 --list-tests`（652）＋ `-e` 探针抽查（hidden→SKIP 注册、notbuilt→`Cannot find matching tests`）。
-- 计时：`/tmp/capmatrix_qm1_t2000_n24_run3.yaml`（`--quality=-1 -t 2000 -n 24 --full-log`，2026-11-26，no-SVE 920）；`mesh_upi_sse_sym` 单独 `SDC_MESH_BUFFER_BYTES=1GiB` 限幅腿。两次前置失败腿（默认全核 8-control × mesh 重复提交 → SIGQUIT；-n 24 单 control 同挂于 mesh_upi_sse_sym）记录于任务 ledger，为 issue #325 同族未修干净的新发现。
+- 计时（多腿合并，`-t 2000 -n 24 --full-log` 统一口径）：腿 A `capmatrix_qm1_t2000_n24.yaml`（53 例，止于 mesh_upi_sse_sym 挂死）；腿 B `capmatrix_qm1_t2000_n24_run3.yaml`（294 例，止于 openblas_dgemm 300s 超时）；腿 C `run4_c0–c3.yaml` 四块（354 例，与腿 B 名单零交集补齐）；限幅腿 8 件——`mesh_upi_sse_sym`（SDC_MESH_BUFFER_BYTES=1GiB）、openblas 5 件（`-O *.mdim/n=2048`，默认 68GB 工作集超时如实入档）、gather_f32/i32（`-O data_size=16777216`，默认 600‰ 档 452.7GiB 分配中止）。两次整跑死亡（默认全核 8-control 重复内存提交；`-n 24` 同挂于 mesh_upi_sse_sym）+ gather 600‰ 中止均为 phys×‰ 定幅超限新发现（issue #325 同族），如实入档并建议单独立 issue。
 - 复现证据：`/tmp/capmatrix/repro_evidence.md`（README「测试用例与检测能力」、`docs/sdc-excite-reproduce/`、OFHC 报告、git log 家族提交、`/home/sdc/sdc-excite-reproduce/daily_summary.log` 战役阴性记录）。
 - 深读：19 组并行 agent（`/tmp/capmatrix/agents/`），每组输出与其分派名单做过名字 diff。
