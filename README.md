@@ -351,6 +351,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 - **控制线程**在 `test_init` 前 pin 到芯片最大档（aux 线程与 worker 继承，init golden 与 run lane 档位一致）；每个 SVE/SVE2 worker 重新 pin 并校验读回——pin 被拒 = SKIP，读回不符 = FAIL。
 - `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` 压低假定的最大档（只降不升，未实现档回退内核授予值）。
 - 用例规格声明覆盖由 `scripts/check-arm64-requires.py` 保证诚实。
+- **全用例能力矩阵**（868 例逐例：测试域 / 单轮执行时间（轮次）本机实测 / SDC 检测能力 / 复现情况四分类，2026-11-26 生成——脚本机判 + 本机全量计时 + 19 组并行源码深读，覆盖率机械校验 868/868）：[`docs/SDC_TEST_CAPABILITY_MATRIX_CN.md`](docs/SDC_TEST_CAPABILITY_MATRIX_CN.md)。
 
 ### SVE 用例全 VL 验证矩阵（2026-10-30 收口）
 
